@@ -2,6 +2,7 @@
 
 #include "axe/axe_window/window.hpp"
 #include "axe/log/log.hpp"
+#include "axe/graphics/render_command.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <glad/glad.h>
@@ -34,6 +35,8 @@ namespace axe
 		AXE_CORE_INFO("OpenGL Version: {}", (const char*)glGetString(GL_VERSION));
 		AXE_CORE_INFO("GLSL Version: {}", (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
 		AXE_CORE_INFO("Renderer: {}", (const char*)glGetString(GL_RENDERER));
+
+		RenderCommand::Init();
 
 		AXE_CORE_INFO("GraphicsDevice Initialized successfully");
 		return true;

@@ -1,18 +1,24 @@
-[22:16:46.907] [I] [axe] Core logger initialized
-[22:16:46.908] [I] [editor] Editor logger initialized
-[22:16:46.908] [I] [editor] Creating window...
-[22:16:46.934] [I] [axe] GLFW initialized
-[22:16:47.051] [I] [axe] Window created: AXE Engine (1280x720)
-[22:16:47.052] [I] [axe] OpenGL loader initialized
-[22:16:47.052] [I] [editor] EditorLayer attached
-[22:16:47.052] [I] [axe] ImGui initialized
-[22:16:47.053] [I] [editor] EditorApp created successfully
-[22:16:47.053] [I] [axe] GraphicsDevice initialized
-[22:16:47.053] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
-[22:16:47.053] [I] [axe] GLSL Version: 4.60
-[22:16:47.053] [I] [axe] Renderer: Radeon RX 580 Series
-[22:16:47.053] [I] [axe] GraphicsDevice Initialized successfully
-[22:16:47.054] [I] [editor] Editor started
-[22:17:26.635] [I] [axe] GraphicsDevice shutdown
-[22:17:26.636] [I] [axe] ImGui shutdown
-[22:17:26.657] [I] [axe] Window detroyed
+[17:23:02.678] [I] [axe] Core logger initialized
+[17:23:02.678] [I] [editor] Editor logger initialized
+[17:23:02.678] [I] [editor] Creating window...
+[17:23:02.700] [I] [axe] GLFW initialized
+[17:23:02.807] [I] [axe] Window created: AXE Engine (1280x720)
+[17:23:02.808] [I] [axe] OpenGL loader initialized
+[17:23:02.808] [I] [axe] GraphicsDevice initialized
+[17:23:02.808] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
+[17:23:02.808] [I] [axe] GLSL Version: 4.60
+[17:23:02.808] [I] [axe] Renderer: Radeon RX 580 Series
+[17:23:02.809] [I] [axe] GraphicsDevice Initialized successfully
+[17:23:02.809] [I] [axe] ViewportWindow created (no GPU resources yet)
+[17:23:02.809] [I] [editor] EditorLayer attached
+[17:23:02.809] [I] [axe] Initializing ViewportWindow resources...
+[17:23:02.809] [I] [axe] ViewportWindow initialized successfully
+[17:23:02.865] [I] [axe] CubeRenderer created
+[17:23:02.866] [I] [axe] ImGui initialized
+[17:23:02.866] [I] [editor] EditorApp created successfully
+[17:23:02.866] [I] [editor] Editor started
+[17:23:02.922] [I] [axe] Viewport resized to 797x484
+[17:24:09.477] [I] [axe] GraphicsDevice shutdown
+[17:24:09.477] [I] [axe] ViewportWindow destroyed
+[17:24:09.478] [I] [axe] ImGui shutdown
+[17:24:09.499] [I] [axe] Window detroyed

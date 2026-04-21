@@ -149,7 +149,7 @@ namespace axe
 			{
 				data.EventCallback(event);
 			}
-			AXE_CORE_INFO("MouseScrolledEvent: {} {}", xOffset, yOffset);
+			//AXE_CORE_INFO("MouseScrolledEvent: {} {}", xOffset, yOffset);
 		});
 
 

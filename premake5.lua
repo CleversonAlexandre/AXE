@@ -157,6 +157,7 @@ project "editor"
         "src/editor",
         "%{IncludeDir.Imgui}",
         "%{IncludeDir.GLFW}",
+        "%{IncludeDir.Glad}",
         "src/vendor/spdlog/include",
     }
 
@@ -164,7 +165,8 @@ project "editor"
     {
         "axe",
         "GLFW",
-        "opengl32"
+        "opengl32",
+        "Glad"
     }
 
     defines

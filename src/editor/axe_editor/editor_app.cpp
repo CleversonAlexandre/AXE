@@ -16,6 +16,8 @@ namespace axe
 
 	EditorApp* EditorApp::s_Instance = nullptr;
 
+	
+
 	EditorApp::EditorApp()
 	{		
 		console_init();
@@ -33,17 +35,25 @@ namespace axe
 			AXE_CORE_ERROR("Failed to create window in constructor");
 			return;
 		}
+		m_Graphics = std::make_unique<GraphicsDevice>();
+		if (!m_Graphics->Initialize(m_Window.get()))
+		{
+			AXE_CORE_ERROR("Failed to initialize GraphicsDevice");
+			return;
+		}		
+		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
 
 		m_Window->SetEventCallback(BIND_EVENT_FN(OnEvent));
 
 		// EditorLayer — layer normal, fica na base da pilha
 		m_LayerStack.PushLayer(new EditorLayer());
 
-		
-
 		// ImGuiLayer — overlay, sempre no topo
 		m_ImGuiLayer = new ImGuiLayer(m_Window.get());
 		m_LayerStack.PushOverlay(m_ImGuiLayer);
+
+
+
 
 		AXE_EDITOR_INFO("EditorApp created successfully");
 	}
@@ -65,14 +75,10 @@ namespace axe
 	void EditorApp::Run()
 	{		
 	
-		GraphicsDevice graphics;
-		if (!graphics.Initialize(m_Window.get()))
-		{
-			AXE_CORE_ERROR("Failed to initialize GraphicsDevice");
-			return;
-		}
+		
+		
 
-		graphics.SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
 
 		AXE_EDITOR_INFO("Editor started");
 
@@ -92,7 +98,7 @@ namespace axe
 				layer->OnUpdate((float)deltaTime);
 
 			//Render - ImGui envolve o render de todas as layers
-			graphics.BeginFrame();
+			m_Graphics->BeginFrame();
 			m_ImGuiLayer->Begin();      // abre o frame do ImGui
 
 			for (Layer* layer : m_LayerStack)
@@ -100,11 +106,11 @@ namespace axe
 		
 			//m_EditorUI->Draw();
 			m_ImGuiLayer->End();        // fecha e renderiza o ImGui
-			graphics.EndFrame();
+			m_Graphics->EndFrame();
 			m_Window->SwapBuffers();
 		}
 		
-		graphics.Shutdown();
+		m_Graphics->Shutdown();
 	}
 
 	bool EditorApp::OnWindowClose(WindowCloseEvent& e)

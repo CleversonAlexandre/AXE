@@ -16,6 +16,8 @@ namespace axe
 	public:
 		void Draw();
 
+		ViewportWindow* GetViewport() { return &m_ViewportWindow; }
+
 	private:
 
 		void BeginDockspace();

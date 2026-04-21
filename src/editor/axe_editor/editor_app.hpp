@@ -6,6 +6,8 @@
 #include "axe/events/application_event.hpp"
 #include "editor/axe_editor/editor_ui.hpp"
 
+#include "axe/graphics/graphics_device.hpp"
+
 #include "axe/layers/layer_stack.hpp"
 #include "imgui_layer.hpp"
 
@@ -35,6 +37,7 @@ namespace axe
 		bool m_Running = true;
 		
 		static EditorApp* s_Instance;
+		std::unique_ptr<GraphicsDevice> m_Graphics;
 
 		LayerStack m_LayerStack;
 		ImGuiLayer* m_ImGuiLayer{ nullptr };

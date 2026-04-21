@@ -5,6 +5,12 @@
 
 #include "GLFW/glfw3.h"
 #include <iostream>
+
+#include "axe/graphics/renderer/triangle_renderer.hpp"
+#include "axe/graphics/renderer/viewport_renderer.hpp"
+
+
+#include "axe/graphics/framebuffer.hpp"
 namespace axe
 {
 	// EditorLayer contém toda a UI do editor
@@ -21,7 +27,22 @@ namespace axe
 
 		void OnAttach() override
 		{
-			AXE_EDITOR_INFO("EditorLayer attached");			
+			AXE_EDITOR_INFO("EditorLayer attached");
+
+			// Inicializa os recursos OpenGL do viewport
+			// OnAttach é chamado após o GraphicsDevice estar pronto
+			ViewportWindow* viewport = m_EditorUI->GetViewport();
+			if (viewport)
+			{
+				viewport->Initialize();
+			}
+			else
+			{
+				AXE_EDITOR_ERROR("ViewportWindow is null during OnAttach!");
+			}
+
+			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
+			m_ViewportRenderer->Initialize();
 		}
 
 		void OnDetach() override
@@ -43,27 +64,45 @@ namespace axe
 				m_FPSSamples = 0;
 			}
 		}
-		
-		void OnRender() override 
-		{		
 
-			
+
+		void OnRender() override
+		{
+			if (m_EditorUI)
+			{
+				ViewportWindow* viewport = m_EditorUI->GetViewport();
+				if (viewport && viewport->IsInitialized())
+				{
+					auto framebuffer = viewport->GetFramebuffer();
+					if (framebuffer && viewport->GetWidth() > 0 && viewport->GetHeight() > 0)
+					{
+						m_ViewportRenderer->RenderToFramebuffer(
+							*framebuffer,
+							viewport->GetWidth(),
+							viewport->GetHeight(),
+							EditorApp::Get().GetWindow().GetTime()
+						);
+					}
+				}
+			}
 
 			std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
 			EditorApp::Get().GetWindow().SetTitle(title);
-			
-
 			if (m_EditorUI)
 				m_EditorUI->Draw();
 			else
 				AXE_EDITOR_ERROR("EditorUI is null!");
 		}
 
+
 		void OnEvent(Event& e) override
 		{
 			
 			
 		}
+	private:
+		std::unique_ptr<axe::TriangleRenderer> m_TriangleRenderer;
+		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
 
 	private:
 		std::unique_ptr<EditorUI> m_EditorUI;
