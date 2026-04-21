@@ -1,0 +1,21 @@
+[submodule "AXE/vendor/spdlog"]
+	path = AXE/vendor/spdlog
+	url = https://github.com/gabime/spdlog
+[submodule "AXE/vendor/GLFW"]
+	path = AXE/vendor/GLFW
+	url = https://github.com/TheCherno/GLFW
+[submodule "AXE/vendor/imgui"]
+	path = AXE/vendor/imgui
+	url = https://github.com/TheCherno/Imgui
+[submodule "src/vendor/spdlog"]
+	path = src/vendor/spdlog
+	url = https://github.com/gabime/spdlog
+[submodule "src/vendor/fmt"]
+	path = src/vendor/fmt
+	url = https://github.com/fmtlib/fmt
+[submodule "src/vendor/geogram"]
+	path = src/vendor/geogram
+	url = https://github.com/BrunoLevy/geogram
+[submodule "src/vendor/simdjson"]
+	path = src/vendor/simdjson
+	url = https://github.com/simdjson/simdjson

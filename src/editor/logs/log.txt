@@ -1,0 +1,18 @@
+[22:16:46.907] [I] [axe] Core logger initialized
+[22:16:46.908] [I] [editor] Editor logger initialized
+[22:16:46.908] [I] [editor] Creating window...
+[22:16:46.934] [I] [axe] GLFW initialized
+[22:16:47.051] [I] [axe] Window created: AXE Engine (1280x720)
+[22:16:47.052] [I] [axe] OpenGL loader initialized
+[22:16:47.052] [I] [editor] EditorLayer attached
+[22:16:47.052] [I] [axe] ImGui initialized
+[22:16:47.053] [I] [editor] EditorApp created successfully
+[22:16:47.053] [I] [axe] GraphicsDevice initialized
+[22:16:47.053] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
+[22:16:47.053] [I] [axe] GLSL Version: 4.60
+[22:16:47.053] [I] [axe] Renderer: Radeon RX 580 Series
+[22:16:47.053] [I] [axe] GraphicsDevice Initialized successfully
+[22:16:47.054] [I] [editor] Editor started
+[22:17:26.635] [I] [axe] GraphicsDevice shutdown
+[22:17:26.636] [I] [axe] ImGui shutdown
+[22:17:26.657] [I] [axe] Window detroyed
