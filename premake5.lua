@@ -73,9 +73,11 @@ project "axe"
         "src/vendor/fmt/include",
         "src/vendor/geogram/src/lib",
         "src/vendor/simdjson/include",
+        "src/vendor/glm",
         "%{IncludeDir.GLFW}",
         "%{IncludeDir.Glad}",
         "%{IncludeDir.Imgui}",
+        
     }
     
     links
@@ -159,6 +161,7 @@ project "editor"
         "%{IncludeDir.GLFW}",
         "%{IncludeDir.Glad}",
         "src/vendor/spdlog/include",
+        "src/vendor/glm",
     }
 
     links

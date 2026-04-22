@@ -7,90 +7,14 @@
 #include "axe/graphics/render_command.hpp"
 #include "axe/graphics/pipeline.hpp"
 #include "axe/graphics/texture.hpp"
+#include "axe/graphics/editor_camera.hpp"
 
-#include <cmath>
+#include <glm/glm.hpp>
+#include <glm/ext.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 namespace axe
 {
-	namespace
-	{
-		void MultiplyMat4(const float* a, const float* b, float* result)
-		{
-			for (int col = 0; col < 4; ++col)
-			{
-				for (int row = 0; row < 4; ++row)
-				{
-					result[col * 4 + row] =
-						a[0 * 4 + row] * b[col * 4 + 0] +
-						a[1 * 4 + row] * b[col * 4 + 1] +
-						a[2 * 4 + row] * b[col * 4 + 2] +
-						a[3 * 4 + row] * b[col * 4 + 3];
-				}
-			}
-		}
-
-		void MakePerspective(float fovRadians, float aspect, float zNear, float zFar, float* out)
-		{
-			const float f = 1.0f / std::tan(fovRadians * 0.5f);
-
-			for (int i = 0; i < 16; ++i)
-				out[i] = 0.0f;
-
-			out[0] = f / aspect;
-			out[5] = f;
-			out[10] = (zFar + zNear) / (zNear - zFar);
-			out[11] = -1.0f;
-			out[14] = (2.0f * zFar * zNear) / (zNear - zFar);
-		}
-
-		void MakeTranslation(float x, float y, float z, float* out)
-		{
-			for (int i = 0; i < 16; ++i)
-				out[i] = 0.0f;
-
-			out[0] = 1.0f;
-			out[5] = 1.0f;
-			out[10] = 1.0f;
-			out[15] = 1.0f;
-
-			out[12] = x;
-			out[13] = y;
-			out[14] = z;
-		}
-
-		void MakeRotationY(float angle, float* out)
-		{
-			const float c = std::cos(angle);
-			const float s = std::sin(angle);
-
-			for (int i = 0; i < 16; ++i)
-				out[i] = 0.0f;
-
-			out[0] = c;
-			out[2] = -s;
-			out[5] = 1.0f;
-			out[8] = s;
-			out[10] = c;
-			out[15] = 1.0f;
-		}
-
-		void MakeRotationX(float angle, float* out)
-		{
-			const float c = std::cos(angle);
-			const float s = std::sin(angle);
-
-			for (int i = 0; i < 16; ++i)
-				out[i] = 0.0f;
-
-			out[0] = 1.0f;
-			out[5] = c;
-			out[6] = s;
-			out[9] = -s;
-			out[10] = c;
-			out[15] = 1.0f;
-		}
-	}
-
 	CubeRenderer::CubeRenderer()
 	{
 		const float vertices[] =
@@ -109,17 +33,11 @@ namespace axe
 
 		const std::uint32_t indices[] =
 		{
-			// back
 			0, 1, 2,  2, 3, 0,
-			// front
 			4, 5, 6,  6, 7, 4,
-			// left
 			7, 4, 0,  0, 3, 7,
-			// right
 			6, 5, 1,  1, 2, 6,
-			// bottom
 			4, 5, 1,  1, 0, 4,
-			// top
 			7, 6, 2,  2, 3, 7
 		};
 
@@ -177,31 +95,20 @@ namespace axe
 		AXE_CORE_INFO("CubeRenderer created");
 	}
 
-	void CubeRenderer::Render(float timeSeconds, float aspectRatio)
+	void CubeRenderer::Render(float timeSeconds, const EditorCamera& camera)
 	{
-		float rotY[16];
-		float rotX[16];
-		float model[16];
+		glm::mat4 model = glm::mat4(1.0f);
+		//model = glm::rotate(model, timeSeconds, glm::vec3(0.0f, 1.0f, 0.0f));
+		//model = glm::rotate(model, timeSeconds * 0.01f, glm::vec3(1.0f, 0.0f, 0.0f));
 
-		MakeRotationY(timeSeconds, rotY);
-		MakeRotationX(timeSeconds * 0.6f, rotX);
-		MultiplyMat4(rotY, rotX, model);
-
-		float view[16];
-		MakeTranslation(0.0f, 0.0f, -3.0f, view);
-
-		float projection[16];
-		MakePerspective(45.0f * 3.14159265f / 180.0f, aspectRatio, 0.1f, 100.0f, projection);
-
-		float viewProjection[16];
-		MultiplyMat4(projection, view, viewProjection);
+		glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
 
 		m_Pipeline->Bind();
 		m_VertexArray->Bind();
 		m_Texture->Bind(0);
 
-		m_Shader->SetMat4("u_Model", model);
-		m_Shader->SetMat4("u_ViewProjection", viewProjection);
+		m_Shader->SetMat4("u_Model", glm::value_ptr(model));
+		m_Shader->SetMat4("u_ViewProjection", glm::value_ptr(viewProjection));
 
 		RenderCommand::DrawIndexed(m_VertexArray);
 	}

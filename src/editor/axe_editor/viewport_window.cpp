@@ -4,6 +4,8 @@
 #include "axe/log/log.hpp"
 
 #include <imgui.h>
+#include <glm/glm.hpp>
+
 
 namespace axe
 {
@@ -63,7 +65,13 @@ namespace axe
 			OnResize(width, height);
 		}
 
-		m_IsHovered = ImGui::IsWindowHovered();
+		//m_IsHovered = ImGui::IsWindowHovered();
+		m_IsFocused = ImGui::IsWindowFocused();
+
+		ImVec2 mousePos = ImGui::GetMousePos();
+		m_MousePosition = { mousePos.x, mousePos.y };
+		m_MouseDelta = m_MousePosition - m_LastMousePosition;
+		m_LastMousePosition = m_MousePosition;
 
 		if (m_Initialized && m_Framebuffer)
 		{
@@ -71,11 +79,13 @@ namespace axe
 			if (textureID)
 			{
 				ImGui::Image(textureID, viewportSize, ImVec2(0, 1), ImVec2(1, 0));
+				m_IsHovered = ImGui::IsItemHovered();
 			}
 		}
 		else
 		{
 			ImGui::Text("Initializing viewport...");
+			m_IsHovered = false;
 		}
 		ImGui::End();
 	}

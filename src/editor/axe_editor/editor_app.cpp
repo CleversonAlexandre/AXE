@@ -113,6 +113,9 @@ namespace axe
 		m_Graphics->Shutdown();
 	}
 
+
+
+
 	bool EditorApp::OnWindowClose(WindowCloseEvent& e)
 	{
 		m_Running = false;

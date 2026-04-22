@@ -11,6 +11,9 @@
 
 
 #include "axe/graphics/framebuffer.hpp"
+
+#include <imgui.h>
+#include <glm/glm.hpp>
 namespace axe
 {
 	// EditorLayer contém toda a UI do editor
@@ -69,6 +72,11 @@ namespace axe
 		void OnRender() override
 		{
 			if (m_EditorUI)
+				m_EditorUI->Draw();
+
+			HandleViewportCameraInput();
+
+			if (m_EditorUI)
 			{
 				ViewportWindow* viewport = m_EditorUI->GetViewport();
 				if (viewport && viewport->IsInitialized())
@@ -88,10 +96,9 @@ namespace axe
 
 			std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
 			EditorApp::Get().GetWindow().SetTitle(title);
-			if (m_EditorUI)
-				m_EditorUI->Draw();
-			else
-				AXE_EDITOR_ERROR("EditorUI is null!");
+			
+			//else
+			//	AXE_EDITOR_ERROR("EditorUI is null!");
 		}
 
 
@@ -100,7 +107,55 @@ namespace axe
 			
 			
 		}
+
+	
+		void HandleViewportCameraInput() 
+		{
+			if (!m_EditorUI)
+				return;
+
+			ViewportWindow* viewport = m_EditorUI->GetViewport();
+			if (!viewport || !viewport->IsHovered())
+				return;
+
+			ImGuiIO& io = ImGui::GetIO();
+
+			
+
+			const bool alt = io.KeyAlt;
+			if (!alt)
+				return;
+
+			glm::vec2 delta = viewport->GetMouseDelta();
+
+			// Sensibilidade básica
+			delta *= 0.003f;
+
+			if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+			{
+				//AXE_CORE_INFO("Rotate input");
+				m_ViewportRenderer->OnMouseRotate(delta);
+			}
+			else if (ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+			{
+				//AXE_CORE_INFO("Pan input");
+				m_ViewportRenderer->OnMousePan(delta);
+			}
+			else if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
+			{
+				//AXE_CORE_INFO("Zoom input");
+				m_ViewportRenderer->OnMouseZoom(delta.y * 10.0f);
+			}
+
+			if (io.MouseWheel != 0.0f)
+			{
+				//AXE_CORE_INFO("Scroll zoom: {}", io.MouseWheel);
+				m_ViewportRenderer->OnMouseZoom(io.MouseWheel);
+			}
+		}
+
 	private:
+		
 		std::unique_ptr<axe::TriangleRenderer> m_TriangleRenderer;
 		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
 

@@ -19,3 +19,6 @@
 [submodule "src/vendor/simdjson"]
 	path = src/vendor/simdjson
 	url = https://github.com/simdjson/simdjson
+[submodule "src/vendor/src/vendor/glm"]
+	path = src/vendor/src/vendor/glm
+	url = https://github.com/g-truc/glm
