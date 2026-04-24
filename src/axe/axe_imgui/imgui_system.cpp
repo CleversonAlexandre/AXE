@@ -13,6 +13,7 @@
 
 #include "axe/core/types.hpp"
 
+#include <ImGuizmo.h>
 namespace axe
 {
 
@@ -31,8 +32,7 @@ namespace axe
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 		
-	
-
+		
 
 		m_NativeWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
 
@@ -67,14 +67,12 @@ namespace axe
 	void ImGuiSystem::BeginFrame()
 	{
 
-		ImGuiIO& io = ImGui::GetIO();
 		
-	
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 
 		ImGui::NewFrame();
-
+		ImGuizmo::BeginFrame();
 		
 	}
 

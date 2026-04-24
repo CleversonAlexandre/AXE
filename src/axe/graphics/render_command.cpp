@@ -1,5 +1,5 @@
 #include "render_command.hpp"
-#include "axe/graphics/renderer_api.hpp"
+
 
 namespace axe
 {
@@ -14,4 +14,14 @@ namespace axe
 	{
 		s_RendererAPI->DrawIndexed(vertexArray);
 	}
+	void RenderCommand::SetPolygonMode(RendererAPI::PolygonMode mode)
+	{
+		s_RendererAPI->SetPolygonMode(mode);
+	}
+
+	void RenderCommand::DrawLines(const std::shared_ptr<VertexArray>& vertexArray, std::uint32_t vertexCount)
+	{
+		s_RendererAPI->DrawLines(vertexArray, vertexCount);
+	}
+
 }

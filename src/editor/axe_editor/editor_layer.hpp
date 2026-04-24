@@ -6,16 +6,21 @@
 #include "GLFW/glfw3.h"
 #include <iostream>
 
-#include "axe/graphics/renderer/triangle_renderer.hpp"
 #include "axe/graphics/renderer/viewport_renderer.hpp"
 
 
 #include "axe/graphics/framebuffer.hpp"
 
 #include <imgui.h>
+#include <ImGuizmo.h>
 #include <glm/glm.hpp>
+
+#include "axe/graphics/editor_camera.hpp"
+
+
 namespace axe
 {
+	class EditorCamera;
 	// EditorLayer contém toda a UI do editor
 	// É uma layer normal — fica abaixo do ImGuiLayer
 
@@ -38,14 +43,24 @@ namespace axe
 			if (viewport)
 			{
 				viewport->Initialize();
+
+				viewport->SetGuizmoCallback([this](const glm::vec2& min, const glm::vec2& max)
+					{
+						m_ViewportRenderer->DrawGuizmo(min, max);
+					});
 			}
 			else
 			{
 				AXE_EDITOR_ERROR("ViewportWindow is null during OnAttach!");
 			}
 
+			
 			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
 			m_ViewportRenderer->Initialize();
+
+			m_EditorUI->SetViewportRenderer(m_ViewportRenderer.get());
+
+			
 		}
 
 		void OnDetach() override
@@ -65,17 +80,13 @@ namespace axe
 				m_FPS = m_FPSAccumulator / m_FPSSamples;
 				m_FPSAccumulator = 0.0f;
 				m_FPSSamples = 0;
-			}
+			}		
 		}
 
 
 		void OnRender() override
 		{
-			if (m_EditorUI)
-				m_EditorUI->Draw();
-
-			HandleViewportCameraInput();
-
+			
 			if (m_EditorUI)
 			{
 				ViewportWindow* viewport = m_EditorUI->GetViewport();
@@ -91,14 +102,36 @@ namespace axe
 							EditorApp::Get().GetWindow().GetTime()
 						);
 					}
+									
 				}
 			}
+			
+			if (m_EditorUI)
+			{
+								
+				ViewportWindow* viewport = m_EditorUI->GetViewport();
+				
+				if (viewport)
+				{
+					m_ViewportRenderer->DrawGuizmo(
+						
+						viewport->GetBoundsMin(),
+						viewport->GetBoundsMax());
+									
+				}
+
+			}
+			
+		
+			//if (m_EditorUI)
+				m_EditorUI->Draw();
+
+			HandleViewportCameraInput();
+
+
 
 			std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
 			EditorApp::Get().GetWindow().SetTitle(title);
-			
-			//else
-			//	AXE_EDITOR_ERROR("EditorUI is null!");
 		}
 
 
@@ -120,8 +153,32 @@ namespace axe
 
 			ImGuiIO& io = ImGui::GetIO();
 
-			
+			if (ImGui::IsKeyPressed(ImGuiKey_P))
+			{
+				m_ViewportRenderer->m_Camera->isPerspective = !m_ViewportRenderer->m_Camera->isPerspective;			
+				if (!m_ViewportRenderer->m_Camera->isPerspective)
+				{					
+					m_ViewportRenderer->m_Camera->viewHeight = m_ViewportRenderer->m_Camera->viewWidth * io.DisplaySize.y / io.DisplaySize.x;
+				}
+				AXE_EDITOR_INFO("Perspective mode: {}", m_ViewportRenderer->m_Camera->isPerspective);
+			}
 
+			if (viewport->IsFocused())
+			{
+				if (ImGui::IsKeyPressed(ImGuiKey_R))
+				{
+					m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::ROTATE;
+				}
+				if (ImGui::IsKeyPressed(ImGuiKey_S))
+				{
+					m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::SCALE;
+				}
+				if (ImGui::IsKeyPressed(ImGuiKey_T))
+				{
+					m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::TRANSLATE;
+				}
+			}
+				
 			const bool alt = io.KeyAlt;
 			if (!alt)
 				return;
@@ -154,9 +211,7 @@ namespace axe
 			}
 		}
 
-	private:
-		
-		std::unique_ptr<axe::TriangleRenderer> m_TriangleRenderer;
+	private:		
 		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
 
 	private:

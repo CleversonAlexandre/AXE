@@ -4,11 +4,16 @@
 #include <functional>
 #include <glm/glm.hpp>
 
+#include "axe/graphics/editor_camera.hpp"
+
+
 
 
 namespace axe
 {
 	class Framebuffer;
+	class EditorCamera;
+	class ViewportRenderer;
 	
 	class AXE_API ViewportWindow
 	{
@@ -20,6 +25,7 @@ namespace axe
 		void Initialize();		
 		void Draw();		
 		void OnResize(uint32_t width, uint32_t height);		
+		
 		 
 		bool IsInitialized() const { return m_Initialized; }
 		bool IsHovered() const { return m_IsHovered; }
@@ -32,10 +38,19 @@ namespace axe
 		glm::vec2 GetMouseDelta() const { return m_MouseDelta; }
 		glm::vec2 GetMousePosition() const { return m_MousePosition; }
 
+		glm::vec2 GetBoundsMin() const { return m_BoundsMin; }
+		glm::vec2 GetBoundsMax() const { return m_BoundsMax; }
+		glm::vec2 GetSize() const { return { (float)m_Width, (float)m_Height }; }
+
 		std::shared_ptr<Framebuffer> GetFramebuffer() const { return m_Framebuffer; }
 		void* GetTextureID() const;
 
-	private:
+		using GuizmoDrawFunc = std::function<void(const glm::vec2&, const glm::vec2&)>;
+		void SetGuizmoCallback(GuizmoDrawFunc func) { m_GuizmoCallback = func; }
+
+
+		std::unique_ptr<EditorCamera> m_Camera;
+		private:
 		bool m_Initialized = false;
 		bool m_IsHovered = false;
 		bool m_IsFocused = false;
@@ -48,5 +63,13 @@ namespace axe
 		glm::vec2 m_MouseDelta{ 0.0f, 0.0f };
 
 		std::shared_ptr<Framebuffer> m_Framebuffer;
+		
+		
+		glm::vec2 m_BoundsMin{ 0.0f, 0.0f };
+		glm::vec2 m_BoundsMax{ 0.0f, 0.0f };
+
+		GuizmoDrawFunc m_GuizmoCallback;
+
+		  
 	};
 }

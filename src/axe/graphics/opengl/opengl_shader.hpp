@@ -3,6 +3,8 @@
 #include "axe/graphics/shader.hpp"
 #include <unordered_map>
 #include <string>
+#include <glm/glm.hpp>
+
 
 namespace axe
 {
@@ -17,6 +19,9 @@ namespace axe
 
 		void SetFloat4(const std::string& name, float x, float y, float z, float w) override;
 		void SetMat4(const std::string& name, const float* value) override;
+
+		void SetInt(const std::string& name, int value) override;
+		void SetFloat4(const std::string& name, const glm::vec4& value) override;
 
 	private:
 		int GetUniformLocation(const std::string& name);

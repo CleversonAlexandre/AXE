@@ -30,16 +30,25 @@ namespace axe
 		MouseZoom(delta * 0.1f);
 		UpdateView();
 	}
+	glm::mat4 EditorCamera::GetViewMatrix() const
+	{
+		return m_ViewMatrix;
+
+	}
+	
 
 	glm::mat4 EditorCamera::GetViewProjectionMatrix() const
 	{
-		return GetProjectionMatrix() * m_ViewMatrix;
+		return GetProjectionMatrix() * GetViewMatrix();
+
 	}
+
 
 	void EditorCamera::UpdateView()
 	{
 		m_Position = CalculatePosition();
 		m_ViewMatrix = glm::lookAt(m_Position, m_FocalPoint, GetUpDirection());
+		
 	}
 
 	glm::vec3 EditorCamera::CalculatePosition() const

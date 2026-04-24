@@ -4,6 +4,7 @@
 #include "axe/log/log.hpp"
 
 #include <imgui.h>
+#include <ImGuizmo.h>
 #include <glm/glm.hpp>
 
 
@@ -26,6 +27,8 @@ namespace axe
 			AXE_CORE_WARN("Viewport already initialized");
 			return;
 		}
+
+		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 100.0f);
 
 		AXE_CORE_INFO("Initializing ViewportWindow resources...");
 
@@ -50,9 +53,11 @@ namespace axe
 
 	void ViewportWindow::Draw()
 	{
+		//ImGui::PushStyleColor(ImGuiCol_WindowBg, (ImVec4)ImColor(0.35f, 0.3f, 0.3f));
 		if (!ImGui::Begin("Viewport"))
 		{
 			ImGui::End();
+			//ImGui::PopStyleColor(1);
 			return;
 		}
 
@@ -65,6 +70,7 @@ namespace axe
 			OnResize(width, height);
 		}
 
+	
 		//m_IsHovered = ImGui::IsWindowHovered();
 		m_IsFocused = ImGui::IsWindowFocused();
 
@@ -78,16 +84,27 @@ namespace axe
 			void* textureID = GetTextureID();
 			if (textureID)
 			{
+				ImVec2 imagePos = ImGui::GetCursorScreenPos();
+
 				ImGui::Image(textureID, viewportSize, ImVec2(0, 1), ImVec2(1, 0));
 				m_IsHovered = ImGui::IsItemHovered();
+
+				m_BoundsMin = { imagePos.x, imagePos.y };
+				m_BoundsMax = { imagePos.x + viewportSize.x, imagePos.y + viewportSize.y };
+				
+				if (m_GuizmoCallback)
+				{
+					m_GuizmoCallback(m_BoundsMin, m_BoundsMax);
+				}
 			}
 		}
 		else
 		{
 			ImGui::Text("Initializing viewport...");
 			m_IsHovered = false;
-		}
+		}		
 		ImGui::End();
+		//ImGui::PopStyleColor(1);
 	}
 
 	void ViewportWindow::OnResize(uint32_t width, uint32_t height)
@@ -115,4 +132,9 @@ namespace axe
 		}
 		return nullptr;
 	}
+
+
+
+
+	
 }

@@ -12,6 +12,7 @@ namespace axe
 
 		void Bind() const override;
 		void Unbind() const override;
+		void SetData(const void* data, std::uint32_t size);
 
 	private:
 		unsigned int m_RendererID = 0;

@@ -1,7 +1,8 @@
 #pragma once
+#include "axe/utils/glm_config.hpp"
 #include "axe/core/types.hpp"
 #include <memory>
-#include "axe/graphics/editor_camera.hpp"
+#include "axe/graphics/opengl/opengl_renderer_api.hpp"
 
 namespace axe
 {
@@ -9,16 +10,23 @@ namespace axe
 	class VertexArray;
 	class Pipeline;
 	class Texture2D;
-	class EditorCamera;
+	class PolyngMode;
 
 	class AXE_API CubeRenderer
 	{
 	public:
 		CubeRenderer();
 
-		void Render(float timeSeconds, const EditorCamera& camera);
+		void DrawCubeWireframe(const glm::mat4& model);
+		void Begin(const glm::mat4& viewProjection);
+		void DrawCube(const glm::mat4& model, bool selected = false, const glm::vec4& color = { 1.0f, 0.85f, 0.1f, 1.0f });
+		void End();
+		
 
 	private:
+
+		glm::mat4 m_ViewProjection = glm::mat4(1.0f);
+		
 		std::shared_ptr<Shader> m_Shader;
 		std::shared_ptr<VertexArray> m_VertexArray;
 		std::shared_ptr<Pipeline> m_Pipeline;

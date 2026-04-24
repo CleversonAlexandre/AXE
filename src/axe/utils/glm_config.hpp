@@ -5,6 +5,7 @@
 // CONFIGURAÇÕES GLOBAIS DO GLM
 // ============================================
 
+
 // Habilita extensões experimentais (GTX)
 #ifndef GLM_ENABLE_EXPERIMENTAL
 #define GLM_ENABLE_EXPERIMENTAL
@@ -31,7 +32,7 @@
 
 // Core
 #include <glm/glm.hpp>
-
+#include <glm/gtx/matrix_decompose.hpp>
 // Stable extensions (GTC)
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>

@@ -9,5 +9,9 @@ namespace axe
 	{
 	public:
 		void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) override;
+		void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, std::uint32_t vertexCount) override;
+
+		void SetPolygonMode(PolygonMode mode) override;
 	};
+
 }

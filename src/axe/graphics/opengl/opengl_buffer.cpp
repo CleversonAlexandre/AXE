@@ -26,6 +26,12 @@ namespace axe
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 	}
 
+	void OpenGLVertexBuffer::SetData(const void* data, std::uint32_t size)
+	{
+		Bind();
+		glBufferSubData(GL_ARRAY_BUFFER, 0, size, data);
+	}
+
 	OpenGLIndexBuffer::OpenGLIndexBuffer(const std::uint32_t* data, std::uint32_t count)
 		: m_Count(count)
 	{

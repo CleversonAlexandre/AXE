@@ -15,4 +15,23 @@ namespace axe
 			nullptr
 		);
 	}
+
+	void OpenGLRendererAPI::SetPolygonMode(PolygonMode mode)
+	{
+		switch (mode)
+		{
+		case PolygonMode::Fill:
+			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+			break;
+
+		case PolygonMode::Line:
+			glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+			break;
+		}
+	}
+	void OpenGLRendererAPI::DrawLines(const std::shared_ptr<VertexArray>& vertexArray, std::uint32_t vertexCount)
+	{
+		vertexArray->Bind();
+		glDrawArrays(GL_LINES, 0, vertexCount);
+	}
 }

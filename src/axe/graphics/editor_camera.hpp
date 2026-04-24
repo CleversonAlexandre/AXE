@@ -24,7 +24,7 @@ namespace axe
 
 		const glm::mat4& GetViewMatrixCached() const { return m_ViewMatrix; }
 		glm::mat4 GetViewProjectionMatrix() const;
-
+		glm::mat4 GetViewMatrix() const;
 		const glm::vec3& GetPosition() const { return m_Position; }
 		float GetPitch() const { return m_Pitch; }
 		float GetYaw() const { return m_Yaw; }
@@ -34,9 +34,14 @@ namespace axe
 		void Rotate(const glm::vec2& delta);
 		void Pan(const glm::vec2& delta);
 		void Zoom(float delta);
+		
+		void UpdateView();
+
+	
+		glm::mat4 m_ViewMatrix{ 1.0f };
 
 	private:
-		void UpdateView();
+		
 
 		glm::vec3 CalculatePosition() const;
 
@@ -54,8 +59,10 @@ namespace axe
 		float RotationSpeed() const;
 		float ZoomSpeed() const;
 
+		
+
 	private:
-		glm::mat4 m_ViewMatrix{ 1.0f };
+		
 
 		glm::vec3 m_Position{ 0.0f, 0.0f, 3.0f };
 		glm::vec3 m_FocalPoint{ 0.0f, 0.0f, 0.0f };

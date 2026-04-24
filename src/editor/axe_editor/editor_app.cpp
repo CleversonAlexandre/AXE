@@ -8,7 +8,8 @@
 #include <GLFW/glfw3.h>
 
 
-//#include <imgui.h>
+#include <imgui.h>
+#include <ImGuizmo.h>
 
 namespace axe
 {
@@ -73,11 +74,7 @@ namespace axe
 	}
 
 	void EditorApp::Run()
-	{		
-	
-		
-		
-
+	{	
 		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
 
 		AXE_EDITOR_INFO("Editor started");

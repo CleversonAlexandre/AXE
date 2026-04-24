@@ -11,11 +11,14 @@
 
 namespace axe
 {
+	class ViewportRenderer;
+
 	class EditorUI
 	{
 	public:
+		void SetViewportRenderer(ViewportRenderer* renderer);
 		void Draw();
-
+		
 		ViewportWindow* GetViewport() { return &m_ViewportWindow; }
 
 	private:
@@ -35,6 +38,8 @@ namespace axe
 		bool m_ShowViewport = true;
 		bool m_ShowInspector = true;
 		bool m_ShowAssetBrowser = true;
+
+		ViewportRenderer* m_ViewportRenderer = nullptr;
 	};
 }
 

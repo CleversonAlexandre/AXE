@@ -21,13 +21,14 @@ IncludeDir["spdlog"] = "src/vendor/spdlog"
 IncludeDir["GLFW"] = "src/vendor/GLFW/include"
 IncludeDir["Imgui"] = "src/vendor/imgui"
 IncludeDir["Glad"] = "src/vendor/Glad/include"
+IncludeDir["ImGuizmo"] = "src/vendor/imguizmo"
 
 
 include "src/vendor/simdjson/singleheader"
 include "src/vendor/spdlog"
 include "src/vendor/GLFW"
 include "src/vendor/Glad"
--- include "src/vendor/imgui"
+-- include "src/vendor/imguizmo"
 
 
 
@@ -53,6 +54,10 @@ project "axe"
         "src/vendor/imgui/imgui_demo.cpp",
         "src/vendor/imgui/backends/imgui_impl_opengl3.cpp",
         "src/vendor/imgui/backends/imgui_impl_glfw.cpp",
+        "src/vendor/imguizmo/ImGuizmo.h",
+        "src/vendor/imguizmo/ImGuizmo.cpp",
+        "src/vendor/imguizmo/ImZoomSlider.h",
+        
     }
 
     removefiles
@@ -77,6 +82,8 @@ project "axe"
         "%{IncludeDir.GLFW}",
         "%{IncludeDir.Glad}",
         "%{IncludeDir.Imgui}",
+        "%{IncludeDir.ImGuizmo}",
+        
         
     }
     
@@ -86,7 +93,7 @@ project "axe"
         "spdlog",
         "GLFW",
         "opengl32",
-        "Glad"
+        "Glad"        
     }
 
     defines
@@ -100,8 +107,11 @@ project "axe"
     dependson
     {
         "simdjson",
-        "spdlog"
+        "spdlog"        
     }
+     filter "files:src/vendor/imguizmo/**.cpp"
+        pchheader "None"  -- 
+        pchsource "" 
 
     filter "system:windows"
         cppdialect "C++20"
@@ -162,6 +172,7 @@ project "editor"
         "%{IncludeDir.Glad}",
         "src/vendor/spdlog/include",
         "src/vendor/glm",
+        "%{IncludeDir.ImGuizmo}",
     }
 
     links

@@ -12,6 +12,7 @@ namespace axe
 
 		virtual void Bind() const = 0;
 		virtual void Unbind() const = 0;
+		virtual void SetData(const void* data, std::uint32_t size) = 0;
 
 		static std::shared_ptr<VertexBuffer> Create(const void* data, std::uint32_t size);
 	};

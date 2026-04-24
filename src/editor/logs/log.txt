@@ -1,25 +1,24 @@
-[21:02:47.365] [I] [axe] Core logger initialized
-[21:02:47.365] [I] [editor] Editor logger initialized
-[21:02:47.365] [I] [editor] Creating window...
-[21:02:47.389] [I] [axe] GLFW initialized
-[21:02:47.502] [I] [axe] Window created: AXE Engine (1280x720)
-[21:02:47.502] [I] [axe] OpenGL loader initialized
-[21:02:47.503] [I] [axe] GraphicsDevice initialized
-[21:02:47.503] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
-[21:02:47.503] [I] [axe] GLSL Version: 4.60
-[21:02:47.503] [I] [axe] Renderer: Radeon RX 580 Series
-[21:02:47.504] [I] [axe] GraphicsDevice Initialized successfully
-[21:02:47.504] [I] [axe] ViewportWindow created (no GPU resources yet)
-[21:02:47.504] [I] [editor] EditorLayer attached
-[21:02:47.504] [I] [axe] Initializing ViewportWindow resources...
-[21:02:47.504] [I] [axe] ViewportWindow initialized successfully
-[21:02:47.562] [I] [axe] CubeRenderer created
-[21:02:47.563] [I] [axe] ImGui initialized
-[21:02:47.563] [I] [editor] EditorApp created successfully
-[21:02:47.563] [I] [editor] Editor started
-[21:02:47.619] [I] [axe] Viewport resized to 797x484
-[21:02:52.847] [I] [axe] Viewport resized to 1437x773
-[21:03:22.399] [I] [axe] GraphicsDevice shutdown
-[21:03:22.399] [I] [axe] ViewportWindow destroyed
-[21:03:22.400] [I] [axe] ImGui shutdown
-[21:03:22.427] [I] [axe] Window detroyed
+[00:10:38.378] [I] [axe] Core logger initialized
+[00:10:38.379] [I] [editor] Editor logger initialized
+[00:10:38.379] [I] [editor] Creating window...
+[00:10:38.403] [I] [axe] GLFW initialized
+[00:10:38.526] [I] [axe] Window created: AXE Engine (1280x720)
+[00:10:38.526] [I] [axe] OpenGL loader initialized
+[00:10:38.526] [I] [axe] GraphicsDevice initialized
+[00:10:38.526] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
+[00:10:38.527] [I] [axe] GLSL Version: 4.60
+[00:10:38.527] [I] [axe] Renderer: Radeon RX 580 Series
+[00:10:38.527] [I] [axe] GraphicsDevice Initialized successfully
+[00:10:38.527] [I] [axe] ViewportWindow created (no GPU resources yet)
+[00:10:38.528] [I] [editor] EditorLayer attached
+[00:10:38.528] [I] [axe] Initializing ViewportWindow resources...
+[00:10:38.528] [I] [axe] ViewportWindow initialized successfully
+[00:10:38.593] [I] [axe] CubeRenderer created
+[00:10:38.596] [I] [axe] ImGui initialized
+[00:10:38.596] [I] [editor] EditorApp created successfully
+[00:10:38.596] [I] [editor] Editor started
+[00:10:38.654] [I] [axe] Viewport resized to 797x484
+[00:10:45.026] [I] [axe] GraphicsDevice shutdown
+[00:10:45.026] [I] [axe] ViewportWindow destroyed
+[00:10:45.027] [I] [axe] ImGui shutdown
+[00:10:45.052] [I] [axe] Window detroyed
