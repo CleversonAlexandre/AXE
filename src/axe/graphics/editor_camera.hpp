@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+
 namespace axe
 {
 	class AXE_API EditorCamera : public Camera

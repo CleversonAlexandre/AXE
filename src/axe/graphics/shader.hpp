@@ -17,10 +17,14 @@ namespace axe
 		virtual void SetMat4(const std::string& name, const float* valeu) = 0;
 
 		virtual void SetInt(const std::string& name, int value) = 0;
+		virtual void SetUint(const std::string& name, std::uint32_t value) = 0;
 		virtual void SetFloat4(const std::string& name, const glm::vec4& value) = 0;
 
 		static std::shared_ptr<Shader> Create(const std::string& vertexSource,
 											  const std::string& fragmentSource);
-
+		virtual void SetFloat(const std::string& name, float value) = 0;
+		virtual void SetFloat3(const std::string& name, const glm::vec3& value) = 0;
+		virtual void SetMat3(const std::string& name, const float* value) = 0;
+		virtual void SetBool(const std::string& name, bool value) = 0;
 	};
 }

@@ -16,6 +16,7 @@ namespace axe
 		void Resize(std::uint32_t width, std::uint32_t height) override;
 
 		std::uint32_t GetColorAttachmentRendererID() const override { return m_ColorAttachment; }
+		std::uint32_t ReadPixel(std::uint32_t x, std::uint32_t y) const override;
 		const FramebufferSpecification& GetSpecification() const override { return m_Specification; }
 
 	private:

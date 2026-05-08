@@ -32,7 +32,7 @@ namespace axe
 		float GetTime() const override;
 		virtual void* GetNativeWindow() const override;
 
-
+		void CaptureCursor(bool capture) override;
 
 	private:
 		struct WindowData

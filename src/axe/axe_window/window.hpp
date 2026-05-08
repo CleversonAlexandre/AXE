@@ -43,6 +43,8 @@ namespace axe
 
 		static Window* Create(const WindowProps& props = WindowProps());
 		
+		virtual void CaptureCursor(bool capture) = 0;
+		
 	
 	};
 }

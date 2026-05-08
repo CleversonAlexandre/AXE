@@ -5,7 +5,7 @@
 #include "editor_ui.hpp"
 #include "asset_browser.hpp"
 
-//#include "axe/core/types.hpp"
+#include "editor_context.hpp"
 
 #include <imgui.h>
 
@@ -17,9 +17,11 @@ namespace axe
 	{
 	public:
 		void SetViewportRenderer(ViewportRenderer* renderer);
+		void SetContext(EditorContext* context);
 		void Draw();
 		
 		ViewportWindow* GetViewport() { return &m_ViewportWindow; }
+		AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
 
 	private:
 

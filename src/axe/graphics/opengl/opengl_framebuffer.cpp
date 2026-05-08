@@ -1,4 +1,5 @@
 #include "opengl_framebuffer.hpp"
+#include "axe/graphics/framebuffer.hpp"
 
 #include <glad/glad.h>
 
@@ -71,5 +72,23 @@ namespace axe
 		m_Specification.Width = width;
 		m_Specification.Height = height;
 		Invalidate();
+	}
+
+	std::uint32_t OpenGLFramebuffer::ReadPixel(std::uint32_t x, std::uint32_t y) const
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
+
+		// Lê 1 pixel na posição (x, y) como 4 bytes RGBA
+		std::uint8_t pixel[4] = { 0, 0, 0, 0 };
+		glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		// Reconstrói o ID a partir dos 4 canais
+		// Mesmo encoding usado no shader de picking
+		return  (std::uint32_t)(pixel[0]) |
+			(std::uint32_t)(pixel[1]) << 8 |
+			(std::uint32_t)(pixel[2]) << 16 |
+			(std::uint32_t)(pixel[3]) << 24;
 	}
 }

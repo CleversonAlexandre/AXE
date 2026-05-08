@@ -48,7 +48,8 @@ namespace axe
 
 	private:
 		std::vector<Layer*> m_Layers;
-		std::vector<Layer*>::iterator m_LayerInsertIndex;
+		uint32_t m_LayerInsertIndex = 0;
+		//std::vector<Layer*>::iterator m_LayerInsertIndex;
 	};
 }
 

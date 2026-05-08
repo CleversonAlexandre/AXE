@@ -33,6 +33,8 @@ namespace axe
 
 		void* GetContextRaw() const { return (void*)m_Context; }
 
+		GLFWwindow* GetNativeWindow() const { return m_NativeWindow; }
+
 	private:
 		bool OnMouseButtonReleasedEvent(MouseButtonReleasedEvent& e);
 		bool OnMouseMovedEvent(MouseMovedEvent& e);

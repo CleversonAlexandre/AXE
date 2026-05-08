@@ -25,3 +25,9 @@
 [submodule "src/vendor/imguizmo"]
 	path = src/vendor/imguizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo
+[submodule "src/vendor/assimp"]
+	path = src/vendor/assimp
+	url = https://github.com/assimp/assimp.git
+[submodule "src/vendor/entt"]
+	path = src/vendor/entt
+	url = https://github.com/skypjack/entt.git

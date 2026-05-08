@@ -126,4 +126,34 @@ namespace axe
 		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
 		glUniform4f(location, value.x, value.y, value.z, value.w);
 	}
+
+	void OpenGLShader::SetFloat(const std::string& name, float value)
+	{
+		Bind();
+		glUniform1f(GetUniformLocation(name), value);
+	}
+
+	void OpenGLShader::SetFloat3(const std::string& name, const glm::vec3& value)
+	{
+		Bind();
+		glUniform3f(GetUniformLocation(name), value.x, value.y, value.z);
+	}
+
+	void OpenGLShader::SetMat3(const std::string& name, const float* value)
+	{
+		Bind();
+		glUniformMatrix3fv(GetUniformLocation(name), 1, GL_FALSE, value);
+	}
+
+	void OpenGLShader::SetBool(const std::string& name, bool value)
+	{
+		Bind();
+		glUniform1i(GetUniformLocation(name), value ? 1 : 0);
+	}
+	void OpenGLShader::SetUint(const std::string& name, std::uint32_t value)
+	{
+		Bind();
+		glUniform1ui(GetUniformLocation(name), value);
+	}
+
 }

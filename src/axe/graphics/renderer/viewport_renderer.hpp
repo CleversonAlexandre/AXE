@@ -1,68 +1,67 @@
 #pragma once
 #include "axe/core/types.hpp"
-
 #include "axe/utils/glm_config.hpp"
 #include "axe/graphics/framebuffer.hpp"
-#include "axe/graphics/renderer/cube_renderer.hpp"
-
 #include "axe/renderer/scene_renderer.hpp"
+#include "picking_renderer.hpp"
 #include "axe/scene/scene.hpp"
-
+#include "axe/scene/components.hpp"
+#include <entt/entt.hpp>
 #include <memory>
-#include <cstdint>
-
 #include <imgui.h>
 #include <ImGuizmo.h>
-#include <string>
+
+#include "axe/graphics/game_camera.hpp"
+#include "skybox_renderer.hpp"
+#include "axe/scene/scene_environment.hpp"
 
 namespace axe
 {
 
-class Framebuffer;
-class EditorCamera;
-class SceneRenderer;
-class Scene;
+	class Framebuffer;
+	class EditorCamera;
+	class SceneRenderer;
+	class Scene;
 
 
-class AXE_API ViewportRenderer
+	class AXE_API ViewportRenderer
 	{
-		
 	public:
-
-		
-
 		void Initialize();
-		void RenderToFramebuffer(Framebuffer& framebuffer, std::uint32_t width, std::uint32_t height, float timeSeconds);
+
+		void SetScene(Scene* scene) { m_Scene = scene; }
+		void SetSelectedEntity(entt::entity* e) { m_SelectedEntity = e; }
+
+		void RenderToFramebuffer(Framebuffer& framebuffer, std::uint32_t width,
+			std::uint32_t height, float timeSeconds);
 
 		void OnMouseRotate(const glm::vec2& delta);
 		void OnMousePan(const glm::vec2& delta);
 		void OnMouseZoom(float delta);
 
-		Scene* GetScene() { return m_Scene.get(); }
-		const Scene* GetScene() const { return m_Scene.get(); }
-
-
-
-		void SelectObject(std::uint32_t id) { m_SelectedObjectID = id; }
-		void ClearSelection() { m_SelectedObjectID = 0; }
-
-		std::uint32_t GetSelectedObjectID() const { return m_SelectedObjectID; }
-
-		SceneObject* GetSelectedObject();
-		const SceneObject* GetSelectedObject() const;
-				
-		
-
-		
 		void DrawGuizmo(const glm::vec2& boundsMin, const glm::vec2& boundsMax);
+
+		std::uint32_t PickObject(float mouseX, float mouseY);
+		void ResizePicking(std::uint32_t width, std::uint32_t height);
+
 		ImGuizmo::OPERATION m_GuizmoOperation = ImGuizmo::TRANSLATE;
 		std::unique_ptr<EditorCamera> m_Camera;
+
+		void SetGameCamera(GameCamera* cam) { m_GameCamera = cam; }
+
+		void SetEnvironment(SceneEnvironment* env) { m_Environment = env; }
+
 	private:
-		
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
-		std::unique_ptr<Scene> m_Scene;
-		
-				
-		std::uint32_t m_SelectedObjectID = 0;
+		PickingRenderer                m_PickingRenderer;
+
+		Scene* m_Scene = nullptr;
+		entt::entity* m_SelectedEntity = nullptr;
+
+		GameCamera* m_GameCamera = nullptr;
+
+		SkyboxRenderer   m_SkyboxRenderer;
+		SceneEnvironment* m_Environment = nullptr;
 	};
-}
+
+} // namespace axe

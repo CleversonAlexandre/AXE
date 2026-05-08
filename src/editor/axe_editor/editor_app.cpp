@@ -11,6 +11,9 @@
 #include <imgui.h>
 #include <ImGuizmo.h>
 
+#include "axe/project/project_manager.hpp"
+#include "project_selector_layer.hpp"
+
 namespace axe
 {
 #define BIND_EVENT_FN(x) std::bind(&EditorApp::x, this, std::placeholders::_1)
@@ -46,10 +49,46 @@ namespace axe
 
 		m_Window->SetEventCallback(BIND_EVENT_FN(OnEvent));
 
-		// EditorLayer — layer normal, fica na base da pilha
-		m_LayerStack.PushLayer(new EditorLayer());
 
-		// ImGuiLayer — overlay, sempre no topo
+		axe::ProjectManager::Get().LoadPreferences();
+
+		// Decide qual layer colocar primeiro
+		if (ProjectManager::Get().HasLastProject())
+		{
+			// Abre direto o editor
+			ProjectManager::Get().OpenProject(
+				ProjectManager::Get().GetLastProjectPath()
+			);
+			m_LayerStack.PushLayer(new EditorLayer());
+		}
+		else
+		{
+			// Mostra splash screen
+			m_LayerStack.PushLayer(new ProjectSelectorLayer(
+				[this](const std::filesystem::path& projectPath)
+				{
+					// Agenda a troca — não executa agora
+					m_PendingCommands.push_back([this]()
+						{
+							// Remove ProjectSelectorLayer
+							for (auto* layer : m_LayerStack)
+							{
+								if (layer->GetName() == "ProjectSelectorLayer")
+								{
+									m_LayerStack.PopLayer(layer);
+									delete layer;
+									break;
+								}
+							}
+							// Adiciona EditorLayer
+							auto* editorLayer = new EditorLayer();
+							m_LayerStack.PushLayer(editorLayer);
+						});
+				}
+			));
+		}
+
+		// ImGuiLayer sempre por último
 		m_ImGuiLayer = new ImGuiLayer(m_Window.get());
 		m_LayerStack.PushOverlay(m_ImGuiLayer);
 
@@ -74,9 +113,8 @@ namespace axe
 	}
 
 	void EditorApp::Run()
-	{	
+	{
 		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
-
 		AXE_EDITOR_INFO("Editor started");
 
 		float lastFrameTime = m_Window->GetTime();
@@ -87,27 +125,39 @@ namespace axe
 			TimeStamp deltaTime = currentTime - lastFrameTime;
 			lastFrameTime = currentTime;
 
-			
+			// Executa comandos pendentes ANTES de iterar as layers
+			ExecutePendingCommands();
 
 			m_Window->PollEvents();
 
 			for (Layer* layer : m_LayerStack)
 				layer->OnUpdate((float)deltaTime);
 
-			//Render - ImGui envolve o render de todas as layers
 			m_Graphics->BeginFrame();
-			m_ImGuiLayer->Begin();      // abre o frame do ImGui
+			m_ImGuiLayer->Begin();
 
 			for (Layer* layer : m_LayerStack)
-				layer->OnRender();   	// cada layer desenha a sua UI
-		
-			//m_EditorUI->Draw();
-			m_ImGuiLayer->End();        // fecha e renderiza o ImGui
+				layer->OnRender();
+
+			m_ImGuiLayer->End();
 			m_Graphics->EndFrame();
 			m_Window->SwapBuffers();
 		}
-		
+
 		m_Graphics->Shutdown();
+	}
+
+	void EditorApp::ExecutePendingCommands()
+	{
+		for (auto& cmd : m_PendingCommands)
+		{
+			try { cmd(); }
+			catch (const std::exception& e)
+			{
+				AXE_CORE_ERROR("ExecutePendingCommands: {}", e.what());
+			}
+		}
+		m_PendingCommands.clear();
 	}
 
 

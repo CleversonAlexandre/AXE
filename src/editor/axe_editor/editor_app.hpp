@@ -11,6 +11,9 @@
 #include "axe/layers/layer_stack.hpp"
 #include "imgui_layer.hpp"
 
+#include <functional>
+#include <vector>
+
 namespace axe
 {
 	class EditorUI;
@@ -42,6 +45,9 @@ namespace axe
 
 		LayerStack m_LayerStack;
 		ImGuiLayer* m_ImGuiLayer{ nullptr };
+
+		void ExecutePendingCommands();
+		std::vector<std::function<void()>> m_PendingCommands;
 	};
 
 	// EditorApp* CreateEditorApp();

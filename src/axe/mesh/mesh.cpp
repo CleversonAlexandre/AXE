@@ -1,0 +1,36 @@
+#include "mesh.hpp"
+
+#include "axe/graphics/buffer.hpp"
+#include "axe/graphics/vertex_array.hpp"
+
+
+namespace axe
+{
+	Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<std::uint32_t>& indices)
+	{
+		m_VertexArray = VertexArray::Create();
+
+		m_VertexBuffer = VertexBuffer::Create(
+			vertices.data(),
+			static_cast<std::uint32_t>(vertices.size() * sizeof(Vertex))
+		);
+
+		BufferLayout layout =
+		{
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false},
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false},
+			{axe::ShaderDataType::Float2, sizeof(float) * 2, false}
+		};
+
+		m_VertexArray->AddVertexBuffer(m_VertexBuffer, layout);
+
+		m_IndexBuffer = IndexBuffer::Create(
+			indices.data(),
+			static_cast<std::uint32_t>(indices.size())
+		);
+
+		m_VertexArray->SetIndexBuffer(m_IndexBuffer);
+
+		m_IndexCount = static_cast<std::uint32_t>(indices.size());
+	}
+}

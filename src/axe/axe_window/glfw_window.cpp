@@ -10,6 +10,8 @@
 #include "axe/log/log.hpp"
 
 
+
+
 #include <functional>
 
 
@@ -108,10 +110,9 @@ namespace axe
 			case GLFW_PRESS:
 			{
 				KeyPressedEvent event(key, 0);
-				if (data.EventCallback)
-				{
+				if (data.EventCallback)				
 					data.EventCallback(event);
-				}
+				
 				//AXE_CORE_INFO(" GLFW_REPEAT: {} {} {}", key, scancode, action, modes);
 				break;
 			}
@@ -204,8 +205,25 @@ namespace axe
 			//AXE_CORE_INFO("XPos {} YPos {}", xpos, ypos);
 		});
 
+		glfwSetDropCallback(m_Window, [](GLFWwindow* window, int count, const char** paths)
+		{
+			
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+
+				//Suporta um arquivo por vez o primeiro da lista
+				if (count > 0 && data.EventCallback)
+				{
+					FileDropEvent event(paths[0]);
+					data.EventCallback(event);
+				}
+		});
 
 
+
+		glfwSetCursorEnterCallback(m_Window, [](GLFWwindow* window, int entered)
+			{
+				// Necessário para o ImGui rastrear quando o cursor entra/sai
+			});
 	
 	}
 
@@ -269,6 +287,17 @@ namespace axe
 	float WindowGlfw::GetTime() const
 	{
 		return (float)glfwGetTime(); // chamado dentro da DLL onde o GLFW vive
+	}
+
+	void WindowGlfw::CaptureCursor(bool capture)
+	{
+		if (capture)
+			glfwSetInputMode(m_Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+		else
+			glfwSetInputMode(m_Window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+		AXE_CORE_INFO("CaptureCursor: {} → modo={}", capture,
+			glfwGetInputMode(m_Window, GLFW_CURSOR));
 	}
 	
 	

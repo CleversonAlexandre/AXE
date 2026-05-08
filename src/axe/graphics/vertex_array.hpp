@@ -6,7 +6,7 @@
 
 namespace axe
 {
-	enum class ShaderDataType
+	enum class AXE_API ShaderDataType
 	{
 		Float,
 		Float2,

@@ -60,6 +60,7 @@ namespace axe
 			//ImGui::PopStyleColor(1);
 			return;
 		}
+		DrawToolbar();
 
 		ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 		uint32_t width = static_cast<uint32_t>(viewportSize.x);
@@ -103,6 +104,19 @@ namespace axe
 			ImGui::Text("Initializing viewport...");
 			m_IsHovered = false;
 		}		
+
+		// Drag and drop do Asset Browser para o viewport
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+			{
+				const char* uuid = (const char*)payload->Data;
+				if (m_AssetDropCallback)
+					m_AssetDropCallback(std::string(uuid));
+			}
+			ImGui::EndDragDropTarget();
+		}
+
 		ImGui::End();
 		//ImGui::PopStyleColor(1);
 	}
@@ -133,6 +147,67 @@ namespace axe
 		return nullptr;
 	}
 
+	void ViewportWindow::DrawToolbar()
+	{
+		if (!m_PlayStateCallback || !m_PlayActionCallback) return;
+
+		int state = m_PlayStateCallback(); //0=Edit, 1=Play, 2=Pause
+
+		//Posição da toolbar - centralizada no topo do viewport
+		ImDrawList* draw = ImGui::GetWindowDrawList();
+		ImVec2 wpos = ImGui::GetWindowPos();
+		ImVec2 wsize = ImGui::GetWindowSize();
+
+		float btnW = 60.0f;
+		float btnH = 24.0f;
+		float gap = 4.0f;
+		float totalW = btnW * 3 + gap * 2;
+		float startX = wpos.x + (wsize.x - totalW) * 0.5f;
+		float startY = wpos.y + 28.0f; //Abaixo do titulo da janela
+
+		//Fundo da toolbar 
+		draw->AddRectFilled(
+			ImVec2(startX - 6, startY -4),
+			ImVec2(startX + totalW + 6, startY + btnH + 4),
+			IM_COL32(30, 30, 30, 200), 4.0f
+		);
+
+		//Botão Play
+		ImGui::SetCursorScreenPos(ImVec2(startX, startY));
+		if (state == 1) //play ativo
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+		else
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.24f, 0.25f, 1.0f));
+		if (ImGui::Button("Play", ImVec2(btnW, btnH)))
+		{
+			if (state == 0) m_PlayActionCallback(0); // Edit → Play
+			if (state == 2) m_PlayActionCallback(0); // Pause → Play
+		}
+		ImGui::PopStyleColor();
+
+
+		// Botão Pause
+		ImGui::SetCursorScreenPos(ImVec2(startX + btnW + gap, startY));
+		if (state == 2)
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
+		else
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+
+		if (ImGui::Button("Pause", ImVec2(btnW, btnH)) && state == 1)
+			m_PlayActionCallback(1);
+
+		ImGui::PopStyleColor();
+
+		// Botão Stop
+		ImGui::SetCursorScreenPos(ImVec2(startX + (btnW + gap) * 2, startY));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+
+		if (ImGui::Button("Stop", ImVec2(btnW, btnH)) && state != 0)
+			m_PlayActionCallback(2);
+
+		ImGui::PopStyleColor();
+
+	}
 
 
 

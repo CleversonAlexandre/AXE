@@ -43,8 +43,8 @@ namespace axe
 
 
 		//Abre a janela host 
-		//ImGui::Begin("Dockspace Host", nullptr, windowFlags);
-		ImGui::Begin("Dockspace Host");
+		ImGui::Begin("Dockspace Host", nullptr, windowFlags);
+		//ImGui::Begin("Dockspace Host");
 
 		ImGui::PopStyleVar(3); // restaura os 3 estilos que feitos o push
 
@@ -62,11 +62,16 @@ namespace axe
 		DrawMenuBar();
 
 	}
+	void EditorUI::SetContext(EditorContext* context)
+	{
+		m_HierarchyWindow.SetContext(context);
+		m_InspectorWindow.SetContext(context);
+		m_AssetBowserWindow.SetContext(context);
+	}
 
 	void EditorUI::SetViewportRenderer(ViewportRenderer* renderer)
 	{
-		m_HierarchyWindow.SetViewportRenderer(renderer);
-		m_InspectorWindow.SetViewportRenderer(renderer);
+		m_ViewportRenderer = renderer;		
 	}
 
 	void EditorUI::EndDockspace()

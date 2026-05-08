@@ -22,13 +22,18 @@ IncludeDir["GLFW"] = "src/vendor/GLFW/include"
 IncludeDir["Imgui"] = "src/vendor/imgui"
 IncludeDir["Glad"] = "src/vendor/Glad/include"
 IncludeDir["ImGuizmo"] = "src/vendor/imguizmo"
+IncludeDir["assimp"] = "src/vendor/assimp/include"
+IncludeDir["entt"] = "src/vendor/entt/src"
+IncludeDir["nlohmann"] = "src/vendor"
+IncludeDir["stb"] = "src/vendor/stb"
+
 
 
 include "src/vendor/simdjson/singleheader"
 include "src/vendor/spdlog"
 include "src/vendor/GLFW"
 include "src/vendor/Glad"
--- include "src/vendor/imguizmo"
+-- include "src/vendor/assimp"
 
 
 
@@ -83,17 +88,24 @@ project "axe"
         "%{IncludeDir.Glad}",
         "%{IncludeDir.Imgui}",
         "%{IncludeDir.ImGuizmo}",
-        
-        
+        "%{IncludeDir.assimp}",
+        "%{IncludeDir.entt}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.stb}"
+
     }
-    
+   libdirs
+    {
+        "src/vendor/assimp/build/lib/Release"
+    }
     links
     {
         "simdjson",
         "spdlog",
         "GLFW",
         "opengl32",
-        "Glad"        
+        "Glad",
+        "assimp-vc145-mt"
     }
 
     defines
@@ -107,7 +119,8 @@ project "axe"
     dependson
     {
         "simdjson",
-        "spdlog"        
+        "spdlog"
+     
     }
      filter "files:src/vendor/imguizmo/**.cpp"
         pchheader "None"  -- 
@@ -123,11 +136,19 @@ project "axe"
             "AXE_BUILD_DLL"
         }
 
+     
+--    postbuildcommands
+--     {
+--         '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/editor"',
+--         '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor/axe.dll"',
+--         '{COPYFILE} "C:/msys64/ucrt64/bin/libassimp-6.dll" "%{cfg.targetdir}"'
+--     }
         postbuildcommands
         {
-            -- COPIA A DLL PARA A PASTA DO EDITOR
-            ('{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/editor"'),
-            ('{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor/axe.dll"')
+            '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/editor" >nul 2>nul',
+            '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor/axe.dll" >nul',
+            '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"'
+                
         }
 
     filter "configurations:Debug"
@@ -173,14 +194,24 @@ project "editor"
         "src/vendor/spdlog/include",
         "src/vendor/glm",
         "%{IncludeDir.ImGuizmo}",
+        "%{IncludeDir.assimp}",
+        "%{IncludeDir.entt}",
+        "%{IncludeDir.nlohmann}",
     }
+
+    libdirs
+    {
+        "src/vendor/assimp/build/lib/Release"
+    }
+
 
     links
     {
         "axe",
         "GLFW",
         "opengl32",
-        "Glad"
+        "Glad",
+        "assimp-vc145-mt"
     }
 
     defines
@@ -201,7 +232,8 @@ project "editor"
     -- Primeiro cria a pasta se não existir
     ('if not exist "%{wks.location}/bin/' .. outputdir .. '/editor" mkdir "%{wks.location}/bin/' .. outputdir .. '/editor"'),
     -- Depois copia o arquivo
-    ('xcopy /Y /B "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor\\"')
+    ('xcopy /Y /B "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor\\"'),
+     '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"'
 }
     filter "system:windows"
         cppdialect "C++20"

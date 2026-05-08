@@ -31,8 +31,12 @@ namespace axe
 		ImGuiIO& io = ImGui::GetIO();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+		io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
+
+		// Diz ao ImGui para não restaurar o cursor do SO
+		io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 		
-		
+		io.MouseDrawCursor = false;
 
 		m_NativeWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
 

@@ -67,6 +67,30 @@ namespace axe
 		EVENT_CLASS_TYPE(AppRender)
 			EVENT_CLASS_CATEGORY(EventCategoryApplication)
 	};
+
+	class FileDropEvent : public Event 
+	{
+	public:
+		FileDropEvent(const std::string& path) 
+			: m_Path(path) {}
+
+		const std::string& GetPath() const { return m_Path; }
+
+		std::string ToString() const override
+		{
+			std::stringstream ss;
+			ss << "FileDropEvent: " << m_Path;
+			return ss.str();
+		}
+		EVENT_CLASS_TYPE(FileDrop)
+		EVENT_CLASS_CATEGORY(EventCategoryApplication)
+
+
+	private:
+		std::string m_Path;
+
+	};
 }
+
 
 
