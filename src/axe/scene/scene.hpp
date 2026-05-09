@@ -30,6 +30,21 @@ namespace axe
 		entt::registry& GetRegistry() { return m_Registry; }
 		const entt::registry& GetRegistry() const { return m_Registry; }
 
+		//cria uma pasta de organização
+		entt::entity CreateFolder(const std::string& name = "Folder");
+
+		//Define pai/filho
+		void SetParent(entt::entity child, entt::entity parent);
+
+		//Remove de um pai
+		void RemoveParent(entt::entity child);
+
+		//Calcula tranform acumulado (pai * filho *...)
+		glm::mat4 GetWorldTransform(entt::entity entity) const;
+
+		//Retorna entities raiz (sem pai)
+		std::vector<entt::entity> GetRootEntities() const;
+
 	private:
 		entt::registry m_Registry;
 	private:

@@ -61,41 +61,42 @@ namespace axe
 			
 		}
 		
-			void OnAttach() override
+		void OnAttach() override
 		{
 			AXE_EDITOR_INFO("EditorLayer attached");
 
 			// 1. Cria a cena
 			m_Scene = std::make_unique<Scene>();
-
-			// Cube A
-			entt::entity cubeA = m_Scene->CreateEntity("Cube A");
-			auto& mcA = m_Scene->GetRegistry().emplace<MeshComponent>(cubeA);
-			mcA.Data = MeshFactory::CreateCube();
-			mcA.AssetUUID = PrimitiveUUID::Cube;
-
-			// Cube B
-			entt::entity cubeB = m_Scene->CreateEntity("Cube B");
-			auto& mcB = m_Scene->GetRegistry().emplace<MeshComponent>(cubeB);
-			mcB.Data = MeshFactory::CreateCube();
-			mcB.AssetUUID = PrimitiveUUID::Cube;
-			m_Scene->GetRegistry().get<TransformComponent>(cubeB).Data.Position = { 2.0f, 0.0f, 0.0f };
-
-			// Cube C
-			entt::entity cubeC = m_Scene->CreateEntity("Cube C");
-			auto& mcC = m_Scene->GetRegistry().emplace<MeshComponent>(cubeC);
-			mcC.Data = MeshFactory::CreateCube();
-			mcC.AssetUUID = PrimitiveUUID::Cube;
-			m_Scene->GetRegistry().get<TransformComponent>(cubeC).Data.Position = { -2.0f, 0.0f, 0.0f };
-			m_Scene->GetRegistry().get<TransformComponent>(cubeC).Data.Scale = { 1.0f,  2.0f, 1.0f };
-
-			// Luz direcional
-			m_Scene->CreateLight("Directional Light");
-
-			// 2. Popula o contexto
 			m_Context.ActiveScene = m_Scene.get();
-			m_Context.SelectedEntity = cubeA;
+			m_Context.SelectedEntity = entt::null;
 			m_EditorUI->SetContext(&m_Context);
+
+			// 2. Carrega cena padrão se existir, senão cria cena vazia
+			if (ProjectManager::Get().HasStartScene())
+			{
+				SceneSerializer::Deserialize(
+					ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
+			}
+			else
+			{
+				// Tenta carregar cena padrão do engine
+				std::string defaultScene = "resources/default_scene/main.axescene";
+				AXE_EDITOR_INFO("Procurando cena padrão em: {}",
+					std::filesystem::absolute(defaultScene).string());
+
+				if (std::filesystem::exists(defaultScene))
+				{
+					AXE_EDITOR_INFO("Carregando cena padrão do engine.");
+					SceneSerializer::Deserialize(defaultScene, *m_Scene);
+				}
+				else
+				{
+					// Cena realmente vazia
+					AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
+					m_Scene->CreateLight("Directional Light");
+					AXE_EDITOR_INFO("Cena vazia criada.");
+				}
+			}
 
 			// 3. Registra callback do AssetBrowser
 			m_EditorUI->GetAssetBrowser()->SetFileDropCallback(
@@ -139,8 +140,7 @@ namespace axe
 						auto mesh = MeshFactory::CreateByUUID(uuid);
 						if (!mesh) return;
 
-						auto entity = m_Scene->CreateEntity(
-							AssetDatabase::Get().GetByUUID(uuid)->Name);
+						auto entity = m_Scene->CreateEntity(AssetDatabase::Get().GetByUUID(uuid)->Name);
 						auto& mc = registry.emplace<MeshComponent>(entity);
 						mc.Data = mesh;
 						mc.AssetUUID = uuid;
@@ -168,7 +168,6 @@ namespace axe
 
 			m_EditorUI->GetAssetBrowser()->SetInstantiateCallback(instantiate);
 			m_EditorUI->GetViewport()->SetAssetDropCallback(instantiate);
-
 
 			// 4. Inicializa o viewport
 			ViewportWindow* viewport = m_EditorUI->GetViewport();
@@ -212,14 +211,8 @@ namespace axe
 							AXE_EDITOR_INFO("Modo Play retomado.");
 						}
 					}
-					else if (action == 1) // Pause
-					{
-						EnterPause();
-					}
-					else if (action == 2) // Stop
-					{
-						EnterEdit();
-					}
+					else if (action == 1) EnterPause();
+					else if (action == 2) EnterEdit();
 				});
 
 			// 5. Inicializa o renderer
@@ -227,9 +220,10 @@ namespace axe
 			m_ViewportRenderer->Initialize();
 			m_ViewportRenderer->SetScene(m_Scene.get());
 			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-			m_ViewportRenderer->SetEnvironment(&m_Environment); // ← aqui, após Initialize
+			m_ViewportRenderer->SetEnvironment(&m_Environment);
 
 			m_EditorUI->SetViewportRenderer(m_ViewportRenderer.get());
+
 			m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
 			EditorIconLibrary::Get().Load("resources");
 		}
@@ -400,6 +394,13 @@ namespace axe
 				/ "Scenes" / "main.axescene";
 
 			SceneSerializer::Serialize(*m_Scene, scenePath);
+
+			// Define como cena padrão automaticamente
+			auto& project = ProjectManager::Get().GetCurrent();
+			project.StartScene = "Assets/Scenes/main.axescene";
+			ProjectManager::Get().SaveProject();
+
+			AXE_EDITOR_INFO("Cena salva e definida como padrão.");
 		}
 		void LoadScene()
 		{

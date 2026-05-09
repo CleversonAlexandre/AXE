@@ -6,7 +6,6 @@
 #include <cstdlib>
 
 #include "axe/asset/asset_database.hpp"
-#include "axe/asset/asset_database.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 
 namespace axe
@@ -216,5 +215,20 @@ namespace axe
 			AXE_CORE_WARN("ProjectManager: erro ao ler preferências: {}", e.what());
 		}
 	}
+
+	bool ProjectManager::HasStartScene() const
+	{
+		if (!m_CurrentProject) return false;
+		if (m_CurrentProject->StartScene.empty()) return false;
+
+		auto path = m_CurrentProject->RootPath / m_CurrentProject->StartScene;
+		return std::filesystem::exists(path);
+	}
+	void ProjectManager::SaveProject()
+	{
+		if (!m_CurrentProject) return;
+		WriteProjectFile(*m_CurrentProject);
+	}
+
 
 } // namespace axe

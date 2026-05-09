@@ -35,6 +35,15 @@ namespace axe
 		void SavePreferences();
 		void LoadPreferences();
 
+		bool HasStartScene() const;
+		void SaveProject();
+		
+
+		std::filesystem::path GetStartScenePath() const
+		{
+			return m_CurrentProject->RootPath / m_CurrentProject->StartScene;
+		}
+
 	private:
 		ProjectManager() = default;
 

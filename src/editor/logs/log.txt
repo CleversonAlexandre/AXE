@@ -1,53 +1,42 @@
-[23:19:16.310] [I] [axe] Core logger initialized
-[23:19:16.311] [I] [editor] Editor logger initialized
-[23:19:16.311] [I] [editor] Creating window...
-[23:19:16.329] [I] [axe] GLFW initialized
-[23:19:16.435] [I] [axe] Window created: AXE Engine (1280x720)
-[23:19:16.435] [I] [axe] OpenGL loader initialized
-[23:19:16.435] [I] [axe] GraphicsDevice initialized
-[23:19:16.435] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
-[23:19:16.436] [I] [axe] GLSL Version: 4.60
-[23:19:16.436] [I] [axe] Renderer: Radeon RX 580 Series
-[23:19:16.436] [I] [axe] GraphicsDevice Initialized successfully
-[23:19:16.438] [I] [axe] AssetDatabase: primitiva registrada 'Cube' → primitive-cube-0000-0000-000000000001
-[23:19:16.438] [I] [axe] AssetDatabase: primitiva registrada 'Sphere' → primitive-sphere-0000-0000-000000000002
-[23:19:16.438] [I] [axe] AssetDatabase: primitiva registrada 'Plane' → primitive-plane-0000-0000-000000000003
-[23:19:16.438] [I] [axe] AssetDatabase: primitiva registrada 'Cylinder' → primitive-cylinder-0000-0000-000000000004
-[23:19:16.439] [I] [axe] AssetDatabase: 5 assets carregados.
-[23:19:16.439] [I] [axe] ProjectManager: projeto 'EngineDevelopment' aberto.
-[23:19:16.439] [I] [axe] ViewportWindow created (no GPU resources yet)
-[23:19:16.439] [I] [editor] EditorLayer attached
-[23:19:16.440] [I] [axe] Initializing ViewportWindow resources...
-[23:19:16.441] [I] [axe] ViewportWindow initialized successfully
-[23:19:16.499] [I] [axe] CubeRenderer created
-[23:19:16.548] [I] [axe] CubemapTexture: HDRI 'resources/quarry_04_puresky_2k.hdr' carregado (2048x1024)
-[23:19:16.555] [I] [axe] CubemapTexture: cubemap gerado com sucesso.
-[23:19:16.556] [I] [axe] Texture2D: 'resources/icons/icon_mesh.png' carregada (122x105, 4 canais)
-[23:19:16.557] [I] [axe] Texture2D: 'resources/icons/icon_texture.png' carregada (82x83, 4 canais)
-[23:19:16.558] [I] [axe] Texture2D: 'resources/icons/icon_scene.png' carregada (106x93, 4 canais)
-[23:19:16.559] [I] [axe] Texture2D: 'resources/icons/icon_folder.png' carregada (80x69, 4 canais)
-[23:19:16.560] [I] [axe] Texture2D: 'resources/icons/icon_script.png' carregada (72x87, 4 canais)
-[23:19:16.560] [I] [axe] Texture2D: 'resources/icons/icon_audio.png' carregada (91x76, 4 canais)
-[23:19:16.560] [I] [axe] EditorIconLibrary: ícones carregados.
-[23:19:16.561] [I] [axe] ImGui initialized
-[23:19:16.561] [I] [editor] EditorApp created successfully
-[23:19:16.561] [I] [editor] Editor started
-[23:19:16.616] [I] [axe] Viewport resized to 1437x744
-[23:19:16.619] [I] [axe] Viewport resized to 797x455
-[23:19:18.461] [I] [axe] Viewport resized to 1437x744
-[23:19:21.131] [I] [axe] MeshLoader: carregando 'C:\Users\Clever\Documents\cube.obj' (1 mesh(es) encontrada(s))
-[23:19:21.131] [I] [axe] MeshLoader: 216 vértices, 324 índices
-[23:19:21.133] [I] [axe] MeshLoader: cor do material (0.012466, 0.002699, 0.800007, 1)
-[23:19:21.133] [I] [axe] SceneSerializer: cena carregada de 'C:\Users\Clever\Documents\AXEProjects\EngineDevelopment\Assets\Scenes\main.axescene'
-[23:19:39.490] [I] [axe] CaptureCursor: true → modo=212995
-[23:19:39.490] [I] [editor] Modo Play iniciado.
-[23:20:27.347] [I] [axe] CaptureCursor: false → modo=212993
-[23:20:27.348] [I] [editor] Modo Pause — editor ativo.
-[23:20:37.750] [I] [axe] MeshLoader: carregando 'C:\Users\Clever\Documents\cube.obj' (1 mesh(es) encontrada(s))
-[23:20:37.751] [I] [axe] MeshLoader: 216 vértices, 324 índices
-[23:20:37.751] [I] [axe] MeshLoader: cor do material (0.012466, 0.002699, 0.800007, 1)
-[23:20:37.751] [I] [editor] Modo Edit restaurado.
-[23:21:16.921] [I] [axe] GraphicsDevice shutdown
-[23:21:16.921] [I] [axe] ViewportWindow destroyed
-[23:21:16.922] [I] [axe] ImGui shutdown
-[23:21:16.946] [I] [axe] Window detroyed
+[12:01:38.315] [I] [axe] Core logger initialized
+[12:01:38.315] [I] [editor] Editor logger initialized
+[12:01:38.315] [I] [editor] Creating window...
+[12:01:38.334] [I] [axe] GLFW initialized
+[12:01:38.431] [I] [axe] Window created: AXE Engine (1280x720)
+[12:01:38.438] [I] [axe] OpenGL loader initialized
+[12:01:38.439] [I] [axe] GraphicsDevice initialized
+[12:01:38.440] [I] [axe] OpenGL Version: 4.5.0 Core Profile Context 25.8.1.250617
+[12:01:38.440] [I] [axe] GLSL Version: 4.60
+[12:01:38.440] [I] [axe] Renderer: Radeon RX 580 Series
+[12:01:38.440] [I] [axe] GraphicsDevice Initialized successfully
+[12:01:38.442] [I] [axe] AssetDatabase: primitiva registrada 'Cube' → primitive-cube-0000-0000-000000000001
+[12:01:38.443] [I] [axe] AssetDatabase: primitiva registrada 'Sphere' → primitive-sphere-0000-0000-000000000002
+[12:01:38.443] [I] [axe] AssetDatabase: primitiva registrada 'Plane' → primitive-plane-0000-0000-000000000003
+[12:01:38.443] [I] [axe] AssetDatabase: primitiva registrada 'Cylinder' → primitive-cylinder-0000-0000-000000000004
+[12:01:38.444] [I] [axe] AssetDatabase: 8 assets carregados.
+[12:01:38.445] [I] [axe] ProjectManager: projeto 'EngineDevelopment' aberto.
+[12:01:38.445] [I] [axe] ViewportWindow created (no GPU resources yet)
+[12:01:38.445] [I] [editor] EditorLayer attached
+[12:01:38.445] [I] [editor] Procurando cena padrão em: C:\Users\Clever\Documents\AXE\src\editor\resources\default_scene\main.axescene
+[12:01:38.445] [I] [editor] Arquivo não encontrado: resources/default_scene/main.axescene
+[12:01:38.446] [I] [editor] Cena vazia criada.
+[12:01:38.446] [I] [axe] Initializing ViewportWindow resources...
+[12:01:38.447] [I] [axe] ViewportWindow initialized successfully
+[12:01:38.509] [I] [axe] CubeRenderer created
+[12:01:38.559] [I] [axe] CubemapTexture: HDRI 'resources/quarry_04_puresky_2k.hdr' carregado (2048x1024)
+[12:01:38.566] [I] [axe] CubemapTexture: cubemap gerado com sucesso.
+[12:01:38.567] [I] [axe] Texture2D: 'resources/icons/icon_mesh.png' carregada (122x105, 4 canais)
+[12:01:38.568] [I] [axe] Texture2D: 'resources/icons/icon_texture.png' carregada (82x83, 4 canais)
+[12:01:38.568] [I] [axe] Texture2D: 'resources/icons/icon_scene.png' carregada (106x93, 4 canais)
+[12:01:38.569] [I] [axe] Texture2D: 'resources/icons/icon_folder.png' carregada (80x69, 4 canais)
+[12:01:38.570] [I] [axe] Texture2D: 'resources/icons/icon_script.png' carregada (72x87, 4 canais)
+[12:01:38.570] [I] [axe] Texture2D: 'resources/icons/icon_audio.png' carregada (91x76, 4 canais)
+[12:01:38.571] [I] [axe] EditorIconLibrary: ícones carregados.
+[12:01:38.571] [I] [axe] ImGui initialized
+[12:01:38.571] [I] [editor] EditorApp created successfully
+[12:01:38.571] [I] [editor] Editor started
+[12:01:38.637] [I] [axe] Viewport resized to 797x455
+[12:01:51.533] [I] [axe] GraphicsDevice shutdown
+[12:01:51.533] [I] [axe] ViewportWindow destroyed
+[12:01:51.535] [I] [axe] ImGui shutdown
+[12:01:51.563] [I] [axe] Window detroyed

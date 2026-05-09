@@ -7,7 +7,7 @@
 
 #include <nlohmann/json.hpp>
 #include <fstream>
-
+#include <imgui.h>
 namespace axe
 {
 
@@ -33,6 +33,16 @@ namespace axe
 			e["id"] = (uint32_t)entity;
 
 			json components;
+
+			// FolderComponent
+			if (registry.any_of<FolderComponent>(entity))
+			{
+				auto& folder = registry.get<FolderComponent>(entity);
+				components["Folder"]["color"] = {
+					folder.Color.x, folder.Color.y,
+					folder.Color.z, folder.Color.w
+				};
+			}
 
 			// NameComponent
 			if (auto* c = registry.try_get<NameComponent>(entity))
@@ -77,6 +87,22 @@ namespace axe
 				}
 			}
 
+			// RelationshipComponent
+			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
+			{
+				if (rel->Parent != entt::null)
+					components["Relationship"]["parent"] = (uint32_t)rel->Parent;
+
+				if (!rel->Children.empty())
+				{
+					json children = json::array();
+					for (auto child : rel->Children)
+						children.push_back((uint32_t)child);
+					components["Relationship"]["children"] = children;
+				}
+			}
+
+
 			e["components"] = components;
 			entities.push_back(e);
 		}
@@ -107,8 +133,7 @@ namespace axe
 		}
 
 		std::ifstream file(filepath);
-		if (!file.is_open())
-			return false;
+		if (!file.is_open()) return false;
 
 		json root;
 		try { root = json::parse(file); }
@@ -120,16 +145,41 @@ namespace axe
 
 		auto& registry = scene.GetRegistry();
 
+		// Mapa de ID antigo → entity nova
+		std::unordered_map<uint32_t, entt::entity> idMap;
+
+		// --- Passo 1: cria entities e componentes ---
 		for (const auto& e : root["entities"])
 		{
-			entt::entity entity = scene.CreateEntity("Entity");
+			uint32_t oldID = e["id"];
 			const auto& components = e["components"];
+
+			entt::entity entity;
+
+			// Pasta não tem TransformComponent
+			if (components.contains("Folder"))
+				entity = scene.CreateFolder("Entity");
+			else
+				entity = scene.CreateEntity("Entity");
+
+			idMap[oldID] = entity;
 
 			// NameComponent
 			if (components.contains("Name"))
 			{
 				auto* c = registry.try_get<NameComponent>(entity);
 				if (c) c->Name = components["Name"]["name"];
+			}
+
+			// FolderComponent — atualiza cor
+			if (components.contains("Folder"))
+			{
+				auto* f = registry.try_get<FolderComponent>(entity);
+				if (f)
+				{
+					auto& t = components["Folder"]["color"];
+					f->Color = ImVec4(t[0], t[1], t[2], t[3]);
+				}
 			}
 
 			// TransformComponent
@@ -150,13 +200,9 @@ namespace axe
 				mc.AssetUUID = uuid;
 
 				if (MeshFactory::IsPrimitive(uuid))
-				{
-					// Primitiva — gera proceduralmente
 					mc.Data = MeshFactory::CreateByUUID(uuid);
-				}
 				else
 				{
-					// Asset de arquivo — busca no AssetDatabase
 					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
 					if (record && std::filesystem::exists(record->FilePath))
 					{
@@ -164,9 +210,7 @@ namespace axe
 						mc.Data = loaded.MeshData;
 					}
 					else
-					{
 						AXE_CORE_WARN("SceneSerializer: asset '{}' não encontrado.", uuid);
-					}
 				}
 			}
 
@@ -174,7 +218,7 @@ namespace axe
 			if (components.contains("Material"))
 			{
 				auto& t = components["Material"];
-				auto  mat = std::make_shared<Material>(nullptr, "Material");
+				auto mat = std::make_shared<Material>(nullptr, "Material");
 				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
 				mat->SpecularStrength = t["specular_strength"];
 				mat->Shininess = t["shininess"];
@@ -185,7 +229,7 @@ namespace axe
 			if (components.contains("Light"))
 			{
 				auto& t = components["Light"];
-				auto  light = std::make_shared<DirectionalLight>();
+				auto light = std::make_shared<DirectionalLight>();
 				light->Direction = { t["direction"][0], t["direction"][1], t["direction"][2] };
 				light->Color = { t["color"][0],     t["color"][1],     t["color"][2] };
 				light->Intensity = t["intensity"];
@@ -193,6 +237,27 @@ namespace axe
 				light->SpecularStrength = t["specular"];
 				light->Shininess = t["shininess"];
 				registry.emplace<LightComponent>(entity, light);
+			}
+		}
+
+		// --- Passo 2: reconstrói hierarquia ---
+		for (const auto& e : root["entities"])
+		{
+			uint32_t oldID = e["id"];
+			if (!idMap.count(oldID)) continue;
+
+			entt::entity entity = idMap[oldID];
+			const auto& components = e["components"];
+
+			if (components.contains("Relationship"))
+			{
+				auto& rel = components["Relationship"];
+				if (rel.contains("parent"))
+				{
+					uint32_t oldParent = rel["parent"];
+					if (idMap.count(oldParent))
+						scene.SetParent(entity, idMap[oldParent]);
+				}
 			}
 		}
 

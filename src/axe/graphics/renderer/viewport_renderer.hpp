@@ -50,7 +50,7 @@ namespace axe
 		void SetGameCamera(GameCamera* cam) { m_GameCamera = cam; }
 
 		void SetEnvironment(SceneEnvironment* env) { m_Environment = env; }
-
+		void DrawGrid();
 	private:
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;

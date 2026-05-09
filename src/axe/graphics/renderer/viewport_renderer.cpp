@@ -145,13 +145,7 @@ namespace axe
 
 	void ViewportRenderer::DrawGuizmo(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
 	{
-		static const float identityMatrix[16] = {
-			1.f, 0.f, 0.f, 0.f,
-			0.f, 1.f, 0.f, 0.f,
-			0.f, 0.f, 1.f, 0.f,
-			0.f, 0.f, 0.f, 1.f
-		};
-
+		
 		if (!m_Scene || !m_SelectedEntity || *m_SelectedEntity == entt::null || !m_Camera)
 			return;
 
@@ -199,6 +193,20 @@ namespace axe
 				tc->Data.Scale = scale;
 			}
 		}
+
+		
+	}
+
+	void ViewportRenderer::DrawGrid()
+	{
+		if (!m_Camera) return;
+
+		static const float identityMatrix[16] = {
+			1.f, 0.f, 0.f, 0.f,
+			0.f, 1.f, 0.f, 0.f,
+			0.f, 0.f, 1.f, 0.f,
+			0.f, 0.f, 0.f, 1.f
+		};
 
 		ImGuizmo::DrawGrid(
 			glm::value_ptr(m_Camera->GetViewMatrix()),

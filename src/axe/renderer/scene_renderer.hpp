@@ -7,6 +7,8 @@
 #include "axe/graphics/renderer/line_renderer.hpp"
 #include "axe/graphics/renderer/mesh_renderer.hpp"
 #include <entt/entt.hpp>
+
+#include "axe/lighting/directional_light.hpp"
 namespace  axe
 {
 	
@@ -31,5 +33,9 @@ namespace  axe
 		LineRenderer m_LineRenderer;
 
 		MeshRenderer m_MeshRenderer;
+
+		void RenderEntity(const Scene& scene, entt::entity entity,
+			const glm::mat4& parentTransform, entt::entity selectedEntity,
+			const DirectionalLight* light);
 	};
 }

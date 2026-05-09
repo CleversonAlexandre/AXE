@@ -6,7 +6,8 @@
 #include "axe/lighting/directional_light.hpp"
 #include <memory>
 #include <string>
-
+#include <imgui.h>
+#include <entt/entt.hpp>
 namespace axe
 {
 	//Nome do objeto - todo entity tem um
@@ -37,5 +38,15 @@ namespace axe
 	struct LightComponent
 	{
 		std::shared_ptr<DirectionalLight> Data;
+	};
+
+	struct FolderComponent
+	{
+		ImVec4 Color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+	};
+	struct RelationshipComponent
+	{
+		entt::entity Parent = entt::null;
+		std::vector<entt::entity> Children;
 	};
 }//namespace axe

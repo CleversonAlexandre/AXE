@@ -129,6 +129,7 @@ project "axe"
     filter "system:windows"
         cppdialect "C++20"
         systemversion "latest"
+        debugdir "%{cfg.targetdir}" 
 
         defines
         {
@@ -238,6 +239,7 @@ project "editor"
     filter "system:windows"
         cppdialect "C++20"
         systemversion "latest"
+        debugdir "%{cfg.targetdir}" 
 
     filter "configurations:Debug"
         defines "AXE_DEBUG"

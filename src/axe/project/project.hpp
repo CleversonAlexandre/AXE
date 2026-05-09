@@ -8,7 +8,7 @@ namespace axe
 
 	struct AXE_API Project
 	{
-		std::string Name = "Untitled";
+		std::string Name = "StartScene";
 		std::string Version = "1.0.0";
 		std::string EngineVersion = "0.1.0";
 		std::string StartScene = "";

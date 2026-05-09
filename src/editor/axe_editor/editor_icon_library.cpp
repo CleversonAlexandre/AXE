@@ -30,6 +30,7 @@ namespace axe
 		m_IconFolder = load("icon_folder.png");
 		m_IconScript = load("icon_script.png");
 		m_IconAudio = load("icon_audio.png");
+		m_IconDirectionalLight = load("directional_light.png");
 
 		m_Loaded = true;
 		AXE_CORE_INFO("EditorIconLibrary: ícones carregados.");

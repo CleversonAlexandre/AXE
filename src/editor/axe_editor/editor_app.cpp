@@ -14,6 +14,9 @@
 #include "axe/project/project_manager.hpp"
 #include "project_selector_layer.hpp"
 
+#include <stdlib.h>
+#include <filesystem>
+
 namespace axe
 {
 #define BIND_EVENT_FN(x) std::bind(&EditorApp::x, this, std::placeholders::_1)
@@ -24,6 +27,15 @@ namespace axe
 
 	EditorApp::EditorApp()
 	{		
+
+		char* pgmptr = nullptr;
+		_get_pgmptr(&pgmptr);
+		if (pgmptr)
+		{
+			auto exeDir = std::filesystem::path(pgmptr).parent_path();
+			std::filesystem::current_path(exeDir);
+		}
+
 		console_init();
 		InfoLog::EnableConsoleLogging();
 		InfoLog::Init();
