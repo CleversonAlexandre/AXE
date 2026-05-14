@@ -32,6 +32,7 @@ namespace axe
 	struct MaterialComponent
 	{
 		std::shared_ptr<Material> Data;
+		std::string MaterialAssetUUID;
 	};
 
 	//Luz direcional

@@ -31,3 +31,6 @@
 [submodule "src/vendor/entt"]
 	path = src/vendor/entt
 	url = https://github.com/skypjack/entt.git
+[submodule "src/vendor/imgui-node-editor"]
+	path = src/vendor/imgui-node-editor
+	url = https://github.com/thedmd/imgui-node-editor

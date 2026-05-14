@@ -5,6 +5,8 @@
 
 #include "axe/core/types.hpp"
 #include "axe/events/event.hpp"
+#include "axe/input/key_codes.hpp"
+#include <glm/glm.hpp>
 
 
 namespace axe
@@ -44,6 +46,11 @@ namespace axe
 		static Window* Create(const WindowProps& props = WindowProps());
 		
 		virtual void CaptureCursor(bool capture) = 0;
+		
+		// Input
+		virtual bool      IsKeyDown(int keycode) const = 0;
+		virtual glm::vec2 GetCursorPosition()   const = 0;
+		virtual void      SetCursorPosition(float x, float y) = 0;
 		
 	
 	};

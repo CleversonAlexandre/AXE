@@ -30,6 +30,7 @@ namespace axe
 		m_IconFolder = load("icon_folder.png");
 		m_IconScript = load("icon_script.png");
 		m_IconAudio = load("icon_audio.png");
+		m_Material = load("icon_material.png");
 		m_IconDirectionalLight = load("directional_light.png");
 
 		m_Loaded = true;
@@ -44,6 +45,7 @@ namespace axe
 		if (type == "Folder") return m_IconFolder;
 		if (type == "Script") return m_IconScript;
 		if (type == "Audio") return m_IconAudio;
+		if (type == "Material") return m_Material;
 		return m_IconMesh; 
 
 	}

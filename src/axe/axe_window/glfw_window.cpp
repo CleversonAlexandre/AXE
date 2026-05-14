@@ -299,7 +299,24 @@ namespace axe
 		AXE_CORE_INFO("CaptureCursor: {} → modo={}", capture,
 			glfwGetInputMode(m_Window, GLFW_CURSOR));
 	}
-	
+
+
+	bool WindowGlfw::IsKeyDown(int keycode) const
+	{
+		return glfwGetKey(m_Window, keycode) == GLFW_PRESS;
+	}
+
+	glm::vec2 WindowGlfw::GetCursorPosition() const
+	{
+		double x, y;
+		glfwGetCursorPos(m_Window, &x, &y);
+		return { (float)x, (float)y };
+	}
+
+	void WindowGlfw::SetCursorPosition(float x, float y)
+	{
+		glfwSetCursorPos(m_Window, (double)x, (double)y);
+	}
 	
 	
 }

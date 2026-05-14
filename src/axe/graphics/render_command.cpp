@@ -23,5 +23,8 @@ namespace axe
 	{
 		s_RendererAPI->DrawLines(vertexArray, vertexCount);
 	}
-
+	void RenderCommand::DrawIndexedCount(uint32_t indexCount)
+	{
+		s_RendererAPI->DrawIndexedCount(indexCount);
+	}
 }

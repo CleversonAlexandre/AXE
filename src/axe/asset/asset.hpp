@@ -13,17 +13,19 @@ namespace axe
 		Texture,    // .png, .jpg, .jpeg
 		Scene,      // .axescene
 		Audio,      // .wav, .mp3
-		Script      // .lua (futuro)
+		Script,      // .lua (futuro)
+		Material
 	};
 
 	// Converte extensão para tipo
 	static AssetType AssetTypeFromExtension(const std::string& ext)
 	{
-		if (ext == ".obj" || ext == ".gltf" || ext == ".glb") return AssetType::Mesh;
+		if (ext == ".obj" || ext == ".gltf" || ext == ".glb")return AssetType::Mesh;
 		if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")return AssetType::Texture;
-		if (ext == ".axescene")                                 return AssetType::Scene;
-		if (ext == ".wav" || ext == ".mp3")                   return AssetType::Audio;
-		if (ext == ".lua")                                      return AssetType::Script;
+		if (ext == ".axescene")                              return AssetType::Scene;
+		if (ext == ".wav" || ext == ".mp3")                  return AssetType::Audio;
+		if (ext == ".lua")                                   return AssetType::Script;
+		if (ext == ".axemat")                                return AssetType::Material;
 		return AssetType::Unknown;
 	}
 
@@ -31,12 +33,14 @@ namespace axe
 	{
 		switch (type)
 		{
-		case AssetType::Mesh:    return "Mesh";
-		case AssetType::Texture: return "Texture";
-		case AssetType::Scene:   return "Scene";
-		case AssetType::Audio:   return "Audio";
-		case AssetType::Script:  return "Script";
-		default:                 return "Unknown";
+		case AssetType::Mesh:		return "Mesh";
+		case AssetType::Texture:	return "Texture";
+		case AssetType::Scene:		return "Scene";
+		case AssetType::Audio:		return "Audio";
+		case AssetType::Script:		return "Script";
+		case AssetType::Material:	return "Material";
+
+		default:					return "Unknown";
 		}
 	}
 
@@ -47,6 +51,7 @@ namespace axe
 		if (str == "Scene")   return AssetType::Scene;
 		if (str == "Audio")   return AssetType::Audio;
 		if (str == "Script")  return AssetType::Script;
+		if (str == "Material")  return AssetType::Material;
 		return AssetType::Unknown;
 	}
 
@@ -60,5 +65,6 @@ namespace axe
 
 		bool IsValid() const { return !UUID.empty() && !FilePath.empty(); }
 	};
+	
 
 } // namespace axe

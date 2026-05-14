@@ -34,4 +34,50 @@ namespace axe
 		vertexArray->Bind();
 		glDrawArrays(GL_LINES, 0, vertexCount);
 	}
+
+	void OpenGLRendererAPI::SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+	{
+		glViewport(x, y, width, height);
+	}
+
+	void OpenGLRendererAPI::SetClearColor(float r, float g, float b, float a)
+	{
+		glClearColor(r, g, b, a);
+	}
+
+	void OpenGLRendererAPI::Clear()
+	{
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	}
+
+	void OpenGLRendererAPI::SetDepthTest(bool enabled)
+	{
+		if (enabled) glEnable(GL_DEPTH_TEST);
+		else         glDisable(GL_DEPTH_TEST);
+	}
+
+	void OpenGLRendererAPI::SetDepthWrite(bool enabled)
+	{
+		glDepthMask(enabled ? GL_TRUE : GL_FALSE);
+	}
+
+	void OpenGLRendererAPI::SetDepthFunc(DepthFunc func)
+	{
+		switch (func)
+		{
+		case DepthFunc::Less:      glDepthFunc(GL_LESS);    break;
+		case DepthFunc::LessEqual: glDepthFunc(GL_LEQUAL);  break;
+		}
+	}
+
+	void OpenGLRendererAPI::SetCullFace(bool enabled)
+	{
+		if (enabled) glEnable(GL_CULL_FACE);
+		else         glDisable(GL_CULL_FACE);
+	}
+
+	void OpenGLRendererAPI::DrawIndexedCount(uint32_t indexCount)
+	{
+		glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
+	}
 }

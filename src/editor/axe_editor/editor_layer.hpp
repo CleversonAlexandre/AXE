@@ -32,7 +32,9 @@
 
 #include "axe/graphics/game_camera.hpp"
 #include "axe/events/key_event.hpp"
+#include "axe/input/key_codes.hpp"
 
+#include "material_editor_window.hpp"
 namespace axe
 {
 
@@ -72,31 +74,31 @@ namespace axe
 			m_EditorUI->SetContext(&m_Context);
 
 			// 2. Carrega cena padrão se existir, senão cria cena vazia
-			if (ProjectManager::Get().HasStartScene())
-			{
-				SceneSerializer::Deserialize(
-					ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
-			}
-			else
-			{
-				// Tenta carregar cena padrão do engine
-				std::string defaultScene = "resources/default_scene/main.axescene";
-				AXE_EDITOR_INFO("Procurando cena padrão em: {}",
-					std::filesystem::absolute(defaultScene).string());
+			//if (ProjectManager::Get().HasStartScene())
+			//{
+			//	SceneSerializer::Deserialize(
+			//		ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
+			//}
+			//else
+			//{
+			//	// Tenta carregar cena padrão do engine
+			//	std::string defaultScene = "resources/default_scene/main.axescene";
+			//	AXE_EDITOR_INFO("Procurando cena padrão em: {}",
+			//		std::filesystem::absolute(defaultScene).string());
 
-				if (std::filesystem::exists(defaultScene))
-				{
-					AXE_EDITOR_INFO("Carregando cena padrão do engine.");
-					SceneSerializer::Deserialize(defaultScene, *m_Scene);
-				}
-				else
-				{
-					// Cena realmente vazia
-					AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
-					m_Scene->CreateLight("Directional Light");
-					AXE_EDITOR_INFO("Cena vazia criada.");
-				}
-			}
+			//	if (std::filesystem::exists(defaultScene))
+			//	{
+			//		AXE_EDITOR_INFO("Carregando cena padrão do engine.");
+			//		SceneSerializer::Deserialize(defaultScene, *m_Scene);
+			//	}
+			//	else
+			//	{
+			//		// Cena realmente vazia
+			//		AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
+			//		m_Scene->CreateLight("Directional Light");
+			//		AXE_EDITOR_INFO("Cena vazia criada.");
+			//	}
+			//}
 
 			// 3. Registra callback do AssetBrowser
 			m_EditorUI->GetAssetBrowser()->SetFileDropCallback(
@@ -130,6 +132,17 @@ namespace axe
 					AXE_CORE_INFO("EditorLayer: '{}' importado. UUID: {}", name, uuid);
 				}
 			);
+
+			m_EditorUI->GetAssetBrowser()->SetAssetOpenCallback([this](const AssetRecord& record)
+				{
+					if (record.Type == AssetType::Material)
+					{
+						auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
+						if (matAsset)
+							m_MaterialEditor.OpenMaterial(matAsset);
+							m_MaterialEditor.OpenMaterial(matAsset);
+					}
+				});
 
 			auto instantiate = [this](const std::string& uuid)
 				{
@@ -236,7 +249,39 @@ namespace axe
 		}
 
 		void OnUpdate(float deltaTime) override
-		{			
+		{	
+			
+
+			// Carrega a cena no primeiro frame (após OpenGL estar pronto)
+			if (!m_SceneLoaded)
+			{
+				m_SceneLoaded = true;
+
+				if (ProjectManager::Get().HasStartScene())
+				{
+					SceneSerializer::Deserialize(
+						ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
+				}
+				else
+				{
+					std::string defaultScene = "resources/default_scene/main.axescene";
+					AXE_EDITOR_INFO("Procurando cena padrão em: {}",
+						std::filesystem::absolute(defaultScene).string());
+
+					if (std::filesystem::exists(defaultScene))
+					{
+						AXE_EDITOR_INFO("Carregando cena padrão do engine.");
+						SceneSerializer::Deserialize(defaultScene, *m_Scene);
+					}
+					else
+					{
+						AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
+						m_Scene->CreateLight("Directional Light");
+						AXE_EDITOR_INFO("Cena vazia criada.");
+					}
+				}
+			}
+
 			m_DeltaTime = deltaTime;
 
 			m_FPSAccumulator += 1.0f / deltaTime;
@@ -248,23 +293,35 @@ namespace axe
 				m_FPSSamples = 0;
 			}
 
+			// PROTEÇÃO
+			if (m_EditorUI && m_EditorUI->GetAssetBrowser())
+			{
+				m_EditorUI->GetAssetBrowser()->Update();
+			}
+			else
+			{
+				AXE_CORE_ERROR("AssetBrowser é nullptr!");
+			}
+
+			
+
+
 			if (m_EditorState == EditorState::Play)
 			{
-				GLFWwindow* window = (GLFWwindow*)EditorApp::Get().GetWindow().GetNativeWindow();
-				m_GameCamera.OnUpdate(deltaTime, window);
+				m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
 
-				bool escNow = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+				bool escNow = EditorApp::Get().GetWindow().IsKeyDown((int)Key::Escape);
 				if (escNow && !m_EscWasPressed)
-				{
-					AXE_EDITOR_INFO("Escape pressionado — pausando.");
 					EnterPause();
-				}
 				m_EscWasPressed = escNow;
 			}
 			else
 			{
 				m_EscWasPressed = false;
 			}
+
+			//m_EditorUI->GetAssetBrowser()->Update();
+			
 		}
 
 		void DrawPlayToolbar()
@@ -324,6 +381,8 @@ namespace axe
 		void OnRender() override
 
 		{
+			
+
 			// Atualiza câmera antes de renderizar
 			if (m_EditorState == EditorState::Play)
 				m_ViewportRenderer->SetGameCamera(&m_GameCamera);
@@ -365,6 +424,7 @@ namespace axe
 
 			
 			m_EditorUI->Draw();
+			m_MaterialEditor.Draw();
 
 
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
@@ -613,7 +673,7 @@ namespace axe
 
 	private:
 		std::unique_ptr<Scene> m_Scene;
-		
+		bool m_SceneLoaded = false;
 
 		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
 		std::unique_ptr<EditorUI> m_EditorUI;
@@ -629,5 +689,6 @@ namespace axe
 		bool m_EscWasPressed = false;
 
 		SceneEnvironment m_Environment;
+		MaterialEditorWindow m_MaterialEditor;
 	};
 }    

@@ -6,7 +6,7 @@
 #include <glm/glm.hpp>
 
 #include "axe/graphics/editor_camera.hpp"
-
+#include <imgui.h>
 namespace axe
 {
 	class Framebuffer;
@@ -39,7 +39,7 @@ namespace axe
 		glm::vec2 GetSize()          const { return { (float)m_Width, (float)m_Height }; }
 
 		std::shared_ptr<Framebuffer> GetFramebuffer() const { return m_Framebuffer; }
-		void* GetTextureID() const;
+		ImTextureID GetTextureID() const;
 
 		using GuizmoDrawFunc = std::function<void(const glm::vec2&, const glm::vec2&)>;
 		void SetGuizmoCallback(GuizmoDrawFunc func) { m_GuizmoCallback = func; }

@@ -26,6 +26,7 @@ IncludeDir["assimp"] = "src/vendor/assimp/include"
 IncludeDir["entt"] = "src/vendor/entt/src"
 IncludeDir["nlohmann"] = "src/vendor"
 IncludeDir["stb"] = "src/vendor/stb"
+IncludeDir["imguinodeeditor"] = "src/vendor/imgui-node-editor"
 
 
 
@@ -62,7 +63,7 @@ project "axe"
         "src/vendor/imguizmo/ImGuizmo.h",
         "src/vendor/imguizmo/ImGuizmo.cpp",
         "src/vendor/imguizmo/ImZoomSlider.h",
-        
+    
     }
 
     removefiles
@@ -91,7 +92,8 @@ project "axe"
         "%{IncludeDir.assimp}",
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
-        "%{IncludeDir.stb}"
+        "%{IncludeDir.stb}",
+         "%{IncludeDir.imguinodeeditor}",
 
     }
    libdirs
@@ -113,7 +115,8 @@ project "axe"
        "FMT_HEADER_ONLY=1",
         "SIMDJSON_EXCEPTIONS=0",
         "AXE_BUILD_DLL",
-        "IMGUI_API=__declspec(dllexport)"
+        "IMGUI_API=__declspec(dllexport)",
+        "IMGUI_DEFINE_MATH_OPERATORS" 
     }
     
     dependson
@@ -122,6 +125,11 @@ project "axe"
         "spdlog"
      
     }
+
+    filter "files:src/vendor/imgui-node-editor/**.cpp"
+    defines { "IMGUI_DEFINE_MATH_OPERATORS" }
+    filter {}
+
      filter "files:src/vendor/imguizmo/**.cpp"
         pchheader "None"  -- 
         pchsource "" 
@@ -148,7 +156,8 @@ project "axe"
         {
             '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/editor" >nul 2>nul',
             '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor/axe.dll" >nul',
-            '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"'
+            '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"',
+            
                 
         }
 
@@ -182,7 +191,21 @@ project "editor"
     files
     {
         "src/editor/**.hpp",
-        "src/editor/**.cpp"
+        "src/editor/**.cpp",
+
+          "src/vendor/imgui-node-editor/imgui_node_editor.h",
+        "src/vendor/imgui-node-editor/imgui_node_editor.cpp",
+        "src/vendor/imgui-node-editor/imgui_node_editor_api.cpp",
+        "src/vendor/imgui-node-editor/imgui_node_editor_internal.h",
+        "src/vendor/imgui-node-editor/imgui_node_editor_internal.inl",
+        "src/vendor/imgui-node-editor/imgui_canvas.h",
+        "src/vendor/imgui-node-editor/imgui_canvas.cpp",
+        "src/vendor/imgui-node-editor/imgui_bezier_math.h",
+        "src/vendor/imgui-node-editor/imgui_bezier_math.inl",
+        "src/vendor/imgui-node-editor/imgui_extra_math.h",
+        "src/vendor/imgui-node-editor/imgui_extra_math.inl",
+        "src/vendor/imgui-node-editor/crude_json.h",
+        "src/vendor/imgui-node-editor/crude_json.cpp",
     }
 
     includedirs
@@ -198,6 +221,7 @@ project "editor"
         "%{IncludeDir.assimp}",
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
+         "%{IncludeDir.imguinodeeditor}",
     }
 
     libdirs
@@ -219,7 +243,8 @@ project "editor"
     {
         "AXE_PLATFORM_WINDOWS",
         "FMT_HEADER_ONLY=1",
-        "IMGUI_API=__declspec(dllimport)"
+        "IMGUI_API=__declspec(dllimport)",
+        "IMGUI_DEFINE_MATH_OPERATORS",
         
     }
 

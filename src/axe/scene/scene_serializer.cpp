@@ -62,16 +62,28 @@ namespace axe
 				components["Mesh"]["uuid"] = c->AssetUUID;
 			}
 
+			
 			// MaterialComponent
-			if (auto* c = registry.try_get<MaterialComponent>(entity))
-			{
-				if (c->Data)
+				if (auto* c = registry.try_get<MaterialComponent>(entity))
 				{
-					components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
-					components["Material"]["specular_strength"] = c->Data->SpecularStrength;
-					components["Material"]["shininess"] = c->Data->Shininess;
+					if (c->Data)
+					{
+						components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
+						components["Material"]["specular_strength"] = c->Data->SpecularStrength;
+						components["Material"]["shininess"] = c->Data->Shininess;
+						components["Material"]["metallic"] = c->Data->Metallic;
+						components["Material"]["roughness"] = c->Data->Roughness;
+						components["Material"]["ao"] = c->Data->AO;
+						components["Material"]["use_pbr"] = c->Data->UsePBR;
+
+						// UUIDs das texturas
+						components["Material"]["albedo_uuid"] = c->Data->AlbedoUUID;
+						components["Material"]["normal_uuid"] = c->Data->NormalUUID;
+						components["Material"]["roughness_uuid"] = c->Data->RoughnessUUID;
+						components["Material"]["metallic_uuid"] = c->Data->MetallicUUID;
+						components["Material"]["ao_uuid"] = c->Data->AOUUID;
+					}
 				}
-			}
 
 			// LightComponent
 			if (auto* c = registry.try_get<LightComponent>(entity))
@@ -215,13 +227,43 @@ namespace axe
 			}
 
 			// MaterialComponent
+			// MaterialComponent
 			if (components.contains("Material"))
 			{
 				auto& t = components["Material"];
 				auto mat = std::make_shared<Material>(nullptr, "Material");
+
 				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
 				mat->SpecularStrength = t["specular_strength"];
 				mat->Shininess = t["shininess"];
+
+				// PBR
+				if (t.contains("metallic"))  mat->Metallic = t["metallic"];
+				if (t.contains("roughness")) mat->Roughness = t["roughness"];
+				if (t.contains("ao"))        mat->AO = t["ao"];
+				if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
+
+				// Texturas — carrega pelo UUID
+				auto LoadTex = [&](const std::string& key, std::string& uuid,
+					std::shared_ptr<Texture2D>& tex)
+					{
+						if (!t.contains(key)) return;
+						uuid = t[key].get<std::string>();
+						if (uuid.empty()) return;
+
+						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+						if (record && std::filesystem::exists(record->FilePath))
+							tex = Texture2D::Create(record->FilePath.string());
+						else
+							AXE_CORE_WARN("SceneSerializer: textura '{}' não encontrada.", uuid);
+					};
+
+				LoadTex("albedo_uuid", mat->AlbedoUUID, mat->AlbedoMap);
+				LoadTex("normal_uuid", mat->NormalUUID, mat->NormalMap);
+				LoadTex("roughness_uuid", mat->RoughnessUUID, mat->RoughnessMap);
+				LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
+				LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
+
 				registry.emplace<MaterialComponent>(entity, mat);
 			}
 
@@ -298,14 +340,44 @@ namespace axe
 			if (auto* c = registry.try_get<MeshComponent>(entity))
 				components["Mesh"]["uuid"] = c->AssetUUID;
 
-			if (auto* c = registry.try_get<MaterialComponent>(entity))
+			// MaterialComponent
+			if (components.contains("Material"))
 			{
-				if (c->Data)
-				{
-					components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
-					components["Material"]["specular_strength"] = c->Data->SpecularStrength;
-					components["Material"]["shininess"] = c->Data->Shininess;
-				}
+				auto& t = components["Material"];
+				auto mat = std::make_shared<Material>(nullptr, "Material");
+
+				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
+				mat->SpecularStrength = t["specular_strength"];
+				mat->Shininess = t["shininess"];
+
+				// PBR
+				if (t.contains("metallic"))  mat->Metallic = t["metallic"];
+				if (t.contains("roughness")) mat->Roughness = t["roughness"];
+				if (t.contains("ao"))        mat->AO = t["ao"];
+				if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
+
+				// Texturas — carrega pelo UUID
+				auto LoadTex = [&](const std::string& key, std::string& uuid,
+					std::shared_ptr<Texture2D>& tex)
+					{
+						if (!t.contains(key)) return;
+						uuid = t[key].get<std::string>();
+						if (uuid.empty()) return;
+
+						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+						if (record && std::filesystem::exists(record->FilePath))
+							tex = Texture2D::Create(record->FilePath.string());
+						else
+							AXE_CORE_WARN("SceneSerializer: textura '{}' não encontrada.", uuid);
+					};
+
+				LoadTex("albedo_uuid", mat->AlbedoUUID, mat->AlbedoMap);
+				LoadTex("normal_uuid", mat->NormalUUID, mat->NormalMap);
+				LoadTex("roughness_uuid", mat->RoughnessUUID, mat->RoughnessMap);
+				LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
+				LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
+
+				registry.emplace<MaterialComponent>(entity, mat);
 			}
 
 			if (auto* c = registry.try_get<LightComponent>(entity))
@@ -377,13 +449,43 @@ namespace axe
 					}
 				}
 
+				// MaterialComponent
 				if (components.contains("Material"))
 				{
 					auto& t = components["Material"];
-					auto  mat = std::make_shared<Material>(nullptr, "Material");
+					auto mat = std::make_shared<Material>(nullptr, "Material");
+
 					mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
 					mat->SpecularStrength = t["specular_strength"];
 					mat->Shininess = t["shininess"];
+
+					// PBR
+					if (t.contains("metallic"))  mat->Metallic = t["metallic"];
+					if (t.contains("roughness")) mat->Roughness = t["roughness"];
+					if (t.contains("ao"))        mat->AO = t["ao"];
+					if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
+
+					// Texturas — carrega pelo UUID
+					auto LoadTex = [&](const std::string& key, std::string& uuid,
+						std::shared_ptr<Texture2D>& tex)
+						{
+							if (!t.contains(key)) return;
+							uuid = t[key].get<std::string>();
+							if (uuid.empty()) return;
+
+							const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+							if (record && std::filesystem::exists(record->FilePath))
+								tex = Texture2D::Create(record->FilePath.string());
+							else
+								AXE_CORE_WARN("SceneSerializer: textura '{}' não encontrada.", uuid);
+						};
+
+					LoadTex("albedo_uuid", mat->AlbedoUUID, mat->AlbedoMap);
+					LoadTex("normal_uuid", mat->NormalUUID, mat->NormalMap);
+					LoadTex("roughness_uuid", mat->RoughnessUUID, mat->RoughnessMap);
+					LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
+					LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
+
 					registry.emplace<MaterialComponent>(entity, mat);
 				}
 

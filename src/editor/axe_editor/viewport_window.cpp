@@ -82,8 +82,8 @@ namespace axe
 
 		if (m_Initialized && m_Framebuffer)
 		{
-			void* textureID = GetTextureID();
-			if (textureID)
+			ImTextureID textureID = GetTextureID();
+			if (textureID != (ImTextureID)0)
 			{
 				ImVec2 imagePos = ImGui::GetCursorScreenPos();
 
@@ -136,15 +136,11 @@ namespace axe
 		}
 	}
 
-	void* ViewportWindow::GetTextureID() const
+	ImTextureID ViewportWindow::GetTextureID() const
 	{
 		if (m_Framebuffer)
-		{
-			return reinterpret_cast<ImTextureID>(
-				static_cast<uintptr_t>(m_Framebuffer->GetColorAttachmentRendererID())
-				);
-		}
-		return nullptr;
+			return (ImTextureID)(uintptr_t)m_Framebuffer->GetColorAttachmentRendererID();
+		return (ImTextureID)0;
 	}
 
 	void ViewportWindow::DrawToolbar()

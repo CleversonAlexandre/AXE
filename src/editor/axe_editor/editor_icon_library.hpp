@@ -17,6 +17,7 @@ namespace axe
 		std::shared_ptr<Texture2D> GetFolder() const { return m_IconFolder; }
 		std::shared_ptr<Texture2D> GetScript() const { return m_IconScript; }
 		std::shared_ptr<Texture2D> GetAudio() const { return m_IconAudio; }
+		std::shared_ptr<Texture2D> GetMaterial() const { return m_Material; }
 		std::shared_ptr<Texture2D> GetDirectionalLight() const { return m_IconDirectionalLight; }
 
 
@@ -40,6 +41,7 @@ namespace axe
 		std::shared_ptr<Texture2D> m_IconFolder;
 		std::shared_ptr<Texture2D> m_IconScript;
 		std::shared_ptr<Texture2D> m_IconAudio;		
+		std::shared_ptr<Texture2D> m_Material;
 		std::shared_ptr<Texture2D> m_IconDirectionalLight;
 		bool m_Loaded = true;
 

@@ -12,6 +12,7 @@
 #include <ImGuizmo.h>
 
 #include "axe/graphics/game_camera.hpp"
+#include "axe/graphics/render_command.hpp"
 
 namespace axe
 {
@@ -40,9 +41,13 @@ namespace axe
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
 		framebuffer.Bind();
-		glViewport(0, 0, width, height);
-		glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		RenderCommand::SetViewport(0, 0, width, height);
+		RenderCommand::SetClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+		RenderCommand::Clear();
+		//glViewport(0, 0, width, height);
+		//glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+		//glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		entt::entity selected = m_SelectedEntity ? *m_SelectedEntity : entt::null;
 

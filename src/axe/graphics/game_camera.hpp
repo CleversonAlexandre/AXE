@@ -1,8 +1,8 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/utils/glm_config.hpp"
+#include "axe/axe_window/window.hpp"
 
-struct GLFWwindow; // forward declaration
 
 namespace axe
 {
@@ -12,7 +12,7 @@ namespace axe
 	public:
 		GameCamera() = default;
 
-		void OnUpdate(float deltaTime, GLFWwindow* window);
+		void OnUpdate(float deltaTime, Window* window);
 
 		glm::mat4 GetViewMatrix() const;
 		glm::mat4 GetProjectionMatrix(float aspectRatio) const;
@@ -38,7 +38,7 @@ namespace axe
 		float     m_LastMousePos_y = 0.0f;
 		
 
-		// Alias para compatibilidade
+		
 		struct { float x = 0.0f; float y = 0.0f; } m_LastMousePos;
 	};
 

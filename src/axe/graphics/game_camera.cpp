@@ -1,10 +1,11 @@
 #include "game_camera.hpp"
 #include "axe/log/log.hpp"
 
-#include <GLFW/glfw3.h>
+#include "axe/axe_window/window.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include "axe/input/key_codes.hpp"
 
 namespace axe
 {
@@ -18,49 +19,40 @@ namespace axe
 		return glm::normalize(forward);
 	}
 
-	void GameCamera::OnUpdate(float deltaTime, GLFWwindow* window)
+	void GameCamera::OnUpdate(float deltaTime, Window* window)
 	{
 		if (!MouseCaptured || !window) return;
-	
 
 		glm::vec3 forward = CalcForward(m_Yaw, m_Pitch);
 		glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
 		glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
 
 		float speed = MoveSpeed * deltaTime;
-		if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
-			speed *= 3.0f;
+		if (window->IsKeyDown((int)Key::LeftShift)) speed *= 3.0f;
 
-		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) m_Position = m_Position + forward * speed;
-		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) m_Position = m_Position - forward * speed;
-		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) m_Position = m_Position - right * speed;
-		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) m_Position = m_Position + right * speed;
-		if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) m_Position = m_Position + up * speed;
-		if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) m_Position = m_Position - up * speed;
+		if (window->IsKeyDown((int)Key::W)) m_Position = m_Position + forward * speed;
+		if (window->IsKeyDown((int)Key::S)) m_Position = m_Position - forward * speed;
+		if (window->IsKeyDown((int)Key::A)) m_Position = m_Position - right * speed;
+		if (window->IsKeyDown((int)Key::D)) m_Position = m_Position + right * speed;
+		if (window->IsKeyDown((int)Key::E)) m_Position = m_Position + up * speed;
+		if (window->IsKeyDown((int)Key::Q)) m_Position = m_Position - up * speed;
 
-		// Mouse look
-		double mx, my;
-		glfwGetCursorPos(window, &mx, &my);
-
-		float mouseX = (float)mx;
-		float mouseY = (float)my;
+		glm::vec2 mousePos = window->GetCursorPosition();
 
 		if (m_FirstMouse)
 		{
-			m_LastMousePos.x = mouseX;
-			m_LastMousePos.y = mouseY;
+			m_LastMousePos.x = mousePos.x;
+			m_LastMousePos.y = mousePos.y;
 			m_FirstMouse = false;
 		}
 
-		float deltaX = mouseX - m_LastMousePos.x;
-		float deltaY = mouseY - m_LastMousePos.y;
-
-		m_LastMousePos.x = mouseX;
-		m_LastMousePos.y = mouseY;
+		float deltaX = mousePos.x - m_LastMousePos.x;
+		float deltaY = mousePos.y - m_LastMousePos.y;
+		m_LastMousePos.x = mousePos.x;
+		m_LastMousePos.y = mousePos.y;
 
 		m_Yaw = m_Yaw + deltaX * Sensitivity;
 		m_Pitch = m_Pitch - deltaY * Sensitivity;
-
 		if (m_Pitch > 89.0f) m_Pitch = 89.0f;
 		if (m_Pitch < -89.0f) m_Pitch = -89.0f;
 	}

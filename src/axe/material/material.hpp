@@ -1,6 +1,7 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/graphics/shader.hpp"
+#include "axe/graphics/texture.hpp"
 #include "axe/utils/glm_config.hpp"
 
 #include <memory>
@@ -16,16 +17,44 @@ namespace axe
 
 		//Nome para exibição no inspector
 		const std::string& GetName() const { return m_Name; }
+		std::shared_ptr<Shader> GetShader() const { return m_Shader; }
+		void SetShader(std::shared_ptr<Shader> shader) { m_Shader = shader; }
 
-		//Shader
+		//Apilica uniforms no shader
+		void Apply() const;
+
+		// --- Parâmetros base (compatibilidade com Blinn-Phong) ---
 		glm::vec4 Color{ 0.7f, 0.7f, 0.7f, 1.0f };
-		
 		float     SpecularStrength = 0.5f;
 		float     Shininess = 32.0f;
 
-		//Aplica os parâmetros no shader
-		//Chamado pelo MeshRenderer antes de  DrawIndexed
-		void Apply() const;
+		//--- Parâmetros PBR -- 
+		float Metallic  = 0.0f;
+		float Roughness = 0.5f;
+		float AO		= 1.0f;
+		bool UsePBR		= false; // false = Blinn-Phong, true = PBR
+
+		//Texturas PBR
+		std::shared_ptr<Texture2D> AlbedoMap;
+		std::shared_ptr<Texture2D> NormalMap;
+		std::shared_ptr<Texture2D> RoughnessMap;
+		std::shared_ptr<Texture2D> MetallicMap;
+		std::shared_ptr<Texture2D> AOMap;
+
+		//UUIDs para serialização
+		std::string AlbedoUUID;
+		std::string NormalUUID;
+		std::string RoughnessUUID;
+		std::string MetallicUUID;
+		std::string AOUUID;
+
+		bool HasAlbedoMap() const { return AlbedoMap && AlbedoMap->IsLoaded(); }
+		bool HasNormalMap() const { return NormalMap && NormalMap->IsLoaded(); }
+		bool HasRoughnessMap() const { return RoughnessMap && RoughnessMap->IsLoaded(); }
+		bool HasMetallicMap()   const { return MetallicMap && MetallicMap->IsLoaded(); }
+		bool HasAOMap()         const { return AOMap && AOMap->IsLoaded(); }
+
+		
 
 	private:
 		std::string m_Name;

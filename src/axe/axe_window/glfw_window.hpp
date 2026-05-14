@@ -3,6 +3,7 @@
 #include "window.hpp"
 
 #include "axe/core/types.hpp"
+#include "axe/utils/glm_config.hpp"
 
 struct GLFWwindow;
 
@@ -33,6 +34,10 @@ namespace axe
 		virtual void* GetNativeWindow() const override;
 
 		void CaptureCursor(bool capture) override;
+
+		bool      IsKeyDown(int keycode)        const override;
+		glm::vec2 GetCursorPosition()           const override;
+		void      SetCursorPosition(float x, float y) override;
 
 	private:
 		struct WindowData

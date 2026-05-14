@@ -111,7 +111,7 @@ namespace axe
         if (icon && icon->IsLoaded())
         {
             ImGui::Image(
-                (ImTextureID)(uint64_t)icon->GetRendererID(),
+                (ImTextureID)(uintptr_t)icon->GetRendererID(),
                 ImVec2(16, 16), ImVec2(0, 1), ImVec2(1, 0)
             );
             ImGui::SameLine();

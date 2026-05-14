@@ -4,11 +4,15 @@
 #include <imgui.h>
 #include <filesystem>
 
+#include "axe/project/project_manager.hpp"
+#include "axe/material/material_asset.hpp"
 namespace axe
 {
 
 	static const std::vector<std::string> s_SupportedExtensions = {
-		".gltf", ".glb", ".obj", ".png", ".jpg", ".jpeg"
+		".gltf", ".glb", ".obj", //Meshes
+		".png", ".jpg", ".jpeg", //Texturas
+		".axemat"
 	};
 
 	bool AssetBrowser::IsSupported(const std::string& filepath) const
@@ -28,8 +32,72 @@ namespace axe
 			return;
 		}
 
-		if (m_FileDropCallback)
+		// Registra no AssetDatabase independente do tipo
+		std::string uuid = AssetDatabase::Get().Register(filepath);
+
+		if (ProjectManager::Get().HasProject())
+			AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+		std::string name = std::filesystem::path(filepath).stem().string();
+		AXE_CORE_INFO("AssetBrowser: '{}' registrado. UUID: {}", name, uuid);
+
+		// Só instancia na cena se for mesh
+		std::string ext = std::filesystem::path(filepath).extension().string();
+		for (char& c : ext) c = (char)std::tolower(c);
+		AssetType type = AssetTypeFromExtension(ext);
+
+		if (type == AssetType::Mesh && m_FileDropCallback)
 			m_FileDropCallback(filepath);
+	}
+
+	void AssetBrowser::Update()
+	{
+		m_FramesSinceStart++;
+
+		// Só começa a carregar texturas após 3 frames
+		if (m_FramesSinceStart < 3)
+			return;
+
+		// Carrega uma textura pendente por frame
+		if (!m_TexturesPendingLoad.empty())
+		{
+			AXE_CORE_INFO("AssetBrowser: Carregando texture pendente...");
+
+			auto uuid = *m_TexturesPendingLoad.begin();
+			m_TexturesPendingLoad.erase(m_TexturesPendingLoad.begin());
+
+			auto& db = AssetDatabase::Get();
+			const AssetRecord* record = db.GetByUUID(uuid);
+
+			if (record && std::filesystem::exists(record->FilePath))
+			{
+				try
+				{
+					auto tex = Texture2D::Create(record->FilePath.string());
+
+					if (tex && tex->IsLoaded())
+					{
+						m_TextureCache[uuid] = tex;
+						AXE_CORE_INFO("AssetBrowser: Textura carregada com sucesso!");
+					}
+					else
+					{
+						m_TexturesFailedLoad.insert(uuid);
+						AXE_CORE_WARN("AssetBrowser: Falha ao carregar textura");
+					}
+				}
+				catch (const std::exception& e)
+				{
+					AXE_CORE_ERROR("AssetBrowser: falha ao carregar '{}': {}",
+						record->FilePath.string(), e.what());
+					m_TexturesFailedLoad.insert(uuid);
+				}
+			}
+			else
+			{
+				m_TexturesFailedLoad.insert(uuid);
+			}
+		}
 	}
 
 	void AssetBrowser::Draw()
@@ -59,9 +127,47 @@ namespace axe
 		// Painel direito — grid de assets
 		ImGui::BeginChild("##assets", ImVec2(0, 0), true);
 		DrawAssetGrid();
+		if (ImGui::BeginPopupContextWindow("##assetbrowser_empty",
+			ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+		{
+			DrawContextMenuEmpty();
+			ImGui::EndPopup();
+		}
 		ImGui::EndChild();
 
 		ImGui::End();
+	}
+	void AssetBrowser::DrawContextMenuEmpty()
+	{
+		if (ImGui::BeginMenu("Novo Material"))
+		{
+			if (ImGui::MenuItem("Material"))
+			{
+				// Cria .axemat na pasta de materiais do projeto
+				auto matPath = ProjectManager::Get().GetCurrent().AssetsPath
+					/ "Materials" / "NewMaterial.axemat";
+
+				// Garante nome único
+				int i = 1;
+				while (std::filesystem::exists(matPath))
+				{
+					matPath = ProjectManager::Get().GetCurrent().AssetsPath
+						/ "Materials" / ("NewMaterial_" + std::to_string(i++) + ".axemat");
+				}
+
+				auto matAsset = MaterialAsset::Create(matPath.stem().string());
+				matAsset->Save(matPath);
+
+				// Registra no AssetDatabase
+				AssetDatabase::Get().Register(matPath.string());
+				if (ProjectManager::Get().HasProject())
+					AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+				AXE_CORE_INFO("AssetBrowser: material '{}' criado.", matPath.string());
+			}
+
+			ImGui::EndMenu();
+		}
 	}
 
 	void AssetBrowser::DrawFolderTree()
@@ -90,6 +196,7 @@ namespace axe
 			{ "Scenes",   "Scene"   },
 			{ "Scripts",  "Script"  },
 			{ "Audio",    "Audio"   },
+			{ "Materials", "Material"   }
 		};
 
 		auto& icons = EditorIconLibrary::Get();
@@ -102,7 +209,7 @@ namespace axe
 			if (icons.GetFolder() && icons.GetFolder()->IsLoaded())
 			{
 				ImGui::Image(
-					(ImTextureID)(uint64_t)icons.GetFolder()->GetRendererID(),
+					(ImTextureID)(uintptr_t)icons.GetFolder()->GetRendererID(),
 					ImVec2(16, 16),
 					ImVec2(0, 1),  
 					ImVec2(1, 0)
@@ -155,12 +262,58 @@ namespace axe
 		ImGui::Columns(1);
 	}
 
+	
+
 	void AssetBrowser::DrawAssetItem(const AssetRecord& record)
 	{
-		auto& icons = EditorIconLibrary::Get();
-		auto  icon = icons.GetForType(AssetTypeToString(record.Type));
+		auto& icons = EditorIconLibrary::Get();		
+
+		std::shared_ptr<Texture2D> icon;
+
+		if (record.Type == AssetType::Texture)
+		{
+			
+			// Verifica se já falhou antes
+			if (m_TexturesFailedLoad.count(record.UUID) > 0)
+			{
+				icon = icons.GetForType("Texture");
+			}
+			// Verifica se já está no cache
+			else if (m_TextureCache.count(record.UUID) > 0)
+			{
+				icon = m_TextureCache[record.UUID];
+				if (!icon) icon = icons.GetForType("Texture");
+			}
+			// Verifica se está pendente
+			else if (m_TexturesPendingLoad.count(record.UUID) > 0)
+			{
+				icon = icons.GetForType("Texture"); // Mostra ícone genérico enquanto carrega
+			}
+			// Agenda carregamento para o próximo frame
+			else
+			{
+				if (std::filesystem::exists(record.FilePath))
+				{
+					AXE_CORE_INFO("AssetBrowser: Agendando textura {}", record.UUID);
+					m_TexturesPendingLoad.insert(record.UUID);
+				}
+				icon = icons.GetForType("Texture");
+			}
+		}
+		else
+		{
+			switch (record.Type)
+			{
+			case AssetType::Scene:  icon = icons.GetScene();  break;
+			case AssetType::Script: icon = icons.GetScript(); break;
+			case AssetType::Audio:  icon = icons.GetAudio();  break;
+			case AssetType::Material:  icon = icons.GetMaterial();  break;
+			default:                icon = icons.GetMesh();   break;
+			}
+		}
 
 		ImGui::PushID(record.UUID.c_str());
+
 
 		ImVec2 itemPos = ImGui::GetCursorScreenPos();
 		float  padding = 6.0f;
@@ -173,6 +326,8 @@ namespace axe
 		bool hovered = ImGui::IsItemHovered();
 		bool dclicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
+		
+
 		// Drag and drop — deve vir logo após o InvisibleButton
 		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
 		{
@@ -180,7 +335,7 @@ namespace axe
 
 			if (icon && icon->IsLoaded())
 				ImGui::Image(
-					(ImTextureID)(uint64_t)icon->GetRendererID(),
+					(ImTextureID)(uintptr_t)icon->GetRendererID(),
 					ImVec2(32, 32),
 					ImVec2(0, 1), ImVec2(1, 0)
 				);
@@ -196,6 +351,12 @@ namespace axe
 		// Tooltip
 		if (hovered)
 			ImGui::SetTooltip("%s\n%s", record.Name.c_str(), record.FilePath.string().c_str());
+
+		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		{
+			if (m_AssetOpenCallback)
+				m_AssetOpenCallback(record);
+		}
 
 		// Desenha por cima com DrawList
 		ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -220,7 +381,7 @@ namespace axe
 		// Ícone
 		if (icon && icon->IsLoaded())
 			draw->AddImage(
-				(ImTextureID)(uint64_t)icon->GetRendererID(),
+				(ImTextureID)(uintptr_t)icon->GetRendererID(),
 				iconMin, iconMax,
 				ImVec2(0, 1), ImVec2(1, 0)
 			);
@@ -241,6 +402,8 @@ namespace axe
 			hovered ? IM_COL32(140, 180, 255, 255) : IM_COL32(200, 200, 200, 255),
 			displayName.c_str()
 		);
+
+		
 
 		ImGui::NextColumn();
 		ImGui::PopID();

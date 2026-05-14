@@ -7,6 +7,12 @@
 #include <vector>
 #include <functional>
 
+#include "axe/asset/asset.hpp"
+#include "axe/graphics/texture.hpp"
+#include <unordered_map>
+
+#include <unordered_set>
+
 namespace axe
 {
 
@@ -24,7 +30,11 @@ namespace axe
 
 		void OnFileDrop(const std::string& filepath);
 		void Draw();
+		void DrawContextMenuEmpty();
+		void Update();
 
+		using AssetOpenCallback = std::function<void(const AssetRecord&)>;
+		void SetAssetOpenCallback(AssetOpenCallback cb) { m_AssetOpenCallback = cb; }
 	private:
 		void DrawFolderTree();
 		void DrawAssetGrid();
@@ -41,6 +51,13 @@ namespace axe
 
 		// Tamanho dos ícones no grid
 		float m_IconSize = 64.0f;
+		std::unordered_map<std::string, std::shared_ptr<Texture2D>> m_TextureCache;
+		AssetOpenCallback m_AssetOpenCallback;
+
+		std::unordered_set<std::string> m_TexturesPendingLoad;  
+		std::unordered_set<std::string> m_TexturesFailedLoad;
+		int m_FramesSinceStart = 0;
+		
 	};
 
 } // namespace axe

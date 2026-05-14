@@ -1,6 +1,7 @@
 #include "editor_ui.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include "axe/log/log.hpp"
 namespace axe
 {
 	void EditorUI::Draw()
@@ -28,12 +29,16 @@ namespace axe
 			ImGuiWindowFlags_NoBringToFrontOnFocus | // não sobe ao clicar
 			ImGuiWindowFlags_NoNavFocus;          // não recebe foco de navegação
 
+#ifdef ImGuiWindowFlags_NoDocking
+		windowFlags |= ImGuiWindowFlags_NoDocking;
+#endif
+
 
 		//Pega o tamanho e posição da janela d sistema operacional
 
 		ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::SetNextWindowPos(viewport->Pos);
-		ImGui::SetNextWindowSize(viewport->Size);
+		ImGui::SetNextWindowPos(viewport->WorkPos);
+		ImGui::SetNextWindowSize(viewport->WorkSize);
 		ImGui::SetNextWindowViewport(viewport->ID);
 
 		//Sem padding e sem borda - a janela host é invisivel
@@ -49,7 +54,7 @@ namespace axe
 		ImGui::PopStyleVar(3); // restaura os 3 estilos que feitos o push
 
 		//Cria o DockSpace dentro da janela host
-		ImGuiIO& io = ImGui::GetIO();
+		ImGuiIO& io = ImGui::GetIO();		
 		if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable)
 		{
 			ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
