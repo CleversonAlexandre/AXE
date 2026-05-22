@@ -20,6 +20,11 @@ namespace axe
 		std::shared_ptr<Texture2D> GetMaterial() const { return m_Material; }
 		std::shared_ptr<Texture2D> GetDirectionalLight() const { return m_IconDirectionalLight; }
 
+		std::shared_ptr<Texture2D> GetSave()       const { return m_IconSave; }
+		std::shared_ptr<Texture2D> GetUndo()       const { return m_IconUndo; }
+		std::shared_ptr<Texture2D> GetRedo()       const { return m_IconRedo; }
+		std::shared_ptr<Texture2D> GetCompile()    const { return m_IconCompile; }
+
 
 
 		
@@ -43,6 +48,12 @@ namespace axe
 		std::shared_ptr<Texture2D> m_IconAudio;		
 		std::shared_ptr<Texture2D> m_Material;
 		std::shared_ptr<Texture2D> m_IconDirectionalLight;
+
+		std::shared_ptr<Texture2D> m_IconSave;
+		std::shared_ptr<Texture2D> m_IconUndo;
+		std::shared_ptr<Texture2D> m_IconRedo;
+		std::shared_ptr<Texture2D> m_IconCompile;
+
 		bool m_Loaded = true;
 
 	};

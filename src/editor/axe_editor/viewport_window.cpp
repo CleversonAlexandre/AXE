@@ -132,7 +132,7 @@ namespace axe
 		if (m_Initialized && m_Framebuffer)
 		{
 			m_Framebuffer->Resize(width, height);
-			AXE_CORE_INFO("Viewport resized to {}x{}", width, height);
+			//AXE_CORE_INFO("Viewport resized to {}x{}", width, height);
 		}
 	}
 

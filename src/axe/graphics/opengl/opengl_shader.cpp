@@ -92,7 +92,7 @@ namespace axe
 
 		if (location == -1)
 		{
-			AXE_CORE_INFO("Uniform '{}' not found in shader", name);
+			AXE_CORE_TRACE("Uniform '{}' not found in shader", name);
 		}
 
 		m_UniformLocationCache[name] = location;

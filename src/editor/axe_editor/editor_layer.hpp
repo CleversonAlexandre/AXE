@@ -139,8 +139,8 @@ namespace axe
 					{
 						auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
 						if (matAsset)
-							m_MaterialEditor.OpenMaterial(matAsset);
-							m_MaterialEditor.OpenMaterial(matAsset);
+							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
+							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
 					}
 				});
 
@@ -197,6 +197,7 @@ namespace axe
 				AXE_EDITOR_ERROR("ViewportWindow is null during OnAttach!");
 			}
 
+
 			viewport->SetPlayStateCallback([this]() -> int
 				{
 					if (m_EditorState == EditorState::Play)  return 1;
@@ -239,6 +240,10 @@ namespace axe
 
 			m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
 			EditorIconLibrary::Get().Load("resources");
+
+			m_EditorUI->m_MaterialEditorWindow.Initialize();
+
+
 		}
 
 		void OnDetach() override
@@ -320,7 +325,7 @@ namespace axe
 				m_EscWasPressed = false;
 			}
 
-			//m_EditorUI->GetAssetBrowser()->Update();
+		
 			
 		}
 
@@ -421,10 +426,12 @@ namespace axe
 					}
 				}
 			}
+			if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
+				m_EditorUI->m_MaterialEditorWindow.RenderPreview();
 
 			
 			m_EditorUI->Draw();
-			m_MaterialEditor.Draw();
+			
 
 
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
@@ -438,7 +445,9 @@ namespace axe
 
 			// Input de câmera só no modo Edit
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
-				HandleViewportCameraInput();				
+				HandleViewportCameraInput();
+
+			
 
 			HandleSceneInput();
 
@@ -492,10 +501,20 @@ namespace axe
 			ImGuiIO& io = ImGui::GetIO();
 
 			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
-				SaveScene();
+			{
+				// Se o material editor estiver focado, salva o grafo
+				if (m_EditorUI->m_MaterialEditorWindow.IsOpen() &&
+					m_EditorUI->m_MaterialEditorWindow.IsFocused())
+					m_EditorUI->m_MaterialEditorWindow.SaveGraph();
+				else
+					SaveScene(); // caso contrário salva a cena
+			}
+
 
 			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
 				LoadScene();
+
+			
 		}
 
 
@@ -689,6 +708,6 @@ namespace axe
 		bool m_EscWasPressed = false;
 
 		SceneEnvironment m_Environment;
-		MaterialEditorWindow m_MaterialEditor;
+		
 	};
 }    

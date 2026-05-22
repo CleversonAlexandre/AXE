@@ -7,7 +7,7 @@
 #include "axe/graphics/render_command.hpp"
 #include "axe/mesh/mesh.hpp"
 #include "axe/material/material.hpp"
-
+#include "axe/log/log.hpp"
 namespace axe
 {
 	MeshRenderer::MeshRenderer()
@@ -29,11 +29,14 @@ namespace axe
 
 		void main()
 		{
+			
 			vec4 worldPos  = u_Model * vec4(a_Position, 1.0);
 			v_FragPos      = worldPos.xyz;
 			v_Normal       = normalize(u_NormalMatrix * a_Normal);
 			v_TexCoord     = a_TexCoord;
 			gl_Position    = u_ViewProjection * worldPos;
+			
+			
 		}
 	)";
 
@@ -112,6 +115,9 @@ namespace axe
 
 		void main()
 		{
+			 
+
+
 			// --- Lê valores do material ---
 			vec3 albedo = u_Color.rgb;
 			if (u_HasAlbedoMap == 1)
@@ -206,6 +212,7 @@ namespace axe
 		PipelineSpecification spec;
 		spec.Shader = m_Shader;
 		spec.DepthTest = true;
+		spec.Cull = CullMode::None;
 		m_Pipeline = Pipeline::Create(spec);
 
 		m_DefaultMaterial = std::make_shared<Material>(m_Shader, "Default");
@@ -213,6 +220,8 @@ namespace axe
 
 	void MeshRenderer::Begin(const glm::mat4& viewProjection, const glm::vec3& cameraPosition)
 	{
+	//	AXE_CORE_INFO("MeshRenderer::Begin VP[3][3]={}", viewProjection[3][3]);
+		m_ViewProjection = viewProjection;
 		m_ViewProjection = viewProjection;
 		m_CameraPosition = cameraPosition;
 	}
@@ -220,15 +229,21 @@ namespace axe
 	void MeshRenderer::DrawMesh(const Mesh& mesh, const glm::mat4& model,
 		const Material* material, const DirectionalLight* light)
 	{
+
 		const Material* mat = material ? material : m_DefaultMaterial.get();
+
+		//AXE_CORE_INFO("VP[0][0]={} VP[1][1]={} VP[2][2]={} VP[3][3]={}",
+		//	m_ViewProjection[0][0], m_ViewProjection[1][1],
+		//	m_ViewProjection[2][2], m_ViewProjection[3][3]);
+		//AXE_CORE_INFO("VP[3][0]={} VP[3][1]={} VP[3][2]={}",
+		//	m_ViewProjection[3][0], m_ViewProjection[3][1], m_ViewProjection[3][2]);
+
+
+		//AXE_CORE_INFO("Model[3][0]={} Model[3][1]={} Model[3][2]={}",
+		//	model[3][0], model[3][1], model[3][2]);
 
 		// Usa o shader do material se tiver, senão usa o padrão
 		auto shader = mat->GetShader() ? mat->GetShader() : m_Shader;
-
-		// Garante que o material usa o shader do MeshRenderer
-		// (materiais importados têm shader próprio mas sem uniforms PBR)
-		// Forçamos o shader padrão para garantir compatibilidade
-		shader = m_Shader;
 
 		m_Pipeline->Bind();
 		mesh.GetVertexArray()->Bind();

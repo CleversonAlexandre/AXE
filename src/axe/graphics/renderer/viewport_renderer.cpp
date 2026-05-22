@@ -27,6 +27,7 @@ namespace axe
 		rotation = eulerAngles(orientation);
 		return true;
 	}
+	
 
 	void ViewportRenderer::Initialize()
 	{
@@ -36,14 +37,29 @@ namespace axe
 		m_SkyboxRenderer.Initialize();
 	}
 
+
+	void ViewportRenderer::SetPickingEnabled(bool enabled)
+	{
+		m_PickingEnabled = enabled;
+	}
 	
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
 		framebuffer.Bind();
 
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glDepthMask(GL_TRUE);
+
+		GLint currentFB;
+		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentFB);
+		//AXE_CORE_INFO("ViewportRenderer {:p} rendering to FB OpenGL ID: {}", (void*)this, currentFB);
+
+
+		//AXE_CORE_INFO("ViewportRenderer {:p} m_Scene: {:p}", (void*)this, (void*)m_Scene);
 		RenderCommand::SetViewport(0, 0, width, height);
 		RenderCommand::SetClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+		//RenderCommand::SetClearColor(0.0f, 1.0f, 0.0f, 1.0f); // verde
 		RenderCommand::Clear();
 		//glViewport(0, 0, width, height);
 		//glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
@@ -99,11 +115,21 @@ namespace axe
 				m_Camera->SetViewportSize((float)width, (float)height);
 			}
 
+			//if (m_SceneRenderer && m_Scene && m_Camera)
+			//{
+			//	auto roots = m_Scene->GetRootEntities();
+			//	AXE_CORE_INFO("RenderScene call - VR: {:p}, SR: {:p}, Scene: {:p}, roots: {}",
+			//		(void*)this,
+			//		(void*)m_SceneRenderer.get(),
+			//		(void*)m_Scene,
+			//		roots.size());
+			//}
+
 			if (m_SceneRenderer && m_Scene && m_Camera)
 				m_SceneRenderer->RenderScene(*m_Scene, *m_Camera, selected);
 
 			// Picking só no modo Edit
-			if (m_Scene && m_Camera)
+			if (m_Scene && m_Camera && m_PickingEnabled)
 			{
 				m_PickingRenderer.Resize(width, height);
 				m_PickingRenderer.Begin(m_Camera->GetViewProjectionMatrix());

@@ -2,7 +2,7 @@
 #include "axe/utils/glm_config.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/scene/components.hpp"
-
+#include "axe/log/log.hpp"
 namespace axe
 {
 
@@ -10,7 +10,13 @@ namespace axe
 
 	void SceneRenderer::RenderScene(const Scene& scene, const EditorCamera& camera, entt::entity selectedEntity)
 	{
+	
 		const glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
+
+
+		//AXE_CORE_INFO("SceneRenderer got VP[3][3]={} from camera at {:p}",
+		//	viewProjection[3][3], (void*)&camera);
+
 		const glm::vec3 cameraPosition = camera.GetPosition();
 
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
@@ -32,6 +38,8 @@ namespace axe
 		for (auto entity : roots)
 			RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
 
+		//AXE_CORE_INFO("SceneRenderer {:p} RenderScene - root count: {}", (void*)this, roots.size());
+		//AXE_CORE_INFO("Camera isPerspective: {}", camera.isPerspective);
 		m_MeshRenderer.End();
 		m_LineRenderer.End();
 		m_CubeRenderer.End();
@@ -43,6 +51,8 @@ namespace axe
 	{
 		glm::mat4 viewProjection = projection * view;
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
+
+
 
 		const DirectionalLight* light = nullptr;
 		for (auto entity : registry.view<LightComponent>())
@@ -59,6 +69,7 @@ namespace axe
 		for (auto entity : roots)
 			RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
 
+		//AXE_CORE_INFO("SceneRenderer 'Sobrecarga'{:p} RenderScene - root count: {}", (void*)this, roots.size());
 		m_MeshRenderer.End();
 		m_LineRenderer.End();
 		m_CubeRenderer.End();
@@ -92,8 +103,11 @@ namespace axe
 		auto* mat = registry.try_get<MaterialComponent>(entity);
 
 		if (mc && mc->Data)
+		{
+			//AXE_CORE_INFO("SceneRenderer {:p} drawing entity {}", (void*)this, (uint32_t)entity);
 			m_MeshRenderer.DrawMesh(*mc->Data, worldTransform,
 				mat ? mat->Data.get() : nullptr, light);
+		}
 		else
 			m_CubeRenderer.DrawCube(worldTransform, selected);
 

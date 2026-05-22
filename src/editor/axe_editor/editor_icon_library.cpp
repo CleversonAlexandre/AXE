@@ -31,6 +31,11 @@ namespace axe
 		m_IconScript = load("icon_script.png");
 		m_IconAudio = load("icon_audio.png");
 		m_Material = load("icon_material.png");
+		m_IconSave = load("save.png");
+		m_IconUndo = load("arrow_left.png");
+		m_IconRedo = load("arrow_right.png");
+		m_IconCompile = load("check.png");
+
 		m_IconDirectionalLight = load("directional_light.png");
 
 		m_Loaded = true;

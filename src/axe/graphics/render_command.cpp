@@ -1,5 +1,5 @@
 #include "render_command.hpp"
-
+#include "axe/log/log.hpp"
 
 namespace axe
 {
@@ -12,7 +12,13 @@ namespace axe
 
 	void RenderCommand::DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
 	{
+		if (!s_RendererAPI)
+		{
+			AXE_CORE_ERROR("RenderCommand::DrawIndexed — s_RendererAPI is null!");
+			return;
+		}
 		s_RendererAPI->DrawIndexed(vertexArray);
+			
 	}
 	void RenderCommand::SetPolygonMode(RendererAPI::PolygonMode mode)
 	{

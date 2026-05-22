@@ -26,13 +26,13 @@ namespace  axe
 			const glm::vec3& cameraPosition,
 			entt::entity selectedEntity);
 
-	
+			MeshRenderer& GetMeshRenderer() { return m_MeshRenderer; }
 	private:
 		CubeRenderer m_CubeRenderer;
-
+		MeshRenderer m_MeshRenderer;
 		LineRenderer m_LineRenderer;
 
-		MeshRenderer m_MeshRenderer;
+		
 
 		void RenderEntity(const Scene& scene, entt::entity entity,
 			const glm::mat4& parentTransform, entt::entity selectedEntity,

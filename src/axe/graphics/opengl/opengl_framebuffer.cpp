@@ -1,6 +1,6 @@
 #include "opengl_framebuffer.hpp"
 #include "axe/graphics/framebuffer.hpp"
-
+#include "axe/log/log.hpp"
 #include <glad/glad.h>
 
 namespace axe
@@ -57,6 +57,8 @@ namespace axe
 	{
 		glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
 		glViewport(0, 0, m_Specification.Width, m_Specification.Height);
+		//AXE_CORE_INFO("Framebuffer::Bind() - FB ID: {}, ColorAttachment ID: {}",
+			//m_RendererID, m_ColorAttachment);
 	}
 
 	void OpenGLFramebuffer::Unbind()

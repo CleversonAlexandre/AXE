@@ -12,6 +12,7 @@ namespace axe
 		m_HierarchyWindow.Draw();
 		m_InspectorWindow.Draw();
 		m_ViewportWindow.Draw();
+		m_MaterialEditorWindow.Draw();
 
 		EndDockspace();
 	}
@@ -72,6 +73,7 @@ namespace axe
 		m_HierarchyWindow.SetContext(context);
 		m_InspectorWindow.SetContext(context);
 		m_AssetBowserWindow.SetContext(context);
+		m_MaterialEditorWindow.SetContext(context);
 	}
 
 	void EditorUI::SetViewportRenderer(ViewportRenderer* renderer)
@@ -154,6 +156,7 @@ namespace axe
 		ImGui::DockBuilderDockWindow("Viewport", dockCenter);
 		ImGui::DockBuilderDockWindow("Inspector", dockRight);
 		ImGui::DockBuilderDockWindow("Asset Browser", dockBottom);
+		//ImGui::DockBuilderDockWindow("Material Editor", dockBottom);
 
 		ImGui::DockBuilderFinish(dockspaceId);
 

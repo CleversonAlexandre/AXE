@@ -13,8 +13,8 @@ namespace axe
 	{
 	public:
 		//Cria material com sjader e cor padrão
-		Material(std::shared_ptr<Shader> shader, const std::string& name = "Material");
-
+		//Material(std::shared_ptr<Shader> shader, const std::string& name = "Material");
+		Material(std::shared_ptr<Shader> shader = nullptr, const std::string& name = "Material");
 		//Nome para exibição no inspector
 		const std::string& GetName() const { return m_Name; }
 		std::shared_ptr<Shader> GetShader() const { return m_Shader; }

@@ -2,7 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp> 
-
+#include "axe/log/log.hpp"
 namespace axe
 {
 	Camera::Camera(float fovDegrees, float aspectRatio, float nearClip, float farClip)
@@ -66,7 +66,7 @@ namespace axe
 				m_FarClip
 			);
 	
-		
+	
 	}
 	glm::mat4 Camera::GetViewProjectionMatrix() const
 	{

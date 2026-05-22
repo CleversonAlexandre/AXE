@@ -51,7 +51,16 @@ namespace axe
 
 		void SetEnvironment(SceneEnvironment* env) { m_Environment = env; }
 		void DrawGrid();
+
+		SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
+
+	/// <summary>
+	/// temp
+	 Scene* GetScene() const { return m_Scene; }
+	 void SetPickingEnabled(bool enabled);
+	/// </summary>
 	private:
+		bool m_PickingEnabled = true;
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;
 

@@ -1,0 +1,584 @@
+#include "material_graph.hpp"
+#include "axe/log/log.hpp"
+#include <nlohmann/json.hpp>
+#include "axe/asset/asset_database.hpp"
+namespace axe
+{
+    
+    MaterialGraph::MaterialGraph()
+    {
+        // Cria o Output node por padrão
+       // AddOutputNode();
+        AddMaterialOutputNode();
+    }
+
+    Node* MaterialGraph::AddMaterialOutputNode()
+    {
+        // Só permite um Material Output
+        if (m_MaterialOutputNode)
+        {
+            AXE_EDITOR_WARN("MaterialGraph: Já existe um Material Output node!");
+            return m_MaterialOutputNode;
+        }
+
+        auto node = std::make_unique<Node>(GetNextID(), "Material Output");
+        node->Color = ImVec4(0.8f, 0.2f, 0.2f, 1.0f); // verde escuro
+
+        // Pins de entrada
+        node->Inputs.emplace_back(GetNextID(), "Base Color", PinType::Vec3, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Metallic", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Roughness", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Normal", PinType::Vec3, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Emissive", PinType::Vec3, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Opacity", PinType::Float, ed::PinKind::Input);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddTextureSampleNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Texture Sample");
+        node->Color = ImVec4(0.35f, 0.18f, 0.18f, 1.0f); // vermelho escuro
+
+        node->Inputs.emplace_back(GetNextID(), "Texture", PinType::Texture2D, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "RGBA", PinType::Vec4, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "RGB", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "R", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddColorNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Color");
+        node->Color = ImVec4(0.18f, 0.18f, 0.35f, 1.0f); // azul escuro
+        node->Value.Type = PinType::Vec4;
+        node->Value.Vec4Val = { 1.0f, 1.0f, 1.0f, 1.0f };
+        node->IsConstant = true;
+
+        node->Outputs.emplace_back(GetNextID(), "RGBA", PinType::Vec4, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "RGB", PinType::Vec3, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+    Node* MaterialGraph::FindNodeByID(int id)
+    {
+        for (auto& node : m_Nodes)
+        {
+            if (node->ID.Get() == id)
+                return node.get();
+        }
+        return nullptr;
+
+    }
+
+    bool MaterialGraph::CanCreateLink(Pin* a, Pin* b)
+    {
+        if (!a || !b || a == b) return false;
+        if (a->Kind == b->Kind) return false;
+        if (a->ParentNode == b->ParentNode) return false;
+
+        // Any aceita qualquer tipo
+        if (a->Type == PinType::Any || b->Type == PinType::Any) return true;
+
+        return a->Type == b->Type;
+    }
+
+
+    Node* MaterialGraph::AddFloatNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Float");
+        node->IsConstant = true;
+        node->Color = ImVec4(0.25f, 0.25f, 0.10f, 1.0f); // amarelo escuro
+        node->Value.Type = PinType::Float;
+        node->Value.FloatVal = 0.0f;
+
+        node->Outputs.emplace_back(GetNextID(), "Value", PinType::Float, ed::PinKind::Output); 
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddComment()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Comment");
+        node->Color = ImVec4(159 / 255.0f, 159 / 255.0f, 159 / 255.0f, 1.0f);
+        node->Type = NodeType::Comment;
+        node->Size = ImVec2(300, 200);
+        
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+    Node* MaterialGraph::AddMultiplyNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Multiply");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        //Dois inputs (A e B)
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+
+        //Um output (resultado)
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddAddNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Add");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddLerpNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Lerp");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Alpha", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddUVNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "UV Coordinate");
+        node->Color = ImVec4(0.5f, 0.4f, 0.2f, 1.0f); // Laranja
+
+        // Sem inputs, apenas outputs
+        node->Outputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSubtractNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Subtract");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddDivideNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Divide");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddPowerNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Power");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f); //Verde Escuro
+
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Any, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    void MaterialGraph::AddLink(ed::PinId startPin, ed::PinId endPin)
+    {
+        m_Links.emplace_back(GetNextID(), startPin, endPin);
+
+        AXE_EDITOR_INFO("AddLink: {} -> {} | Total links: {}",
+            startPin.Get(), endPin.Get(), m_Links.size());
+    }
+
+    void MaterialGraph::RemoveLink(ed::LinkId id)
+    {
+        AXE_EDITOR_INFO("RemoveLink: {} | Total antes: {}", id.Get(), m_Links.size());
+
+        m_Links.erase(
+            std::remove_if(m_Links.begin(), m_Links.end(),
+                [id](const Link& l) { return l.ID == id; }),
+            m_Links.end()
+        );
+
+        AXE_EDITOR_INFO("RemoveLink: total depois: {}", m_Links.size());
+    }
+
+    Node* MaterialGraph::AddClampNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Clamp");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Min", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Max", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddAbsNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Abs");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+    Node* MaterialGraph::AddOneMinusNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "OneMinus");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddWorldPositionNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "World Position");
+        node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f); // laranja escuro
+
+        // Sem inputs — só expõe v_FragPos
+        node->Outputs.emplace_back(GetNextID(), "XYZ", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddFresnelNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Fresnel");
+        node->Color = ImVec4(0.1f, 0.3f, 0.5f, 1.0f); // azul escuro
+
+        node->Inputs.emplace_back(GetNextID(), "Exponent", PinType::Float, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Normal", PinType::Vec3, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Pin* MaterialGraph::FindPin(ed::PinId id)
+    {
+        for (auto& node : m_Nodes)
+        {
+            for (auto& pin : node->Inputs)
+                if (pin.ID == id) return &pin;
+            for (auto& pin : node->Outputs)
+                if (pin.ID == id) return &pin;
+        }
+        return nullptr;
+    }
+
+    bool MaterialGraph::IsPinLinked(ed::PinId id) const
+    {
+        for (auto& link : m_Links)
+            if (link.StartPin == id || link.EndPin == id)
+                return true;
+        return false;
+    }
+
+    std::unique_ptr<Node>* MaterialGraph::FindNode(ed::NodeId id)
+    {
+        for (auto& node : m_Nodes)
+            if (node->ID == id)
+                return &node;
+
+        return nullptr;
+    }
+    void MaterialGraph::BuildNode(std::unique_ptr<Node>* node)
+    {
+        auto currNode = node->get();
+
+        for (auto& input : currNode->Inputs)
+        {
+            input.ParentNode = currNode;
+            input.Kind = ed::PinKind::Input;
+        }
+        for (auto& input : currNode->Outputs)
+        {
+            input.ParentNode = currNode;
+            input.Kind = ed::PinKind::Output;
+        }
+    }
+
+    void MaterialGraph::BuildNodes()
+    {
+        for (auto& node : m_Nodes)
+            BuildNode(&node);
+    }
+   
+    nlohmann::json MaterialGraph::Serialize() const
+    {
+        nlohmann::json j;
+
+        j["nodes"] = nlohmann::json::array();
+        for (const auto& node : m_Nodes)
+        {
+            nlohmann::json nodeJson;
+            nodeJson["id"] = node->ID.Get();
+            nodeJson["name"] = node->Name;
+            nodeJson["type"] = (int)node->Type;
+
+            // Posição no canvas
+            //ImVec2 pos = ed::GetNodePosition(node->ID);
+            ImVec2 pos = GetNodePosition(node->ID.Get());
+            nodeJson["pos_x"] = pos.x;
+            nodeJson["pos_y"] = pos.y;
+
+            // Tamanho (comments)
+            nodeJson["size_x"] = node->Size.x;
+            nodeJson["size_y"] = node->Size.y;
+
+            // Valores constantes (Float, Color)
+            if (node->IsConstant)
+            {
+                nodeJson["value_type"] = (int)node->Value.Type;
+
+                if (node->Value.Type == PinType::Float)
+                    nodeJson["value_float"] = node->Value.FloatVal;
+                else if (node->Value.Type == PinType::Vec4)
+                    nodeJson["value_vec4"] = {
+                        node->Value.Vec4Val.x, node->Value.Vec4Val.y,
+                        node->Value.Vec4Val.z, node->Value.Vec4Val.w
+                };
+            }
+
+            // Textura
+            if (!node->Value.TextureUUID.empty())
+                nodeJson["texture_uuid"] = node->Value.TextureUUID;
+
+            // IDs dos pins — necessários para reconstruir os links
+            nlohmann::json inputIds = nlohmann::json::array();
+            nlohmann::json outputIds = nlohmann::json::array();
+            for (auto& pin : node->Inputs)  inputIds.push_back(pin.ID.Get());
+            for (auto& pin : node->Outputs) outputIds.push_back(pin.ID.Get());
+            nodeJson["input_ids"] = inputIds;
+            nodeJson["output_ids"] = outputIds;
+
+            j["nodes"].push_back(nodeJson);
+        }
+
+        j["links"] = nlohmann::json::array();
+        for (const auto& link : m_Links)
+        {
+            nlohmann::json linkJson;
+            linkJson["id"] = link.ID.Get();
+            linkJson["start_pin"] = link.StartPin.Get();
+            linkJson["end_pin"] = link.EndPin.Get();
+            j["links"].push_back(linkJson);
+        }
+
+        return j;
+    }
+
+    void MaterialGraph::Deserialize(const nlohmann::json& j)
+    {
+        m_Nodes.clear();
+        m_Links.clear();
+        m_MaterialOutputNode = nullptr;
+        m_PinRemap.clear();
+
+        // Reconstrói cada node pelo nome
+        for (const auto& nodeJson : j["nodes"])
+        {
+            std::string name = nodeJson["name"].get<std::string>();
+
+            Node* node = nullptr;
+            if (name == "Material Output") node = AddMaterialOutputNode();
+            else if (name == "Texture Sample")  node = AddTextureSampleNode();
+            else if (name == "Float")           node = AddFloatNode();
+            else if (name == "Color")           node = AddColorNode();
+            else if (name == "UV Coordinate")   node = AddUVNode();
+            else if (name == "Multiply")        node = AddMultiplyNode();
+            else if (name == "Add")             node = AddAddNode();
+            else if (name == "Subtract")        node = AddSubtractNode();
+            else if (name == "Divide")          node = AddDivideNode();
+            else if (name == "Power")           node = AddPowerNode();
+            else if (name == "Lerp")            node = AddLerpNode();
+            else if (name == "Comment")         node = AddComment();
+            else if (name == "Clamp")         node = AddComment();
+            else if (name == "Abs")         node = AddComment();
+            else if (name == "OneMinus")         node = AddComment();
+            else if (name == "World Position")         node = AddComment();
+            else if (name == "Fresnel")         node = AddComment();
+            
+
+
+            if (!node) continue;
+
+            // Restaura posição no canvas
+            //ed::SetNodePosition(node->ID, ImVec2(
+            //    nodeJson["pos_x"].get<float>(),
+            //    nodeJson["pos_y"].get<float>()));
+
+            m_PendingPositions[node->ID.Get()] = ImVec2(
+                nodeJson["pos_x"].get<float>(),
+                nodeJson["pos_y"].get<float>());
+
+
+            // Restaura tamanho (comments)
+            if (nodeJson.contains("size_x"))
+                node->Size = ImVec2(
+                    nodeJson["size_x"].get<float>(),
+                    nodeJson["size_y"].get<float>());
+
+            // Restaura valores constantes
+            if (nodeJson.contains("value_float"))
+                node->Value.FloatVal = nodeJson["value_float"].get<float>();
+
+            if (nodeJson.contains("value_vec4"))
+            {
+                auto& v = nodeJson["value_vec4"];
+                node->Value.Vec4Val = { v[0], v[1], v[2], v[3] };
+            }
+
+            // Restaura textura
+            if (nodeJson.contains("texture_uuid"))
+            {
+                node->Value.TextureUUID = nodeJson["texture_uuid"].get<std::string>();
+                const AssetRecord* record = AssetDatabase::Get().GetByUUID(node->Value.TextureUUID);
+                if (record && std::filesystem::exists(record->FilePath))
+                    node->Value.TextureVal = Texture2D::Create(record->FilePath.string());
+            }
+
+            // Remapeia IDs dos pins: salvo → atual (por posição)
+            if (nodeJson.contains("input_ids"))
+            {
+                auto& ids = nodeJson["input_ids"];
+                for (int i = 0; i < (int)ids.size() && i < (int)node->Inputs.size(); i++)
+                    m_PinRemap[ids[i].get<int>()] = node->Inputs[i].ID.Get();
+            }
+            if (nodeJson.contains("output_ids"))
+            {
+                auto& ids = nodeJson["output_ids"];
+                for (int i = 0; i < (int)ids.size() && i < (int)node->Outputs.size(); i++)
+                    m_PinRemap[ids[i].get<int>()] = node->Outputs[i].ID.Get();
+            }
+        }
+
+        
+       // Reconstrói links usando o remap
+        for (const auto& linkJson : j["links"])
+        {
+            int savedStart = linkJson["start_pin"].get<int>();
+            int savedEnd = linkJson["end_pin"].get<int>();
+
+            auto itStart = m_PinRemap.find(savedStart);
+            auto itEnd = m_PinRemap.find(savedEnd);
+
+            if (itStart != m_PinRemap.end() && itEnd != m_PinRemap.end())
+            {
+                // Verifica se já existe link para este endPin
+                bool alreadyConnected = false;
+                for (auto& l : m_Links)
+                    if (l.EndPin.Get() == itEnd->second)
+                    {
+                        alreadyConnected = true; break;
+                    }
+
+                if (!alreadyConnected)
+                    AddLink(ed::PinId(itStart->second), ed::PinId(itEnd->second));
+                else
+                    AXE_CORE_WARN("Deserialize: link duplicado ignorado ({} -> {})",
+                        savedStart, savedEnd);
+            }
+        }
+
+        BuildNodes();
+        AXE_CORE_INFO("MaterialGraph: grafo desserializado com {} nodes e {} links",
+            m_Nodes.size(), m_Links.size());
+    }
+
+    Pin* MaterialGraph::FindPinByOriginalId(int savedId)
+    {
+        // Usa o remap para encontrar o ID atual
+        auto it = m_IdRemap.find(savedId);
+        if (it == m_IdRemap.end()) return nullptr;
+        int currentId = it->second;
+        return FindPin(ed::PinId(currentId));
+    }
+    void MaterialGraph::DeleteNode(ed::NodeId nodeId)
+    {
+        // Remove todos os links conectados a este node
+        auto* nodePtr = FindNode(nodeId);
+        if (!nodePtr) return;
+        auto* node = nodePtr->get();
+
+        m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+            [&](const Link& l)
+            {
+                for (auto& pin : node->Inputs)
+                    if (l.StartPin == pin.ID || l.EndPin == pin.ID) return true;
+                for (auto& pin : node->Outputs)
+                    if (l.StartPin == pin.ID || l.EndPin == pin.ID) return true;
+                return false;
+            }), m_Links.end());
+
+        // Remove o node
+        m_Nodes.erase(std::remove_if(m_Nodes.begin(), m_Nodes.end(),
+            [nodeId](const std::unique_ptr<Node>& n) { return n->ID == nodeId; }),
+            m_Nodes.end());
+    }
+} // namespace axe

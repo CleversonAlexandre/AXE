@@ -6,7 +6,7 @@
 #include "asset_browser.hpp"
 
 #include "editor_context.hpp"
-
+#include "material_editor_window.hpp"
 #include <imgui.h>
 
 namespace axe
@@ -22,7 +22,7 @@ namespace axe
 		
 		ViewportWindow* GetViewport() { return &m_ViewportWindow; }
 		AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
-
+		MaterialEditorWindow m_MaterialEditorWindow;
 	private:
 
 		void BeginDockspace();
@@ -35,6 +35,7 @@ namespace axe
 		ViewportWindow  m_ViewportWindow;
 		InspectorWindow m_InspectorWindow;
 		AssetBrowser m_AssetBowserWindow;
+		
 
 		bool m_ShowHierarchy = true;
 		bool m_ShowViewport = true;

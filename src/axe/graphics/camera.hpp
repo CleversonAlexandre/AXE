@@ -24,9 +24,9 @@ namespace axe
 
 		float GetAspectRatio() const { return m_AspectRatio; }
 
-		glm::mat4 GetViewMatrix() const;
-		glm::mat4 GetProjectionMatrix() const;
-	 	glm::mat4 GetViewProjectionMatrix() const;
+		virtual glm::mat4 GetViewMatrix() const;
+		virtual glm::mat4 GetProjectionMatrix() const;
+	 	virtual glm::mat4 GetViewProjectionMatrix() const;
 
 		void SetPerspective(float fovDegrees, float aspectRatio, float nearClip, float farClip);
 		

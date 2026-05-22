@@ -17,6 +17,7 @@ namespace axe
     enum class PinType
     {
         Float,
+        Vec2,
         Vec3,
         Vec4,
         Texture2D,
@@ -60,7 +61,7 @@ namespace axe
 
         ImColor Color;
 
-
+        Link() : ID(0), StartPin(0), EndPin(0) {}
         Link(int id, ed::PinId start, ed::PinId end)
             : ID(id), StartPin(start), EndPin(end), Color(255, 255, 255) {}
     };
@@ -71,6 +72,7 @@ namespace axe
         PinType Type = PinType::Float;
 
         float               FloatVal = 0.0f;
+        glm::vec2           Vec2Val = { 0, 0 };
         glm::vec3           Vec3Val = { 0, 0, 0 };
         glm::vec4           Vec4Val = { 0, 0, 0, 1 };
         std::shared_ptr<axe::Texture2D> TextureVal;
@@ -92,7 +94,7 @@ namespace axe
 
         float TitleHeight = 0.0f;
         std::vector<int> ChildNodeIDs;
-
+        bool IsConstant = false;
 
         Node(int id, const char* name, ImColor color = ImColor(255, 255, 255)) :
             ID(id), Name(name), Color(color), Type(NodeType::Blueprint), Size(0, 0)

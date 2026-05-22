@@ -22,7 +22,7 @@ namespace axe
 		void DrawMesh(const Mesh& mesh, const glm::mat4& model, const Material* material = nullptr,
 																const DirectionalLight* light = nullptr);		
 		void End();
-
+		std::shared_ptr<Shader> GetDefaultShader() const { return m_Shader; }
 	private:
 		std::shared_ptr<Shader> m_Shader;
 		std::shared_ptr<Pipeline> m_Pipeline;

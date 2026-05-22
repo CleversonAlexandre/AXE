@@ -1,5 +1,6 @@
 #include "material.hpp"
 #include "axe/utils/glm_config.hpp"
+#include "axe/log/log.hpp"
 
 namespace axe
 {
@@ -11,6 +12,8 @@ namespace axe
 	{
 		//Bind do shader é feito pelo Pipeline - aqui só enviamos os parâmetros
 		if (!m_Shader) return;
+		AXE_CORE_INFO("Material::Apply - Shader pointer: {}", (void*)m_Shader.get());
+
 
 		m_Shader->SetFloat4("u_Color", Color);
 		m_Shader->SetFloat("u_SpecularStrength", SpecularStrength);

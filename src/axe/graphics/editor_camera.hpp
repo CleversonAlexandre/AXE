@@ -24,8 +24,8 @@ namespace axe
 		void SetViewportSize(float width, float height);
 
 		const glm::mat4& GetViewMatrixCached() const { return m_ViewMatrix; }
-		glm::mat4 GetViewProjectionMatrix() const;
-		glm::mat4 GetViewMatrix() const;
+		glm::mat4 GetViewProjectionMatrix() const override;
+		glm::mat4 GetViewMatrix() const override;
 		const glm::vec3& GetPosition() const { return m_Position; }
 		float GetPitch() const { return m_Pitch; }
 		float GetYaw() const { return m_Yaw; }

@@ -15,6 +15,8 @@ namespace axe
         void SetContext(EditorContext* context);
         void Draw();
 
+        // Criação
+        void CreateObject(const std::string& name, const std::string& primitiveUUID);
     private:
         // Renderiza um nó e seus filhos recursivamente
         void DrawNode(entt::entity entity);
@@ -22,8 +24,7 @@ namespace axe
         void DrawContextMenuObject(entt::entity entity);
         void HandleKeyboardShortcuts();
 
-        // Criação
-        void CreateObject(const std::string& name, const std::string& primitiveUUID);
+        // Criação        
         void CreateFolder();
         void CreateLight();
 
