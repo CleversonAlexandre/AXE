@@ -9,7 +9,7 @@ namespace axe
     {
         // Cria o Output node por padrão
        // AddOutputNode();
-        AddMaterialOutputNode();
+        //AddMaterialOutputNode();
     }
 
     Node* MaterialGraph::AddMaterialOutputNode()
@@ -458,11 +458,11 @@ namespace axe
             else if (name == "Power")           node = AddPowerNode();
             else if (name == "Lerp")            node = AddLerpNode();
             else if (name == "Comment")         node = AddComment();
-            else if (name == "Clamp")         node = AddComment();
-            else if (name == "Abs")         node = AddComment();
-            else if (name == "OneMinus")         node = AddComment();
-            else if (name == "World Position")         node = AddComment();
-            else if (name == "Fresnel")         node = AddComment();
+            else if (name == "Clamp")           node = AddClampNode();
+            else if (name == "Abs")             node = AddAbsNode();
+            else if (name == "OneMinus")        node = AddOneMinusNode();
+            else if (name == "World Position")  node = AddWorldPositionNode();
+            else if (name == "Fresnel")         node = AddFresnelNode();
             
 
 

@@ -270,33 +270,30 @@ namespace axe
 
 		std::shared_ptr<Texture2D> icon;
 
-		if (record.Type == AssetType::Texture)
+		uint32_t overrideTextureID = 0;
+
+		if (record.Type == AssetType::Material && m_ThumbnailRenderer &&
+			record.FilePath.extension() == ".axemat")
 		{
-			
-			// Verifica se já falhou antes
+			m_ThumbnailRenderer->Register(record.UUID, record.FilePath);
+			overrideTextureID = m_ThumbnailRenderer->GetThumbnail(record.UUID);
+			icon = icons.GetMaterial(); // fallback enquanto thumbnail não está pronto
+		}
+		else if (record.Type == AssetType::Texture)
+		{
 			if (m_TexturesFailedLoad.count(record.UUID) > 0)
-			{
 				icon = icons.GetForType("Texture");
-			}
-			// Verifica se já está no cache
 			else if (m_TextureCache.count(record.UUID) > 0)
 			{
 				icon = m_TextureCache[record.UUID];
 				if (!icon) icon = icons.GetForType("Texture");
 			}
-			// Verifica se está pendente
 			else if (m_TexturesPendingLoad.count(record.UUID) > 0)
-			{
-				icon = icons.GetForType("Texture"); // Mostra ícone genérico enquanto carrega
-			}
-			// Agenda carregamento para o próximo frame
+				icon = icons.GetForType("Texture");
 			else
 			{
 				if (std::filesystem::exists(record.FilePath))
-				{
-					AXE_CORE_INFO("AssetBrowser: Agendando textura {}", record.UUID);
 					m_TexturesPendingLoad.insert(record.UUID);
-				}
 				icon = icons.GetForType("Texture");
 			}
 		}
@@ -304,11 +301,10 @@ namespace axe
 		{
 			switch (record.Type)
 			{
-			case AssetType::Scene:  icon = icons.GetScene();  break;
-			case AssetType::Script: icon = icons.GetScript(); break;
-			case AssetType::Audio:  icon = icons.GetAudio();  break;
-			case AssetType::Material:  icon = icons.GetMaterial();  break;
-			default:                icon = icons.GetMesh();   break;
+			case AssetType::Scene:    icon = icons.GetScene();    break;
+			case AssetType::Script:   icon = icons.GetScript();   break;
+			case AssetType::Audio:    icon = icons.GetAudio();    break;
+			default:                  icon = icons.GetMesh();     break;
 			}
 		}
 
@@ -379,14 +375,18 @@ namespace axe
 		);
 
 		// Ícone
-		if (icon && icon->IsLoaded())
+		if (overrideTextureID != 0)
+			draw->AddImage(
+				(ImTextureID)(uintptr_t)overrideTextureID,
+				iconMin, iconMax,
+				ImVec2(0, 1), ImVec2(1, 0));
+		else if (icon && icon->IsLoaded())
 			draw->AddImage(
 				(ImTextureID)(uintptr_t)icon->GetRendererID(),
 				iconMin, iconMax,
-				ImVec2(0, 1), ImVec2(1, 0)
-			);
+				ImVec2(0, 1), ImVec2(1, 0));
 		else
-			draw->AddRectFilled(iconMin, iconMax, IM_COL32(60, 60, 60, 255), 4.0f);
+			draw->AddRectFilled(iconMin, iconMax, IM_COL32(60, 60, 60, 255), 4.0f);			
 
 		// Nome centralizado
 		std::string displayName = record.Name;

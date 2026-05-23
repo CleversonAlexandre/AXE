@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include <unordered_set>
+#include "material_thumbnail_renderer.hpp"
 
 namespace axe
 {
@@ -35,6 +36,18 @@ namespace axe
 
 		using AssetOpenCallback = std::function<void(const AssetRecord&)>;
 		void SetAssetOpenCallback(AssetOpenCallback cb) { m_AssetOpenCallback = cb; }
+
+		using MaterialDropCallback = std::function<void(const std::string& uuid)>;
+		void SetMaterialDropCallback(MaterialDropCallback cb) { m_MaterialDropCallback = cb; }
+
+		//Thumbnail para o material
+		void SetThumbnailRenderer(MaterialThumbnailRenderer* renderer)
+		{
+			m_ThumbnailRenderer = renderer;
+		}
+
+		MaterialThumbnailRenderer* m_ThumbnailRenderer = nullptr;
+
 	private:
 		void DrawFolderTree();
 		void DrawAssetGrid();
@@ -58,6 +71,7 @@ namespace axe
 		std::unordered_set<std::string> m_TexturesFailedLoad;
 		int m_FramesSinceStart = 0;
 		
+		MaterialDropCallback m_MaterialDropCallback;
 	};
 
 } // namespace axe

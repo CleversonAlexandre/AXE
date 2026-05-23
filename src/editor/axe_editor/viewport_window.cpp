@@ -112,7 +112,12 @@ namespace axe
 			{
 				const char* uuid = (const char*)payload->Data;
 				if (m_AssetDropCallback)
-					m_AssetDropCallback(std::string(uuid));
+				{
+					ImVec2 mousePos = ImGui::GetMousePos();
+					float localX = mousePos.x - m_BoundsMin.x;
+					float localY = mousePos.y - m_BoundsMin.y;
+					m_AssetDropCallback(std::string(uuid), localX, localY);
+				}
 			}
 			ImGui::EndDragDropTarget();
 		}

@@ -45,7 +45,7 @@ namespace axe
 		void SetGuizmoCallback(GuizmoDrawFunc func) { m_GuizmoCallback = func; }
 
 		// Asset drop — público
-		using AssetDropCallback = std::function<void(const std::string&)>;
+		using AssetDropCallback = std::function<void(const std::string&, float, float)>;
 		void SetAssetDropCallback(AssetDropCallback cb) { m_AssetDropCallback = cb; }
 
 		std::unique_ptr<EditorCamera> m_Camera;
@@ -56,7 +56,7 @@ namespace axe
 		void SetPlayStateCallback(PlayStateCallback cb) {m_PlayStateCallback = cb;}
 		void SetPlayActionCallback(PlayActionCallback cb) { m_PlayActionCallback = cb;}
 
-
+		using AssetDropCallback = std::function<void(const std::string& uuid, float mouseX, float mouseY)>;
 
 	private:
 		bool m_Initialized = false;

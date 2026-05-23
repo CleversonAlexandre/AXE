@@ -8,7 +8,9 @@
 #include "axe/graphics/texture.hpp"
 #include "axe/log/log.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe/scene/scene_serializer.hpp"
 
+#include "asset/asset_picker.hpp"
 
 namespace axe
 {
@@ -181,6 +183,8 @@ namespace axe
 	}
 
 
+
+
 	void InspectorWindow::DrawMaterial(entt::entity entity)
 	{
 		auto& registry = m_Context->ActiveScene->GetRegistry();
@@ -190,61 +194,52 @@ namespace axe
 		ImGui::Text("Material");
 		ImGui::Spacing();
 
-		// Slot do asset .axemat
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+		std::string uuid = mc ? mc->MaterialAssetUUID : "";
 
-		std::string slotLabel = "Nenhum Material";
-		if (mc && !mc->MaterialAssetUUID.empty())
-		{
-			const AssetRecord* record = AssetDatabase::Get().GetByUUID(mc->MaterialAssetUUID);
-			if (record) slotLabel = record->Name;
-		}
-		else if (mc && mc->Data)
-		{
-			slotLabel = mc->Data->GetName();
-		}
-
-		ImGui::Button(slotLabel.c_str(), ImVec2(-1, 32));
-		ImGui::PopStyleColor();
-
-		// Aceita .axemat via drag and drop
-		if (ImGui::BeginDragDropTarget())
-		{
-			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+		if (AssetPicker::Draw("Material", uuid, { AssetType::Material },
+			[&](const AssetRecord& record)
 			{
-				std::string uuid = (const char*)payload->Data;
-				const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+				auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
+				if (!matAsset) return;
 
-				if (record && record->Type == AssetType::Material)
+				auto material = matAsset->GetMaterial();
+
+				if (SceneSerializer::GetMaterialRecompileCallback())
 				{
-					auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
-					if (matAsset)
-					{
-						if (!mc)
-						{
-							registry.emplace<MaterialComponent>(entity,
-								matAsset->GetMaterial());
-							mc = registry.try_get<MaterialComponent>(entity);
-						}
-						else
-						{
-							mc->Data = matAsset->GetMaterial();
-						}
-						mc->MaterialAssetUUID = uuid;
-						AXE_EDITOR_INFO("Material '{}' aplicado.", record->Name);
-					}
+					auto shader = SceneSerializer::GetMaterialRecompileCallback()(record.UUID);
+					if (shader) material->SetShader(shader);
 				}
+
+				if (!mc)
+				{
+					auto& comp = registry.emplace<MaterialComponent>(entity, material);
+					comp.MaterialAssetUUID = record.UUID;
+					mc = registry.try_get<MaterialComponent>(entity);
+				}
+				else
+				{
+					mc->Data = material;
+					mc->MaterialAssetUUID = record.UUID;
+				}
+			}))
+		{
+			// uuid mudou — verifica se foi limpo pelo botão X
+			if (uuid.empty() && mc)
+			{
+				registry.remove<MaterialComponent>(entity);
+				mc = nullptr;
 			}
-			ImGui::EndDragDropTarget();
+			else if (!uuid.empty() && mc)
+			{
+				mc->MaterialAssetUUID = uuid;
+			}
 		}
 
 		ImGui::Spacing();
 
-		// Mostra parâmetros do material se tiver
 		if (mc && mc->Data)
 			DrawMaterialParams(*mc->Data);
 	}
-
 	void InspectorWindow::DrawMaterialParams(Material& mat)
 	{
 		bool usePBR = mat.UsePBR;
@@ -269,11 +264,40 @@ namespace axe
 		ImGui::Text("Texturas:");
 		ImGui::Spacing();
 
-		DrawTextureSlot("Albedo", mat.AlbedoMap, mat.AlbedoUUID);
-		DrawTextureSlot("Normal", mat.NormalMap, mat.NormalUUID);
-		DrawTextureSlot("Roughness", mat.RoughnessMap, mat.RoughnessUUID);
-		DrawTextureSlot("Metallic", mat.MetallicMap, mat.MetallicUUID);
-		DrawTextureSlot("AO", mat.AOMap, mat.AOUUID);
+		AssetPicker::Draw("Albedo", mat.AlbedoUUID, { AssetType::Texture },
+			[&](const AssetRecord& record)
+			{
+				mat.AlbedoMap = Texture2D::Create(record.FilePath.string());
+				mat.AlbedoUUID = record.UUID; // ← atualiza o UUID
+			});
+
+		AssetPicker::Draw("Normal", mat.NormalUUID, { AssetType::Texture },
+			[&](const AssetRecord& record)
+			{
+				mat.NormalMap = Texture2D::Create(record.FilePath.string());
+				mat.NormalUUID = record.UUID;
+			});
+
+		AssetPicker::Draw("Roughness", mat.RoughnessUUID, { AssetType::Texture },
+			[&](const AssetRecord& record)
+			{
+				mat.RoughnessMap = Texture2D::Create(record.FilePath.string());
+				mat.RoughnessUUID = record.UUID;
+			});
+
+		AssetPicker::Draw("Metallic", mat.MetallicUUID, { AssetType::Texture },
+			[&](const AssetRecord& record)
+			{
+				mat.MetallicMap = Texture2D::Create(record.FilePath.string());
+				mat.MetallicUUID = record.UUID;
+			});
+
+		AssetPicker::Draw("AO", mat.AOUUID, { AssetType::Texture },
+			[&](const AssetRecord& record)
+			{
+				mat.AOMap = Texture2D::Create(record.FilePath.string());
+				mat.AOUUID = record.UUID;
+			});
 	}
 
 } // namespace axe

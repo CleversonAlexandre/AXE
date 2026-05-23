@@ -8,10 +8,14 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <imgui.h>
+
+#include "editor/axe_editor/node_graph/material_graph.hpp"
 namespace axe
 {
 
 	using json = nlohmann::json;
+
+	SceneSerializer::MaterialRecompileCallback SceneSerializer::s_MaterialRecompileCallback = nullptr;
 
 	bool SceneSerializer::Serialize(const Scene& scene, const std::filesystem::path& filepath)
 	{
@@ -68,6 +72,7 @@ namespace axe
 				{
 					if (c->Data)
 					{
+						components["Material"]["material_asset_uuid"] = c->MaterialAssetUUID; 
 						components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
 						components["Material"]["specular_strength"] = c->Data->SpecularStrength;
 						components["Material"]["shininess"] = c->Data->Shininess;
@@ -225,12 +230,12 @@ namespace axe
 						AXE_CORE_WARN("SceneSerializer: asset '{}' não encontrado.", uuid);
 				}
 			}
-
-			// MaterialComponent
+			
 			// MaterialComponent
 			if (components.contains("Material"))
 			{
 				auto& t = components["Material"];
+
 				auto mat = std::make_shared<Material>(nullptr, "Material");
 
 				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
@@ -264,7 +269,22 @@ namespace axe
 				LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
 				LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
 
-				registry.emplace<MaterialComponent>(entity, mat);
+				auto mc = MaterialComponent{ mat };
+				// Carrega e recompila o shader do grafo se tiver UUID do asset
+				if (t.contains("material_asset_uuid"))
+				{
+					mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
+
+					// Recompila o shader
+					if (s_MaterialRecompileCallback && !mc.MaterialAssetUUID.empty())
+					{
+						auto shader = s_MaterialRecompileCallback(mc.MaterialAssetUUID);
+						if (shader) mat->SetShader(shader);
+					}
+				}
+
+							
+				registry.emplace<MaterialComponent>(entity, mc);
 			}
 
 			// LightComponent
@@ -511,5 +531,6 @@ namespace axe
 			return false;
 		}
 	}
+
 
 } // namespace axe

@@ -15,6 +15,7 @@ namespace axe
         MaterialCompiler compiler(graph);
         CompiledMaterial result;
 
+        
         // 1 Localiza o Material Output node - ponto de partida do percurso
         Node* outputNode = nullptr;
         for (auto& node : graph->GetNodes())
@@ -32,6 +33,8 @@ namespace axe
             AXE_CORE_ERROR("MaterialCompiler: {}", result.ErrorMessage);
             return result;
         }
+
+
 
          // ---------------------------------------------------------------------
          // 2. Percorre o grafo em ordem topológica (DFS reverso)
@@ -113,6 +116,38 @@ namespace axe
         std::string roughness = resolveInput(2, "0.5");
         std::string emissive = resolveInput(4, "vec3(0.0)");
         std::string opacity = resolveInput(5, "1.0");
+
+        // Converte para float se necessário
+        Pin* metallicSrc = (outputNode->Inputs.size() > 1)
+            ? compiler.GetSourcePin(&outputNode->Inputs[1]) : nullptr;
+        Pin* roughnessSrc = (outputNode->Inputs.size() > 2)
+            ? compiler.GetSourcePin(&outputNode->Inputs[2]) : nullptr;
+
+        if (metallicSrc)
+        {
+            PinType t = compiler.GetPinType(metallicSrc->ID);
+            if (t == PinType::Vec3 || t == PinType::Vec4)
+                metallic = "dot(" + metallic + ", vec3(0.299, 0.587, 0.114))"; // luminância
+        }
+
+        if (roughnessSrc)
+        {
+            PinType t = compiler.GetPinType(roughnessSrc->ID);
+            if (t == PinType::Vec3 || t == PinType::Vec4)
+                roughness = "dot(" + roughness + ", vec3(0.299, 0.587, 0.114))";
+            else if (t == PinType::Vec4)
+                roughness = roughness + ".r";
+        }
+
+        Pin* opacitySrc = (outputNode->Inputs.size() > 5)
+            ? compiler.GetSourcePin(&outputNode->Inputs[5]) : nullptr;
+        if (opacitySrc)
+        {
+            PinType t = compiler.GetPinType(opacitySrc->ID);
+            if (t == PinType::Vec3 || t == PinType::Vec4)
+                opacity = "dot(" + opacity + ", vec3(0.299, 0.587, 0.114))";
+        }
+
         // Conversão automática de tipo para Base Color (deve ser vec3)
         Pin* baseColorSrc = compiler.GetSourcePin(&outputNode->Inputs[0]);
         if (baseColorSrc)
@@ -151,31 +186,82 @@ namespace axe
         fs << "    vec3  matEmissive  = " << emissive << ";\n";
         fs << "    float matOpacity   = " << opacity << ";\n\n";
 
+      
         // ---------------------------------------------------------------------
-        // 5. Iluminação Blinn-Phong
-        //    Compatível com os uniforms do MeshRenderer.
-        //    No futuro pode ser substituída por PBR Cook-Torrance sem mudar
-        //    o compilador — basta trocar este bloco.
+        // 5. Iluminação PBR Cook-Torrance        
+        //    D = GGX Normal Distribution
+        //    G = Smith Geometry (Schlick-GGX)
+        //    F = Fresnel Schlick
         // ---------------------------------------------------------------------
-        fs << "    // --- Iluminação Blinn-Phong ---\n";
-        fs << "    vec3  L       = normalize(-u_LightDirection);\n";
-        fs << "    vec3  V       = normalize(u_CameraPosition - v_FragPos);\n";
-        fs << "    vec3  H       = normalize(L + V);\n";
-        fs << "    float NdotL   = max(dot(N, L), 0.0);\n";
-        fs << "    float NdotH   = max(dot(N, H), 0.0);\n";
-        fs << "    float specPow = mix(8.0, 128.0, 1.0 - matRoughness);\n\n";
+        fs << "    // --- PBR Cook-Torrance ---\n";
+        fs << "    vec3  L     = normalize(-u_LightDirection);\n";
+        fs << "    vec3  V     = normalize(u_CameraPosition - v_FragPos);\n";
+        fs << "    vec3  H     = normalize(L + V);\n";
+        fs << "    float NdotL = max(dot(N, L), 0.0);\n";
+        fs << "    float NdotV = max(dot(N, V), 0.0);\n";
+        fs << "    float NdotH = max(dot(N, H), 0.0);\n\n";
 
-        fs << "    vec3 ambient  = matBaseColor * 0.15 * u_LightColor;\n";
-        fs << "    vec3 diffuse  = matBaseColor * NdotL * u_LightColor * u_LightIntensity;\n";
-        fs << "    vec3 specular = vec3(pow(NdotH, specPow))\n";
-        fs << "                   * u_LightColor * u_LightIntensity\n";
-        fs << "                   * (1.0 - matRoughness) * (1.0 - matMetallic) * 0.5;\n\n";
+        // F0 — reflectância na incidência zero
+        // metais usam a cor do material, não-metais usam 0.04
+        fs << "    // F0: reflectância base\n";
+        fs << "    vec3 F0 = mix(vec3(0.04), matBaseColor, matMetallic);\n\n";
 
-        fs << "    vec3 finalColor = ambient + diffuse + specular + matEmissive;\n";
+        // D — GGX Normal Distribution Function
+        fs << "    // D — GGX\n";
+        fs << "    float alpha  = matRoughness * matRoughness;\n";
+        fs << "    float alpha2 = alpha * alpha;\n";
+        fs << "    float denom  = (NdotH * NdotH) * (alpha2 - 1.0) + 1.0;\n";
+        fs << "    float D      = alpha2 / (3.14159265 * denom * denom);\n\n";
+
+        // G — Smith Geometry Function (Schlick-GGX)
+        fs << "    // G — Smith\n";
+        fs << "    float k   = (matRoughness + 1.0) * (matRoughness + 1.0) / 8.0;\n";
+        fs << "    float Gv  = NdotV / (NdotV * (1.0 - k) + k);\n";
+        fs << "    float Gl  = NdotL / (NdotL * (1.0 - k) + k);\n";
+        fs << "    float G   = Gv * Gl;\n\n";
+
+        // F — Fresnel Schlick
+        fs << "    // F — Fresnel Schlick\n";
+        fs << "    float cosTheta = max(dot(H, V), 0.0);\n";
+        fs << "    vec3  F        = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);\n\n";
+
+        // Especular Cook-Torrance
+        fs << "    // Especular\n";
+        fs << "    vec3 numerator   = D * G * F;\n";
+        fs << "    float denomSpec  = 4.0 * NdotV * NdotL + 0.0001;\n";
+        fs << "    vec3  specular   = numerator / denomSpec;\n\n";
+
+        // Difusa — metais não têm difusa
+        fs << "    // Difusa (Lambertian) — metais não difundem\n";
+        fs << "    vec3 kD = (vec3(1.0) - F) * (1.0 - matMetallic);\n";
+        fs << "    vec3 diffuse = kD * matBaseColor / 3.14159265;\n\n";
+
+        // Luz final
+        fs << "    // Combinação final\n";
+        fs << "    vec3 radiance   = u_LightColor * u_LightIntensity;\n";
+        fs << "    vec3 Lo         = (diffuse + specular) * radiance * NdotL;\n";
+        fs << "    vec3 ambient    = matBaseColor * 0.03 * u_LightColor;\n";
+        fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n\n";
+
+        // Tone mapping e correção de gamma
+        fs << "    // Tone mapping (Reinhard) + gamma\n";
+        fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
+        fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
+
         fs << "    FragColor = vec4(finalColor, matOpacity);\n";
         fs << "}\n";
 
         result.FragmentShader = fs.str();
+
+        {
+            std::istringstream stream(result.FragmentShader);
+            std::string line;
+            int lineNum = 0;
+            std::string first30lines;
+            while (std::getline(stream, line) && lineNum < 30)
+                first30lines += std::to_string(++lineNum) + ": " + line + "\n";
+            AXE_CORE_INFO("Fragment Shader:\n{}", first30lines);
+        }
 
         // ---------------------------------------------------------------------
         // 6. Vertex Shader — padrão, independente do grafo
@@ -419,13 +505,24 @@ namespace axe
             if (srcA) { valA = GetPinVariable(srcA->ID); typeA = GetPinType(srcA->ID); }
 
             Pin* srcB = GetSourcePin(&node->Inputs[1]);
-            if (srcB) valB = GetPinVariable(srcB->ID);
+            if (srcB)
+            {
+                PinType typeB = GetPinType(srcB->ID);
+                valB = GetPinVariable(srcB->ID);
+                // B deve ser float — se for vec, converte para luminância
+                if (typeB == PinType::Vec3 || typeB == PinType::Vec4)
+                    valB = "dot(" + valB + ", vec3(0.299, 0.587, 0.114))";
+            }
 
-            // pow() em GLSL requer base >= 0
+            // pow(vec3, float) não existe em GLSL — usa vec3(float) para o expoente
             RegisterPin(node->Outputs[0].ID, var, typeA);
-            code << GetGLSLType(typeA) << " " << var
+            if (typeA == PinType::Vec3 || typeA == PinType::Vec4)
+                code << GetGLSLType(typeA) << " " << var
+                << " = pow(max(" << valA << ", vec3(0.0)), vec3(" << valB << "));";
+            else
+                code << GetGLSLType(typeA) << " " << var
                 << " = pow(max(" << valA << ", 0.0), " << valB << ");";
-        }
+                }
 
         // -----------------------------------------------------------------
         // Lerp — mix(A, B, Alpha)
@@ -446,7 +543,19 @@ namespace axe
             Pin* srcAlpha = GetSourcePin(&node->Inputs[2]);
             if (srcAlpha) alpha = GetPinVariable(srcAlpha->ID);
 
+            // Tipo resultado: o maior entre A e B
             PinType resultType = (typeA >= typeB) ? typeA : typeB;
+
+            // Converte A e B para o mesmo tipo
+            if (resultType == PinType::Vec3 && typeA == PinType::Float)
+                valA = "vec3(" + valA + ")";
+            if (resultType == PinType::Vec3 && typeB == PinType::Float)
+                valB = "vec3(" + valB + ")";
+            if (resultType == PinType::Vec4 && typeA != PinType::Vec4)
+                valA = "vec4(" + valA + ", 1.0)";
+            if (resultType == PinType::Vec4 && typeB != PinType::Vec4)
+                valB = "vec4(" + valB + ", 1.0)";
+
             RegisterPin(node->Outputs[0].ID, var, resultType);
             code << GetGLSLType(resultType) << " " << var
                 << " = mix(" << valA << ", " << valB
@@ -464,15 +573,33 @@ namespace axe
             if (srcVal) { val = GetPinVariable(srcVal->ID); typeV = GetPinType(srcVal->ID); }
 
             Pin* srcMin = GetSourcePin(&node->Inputs[1]);
-            if (srcMin) minVal = GetPinVariable(srcMin->ID);
+            if (srcMin)
+            {
+                minVal = GetPinVariable(srcMin->ID);
+                // Converte min para o mesmo tipo de val
+                PinType typeMin = GetPinType(srcMin->ID);
+                if (typeV == PinType::Vec3 && typeMin == PinType::Float)
+                    minVal = "vec3(" + minVal + ")";
+                else if (typeV == PinType::Float && typeMin == PinType::Vec3)
+                    minVal = "dot(" + minVal + ", vec3(0.299, 0.587, 0.114))";
+            }
 
             Pin* srcMax = GetSourcePin(&node->Inputs[2]);
-            if (srcMax) maxVal = GetPinVariable(srcMax->ID);
+            if (srcMax)
+            {
+                maxVal = GetPinVariable(srcMax->ID);
+                // Converte max para o mesmo tipo de val
+                PinType typeMax = GetPinType(srcMax->ID);
+                if (typeV == PinType::Vec3 && typeMax == PinType::Float)
+                    maxVal = "vec3(" + maxVal + ")";
+                else if (typeV == PinType::Float && typeMax == PinType::Vec3)
+                    maxVal = "dot(" + maxVal + ", vec3(0.299, 0.587, 0.114))";
+            }
 
             RegisterPin(node->Outputs[0].ID, var, typeV);
             code << GetGLSLType(typeV) << " " << var
                 << " = clamp(" << val << ", " << minVal << ", " << maxVal << ");";
-                }
+         }
 
                 // Abs
         else if (node->Name == "Abs")
@@ -499,7 +626,11 @@ namespace axe
             if (src) { val = GetPinVariable(src->ID); type = GetPinType(src->ID); }
 
             RegisterPin(node->Outputs[0].ID, var, type);
-            code << GetGLSLType(type) << " " << var << " = 1.0 - " << val << ";";
+
+            // Usa vec3(1.0) quando o valor é vec3
+            std::string one = (type == PinType::Vec3) ? "vec3(1.0)" :
+                (type == PinType::Vec4) ? "vec4(1.0)" : "1.0";
+            code << GetGLSLType(type) << " " << var << " = " << one << " - " << val << ";";
             }
 
             // World Position
@@ -521,16 +652,29 @@ namespace axe
             std::string normal = "N";
 
             Pin* srcExp = GetSourcePin(&node->Inputs[0]);
-            if (srcExp) exponent = GetPinVariable(srcExp->ID);
+            if (srcExp)
+            {
+                PinType t = GetPinType(srcExp->ID);
+                if (t == PinType::Float) // só aceita float
+                    exponent = GetPinVariable(srcExp->ID);
+                // vec ignorado — usa 5.0
+            }
 
             Pin* srcNorm = GetSourcePin(&node->Inputs[1]);
-            if (srcNorm) normal = GetPinVariable(srcNorm->ID);
+            if (srcNorm)
+            {
+                PinType t = GetPinType(srcNorm->ID);
+                if (t == PinType::Vec3) // só aceita vec3
+                    normal = GetPinVariable(srcNorm->ID);
+                // float ignorado — usa N
+            }
 
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
-            code << "float " << var << " = pow(1.0 - max(dot(normalize("
-                << normal << "), normalize(v_FragPos - u_CameraPosition)), 0.0), "
+            code << "float " << var
+                << " = pow(1.0 - max(dot(normalize(" << normal
+                << "), normalize(u_CameraPosition - v_FragPos)), 0.0), "
                 << exponent << ");";
-                }
+        }
 
         return code.str();
     }

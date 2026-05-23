@@ -70,7 +70,7 @@ namespace axe
 
 		glm::vec2 m_InitialMousePosition{ 0.0f, 0.0f };
 
-		float m_Distance = 3.0f;
+		float m_Distance = 1.5f;
 		float m_Pitch = 0.0f;
 		float m_Yaw = 0.0f;
 

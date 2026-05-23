@@ -246,6 +246,7 @@ namespace axe
 		auto shader = mat->GetShader() ? mat->GetShader() : m_Shader;
 
 		m_Pipeline->Bind();
+		shader->Bind();
 		mesh.GetVertexArray()->Bind();
 
 		// Matrizes

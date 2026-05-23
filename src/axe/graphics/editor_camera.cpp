@@ -41,13 +41,7 @@ namespace axe
 	{
 		
 		return GetProjectionMatrix() * GetViewMatrix();
-		//auto proj = GetProjectionMatrix();
-		//auto view = GetViewMatrix();
-		//AXE_CORE_INFO("proj[2][2]={} proj[3][2]={} proj[2][3]={}",
-		//	proj[2][2], proj[3][2], proj[2][3]);
-		//AXE_CORE_INFO("view[2][2]={} view[3][2]={} view[2][3]={}",
-		//	view[2][2], view[3][2], view[2][3]);
-		//return proj * view;
+
 
 	}
 

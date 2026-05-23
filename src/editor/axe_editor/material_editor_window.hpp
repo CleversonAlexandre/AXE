@@ -23,6 +23,9 @@
 
 #include "axe/scene/scene_environment.hpp" 
 #include "editor_context.hpp"
+#include "material_thumbnail_renderer.hpp"
+
+
 namespace ed = ax::NodeEditor;
 
 namespace axe
@@ -34,7 +37,22 @@ namespace axe
     public:
         MaterialEditorWindow();
         ~MaterialEditorWindow();
-      
+
+        struct ShaderLogEntry
+        {
+            enum class Level {Info, Warnning, Error};
+            Level level;
+            std::string message;
+        };
+
+        void LogInfo(const std::string& msg);
+        void LogWarning(const std::string& msg);
+        void LogError(const std::string& msg);
+        void ClearLog();
+        void DrawShaderLog();
+
+        std::vector<ShaderLogEntry> m_ShaderLog;
+
         void Draw();
 
         // Abre um material para edição
@@ -57,6 +75,9 @@ namespace axe
         void SetContext(EditorContext* context) { m_Context = context; }
 
         bool IsFocused() const { return m_IsAnyWindowFocused; }
+
+        void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
+        MaterialThumbnailRenderer* m_ThumbnailRenderer = nullptr;
     private:
         std::unique_ptr<Scene> m_PreviewScene;
         std::unique_ptr<ViewportRenderer> m_PreviewRenderer;

@@ -35,10 +35,17 @@
 #include "axe/input/key_codes.hpp"
 
 #include "material_editor_window.hpp"
+
+#include "node_graph/material_graph.hpp"
+#include "axe/material/material_compiler.hpp"
+#include <nlohmann/json.hpp>
+#include <fstream>
+
+#include "material_thumbnail_renderer.hpp"
 namespace axe
 {
 
-	
+	MaterialThumbnailRenderer m_ThumbnailRenderer;
 
 	// EditorLayer contém toda a UI do editor
 	// É uma layer normal — fica abaixo do ImGuiLayer
@@ -72,6 +79,8 @@ namespace axe
 			m_Context.ActiveScene = m_Scene.get();
 			m_Context.SelectedEntity = entt::null;
 			m_EditorUI->SetContext(&m_Context);
+
+			
 
 			// 2. Carrega cena padrão se existir, senão cria cena vazia
 			//if (ProjectManager::Get().HasStartScene())
@@ -144,43 +153,235 @@ namespace axe
 					}
 				});
 
+			//auto instantiate = [this](const std::string& uuid)
+			//	{
+			//		auto& registry = m_Scene->GetRegistry();
+
+			//		if (MeshFactory::IsPrimitive(uuid))
+			//		{
+			//			auto mesh = MeshFactory::CreateByUUID(uuid);
+			//			if (!mesh) return;
+
+			//			auto entity = m_Scene->CreateEntity(AssetDatabase::Get().GetByUUID(uuid)->Name);
+			//			auto& mc = registry.emplace<MeshComponent>(entity);
+			//			mc.Data = mesh;
+			//			mc.AssetUUID = uuid;
+			//			m_Context.Select(entity);
+			//		}
+			//		else
+			//		{
+			//			const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+			//			if (!record) return;
+
+			//			LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
+			//			if (!asset.MeshData) return;
+
+			//			auto entity = m_Scene->CreateEntity(record->Name);
+			//			auto& mc = registry.emplace<MeshComponent>(entity);
+			//			mc.Data = asset.MeshData;
+			//			mc.AssetUUID = uuid;
+
+			//			if (asset.MaterialData)
+			//				registry.emplace<MaterialComponent>(entity, asset.MaterialData);
+
+			//			m_Context.Select(entity);
+			//		}
+			//	};
+
 			auto instantiate = [this](const std::string& uuid)
 				{
-					auto& registry = m_Scene->GetRegistry();
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+					if (!record) return;
 
+					auto& registry = m_Scene->GetRegistry(); // ← move para cá
+
+					// Material — aplica no mesh selecionado
+					if (record->Type == AssetType::Material)
+					{
+						
+
+						if (!m_Context.HasSelection()) return;
+						
+						entt::entity selected = m_Context.SelectedEntity;
+						if (!registry.valid(selected)) return;
+						
+						if (!registry.all_of<MeshComponent>(selected)) return;
+						
+
+					
+
+						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
+						if (!matAsset) return;
+
+						auto material = matAsset->GetMaterial();
+
+						// Usa o mesmo callback do SceneSerializer para recompilar
+						if (SceneSerializer::GetMaterialRecompileCallback())
+						{
+							auto shader = SceneSerializer::GetMaterialRecompileCallback()(uuid);
+				
+							if (shader)
+								material->SetShader(shader);
+						}
+
+						
+
+						// Transfere texturas do grafo
+						auto graphPath = record->FilePath;
+						graphPath.replace_extension(".axegraph");
+						if (std::filesystem::exists(graphPath))
+						{
+							std::ifstream file(graphPath);
+							try
+							{
+								nlohmann::json j = nlohmann::json::parse(file);
+								MaterialGraph graph;
+								graph.Deserialize(j);
+
+								int slot = 0;
+								for (auto& node : graph.GetNodes())
+								{
+									if (node->Name != "Texture Sample") continue;
+									if (!node->Value.TextureVal) { ++slot; continue; }
+
+									bool isConnected = false;
+									for (auto& output : node->Outputs)
+										for (auto& link : graph.GetLinks())
+											if (link.StartPin == output.ID)
+												isConnected = true;
+
+									if (isConnected && slot == 0)
+									{
+										material->AlbedoMap = node->Value.TextureVal;
+										material->AlbedoUUID = node->Value.TextureUUID;
+									}
+									++slot;
+								}
+							}
+							catch (...) {}
+						}
+
+						auto matComp = MaterialComponent{ material };
+						matComp.MaterialAssetUUID = uuid;
+
+						if (registry.all_of<MaterialComponent>(selected))
+							registry.get<MaterialComponent>(selected) = matComp;
+						else
+							registry.emplace<MaterialComponent>(selected, matComp);
+
+					
+						AXE_EDITOR_INFO("Material '{}' aplicado.", record->Name);
+						return;
+					}
+
+					// Mesh primitivo
 					if (MeshFactory::IsPrimitive(uuid))
 					{
 						auto mesh = MeshFactory::CreateByUUID(uuid);
 						if (!mesh) return;
 
-						auto entity = m_Scene->CreateEntity(AssetDatabase::Get().GetByUUID(uuid)->Name);
+						auto entity = m_Scene->CreateEntity(record->Name);
 						auto& mc = registry.emplace<MeshComponent>(entity);
 						mc.Data = mesh;
 						mc.AssetUUID = uuid;
 						m_Context.Select(entity);
+						return;
 					}
-					else
-					{
-						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-						if (!record) return;
 
-						LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-						if (!asset.MeshData) return;
+					// Mesh de arquivo
+					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
+					if (!asset.MeshData) return;
 
-						auto entity = m_Scene->CreateEntity(record->Name);
-						auto& mc = registry.emplace<MeshComponent>(entity);
-						mc.Data = asset.MeshData;
-						mc.AssetUUID = uuid;
+					auto entity = m_Scene->CreateEntity(record->Name);
+					auto& mc = registry.emplace<MeshComponent>(entity);
+					mc.Data = asset.MeshData;
+					mc.AssetUUID = uuid;
 
-						if (asset.MaterialData)
-							registry.emplace<MaterialComponent>(entity, asset.MaterialData);
+					if (asset.MaterialData)
+						registry.emplace<MaterialComponent>(entity, asset.MaterialData);
 
-						m_Context.Select(entity);
-					}
+					m_Context.Select(entity);
 				};
 
 			m_EditorUI->GetAssetBrowser()->SetInstantiateCallback(instantiate);
-			m_EditorUI->GetViewport()->SetAssetDropCallback(instantiate);
+			//m_EditorUI->GetViewport()->SetAssetDropCallback(instantiate);
+			m_EditorUI->GetViewport()->SetAssetDropCallback(
+				[this](const std::string& uuid, float mouseX, float mouseY)
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+					if (!record) return;
+
+					auto& registry = m_Scene->GetRegistry();
+
+					// Se for material, usa picking para encontrar o mesh sob o cursor
+					if (record->Type == AssetType::Material)
+					{
+						uint32_t pickID = m_ViewportRenderer->PickObject(mouseX, mouseY);
+						if (pickID != 0)
+						{
+							entt::entity picked = (entt::entity)pickID;
+							if (registry.valid(picked))
+								m_Context.Select(picked);
+						}
+					}
+
+					// Chama o instantiate diretamente — sem referência ao lambda local
+					if (MeshFactory::IsPrimitive(uuid))
+					{
+						auto mesh = MeshFactory::CreateByUUID(uuid);
+						if (!mesh) return;
+						auto entity = m_Scene->CreateEntity(record->Name);
+						auto& mc = registry.emplace<MeshComponent>(entity);
+						mc.Data = mesh;
+						mc.AssetUUID = uuid;
+						m_Context.Select(entity);
+						return;
+					}
+
+					if (record->Type == AssetType::Material)
+					{
+						if (!m_Context.HasSelection()) return;
+						entt::entity selected = m_Context.SelectedEntity;
+						if (!registry.valid(selected)) return;
+						if (!registry.all_of<MeshComponent>(selected)) return;
+
+						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
+						if (!matAsset) return;
+
+						auto material = matAsset->GetMaterial();
+
+						if (SceneSerializer::GetMaterialRecompileCallback())
+						{
+							auto shader = SceneSerializer::GetMaterialRecompileCallback()(uuid);
+							if (shader) material->SetShader(shader);
+						}
+
+						auto matComp = MaterialComponent{ material };
+						matComp.MaterialAssetUUID = uuid;
+
+						if (registry.all_of<MaterialComponent>(selected))
+							registry.get<MaterialComponent>(selected) = matComp;
+						else
+							registry.emplace<MaterialComponent>(selected, matComp);
+						return;
+					}
+
+					// Mesh de arquivo
+					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
+					
+					if (!asset.MeshData) return;
+					auto entity = m_Scene->CreateEntity(record->Name);
+					auto& mc = registry.emplace<MeshComponent>(entity);
+					mc.Data = asset.MeshData;
+					mc.AssetUUID = uuid;
+					if (asset.MaterialData)
+						registry.emplace<MaterialComponent>(entity, asset.MaterialData);
+					m_Context.Select(entity);
+				});
+
+			
+
+			
 
 			// 4. Inicializa o viewport
 			ViewportWindow* viewport = m_EditorUI->GetViewport();
@@ -237,6 +438,35 @@ namespace axe
 			m_ViewportRenderer->SetEnvironment(&m_Environment);
 
 			m_EditorUI->SetViewportRenderer(m_ViewportRenderer.get());
+
+			m_ThumbnailRenderer.Initialize();
+			m_EditorUI->GetAssetBrowser()->SetThumbnailRenderer(&m_ThumbnailRenderer);
+			m_EditorUI->m_MaterialEditorWindow.SetThumbnailRenderer(&m_ThumbnailRenderer);
+
+			SceneSerializer::SetMaterialRecompileCallback(
+				[](const std::string& assetUUID) -> std::shared_ptr<Shader>
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+					if (!record) return nullptr;
+
+					auto graphPath = record->FilePath;
+					graphPath.replace_extension(".axegraph");
+					if (!std::filesystem::exists(graphPath)) return nullptr;
+
+					std::ifstream file(graphPath);
+					try
+					{
+						nlohmann::json j = nlohmann::json::parse(file);
+						MaterialGraph graph;
+						graph.Deserialize(j);
+
+						auto result = MaterialCompiler::Compile(&graph);
+						if (result.Success)
+							return Shader::Create(result.VertexShader, result.FragmentShader);
+					}
+					catch (...) {}
+					return nullptr;
+				});
 
 			m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
 			EditorIconLibrary::Get().Load("resources");
@@ -387,6 +617,7 @@ namespace axe
 
 		{
 			
+			m_ThumbnailRenderer.RenderPending();
 
 			// Atualiza câmera antes de renderizar
 			if (m_EditorState == EditorState::Play)

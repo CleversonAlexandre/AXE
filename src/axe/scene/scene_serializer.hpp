@@ -19,6 +19,22 @@ namespace axe
 
 		static std::string SerializeToString(const Scene& scene);
 		static bool DeserializeFromString(const std::string& data, Scene& scene);
+
+		using MaterialRecompileCallback =
+			std::function<std::shared_ptr<Shader>(const std::string& assetUUID)>;
+
+		static void SetMaterialRecompileCallback(MaterialRecompileCallback cb)
+		{
+			s_MaterialRecompileCallback = cb;
+		}
+
+		static MaterialRecompileCallback GetMaterialRecompileCallback()
+		{
+			return s_MaterialRecompileCallback;
+		}
+
+		static MaterialRecompileCallback s_MaterialRecompileCallback;
+
 	};
 
 } // namespace axe

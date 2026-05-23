@@ -32,7 +32,7 @@ namespace axe
 	void ViewportRenderer::Initialize()
 	{
 		m_SceneRenderer = std::make_unique<SceneRenderer>();
-		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 100.0f);
+		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
 
 		m_SkyboxRenderer.Initialize();
 	}

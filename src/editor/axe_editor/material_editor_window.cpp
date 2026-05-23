@@ -19,7 +19,9 @@
 #include "axe/graphics/render_command.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include "axe/graphics/framebuffer.hpp"
+ #include <sstream>
 
+#include "material_thumbnail_renderer.hpp"
 namespace ed = ax::NodeEditor;
 
 namespace axe
@@ -181,7 +183,7 @@ namespace axe
     void MaterialEditorWindow::Draw()
     {
         if (!m_Open || !m_Asset || !m_Material) return;
-       
+
         // Sempre chama Begin/End para o ImGui salvar a posição no imgui.ini
         ImGui::SetNextWindowSize(ImVec2(1200, 700), ImGuiCond_FirstUseEver);
 
@@ -193,22 +195,38 @@ namespace axe
         {
             ImGui::End();
             return;
-        }           
-      
+        }
+
 
         ImVec2 availSize = ImGui::GetContentRegionAvail();
 
         ImGuiID dockspace_id = ImGui::GetID("MaterialEditorDockSpace");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
-        // Layout padrão — só cria se o dockspace estiver vazio (primeira vez)
+
+
+
+        //ImGuiID dock_preview, dock_log;
+        //ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.6f, &dock_preview, &dock_log);
+
+
+        // Layout padrão — só cria se o dockspace estiver vazio (primeira vez)        
+        
         static bool s_LayoutConfigured = false;
         if (!s_LayoutConfigured)
         {
             s_LayoutConfigured = true;
 
-            if (ImGui::DockBuilderGetNode(dockspace_id) == nullptr)
+            // Verifica se o layout já foi configurado com esta versão
+            const char* layoutFlagFile = "material_editor_layout_v2.flag";
+            bool needsRebuild = !std::filesystem::exists(layoutFlagFile);
+
+            if (needsRebuild)
             {
+                // Cria o arquivo de flag
+                std::ofstream flag(layoutFlagFile);
+                flag << "v2";
+
                 ImGui::DockBuilderRemoveNode(dockspace_id);
                 ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
 
@@ -218,22 +236,26 @@ namespace axe
                 ImGuiID dock_left, dock_right;
                 ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.2f, &dock_left, &dock_right);
 
-                ImGuiID dock_graph, dock_preview;
-                ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.7f, &dock_graph, &dock_preview);
+                ImGuiID dock_graph, dock_bottom;
+                ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.6f, &dock_graph, &dock_bottom);
+
+                ImGuiID dock_preview, dock_log;
+                ImGui::DockBuilderSplitNode(dock_bottom, ImGuiDir_Left, 0.6f, &dock_preview, &dock_log);
 
                 ImGui::DockBuilderDockWindow("Material Params", dock_left);
                 ImGui::DockBuilderDockWindow("Material Graph", dock_graph);
                 ImGui::DockBuilderDockWindow("Material Preview", dock_preview);
+                ImGui::DockBuilderDockWindow("Shader Log", dock_log);
 
                 ImGui::DockBuilderFinish(dockspace_id);
             }
         }
-      
+        
 
         DrawMaterialParamsWindow();
         DrawNodeGraphWindow();
         DrawPreviewWindow();
-       
+        DrawShaderLog();
         m_IsAnyWindowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
 
         HandleInput();
@@ -346,7 +368,7 @@ namespace axe
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if (ImGui::Begin("Material Preview", nullptr,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove))
+            ImGuiWindowFlags_NoScrollbar )) // | ImGuiWindowFlags_NoMove))
         {
             m_PreviewHovered = ImGui::IsWindowHovered();
             m_PreviewFocused = ImGui::IsWindowFocused();
@@ -451,14 +473,18 @@ namespace axe
     // Parâmetros do material
     // -------------------------------------------------------------------------
 
-    void MaterialEditorWindow::CompileAndApply()
+void MaterialEditorWindow::CompileAndApply()
 {
+     ClearLog();
+     LogInfo("Compilando shader...");
+
     if (!m_Material || !m_Graph) return;
 
     auto result = MaterialCompiler::Compile(m_Graph.get());
     if (!result.Success)
     {
-        AXE_CORE_ERROR("Compilation failed: {}", result.ErrorMessage);
+        //AXE_CORE_ERROR("Compilation failed: {}", result.ErrorMessage);
+        LogError("Compilação falhou: " + result.ErrorMessage);
         return;
     }
 
@@ -469,13 +495,16 @@ namespace axe
     }
     catch (const std::exception& e)
     {
-        AXE_CORE_ERROR("Shader creation failed: {}", e.what());
+        //AXE_CORE_ERROR("Shader creation failed: {}", e.what());
+
+        LogError(std::string("Shader creation failed: ") + e.what());
         return;
     }
 
     if (!compiledShader)
     {
-        AXE_CORE_ERROR("Shader::Create returned null");
+        //AXE_CORE_ERROR("Shader::Create returned null");
+        LogError("Shader::Create retornou null");
         return;
     }
 
@@ -526,7 +555,42 @@ namespace axe
         }
     }
 
-    AXE_CORE_INFO("Material compiled and applied.");
+    // Aplica o material no mesh selecionado no viewport
+    if (m_Context && m_Context->HasSelection())
+    {
+        auto& registry = m_Context->ActiveScene->GetRegistry();
+        entt::entity selected = m_Context->SelectedEntity;
+
+        if (registry.valid(selected) && registry.all_of<MeshComponent>(selected))
+        {
+            if (registry.all_of<MaterialComponent>(selected))
+                registry.get<MaterialComponent>(selected).Data = m_Material;
+            else
+                registry.emplace<MaterialComponent>(selected, m_Material);
+
+            LogInfo("Material aplicado na entidade selecionada.");
+        }
+        else
+        {
+            LogWarning("Nenhum mesh selecionado no viewport.");
+        }
+    }
+    else
+    {
+        LogWarning("Nenhuma entidade selecionada no viewport.");
+    }
+
+    LogInfo("Shader compilado com sucesso.");
+    // Após compilar com sucesso:
+    if (m_ThumbnailRenderer && m_Asset)
+    {
+        const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
+        if (record)
+            m_ThumbnailRenderer->Invalidate(record->UUID);
+    }
+
+    
+    
 }
 
     void MaterialEditorWindow::DrawMaterialParams(Material& mat)
@@ -1494,7 +1558,7 @@ namespace axe
                 else if (nodeName == "Lerp")            newNode = m_Graph->AddLerpNode();
                 else if (nodeName == "Comment")         newNode = m_Graph->AddComment();
                 else if (nodeName == "Material Output") newNode = m_Graph->AddMaterialOutputNode();
-                else if (nodeName == "Clamp")           newNode = m_Graph->AddComment();
+                else if (nodeName == "Clamp")           newNode = m_Graph->AddClampNode();
                 else if (nodeName == "Abs")             newNode = m_Graph->AddAbsNode();
                 else if (nodeName == "OneMinus")        newNode = m_Graph->AddOneMinusNode();
                 else if (nodeName == "World Position")  newNode = m_Graph->AddWorldPositionNode();
@@ -1520,6 +1584,87 @@ namespace axe
             });
     }
 
-    
+    void MaterialEditorWindow::LogInfo(const std::string& msg)
+    {
+        std::istringstream stream(msg);
+        std::string line;
+        while (std::getline(stream, line))
+            if (!line.empty())
+                m_ShaderLog.push_back({ ShaderLogEntry::Level::Info, line });
+    }
+    void MaterialEditorWindow::LogWarning(const std::string& msg)
+    {
+        m_ShaderLog.push_back({ ShaderLogEntry::Level::Warnning, msg });
+    }
+    void MaterialEditorWindow::LogError(const std::string& msg)
+    {
+        // Divide mensagens multi-linha em entradas separadas
+        std::istringstream stream(msg);
+        std::string line;
+        while (std::getline(stream, line))
+        {
+            if (!line.empty())
+                m_ShaderLog.push_back({ ShaderLogEntry::Level::Error, line });
+        }
+    }
+    void MaterialEditorWindow::ClearLog()
+    {
+        m_ShaderLog.clear();
+    }
+
+    void MaterialEditorWindow::DrawShaderLog()
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+
+        if(ImGui::Begin("Shader Log", nullptr, ImGuiWindowFlags_NoScrollbar))
+        {
+            // Botão limpar
+            if (ImGui::SmallButton("Limpar"))
+                ClearLog();
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d messagens", (int)m_ShaderLog.size());
+
+            ImGui::Separator();
+            //Lista de mensagens com scroll
+            ImGui::BeginChild("##log_scroll", ImVec2(0, 0), false,
+                ImGuiWindowFlags_HorizontalScrollbar);
+
+            for (auto& entry : m_ShaderLog)
+            {
+                ImVec4 color;
+                const char* prefix;
+
+                switch (entry.level)
+                {
+                case ShaderLogEntry::Level::Info:
+                    color = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+                    prefix = "[INFO]";
+                    break;
+                case ShaderLogEntry::Level::Warnning:
+                    color = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+                    prefix = "[WARN]";
+                    break;
+                case ShaderLogEntry::Level::Error:
+                    color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                    prefix = "[ERR]";
+                    break;
+                }
+
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                ImGui::TextUnformatted((prefix + entry.message).c_str());
+                ImGui::PopStyleColor();
+            }
+
+            //Auto-Scroll para o final
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+                ImGui::SetScrollHereY(1.0f);
+
+            ImGui::EndChild();
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+   
+    }
 
 } // namespace axe
