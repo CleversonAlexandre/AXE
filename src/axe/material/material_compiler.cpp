@@ -2,6 +2,7 @@
 #include "axe/log/log.hpp"
 #include <sstream>
 #include <iomanip>
+#include <unordered_set>
 
 namespace axe
 {
@@ -15,8 +16,7 @@ namespace axe
         MaterialCompiler compiler(graph);
         CompiledMaterial result;
 
-        
-        // 1 Localiza o Material Output node - ponto de partida do percurso
+        // 1. Localiza o Material Output node
         Node* outputNode = nullptr;
         for (auto& node : graph->GetNodes())
         {
@@ -26,83 +26,128 @@ namespace axe
                 break;
             }
         }
-             
+
         if (!outputNode)
         {
             result.ErrorMessage = "Material Output node not found";
             AXE_CORE_ERROR("MaterialCompiler: {}", result.ErrorMessage);
             return result;
         }
+        
+        // 2. Atribui samplers — percorre todos os Texture Sample
+        {
+            int slot = 0;
+            std::unordered_set<int> processed;
 
+            // Primeiro — conectados ao Base Color (pin 0) via qualquer caminho
+            std::function<Node* (ed::PinId)> findTextureSample =
+                [&](ed::PinId startPin) -> Node*
+                {
+                    for (auto& node : graph->GetNodes())
+                        for (auto& outPin : node->Outputs)
+                        {
+                            if (outPin.ID != startPin) continue;
+                            if (node->Name == "Texture Sample") return node.get();
+                            for (auto& inPin : node->Inputs)
+                                for (auto& l2 : graph->GetLinks())
+                                {
+                                    if (l2.EndPin != inPin.ID) continue;
+                                    Node* found = findTextureSample(l2.StartPin);
+                                    if (found) return found;
+                                }
+                        }
+                    return nullptr;
+                };
 
+            // Percorre pins do output em ordem
+            for (auto& inputPin : outputNode->Inputs)
+            {
+                for (auto& link : graph->GetLinks())
+                {
+                    if (link.EndPin != inputPin.ID) continue;
+                    Node* texNode = findTextureSample(link.StartPin);
+                    if (texNode && !processed.count(texNode->ID.Get()))
+                    {
+                        std::string name = (slot == 0) ? "u_AlbedoMap"
+                            : "u_Texture_" + std::to_string(slot);
+                        compiler.m_NodeSamplers[texNode->ID.Get()] = name;
+                        processed.insert(texNode->ID.Get());
+                        ++slot;
+                    }
+                }
+            }
 
-         // ---------------------------------------------------------------------
-         // 2. Percorre o grafo em ordem topológica (DFS reverso)
-         //    Começa pelo output e visita cada input recursivamente.
-         //    Isso garante que o código de cada node é gerado ANTES de ser
-         //    referenciado por outro node.
-         // ---------------------------------------------------------------------        
+            // Depois — todos os Texture Sample não processados ainda
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (processed.count(node->ID.Get())) continue;
+                std::string name = (slot == 0) ? "u_AlbedoMap"
+                    : "u_Texture_" + std::to_string(slot);
+                compiler.m_NodeSamplers[node->ID.Get()] = name;
+                ++slot;
+            }
+        }
+
+        // 3. Percorre o grafo — agora m_NodeSamplers já está preenchido
         compiler.VisitNode(outputNode);
 
-
-        // ---------------------------------------------------------------------
-        // 3. Monta o Fragment Shader
-        // ---------------------------------------------------------------------
-
+        // 4. Monta o Fragment Shader
         std::stringstream fs;
-        // -- Cabeçalho --
+
         fs << "#version 460 core\n";
         fs << "layout(location = 0) out vec4 FragColor;\n\n";
-
-        // -- Varyings do vertex shader --
         fs << "in vec3 v_Normal;\n";
         fs << "in vec3 v_FragPos;\n";
         fs << "in vec2 v_TexCoord;\n\n";
-
-        // -- Uniforms de iluminação (setados pelo MeshRenderer) --
+        fs << "in vec3 v_Tangent;\n";
+        fs << "in vec3 v_Bitangent;\n";
         fs << "uniform vec3  u_LightDirection;\n";
         fs << "uniform vec3  u_LightColor;\n";
         fs << "uniform float u_LightIntensity;\n";
         fs << "uniform vec3  u_CameraPosition;\n\n";
+        fs << "uniform samplerCube u_IrradianceMap;\n";
+        fs << "uniform samplerCube u_PrefilteredMap;\n";
+        fs << "uniform sampler2D   u_BRDFLut;\n";
+        fs << "uniform int         u_HasIBL;\n\n";
+        fs << "uniform float u_AmbientStrength;\n";
 
-        // -- Samplers: um por node Texture Sample no grafo --
-        //    Slot 0 → u_AlbedoMap  (compatível com Material::Apply())
-        //    Slot 1+ → u_Texture_1, u_Texture_2, ...
+        // Declara samplers usando m_NodeSamplers já preenchido
+        std::map<int, std::string> slotToSampler;
+        for (auto& node : graph->GetNodes())
         {
-            int slot = 0;
-            for (auto& node : graph->GetNodes())
-            {
-                if (node->Name != "Texture Sample") continue;
-                std::string samplerName = (slot == 0)
-                    ? "u_AlbedoMap"
-                    : "u_Texture_" + std::to_string(slot);
-                compiler.m_NodeSamplers[node->ID.Get()] = samplerName;
-                fs << "uniform sampler2D " << samplerName << ";\n";
-                ++slot;
-            }
+            if (node->Name != "Texture Sample") continue;
+            auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+            if (it != compiler.m_NodeSamplers.end())
+                fs << "uniform sampler2D " << it->second << ";\n";
         }
+        //std::map<int, std::string> slotToSampler;
+        //for (auto& node : graph->GetNodes())
+        //{
+        //    if (node->Name != "Texture Sample") continue;
+        //    auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+        //    if (it != compiler.m_NodeSamplers.end())
+        //    {
+        //        // Extrai o número do slot do nome
+        //        int slot = 0;
+        //        if (it->second != "u_AlbedoMap")
+        //            slot = std::stoi(it->second.substr(std::string("u_Texture_").size()));
+        //        slotToSampler[slot] = it->second;
+        //    }
+        //}
+        //for (auto& [slot, name] : slotToSampler)
+        //    fs << "uniform sampler2D " << name << ";\n";
         fs << "\n";
 
-        // -- Função main --
+        // 5. Função main
         fs << "void main()\n{\n";
         fs << "    // Normal da superfície\n";
         fs << "    vec3 N = normalize(v_Normal);\n\n";
 
-        // -- Código gerado pelo percurso do grafo --
+        // Código gerado pelo percurso do grafo
         fs << compiler.m_FragmentCode;
 
-        // ---------------------------------------------------------------------
-        // 4. Resolve os inputs do Material Output
-        //    Se não conectado, usa valor padrão.
-        //
-        //    Inputs (ordem definida pelo MaterialGraph):
-        //      0 = Base Color (vec3)
-        //      1 = Metallic   (float)
-        //      2 = Roughness  (float)
-        //      3 = Normal     (vec3)
-        //      4 = Emissive   (vec3)
-        //      5 = Opacity    (float)
-        // ---------------------------------------------------------------------
+        // 6. Resolve os inputs do Material Output
         auto resolveInput = [&](int index, const std::string& fallback) -> std::string
             {
                 if (index >= (int)outputNode->Inputs.size()) return fallback;
@@ -117,26 +162,23 @@ namespace axe
         std::string emissive = resolveInput(4, "vec3(0.0)");
         std::string opacity = resolveInput(5, "1.0");
 
-        // Converte para float se necessário
+        // Converte tipos
         Pin* metallicSrc = (outputNode->Inputs.size() > 1)
             ? compiler.GetSourcePin(&outputNode->Inputs[1]) : nullptr;
-        Pin* roughnessSrc = (outputNode->Inputs.size() > 2)
-            ? compiler.GetSourcePin(&outputNode->Inputs[2]) : nullptr;
-
         if (metallicSrc)
         {
             PinType t = compiler.GetPinType(metallicSrc->ID);
             if (t == PinType::Vec3 || t == PinType::Vec4)
-                metallic = "dot(" + metallic + ", vec3(0.299, 0.587, 0.114))"; // luminância
+                metallic = "dot(" + metallic + ", vec3(0.299, 0.587, 0.114))";
         }
 
+        Pin* roughnessSrc = (outputNode->Inputs.size() > 2)
+            ? compiler.GetSourcePin(&outputNode->Inputs[2]) : nullptr;
         if (roughnessSrc)
         {
             PinType t = compiler.GetPinType(roughnessSrc->ID);
             if (t == PinType::Vec3 || t == PinType::Vec4)
                 roughness = "dot(" + roughness + ", vec3(0.299, 0.587, 0.114))";
-            else if (t == PinType::Vec4)
-                roughness = roughness + ".r";
         }
 
         Pin* opacitySrc = (outputNode->Inputs.size() > 5)
@@ -148,7 +190,6 @@ namespace axe
                 opacity = "dot(" + opacity + ", vec3(0.299, 0.587, 0.114))";
         }
 
-        // Conversão automática de tipo para Base Color (deve ser vec3)
         Pin* baseColorSrc = compiler.GetSourcePin(&outputNode->Inputs[0]);
         if (baseColorSrc)
         {
@@ -158,7 +199,7 @@ namespace axe
             else if (t == PinType::Vec4)
                 baseColor = "(" + baseColor + ").rgb";
         }
-        // Conversão automática para Emissive (deve ser vec3)
+
         Pin* emissiveSrc = (outputNode->Inputs.size() > 4)
             ? compiler.GetSourcePin(&outputNode->Inputs[4]) : nullptr;
         if (emissiveSrc)
@@ -170,7 +211,7 @@ namespace axe
                 emissive = "(" + emissive + ").rgb";
         }
 
-        // Normal Map conectado substitui a normal da superfície
+        // Normal Map
         Pin* normalSrc = (outputNode->Inputs.size() > 3)
             ? compiler.GetSourcePin(&outputNode->Inputs[3]) : nullptr;
         if (normalSrc)
@@ -178,21 +219,17 @@ namespace axe
             fs << "    // Normal Map conectado\n";
             fs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n\n";
         }
-        // -- Variáveis finais do material --
+
+        // Propriedades do material
         fs << "\n    // --- Propriedades do material ---\n";
         fs << "    vec3  matBaseColor = " << baseColor << ";\n";
         fs << "    float matMetallic  = " << metallic << ";\n";
         fs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n";
         fs << "    vec3  matEmissive  = " << emissive << ";\n";
         fs << "    float matOpacity   = " << opacity << ";\n\n";
+        fs << "    float matAO = 1.0;\n";
 
-      
-        // ---------------------------------------------------------------------
-        // 5. Iluminação PBR Cook-Torrance        
-        //    D = GGX Normal Distribution
-        //    G = Smith Geometry (Schlick-GGX)
-        //    F = Fresnel Schlick
-        // ---------------------------------------------------------------------
+        // 7. PBR Cook-Torrance
         fs << "    // --- PBR Cook-Torrance ---\n";
         fs << "    vec3  L     = normalize(-u_LightDirection);\n";
         fs << "    vec3  V     = normalize(u_CameraPosition - v_FragPos);\n";
@@ -200,100 +237,104 @@ namespace axe
         fs << "    float NdotL = max(dot(N, L), 0.0);\n";
         fs << "    float NdotV = max(dot(N, V), 0.0);\n";
         fs << "    float NdotH = max(dot(N, H), 0.0);\n\n";
-
-        // F0 — reflectância na incidência zero
-        // metais usam a cor do material, não-metais usam 0.04
-        fs << "    // F0: reflectância base\n";
         fs << "    vec3 F0 = mix(vec3(0.04), matBaseColor, matMetallic);\n\n";
-
-        // D — GGX Normal Distribution Function
-        fs << "    // D — GGX\n";
         fs << "    float alpha  = matRoughness * matRoughness;\n";
         fs << "    float alpha2 = alpha * alpha;\n";
         fs << "    float denom  = (NdotH * NdotH) * (alpha2 - 1.0) + 1.0;\n";
         fs << "    float D      = alpha2 / (3.14159265 * denom * denom);\n\n";
-
-        // G — Smith Geometry Function (Schlick-GGX)
-        fs << "    // G — Smith\n";
         fs << "    float k   = (matRoughness + 1.0) * (matRoughness + 1.0) / 8.0;\n";
         fs << "    float Gv  = NdotV / (NdotV * (1.0 - k) + k);\n";
         fs << "    float Gl  = NdotL / (NdotL * (1.0 - k) + k);\n";
         fs << "    float G   = Gv * Gl;\n\n";
-
-        // F — Fresnel Schlick
-        fs << "    // F — Fresnel Schlick\n";
         fs << "    float cosTheta = max(dot(H, V), 0.0);\n";
         fs << "    vec3  F        = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);\n\n";
-
-        // Especular Cook-Torrance
-        fs << "    // Especular\n";
         fs << "    vec3 numerator   = D * G * F;\n";
         fs << "    float denomSpec  = 4.0 * NdotV * NdotL + 0.0001;\n";
         fs << "    vec3  specular   = numerator / denomSpec;\n\n";
-
-        // Difusa — metais não têm difusa
-        fs << "    // Difusa (Lambertian) — metais não difundem\n";
         fs << "    vec3 kD = (vec3(1.0) - F) * (1.0 - matMetallic);\n";
         fs << "    vec3 diffuse = kD * matBaseColor / 3.14159265;\n\n";
+        fs << "    vec3 radiance = u_LightColor * u_LightIntensity;\n";
+        fs << "    vec3 Lo       = (diffuse + specular) * radiance * NdotL;\n\n";
 
-        // Luz final
-        fs << "    // Combinação final\n";
-        fs << "    vec3 radiance   = u_LightColor * u_LightIntensity;\n";
-        fs << "    vec3 Lo         = (diffuse + specular) * radiance * NdotL;\n";
-        fs << "    vec3 ambient    = matBaseColor * 0.03 * u_LightColor;\n";
+        // 8. Ambient IBL ou fallback
+        fs << "    vec3 ambient;\n";
+        fs << "    if (u_HasIBL == 1)\n";
+        fs << "    {\n";
+        fs << "        vec3 F_amb  = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);\n";
+        fs << "        vec3 kD_amb = (vec3(1.0) - F_amb) * (1.0 - matMetallic);\n";
+        fs << "        vec3 irradiance  = texture(u_IrradianceMap, N).rgb;\n";
+        fs << "        vec3 diffuse_ibl = irradiance * matBaseColor;\n";
+        fs << "        const float MAX_REFLECTION_LOD = 4.0;\n";
+        fs << "        vec3 R = reflect(-V, N);\n";
+        fs << "        vec3 prefilteredColor = textureLod(u_PrefilteredMap, R,\n";
+        fs << "                                matRoughness * MAX_REFLECTION_LOD).rgb;\n";
+        fs << "        vec2 brdf = texture(u_BRDFLut, vec2(NdotV, matRoughness)).rg;\n";
+        fs << "        vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);\n";
+        fs << "        ambient = (kD_amb * diffuse_ibl + specular_ibl) * matAO;\n";
+        fs << "    }\n";
+        fs << "    else\n";
+        fs << "    {\n";
+        //fs << "        ambient = matBaseColor * 0.03 * u_LightColor;\n";
+        fs << "        ambient = matBaseColor * u_AmbientStrength * u_LightColor;\n";
+        fs << "    }\n\n";
+
         fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n\n";
-
-        // Tone mapping e correção de gamma
-        fs << "    // Tone mapping (Reinhard) + gamma\n";
         fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
         fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
-
         fs << "    FragColor = vec4(finalColor, matOpacity);\n";
         fs << "}\n";
 
         result.FragmentShader = fs.str();
 
-        {
-            std::istringstream stream(result.FragmentShader);
-            std::string line;
-            int lineNum = 0;
-            std::string first30lines;
-            while (std::getline(stream, line) && lineNum < 30)
-                first30lines += std::to_string(++lineNum) + ": " + line + "\n";
-            AXE_CORE_INFO("Fragment Shader:\n{}", first30lines);
-        }
-
-        // ---------------------------------------------------------------------
-        // 6. Vertex Shader — padrão, independente do grafo
-        // ---------------------------------------------------------------------
+        // 9. Vertex Shader
         result.VertexShader = R"(
         #version 460 core
         layout(location = 0) in vec3 a_Position;
         layout(location = 1) in vec3 a_Normal;
         layout(location = 2) in vec2 a_TexCoord;
- 
+        layout(location = 3) in vec3 a_Tangent;
+        layout(location = 4) in vec3 a_Bitangent;
+
         uniform mat4 u_Model;
         uniform mat4 u_ViewProjection;
         uniform mat3 u_NormalMatrix;
- 
+        
+
         out vec3 v_Normal;
         out vec3 v_FragPos;
         out vec2 v_TexCoord;
- 
+        out vec3 v_Tangent;
+        out vec3 v_Bitangent;
+
         void main()
         {
             vec4 worldPos  = u_Model * vec4(a_Position, 1.0);
             v_FragPos      = worldPos.xyz;
             v_Normal       = normalize(u_NormalMatrix * a_Normal);
+            v_Tangent      = normalize(u_NormalMatrix * a_Tangent);
+            v_Bitangent    = normalize(u_NormalMatrix * a_Bitangent);
             v_TexCoord     = a_TexCoord;
             gl_Position    = u_ViewProjection * worldPos;
         }
-        )";
+    )";
 
         result.Success = true;
+
+        // Log temporário
+        {
+            std::istringstream stream(result.FragmentShader);
+            std::string line;
+            int lineNum = 0;
+            std::string lines;
+            while (std::getline(stream, line) && lineNum < 40)
+                lines += std::to_string(++lineNum) + ": " + line + "\n";
+            AXE_CORE_INFO("Fragment:\n{}", lines);
+        }
+
         AXE_CORE_INFO("MaterialCompiler: Compilation successful.");
         return result;
     }
+
 
    // =========================================================================
    // Percurso do grafo
@@ -335,6 +376,8 @@ namespace axe
     std::string MaterialCompiler::GenerateNodeCode(Node* node)
     {
         if (node->Name == "Material Output") return "";
+
+        AXE_CORE_INFO("GenerateNodeCode: '{}'", node->Name);
 
         std::stringstream code;
 
@@ -675,6 +718,37 @@ namespace axe
                 << "), normalize(u_CameraPosition - v_FragPos)), 0.0), "
                 << exponent << ");";
         }
+
+        //Normal Map
+        else if (node->Name == "Normal Map")
+        {
+            std::string var = MakeVar("normalmap");
+            std::string texVal = "vec3(0.5, 0.5, 1.0)"; // normal padrão
+            std::string strength = "1.0";
+
+            Pin* srcTex = GetSourcePin(&node->Inputs[0]);
+            if (srcTex)
+            {
+                PinType t = GetPinType(srcTex->ID);
+                if (t == PinType::Vec3 || t == PinType::Vec4)
+                    texVal = GetPinVariable(srcTex->ID);
+            }
+
+            Pin* srcStr = GetSourcePin(&node->Inputs[1]);
+            if (srcStr)
+            {
+                PinType t = GetPinType(srcStr->ID);
+                if (t == PinType::Float)
+                    strength = GetPinVariable(srcStr->ID);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << "_raw = " << texVal << ";\n";
+            code << "vec3 " << var << "_ts  = normalize(" << var
+                << "_raw * 2.0 - 1.0);\n";
+            code << "vec3 " << var << " = normalize(mat3(v_Tangent, v_Bitangent, v_Normal) * "
+                << var << "_ts * vec3(" << strength << ", " << strength << ", 1.0));";
+                }
 
         return code.str();
     }

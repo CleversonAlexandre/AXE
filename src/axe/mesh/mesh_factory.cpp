@@ -5,6 +5,57 @@
 namespace axe
 {
 
+	static void CalculateTangents(std::vector<Vertex>& vertices,
+		const std::vector<uint32_t>& indices)
+	{
+		// Inicializa tangentes e bitangentes com zero
+		for (auto& v : vertices)
+		{
+			v.Tangent = glm::vec3(0.0f);
+			v.Bitangent = glm::vec3(0.0f);
+		}
+
+		// Calcula por triângulo
+		for (size_t i = 0; i < indices.size(); i += 3)
+		{
+			Vertex& v0 = vertices[indices[i]];
+			Vertex& v1 = vertices[indices[i + 1]];
+			Vertex& v2 = vertices[indices[i + 2]];
+
+			glm::vec3 edge1 = v1.Position - v0.Position;
+			glm::vec3 edge2 = v2.Position - v0.Position;
+
+			glm::vec2 deltaUV1 = v1.TexCoord - v0.TexCoord;
+			glm::vec2 deltaUV2 = v2.TexCoord - v0.TexCoord;
+
+			float det = deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y;
+			if (std::abs(det) < 1e-6f) continue;
+
+			float f = 1.0f / det;
+
+			glm::vec3 tangent = f * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
+			glm::vec3 bitangent = f * (-deltaUV2.x * edge1 + deltaUV1.x * edge2);
+
+			v0.Tangent += tangent; v1.Tangent += tangent; v2.Tangent += tangent;
+			v0.Bitangent += bitangent; v1.Bitangent += bitangent; v2.Bitangent += bitangent;
+		}
+
+		// Normaliza
+		for (auto& v : vertices)
+		{
+			if (glm::length(v.Tangent) > 0.0001f)
+				v.Tangent = glm::normalize(v.Tangent);
+			else
+				v.Tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+
+			if (glm::length(v.Bitangent) > 0.0001f)
+				v.Bitangent = glm::normalize(v.Bitangent);
+			else
+				v.Bitangent = glm::vec3(0.0f, 1.0f, 0.0f);
+		}
+	}
+
+
 	bool MeshFactory::IsPrimitive(const std::string& uuid)
 	{
 		return uuid.rfind("primitive-", 0) == 0;
@@ -31,6 +82,7 @@ namespace axe
 		};
 
 		std::vector<uint32_t> indices = { 0, 1, 2, 2, 3, 0 };
+		CalculateTangents(vertices, indices);
 		return std::make_shared<Mesh>(vertices, indices);
 	}
 
@@ -78,6 +130,7 @@ namespace axe
 			20, 21, 22, 22, 23, 20,  // Base
 		};
 
+		CalculateTangents(vertices, indices);
 		return std::make_shared<Mesh>(vertices, indices);
 	}
 
@@ -155,6 +208,7 @@ namespace axe
 			baseIndex += 2;
 		}
 
+		CalculateTangents(vertices, indices);
 		return std::make_shared<Mesh>(vertices, indices);
 	}
 
@@ -202,6 +256,7 @@ namespace axe
 			}
 		}
 
+		CalculateTangents(vertices, indices);
 		return std::make_shared<Mesh>(vertices, indices);
 	}
 

@@ -6,7 +6,7 @@
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/glm.hpp>
-
+#include "axe/graphics/renderer/viewport_renderer.hpp"
 
 namespace axe
 {
@@ -35,6 +35,7 @@ namespace axe
 		FramebufferSpecification spec;
 		spec.Width = 1280;
 		spec.Height = 720;
+		spec.HDR = true;
 
 		m_Framebuffer = Framebuffer::Create(spec);
 
@@ -128,17 +129,13 @@ namespace axe
 
 	void ViewportWindow::OnResize(uint32_t width, uint32_t height)
 	{
-		if (width == 0 || height == 0)
-			return;
-
+		if (width == 0 || height == 0) return;
 		m_Width = width;
 		m_Height = height;
-
 		if (m_Initialized && m_Framebuffer)
-		{
 			m_Framebuffer->Resize(width, height);
-			//AXE_CORE_INFO("Viewport resized to {}x{}", width, height);
-		}
+		if (m_ViewportRenderer)
+			m_ViewportRenderer->Resize(width, height);
 	}
 
 	ImTextureID ViewportWindow::GetTextureID() const

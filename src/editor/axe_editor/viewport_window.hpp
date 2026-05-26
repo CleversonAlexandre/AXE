@@ -58,6 +58,12 @@ namespace axe
 
 		using AssetDropCallback = std::function<void(const std::string& uuid, float mouseX, float mouseY)>;
 
+		void SetViewportRenderer(ViewportRenderer* renderer) { m_ViewportRenderer = renderer; }
+
+	private:
+		ViewportRenderer* m_ViewportRenderer = nullptr;
+		
+
 	private:
 		bool m_Initialized = false;
 		bool m_IsHovered = false;

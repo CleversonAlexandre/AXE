@@ -8,6 +8,9 @@
 #include <string>
 #include <imgui.h>
 #include <entt/entt.hpp>
+
+#include "axe/graphics/renderer/post_process_pass.hpp"
+
 namespace axe
 {
 	//Nome do objeto - todo entity tem um
@@ -49,5 +52,11 @@ namespace axe
 	{
 		entt::entity Parent = entt::null;
 		std::vector<entt::entity> Children;
+	};
+	
+	struct PostProcessComponent
+	{
+		PostProcessSettings Settings;
+		bool IsGlobal = true; // afeta toda a cena
 	};
 }//namespace axe

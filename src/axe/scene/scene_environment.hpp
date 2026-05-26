@@ -20,6 +20,10 @@ namespace axe
 			Skybox = CubemapTexture::CreateFromHDRI(filepath);
 			SkyboxPath = filepath;
 		}
+		bool HasIBL() const
+		{
+			return Skybox && Skybox->HasIBL();
+		}
 	};
 
 } // namespace axe

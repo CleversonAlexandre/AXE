@@ -32,6 +32,7 @@ namespace axe
 		Node* AddWorldPositionNode();
 		Node* FindNodeByID(int id);
 		Node* AddFresnelNode();
+		Node* AddNormalMapNode();
 
 		//Acesso
 		std::vector<std::unique_ptr<Node>>& GetNodes() { return m_Nodes; }

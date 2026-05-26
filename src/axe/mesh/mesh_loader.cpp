@@ -75,8 +75,9 @@ namespace axe
 
 		const aiScene* scene = importer.ReadFile(filepath,
 			aiProcess_Triangulate |
-			aiProcess_GenNormals |
-			aiProcess_FlipUVs
+			aiProcess_GenNormals  |
+			aiProcess_FlipUVs	  |
+			aiProcess_CalcTangentSpace
 		);
 
 		if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
@@ -117,6 +118,17 @@ namespace axe
 				v.TexCoord = { mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y };
 			else
 				v.TexCoord = { 0.0f, 0.0f };
+			
+			if (mesh->HasTangentsAndBitangents())
+			{
+				v.Tangent = { mesh->mTangents[i].x,   mesh->mTangents[i].y,   mesh->mTangents[i].z };
+				v.Bitangent = { mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z };
+			}
+			else
+			{
+				v.Tangent = { 1.0f, 0.0f, 0.0f };
+				v.Bitangent = { 0.0f, 1.0f, 0.0f };
+			}
 
 			vertices.push_back(v);
 		}
@@ -151,8 +163,8 @@ namespace axe
 			material->Color = { diffuse.r, diffuse.g, diffuse.b, diffuse.a };
 			asset.MaterialData = material;
 
-			AXE_CORE_INFO("MeshLoader: cor do material ({}, {}, {}, {})",
-				diffuse.r, diffuse.g, diffuse.b, diffuse.a);
+			//AXE_CORE_INFO("MeshLoader: cor do material ({}, {}, {}, {})",
+			//	diffuse.r, diffuse.g, diffuse.b, diffuse.a);
 		}
 
 		return asset;

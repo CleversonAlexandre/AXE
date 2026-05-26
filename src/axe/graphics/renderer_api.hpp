@@ -42,6 +42,8 @@ namespace axe
         static API GetAPI() { return s_API; }
         static std::unique_ptr<RendererAPI> Create();
 
+        virtual void BindFramebuffer(uint32_t id) = 0;
+
     private:
         static API s_API;
     };

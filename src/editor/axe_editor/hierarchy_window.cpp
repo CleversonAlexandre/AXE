@@ -218,6 +218,9 @@ namespace axe
             if (ImGui::MenuItem("Luz Direcional"))
                 CreateLight();
 
+            if (ImGui::MenuItem("Post Process Volume"))
+                CreatePostProcess();
+
             ImGui::EndMenu();
         }
     }
@@ -338,6 +341,14 @@ namespace axe
         entt::entity copy = m_Context->ActiveScene->DuplicateEntity(m_Context->SelectedEntity);
         if (copy != entt::null)
             m_Context->Select(copy);
+    }
+
+    void HierarchyWindow::CreatePostProcess()
+    {
+        auto entity = m_Context->ActiveScene->CreateEntity("Post Process Volume");
+        auto& registry = m_Context->ActiveScene->GetRegistry();
+        registry.emplace<PostProcessComponent>(entity);
+        m_Context->Select(entity);
     }
 
 } // namespace axe

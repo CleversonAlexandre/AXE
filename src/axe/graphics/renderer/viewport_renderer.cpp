@@ -34,7 +34,16 @@ namespace axe
 		m_SceneRenderer = std::make_unique<SceneRenderer>();
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
 
+		m_PostProcess = PostProcessPass::Create();
+
+		FramebufferSpecification hdrSpec;
+		hdrSpec.Width = 1280;
+		hdrSpec.Height = 720;
+		hdrSpec.HDR = true;
+		m_HDRFramebuffer = Framebuffer::Create(hdrSpec);
+
 		m_SkyboxRenderer.Initialize();
+
 	}
 
 
@@ -46,114 +55,123 @@ namespace axe
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
-		framebuffer.Bind();
+		// --- Resize HDR se necessário ---
+		auto& hdrSpec = m_HDRFramebuffer->GetSpecification();
+		if (hdrSpec.Width != width || hdrSpec.Height != height)
+			m_HDRFramebuffer->Resize(width, height);
+
+		if (!m_PostProcess->IsInitialized())
+			m_PostProcess->Initialize(width, height);
+		else
+			m_PostProcess->Resize(width, height);
+
+		// ✅ Renderiza tudo no HDR framebuffer (antes era framebuffer direto)
+		m_HDRFramebuffer->Bind();
 
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		glDepthMask(GL_TRUE);
-
-		GLint currentFB;
-		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentFB);
-		//AXE_CORE_INFO("ViewportRenderer {:p} rendering to FB OpenGL ID: {}", (void*)this, currentFB);
-
-
-		//AXE_CORE_INFO("ViewportRenderer {:p} m_Scene: {:p}", (void*)this, (void*)m_Scene);
 		RenderCommand::SetViewport(0, 0, width, height);
 		RenderCommand::SetClearColor(0.1f, 0.1f, 0.12f, 1.0f);
-		//RenderCommand::SetClearColor(0.0f, 1.0f, 0.0f, 1.0f); // verde
 		RenderCommand::Clear();
-		//glViewport(0, 0, width, height);
-		//glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
-		//glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		entt::entity selected = m_SelectedEntity ? *m_SelectedEntity : entt::null;
 
-		// --- Render do Skybox ---
+		// Skybox
 		if (m_Environment && m_Environment->HasSkybox())
 		{
-			// Garante que o SkyboxRenderer tem o cubemap atualizado
 			m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
-
 			if (m_GameCamera)
 			{
 				float aspect = (float)width / (float)height;
 				m_SkyboxRenderer.Render(
 					m_GameCamera->GetViewMatrix(),
-					m_GameCamera->GetProjectionMatrix(aspect)
-				);
+					m_GameCamera->GetProjectionMatrix(aspect));
 			}
 			else if (m_Camera)
 			{
 				m_SkyboxRenderer.Render(
 					m_Camera->GetViewMatrix(),
-					m_Camera->GetProjectionMatrix()
-				);
+					m_Camera->GetProjectionMatrix());
 			}
 		}
 
+		
 
-
+		// SceneRenderer
 		if (m_GameCamera)
 		{
-			// Modo Play — usa GameCamera
 			float aspect = height > 0 ? (float)width / (float)height : 1.0f;
-
+			if (m_SceneRenderer && m_Environment)
+				m_SceneRenderer->SetEnvironment(m_Environment);
 			if (m_SceneRenderer && m_Scene)
 				m_SceneRenderer->RenderScene(
 					*m_Scene,
 					m_GameCamera->GetViewMatrix(),
 					m_GameCamera->GetProjectionMatrix(aspect),
 					m_GameCamera->GetPosition(),
-					entt::null  // sem seleção no Play
-				);
+					entt::null);
 		}
 		else
 		{
-			// Modo Edit — usa EditorCamera
 			if (m_Camera && height > 0)
 			{
 				m_Camera->SetAspectRatio((float)width / (float)height);
 				m_Camera->SetViewportSize((float)width, (float)height);
 			}
-
-			//if (m_SceneRenderer && m_Scene && m_Camera)
+			if (m_SceneRenderer && m_Environment)
+				m_SceneRenderer->SetEnvironment(m_Environment);
+		
+			//if (m_SceneRenderer)
 			//{
-			//	auto roots = m_Scene->GetRootEntities();
-			//	AXE_CORE_INFO("RenderScene call - VR: {:p}, SR: {:p}, Scene: {:p}, roots: {}",
-			//		(void*)this,
-			//		(void*)m_SceneRenderer.get(),
-			//		(void*)m_Scene,
-			//		roots.size());
+			//	m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
+			//	m_SceneRenderer->SetDeferredEnabled(true);
 			//}
 
 			if (m_SceneRenderer && m_Scene && m_Camera)
 				m_SceneRenderer->RenderScene(*m_Scene, *m_Camera, selected);
 
-			// Picking só no modo Edit
+			// Picking
 			if (m_Scene && m_Camera && m_PickingEnabled)
 			{
 				m_PickingRenderer.Resize(width, height);
 				m_PickingRenderer.Begin(m_Camera->GetViewProjectionMatrix());
-
 				auto& registry = m_Scene->GetRegistry();
 				for (auto entity : registry.view<TransformComponent>())
 				{
 					if (registry.any_of<LightComponent>(entity)) continue;
-
 					auto& tc = registry.get<TransformComponent>(entity);
 					glm::mat4 model = tc.Data.GetMatrix();
 					auto* mc = registry.try_get<MeshComponent>(entity);
 					std::uint32_t pickID = (std::uint32_t)entity;
-
 					if (mc && mc->Data)
 						m_PickingRenderer.DrawMesh(*mc->Data, model, pickID);
 					else
 						m_PickingRenderer.DrawCube(model, pickID);
 				}
-
 				m_PickingRenderer.End();
 			}
 		}
 
+		m_HDRFramebuffer->Unbind();
+
+		// ✅ Post process: HDR → framebuffer final (que o ImGui lê)
+		framebuffer.Bind();
+		RenderCommand::SetViewport(0, 0, width, height);
+
+		// Lê PostProcessComponent da cena
+		if (m_Scene)
+		{
+			auto& registry = m_Scene->GetRegistry();
+			for (auto entity : registry.view<PostProcessComponent>())
+			{
+				m_PostProcessSettings = registry.get<PostProcessComponent>(entity).Settings;
+				break;
+			}
+		}
+
+		m_PostProcess->Execute(
+			m_HDRFramebuffer->GetColorAttachmentRendererID(),
+			m_PostProcessSettings);
 		framebuffer.Unbind();
 	}
 
@@ -244,6 +262,15 @@ namespace axe
 			glm::value_ptr(m_Camera->GetProjectionMatrix()),
 			identityMatrix, 100.f
 		);
+	}
+
+	void ViewportRenderer::Resize(uint32_t width, uint32_t height)
+	{
+		if (width == 0 || height == 0) return;
+		if (m_HDRFramebuffer)
+			m_HDRFramebuffer->Resize(width, height);
+		if (m_PostProcess && m_PostProcess->IsInitialized())
+			m_PostProcess->Resize(width, height);
 	}
 
 } // namespace axe

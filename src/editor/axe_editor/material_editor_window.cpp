@@ -19,13 +19,22 @@
 #include "axe/graphics/render_command.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include "axe/graphics/framebuffer.hpp"
- #include <sstream>
+#include <sstream>
 
 #include "material_thumbnail_renderer.hpp"
+
+#include "inspector_window.hpp"
+
+#include "axe_editor/asset/asset_picker.hpp"
+
 namespace ed = ax::NodeEditor;
 
 namespace axe
 {
+
+    bool MaterialEditorWindow::s_NeedsReload = false;
+
+
     // -------------------------------------------------------------------------
     // Construtor / Destrutor
     // -------------------------------------------------------------------------
@@ -79,7 +88,7 @@ namespace axe
             tc.Data.Scale = glm::vec3(1.0f);
         }
 
-        auto lightEntity = m_PreviewScene->CreateEntity("PreviewLight");        
+        auto lightEntity = m_PreviewScene->CreateEntity("PreviewLight");
         auto& lc = registry.emplace<LightComponent>(lightEntity);
         lc.Data = std::make_shared<DirectionalLight>();
         lc.Data->Direction = glm::vec3(0.0f, -1.0f, -1.0f);
@@ -97,14 +106,16 @@ namespace axe
         // O MaterialComponent é adicionado em OpenMaterial(),
         // quando m_Material estiver disponível
 
+
         m_PreviewRenderer->SetScene(m_PreviewScene.get());
 
         // Ambiente HDRI
         m_PreviewEnvironment = std::make_unique<SceneEnvironment>();
         m_PreviewEnvironment->LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
-
-        AXE_CORE_INFO("Material preview initialized");
+        
+        if (m_PreviewRenderer->GetSceneRenderer())
+            m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());        
     }
 
     // -------------------------------------------------------------------------
@@ -114,6 +125,12 @@ namespace axe
     void MaterialEditorWindow::RenderPreview()
     {
         if (!m_PreviewRenderer || !m_PreviewFramebuffer || !m_PreviewScene) return;
+
+        // Garante que o environment está no ViewportRenderer
+        m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
+
+        if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
+            m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
 
         uint32_t width = (uint32_t)m_PreviewSize.x;
         uint32_t height = (uint32_t)m_PreviewSize.y;
@@ -129,7 +146,6 @@ namespace axe
 
     void MaterialEditorWindow::OpenMaterial(std::shared_ptr<MaterialAsset> asset)
     {
-        // Recria o node editor para limpar estado anterior
         if (m_NodeEditorContext)
         {
             ed::DestroyEditor(m_NodeEditorContext);
@@ -144,9 +160,14 @@ namespace axe
         m_Material = asset->GetMaterial();
         m_Open = true;
         m_FrameCount = 0;
-        m_Graph = std::make_unique<MaterialGraph>();
 
-        // Aplica o material na entidade de preview
+        if (m_Material)
+            m_Material->UsePBR = true;
+
+        m_Graph = std::make_unique<MaterialGraph>();
+        LoadGraph(); // ← recompila shader no m_Material
+
+        // Aplica o material na esfera APÓS LoadGraph — shader já está compilado
         if (m_PreviewScene && m_Material)
         {
             auto& registry = m_PreviewScene->GetRegistry();
@@ -158,10 +179,6 @@ namespace axe
                     registry.emplace<MaterialComponent>(m_PreviewEntity, m_Material);
             }
         }
-
-        m_Graph = std::make_unique<MaterialGraph>();
-        LoadGraph(); // ← carrega o grafo salvo se existir
-
 
         // Reseta câmera do preview
         if (m_PreviewRenderer)
@@ -183,6 +200,12 @@ namespace axe
     void MaterialEditorWindow::Draw()
     {
         if (!m_Open || !m_Asset || !m_Material) return;
+
+        if (s_NeedsReload && m_Open)
+        {
+            s_NeedsReload = false;
+            ReloadGraph();
+        }
 
         // Sempre chama Begin/End para o ImGui salvar a posição no imgui.ini
         ImGui::SetNextWindowSize(ImVec2(1200, 700), ImGuiCond_FirstUseEver);
@@ -211,7 +234,7 @@ namespace axe
 
 
         // Layout padrão — só cria se o dockspace estiver vazio (primeira vez)        
-        
+
         static bool s_LayoutConfigured = false;
         if (!s_LayoutConfigured)
         {
@@ -250,7 +273,7 @@ namespace axe
                 ImGui::DockBuilderFinish(dockspace_id);
             }
         }
-        
+
 
         DrawMaterialParamsWindow();
         DrawNodeGraphWindow();
@@ -269,9 +292,13 @@ namespace axe
 
     void MaterialEditorWindow::DrawMaterialParamsWindow()
     {
+        ed::SetCurrentEditor(m_NodeEditorContext);
+
         if (ImGui::Begin("Material Params"))
             DrawMaterialParams(*m_Material);
         ImGui::End();
+
+        ed::SetCurrentEditor(nullptr);
     }
 
     void MaterialEditorWindow::DrawNodeGraphWindow()
@@ -308,7 +335,7 @@ namespace axe
             {
                 if (ImGui::ImageButton("##redo",
                     (ImTextureID)(uintptr_t)icons.GetRedo()->GetRendererID(),
-                    ImVec2(btnSize, btnSize),                    
+                    ImVec2(btnSize, btnSize),
                     ImVec2(0, 1),
                     ImVec2(1, 0)))
                     m_History.Redo();
@@ -326,10 +353,10 @@ namespace axe
             {
                 if (ImGui::ImageButton("##save",
                     (ImTextureID)(uintptr_t)icons.GetSave()->GetRendererID(),
-                    ImVec2(btnSize, btnSize), 
+                    ImVec2(btnSize, btnSize),
                     ImVec2(0, 1),
                     ImVec2(1, 0)
-                    ))
+                ))
                     SaveGraph();
             }
             if (ImGui::IsItemHovered())
@@ -351,7 +378,7 @@ namespace axe
                     if (m_Material)
                         CompileAndApply();
 
-                    
+
                 }
             }
             if (ImGui::IsItemHovered())
@@ -368,7 +395,7 @@ namespace axe
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if (ImGui::Begin("Material Preview", nullptr,
-            ImGuiWindowFlags_NoScrollbar )) // | ImGuiWindowFlags_NoMove))
+            ImGuiWindowFlags_NoScrollbar)) // | ImGuiWindowFlags_NoMove))
         {
             m_PreviewHovered = ImGui::IsWindowHovered();
             m_PreviewFocused = ImGui::IsWindowFocused();
@@ -473,128 +500,257 @@ namespace axe
     // Parâmetros do material
     // -------------------------------------------------------------------------
 
-void MaterialEditorWindow::CompileAndApply()
-{
-     ClearLog();
-     LogInfo("Compilando shader...");
-
-    if (!m_Material || !m_Graph) return;
-
-    auto result = MaterialCompiler::Compile(m_Graph.get());
-    if (!result.Success)
+    void MaterialEditorWindow::CompileAndApply()
     {
-        //AXE_CORE_ERROR("Compilation failed: {}", result.ErrorMessage);
-        LogError("Compilação falhou: " + result.ErrorMessage);
-        return;
-    }
+        ClearLog();
+        LogInfo("Compilando shader...");
 
-    std::shared_ptr<Shader> compiledShader;
-    try
-    {
-        compiledShader = Shader::Create(result.VertexShader, result.FragmentShader);
-    }
-    catch (const std::exception& e)
-    {
-        //AXE_CORE_ERROR("Shader creation failed: {}", e.what());
+        if (!m_Material || !m_Graph) return;
 
-        LogError(std::string("Shader creation failed: ") + e.what());
-        return;
-    }
-
-    if (!compiledShader)
-    {
-        //AXE_CORE_ERROR("Shader::Create returned null");
-        LogError("Shader::Create retornou null");
-        return;
-    }
-
-    m_Material->SetShader(compiledShader);
-    m_Material->UsePBR = true;
-
-    // Transfere texturas conectadas
-    int slot = 0;
-    for (auto& node : m_Graph->GetNodes())
-    {
-        if (node->Name != "Texture Sample") continue;
-        if (!node->Value.TextureVal) { ++slot; continue; }
-
-        bool isConnected = false;
-        for (auto& output : node->Outputs)
-            for (auto& link : m_Graph->GetLinks())
-                if (link.StartPin == output.ID)
-                    isConnected = true;
-
-        if (!isConnected) { ++slot; continue; }
-
-        if (slot == 0)
+        auto result = MaterialCompiler::Compile(m_Graph.get());
+        if (!result.Success)
         {
-            m_Material->AlbedoMap  = node->Value.TextureVal;
-            m_Material->AlbedoUUID = node->Value.TextureUUID;
+            //AXE_CORE_ERROR("Compilation failed: {}", result.ErrorMessage);
+            LogError("Compilação falhou: " + result.ErrorMessage);
+            return;
         }
-        ++slot;
-    }
 
-    if (m_Asset)
-        m_Asset->SetMaterial(m_Material);
-
-    if (!m_Asset->GetFilePath().empty())
-        m_Asset->Save(m_Asset->GetFilePath());
-
-    SaveGraph();
-
-    // Atualiza preview
-    if (m_PreviewScene)
-    {
-        auto& registry = m_PreviewScene->GetRegistry();
-        if (registry.valid(m_PreviewEntity))
+        std::shared_ptr<Shader> compiledShader;
+        try
         {
-            if (registry.all_of<MaterialComponent>(m_PreviewEntity))
-                registry.get<MaterialComponent>(m_PreviewEntity).Data = m_Material;
-            else
-                registry.emplace<MaterialComponent>(m_PreviewEntity, m_Material);
+            compiledShader = Shader::Create(result.VertexShader, result.FragmentShader);
         }
-    }
-
-    // Aplica o material no mesh selecionado no viewport
-    if (m_Context && m_Context->HasSelection())
-    {
-        auto& registry = m_Context->ActiveScene->GetRegistry();
-        entt::entity selected = m_Context->SelectedEntity;
-
-        if (registry.valid(selected) && registry.all_of<MeshComponent>(selected))
+        catch (const std::exception& e)
         {
-            if (registry.all_of<MaterialComponent>(selected))
-                registry.get<MaterialComponent>(selected).Data = m_Material;
-            else
-                registry.emplace<MaterialComponent>(selected, m_Material);
+            //AXE_CORE_ERROR("Shader creation failed: {}", e.what());
 
-            LogInfo("Material aplicado na entidade selecionada.");
+            LogError(std::string("Shader creation failed: ") + e.what());
+            return;
+        }
+
+        if (!compiledShader)
+        {
+            //AXE_CORE_ERROR("Shader::Create returned null");
+            LogError("Shader::Create retornou null");
+            return;
+        }
+
+        m_Material->SetShader(compiledShader);
+        m_Material->UsePBR = true;
+
+        // Transfere texturas conectadas
+        int slot = 0;
+        for (auto& node : m_Graph->GetNodes())
+        {
+            if (node->Name != "Texture Sample") continue;
+            if (!node->Value.TextureVal) { ++slot; continue; }
+
+            bool isConnected = false;
+            for (auto& output : node->Outputs)
+                for (auto& link : m_Graph->GetLinks())
+                    if (link.StartPin == output.ID)
+                        isConnected = true;
+
+            if (!isConnected) { ++slot; continue; }
+
+            if (slot == 0)
+            {
+                m_Material->AlbedoMap = node->Value.TextureVal;
+                m_Material->AlbedoUUID = node->Value.TextureUUID;
+            }
+            ++slot;
+        }
+        // Transfere texturas na mesma ordem do compilador
+        std::function<Node* (ed::PinId)> findTextureSample =
+            [&](ed::PinId startPin) -> Node*
+            {
+                for (auto& n : m_Graph->GetNodes())
+                    for (auto& outPin : n->Outputs)
+                    {
+                        if (outPin.ID != startPin) continue;
+                        if (n->Name == "Texture Sample") return n.get();
+                        for (auto& inPin : n->Inputs)
+                            for (auto& lnk : m_Graph->GetLinks())
+                            {
+                                if (lnk.EndPin != inPin.ID) continue;
+                                Node* found = findTextureSample(lnk.StartPin);
+                                if (found) return found;
+                            }
+                    }
+                return nullptr;
+            };
+
+        Node* outputNode = nullptr;
+        for (auto& n : m_Graph->GetNodes())
+            if (n->Name == "Material Output") { outputNode = n.get(); break; }
+
+        if (outputNode)
+        {
+            int slot = 0;
+            std::unordered_set<int> processed;
+
+            for (auto& inputPin : outputNode->Inputs)
+            {
+                for (auto& lnk : m_Graph->GetLinks())
+                {
+                    if (lnk.EndPin != inputPin.ID) continue;
+                    Node* texNode = findTextureSample(lnk.StartPin);
+                    if (texNode && !processed.count(texNode->ID.Get())
+                        && texNode->Value.TextureVal)
+                    {
+                        if (slot == 0)
+                        {
+                            m_Material->AlbedoMap = texNode->Value.TextureVal;
+                            m_Material->AlbedoUUID = texNode->Value.TextureUUID;
+                        }
+                        processed.insert(texNode->ID.Get());
+                        ++slot;
+                    }
+                }
+            }
+        }
+
+        if (m_Asset)
+            m_Asset->SetMaterial(m_Material);
+
+        if (!m_Asset->GetFilePath().empty())
+            m_Asset->Save(m_Asset->GetFilePath());
+
+        SaveGraph();
+
+        // Atualiza preview
+        if (m_PreviewScene)
+        {
+            auto& registry = m_PreviewScene->GetRegistry();
+            if (registry.valid(m_PreviewEntity))
+            {
+                if (registry.all_of<MaterialComponent>(m_PreviewEntity))
+                    registry.get<MaterialComponent>(m_PreviewEntity).Data = m_Material;
+                else
+                    registry.emplace<MaterialComponent>(m_PreviewEntity, m_Material);
+            }
+        }
+
+        // Aplica o material no mesh selecionado no viewport       
+        if (m_Context && m_Context->ActiveScene && m_Asset)
+        {
+            auto& registry = m_Context->ActiveScene->GetRegistry();
+
+            // Obtém o UUID do asset atual
+            const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
+            if (!record) { LogWarning("Asset não encontrado."); return; }
+
+            std::string assetUUID = record->UUID;
+            int count = 0;
+
+            for (auto entity : registry.view<MaterialComponent>())
+            {
+                auto& mc = registry.get<MaterialComponent>(entity);
+                if (mc.MaterialAssetUUID == assetUUID)
+                {
+                    mc.Data = m_Material; // atualiza o ponteiro para o material recompilado
+                    ++count;
+                }
+            }
+
+            if (count > 0)
+                LogInfo("Material aplicado em " + std::to_string(count) + " objeto(s).");
+            else
+                LogWarning("Nenhum objeto usa este material.");
         }
         else
         {
-            LogWarning("Nenhum mesh selecionado no viewport.");
+            LogWarning("Nenhuma cena ativa.");
         }
-    }
-    else
-    {
-        LogWarning("Nenhuma entidade selecionada no viewport.");
-    }
 
-    LogInfo("Shader compilado com sucesso.");
-    // Após compilar com sucesso:
-    if (m_ThumbnailRenderer && m_Asset)
-    {
-        const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
-        if (record)
-            m_ThumbnailRenderer->Invalidate(record->UUID);
-    }
+        LogInfo("Shader compilado com sucesso.");
+        // Após compilar com sucesso:
+        if (m_ThumbnailRenderer && m_Asset)
+        {
+            const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
+            if (record)
+                m_ThumbnailRenderer->Invalidate(record->UUID);
+        }
 
-    
-    
-}
+
+
+        InspectorWindow::MarkGraphCacheDirty();
+    }
 
     void MaterialEditorWindow::DrawMaterialParams(Material& mat)
     {
+        // Verifica se há um node selecionado no graph
+        int selectedCount = ed::GetSelectedObjectCount();
+        ed::NodeId selectedNodeId = 0;
+
+        if (selectedCount > 0)
+        {
+            std::vector<ed::NodeId> selectedNodes(selectedCount);
+            int nodeCount = ed::GetSelectedNodes(selectedNodes.data(), selectedCount);
+            if (nodeCount > 0)
+                selectedNodeId = selectedNodes[0];
+        }
+
+        if (selectedNodeId)
+        {
+            // Encontra o node selecionado
+            auto nodePtr = m_Graph->FindNode(selectedNodeId);
+            if (nodePtr)
+            {
+                Node* node = nodePtr->get();
+                ImGui::Text("Node: %s", node->Name.c_str());
+                ImGui::Separator();
+
+                if (node->Name == "Float" && node->IsConstant)
+                {
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::DragFloat("##val", &node->Value.FloatVal, 0.01f, 0.0f, 10.0f);
+                }
+                else if (node->Name == "Color" && node->IsConstant)
+                {
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::ColorEdit4("##col", &node->Value.Vec4Val.x);
+                }
+                else if (node->Name == "Texture Sample")
+                {
+                    ImGui::Text("Textura:");
+                    ImGui::Spacing();
+
+                    std::string uuid = node->Value.TextureUUID;
+                    AssetPicker::Draw("##tex",
+                        node->Value.TextureUUID,
+                        { AssetType::Texture },
+                        [&](const AssetRecord& record)
+                        {
+                            node->Value.TextureVal = Texture2D::Create(record.FilePath.string());
+                            node->Value.TextureUUID = record.UUID;
+                        });
+                }
+                else
+                {
+                    // Mostra os pins de input do node
+                    ImGui::Text("Inputs:");
+                    ImGui::Spacing();
+                    for (auto& pin : node->Inputs)
+                        ImGui::TextDisabled("• %s (%s)", pin.Name.c_str(),
+                            pin.Type == PinType::Float ? "Float" :
+                            pin.Type == PinType::Vec3 ? "Vec3" :
+                            pin.Type == PinType::Vec4 ? "Vec4" : "?");
+
+                    ImGui::Spacing();
+                    ImGui::Text("Outputs:");
+                    ImGui::Spacing();
+                    for (auto& pin : node->Outputs)
+                        ImGui::TextDisabled("• %s", pin.Name.c_str());
+                }
+                return;
+            }
+        }
+
+        // Sem node selecionado — mostra parâmetros globais do material
+        ImGui::TextDisabled("Selecione um node para editar.");
+        ImGui::Separator();
+
         bool usePBR = mat.UsePBR;
         if (ImGui::Checkbox("PBR", &usePBR))
             mat.UsePBR = usePBR;
@@ -612,20 +768,7 @@ void MaterialEditorWindow::CompileAndApply()
             ImGui::DragFloat("Metallic", &mat.Metallic, 0.01f, 0.0f, 1.0f);
             ImGui::DragFloat("Roughness", &mat.Roughness, 0.01f, 0.0f, 1.0f);
             ImGui::DragFloat("AO", &mat.AO, 0.01f, 0.0f, 1.0f);
-
-            ImGui::Separator();
-            ImGui::Text("Texturas:");
-            ImGui::Spacing();
-
-            DrawTextureSlot("Albedo", mat.AlbedoMap, mat.AlbedoUUID);
-            DrawTextureSlot("Normal", mat.NormalMap, mat.NormalUUID);
-            DrawTextureSlot("Roughness", mat.RoughnessMap, mat.RoughnessUUID);
-            DrawTextureSlot("Metallic", mat.MetallicMap, mat.MetallicUUID);
-            DrawTextureSlot("AO", mat.AOMap, mat.AOUUID);
         }
-
-        ImGui::Separator();
-               
     }
 
     // -------------------------------------------------------------------------
@@ -886,7 +1029,7 @@ void MaterialEditorWindow::CompileAndApply()
                     {
                         auto nodeId = m_Graph->contextNodeId;
                         DeleteNodeWithHistory(nodeId);
-                       // ed::DeleteNode(nodeId);
+                        // ed::DeleteNode(nodeId);
                     }
                 }
                 else
@@ -930,6 +1073,7 @@ void MaterialEditorWindow::CompileAndApply()
                 {
                     if (ImGui::MenuItem("World Position")) node = m_Graph->AddWorldPositionNode();
                     if (ImGui::MenuItem("Fresnel"))        node = m_Graph->AddFresnelNode();
+                    if (ImGui::MenuItem("Normal Map")) node = m_Graph->AddNormalMapNode();
                     ImGui::EndMenu();
                 }
 
@@ -1065,7 +1209,7 @@ void MaterialEditorWindow::CompileAndApply()
                     }
                 }
             }
-        } 
+        }
 
 
         ed::Resume();
@@ -1563,6 +1707,7 @@ void MaterialEditorWindow::CompileAndApply()
                 else if (nodeName == "OneMinus")        newNode = m_Graph->AddOneMinusNode();
                 else if (nodeName == "World Position")  newNode = m_Graph->AddWorldPositionNode();
                 else if (nodeName == "Fresnel")         newNode = m_Graph->AddFresnelNode();
+                else if (nodeName == "Normal Map") newNode = m_Graph->AddNormalMapNode();
 
                 if (!newNode) return;
 
@@ -1616,7 +1761,7 @@ void MaterialEditorWindow::CompileAndApply()
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
 
-        if(ImGui::Begin("Shader Log", nullptr, ImGuiWindowFlags_NoScrollbar))
+        if (ImGui::Begin("Shader Log", nullptr, ImGuiWindowFlags_NoScrollbar))
         {
             // Botão limpar
             if (ImGui::SmallButton("Limpar"))
@@ -1664,7 +1809,7 @@ void MaterialEditorWindow::CompileAndApply()
         }
         ImGui::End();
         ImGui::PopStyleVar();
-   
+
     }
 
 } // namespace axe

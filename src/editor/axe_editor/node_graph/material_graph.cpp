@@ -52,6 +52,21 @@ namespace axe
         return ptr;
     }
 
+    Node* MaterialGraph::AddNormalMapNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Normal Map");
+        node->Color = ImVec4(0.2f, 0.3f, 0.5f, 1.0f); // azul
+
+        node->Inputs.emplace_back(GetNextID(), "Texture", PinType::Vec3, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "Strength", PinType::Float, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Normal", PinType::Vec3, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Node* MaterialGraph::AddColorNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "Color");
@@ -463,6 +478,7 @@ namespace axe
             else if (name == "OneMinus")        node = AddOneMinusNode();
             else if (name == "World Position")  node = AddWorldPositionNode();
             else if (name == "Fresnel")         node = AddFresnelNode();
+            else if (name == "Normal Map") node = AddNormalMapNode();
             
 
 

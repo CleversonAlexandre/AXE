@@ -8,7 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <imgui.h>
-
+#include "axe/graphics/renderer/post_process_pass.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 namespace axe
 {
@@ -102,6 +102,16 @@ namespace axe
 					components["Light"]["specular"] = c->Data->SpecularStrength;
 					components["Light"]["shininess"] = c->Data->Shininess;
 				}
+			}
+			// PostProcessComponent
+			if (auto* c = registry.try_get<PostProcessComponent>(entity))
+			{
+				components["PostProcess"]["is_global"] = c->IsGlobal;
+				components["PostProcess"]["exposure"] = c->Settings.Exposure;
+				components["PostProcess"]["bloom_enabled"] = c->Settings.BloomEnabled;
+				components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
+				components["PostProcess"]["bloom_intensity"] = c->Settings.BloomIntensity;
+				components["PostProcess"]["bloom_blur_passes"] = c->Settings.BloomBlurPasses;
 			}
 
 			// RelationshipComponent
@@ -300,7 +310,23 @@ namespace axe
 				light->Shininess = t["shininess"];
 				registry.emplace<LightComponent>(entity, light);
 			}
+
+			// PostProcessComponent
+			if (components.contains("PostProcess"))
+			{
+				auto& t = components["PostProcess"];
+				PostProcessComponent pp;
+				pp.IsGlobal = t["is_global"];
+				pp.Settings.Exposure = t["exposure"];
+				pp.Settings.BloomEnabled = t["bloom_enabled"];
+				pp.Settings.BloomThreshold = t["bloom_threshold"];
+				pp.Settings.BloomIntensity = t["bloom_intensity"];
+				pp.Settings.BloomBlurPasses = t["bloom_blur_passes"];
+				registry.emplace<PostProcessComponent>(entity, pp);
+			}
 		}
+		
+
 
 		// --- Passo 2: reconstrói hierarquia ---
 		for (const auto& e : root["entities"])
@@ -411,6 +437,15 @@ namespace axe
 					components["Light"]["specular"] = c->Data->SpecularStrength;
 					components["Light"]["shininess"] = c->Data->Shininess;
 				}
+			}
+			if (auto* c = registry.try_get<PostProcessComponent>(entity))
+			{
+				components["PostProcess"]["is_global"] = c->IsGlobal;
+				components["PostProcess"]["exposure"] = c->Settings.Exposure;
+				components["PostProcess"]["bloom_enabled"] = c->Settings.BloomEnabled;
+				components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
+				components["PostProcess"]["bloom_intensity"] = c->Settings.BloomIntensity;
+				components["PostProcess"]["bloom_blur_passes"] = c->Settings.BloomBlurPasses;
 			}
 
 			e["components"] = components;

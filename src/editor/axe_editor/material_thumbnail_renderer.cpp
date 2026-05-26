@@ -101,25 +101,54 @@ namespace axe
                         {
                             entry.Material->SetShader(shader);
 
-                            // Transfere texturas conectadas
-                            int slot = 0;
-                            for (auto& node : graph.GetNodes())
-                            {
-                                if (node->Name != "Texture Sample") continue;
-                                if (!node->Value.TextureVal) { ++slot; continue; }
-
-                                bool isConnected = false;
-                                for (auto& output : node->Outputs)
-                                    for (auto& link : graph.GetLinks())
-                                        if (link.StartPin == output.ID)
-                                            isConnected = true;
-
-                                if (isConnected && slot == 0)
+                            // Transfere texturas na ordem correta
+                            std::function<Node* (ed::PinId)> findTextureSample =
+                                [&](ed::PinId startPin) -> Node*
                                 {
-                                    entry.Material->AlbedoMap = node->Value.TextureVal;
-                                    entry.Material->AlbedoUUID = node->Value.TextureUUID;
+                                    for (auto& n : graph.GetNodes())
+                                        for (auto& outPin : n->Outputs)
+                                        {
+                                            if (outPin.ID != startPin) continue;
+                                            if (n->Name == "Texture Sample") return n.get();
+                                            for (auto& inPin : n->Inputs)
+                                                for (auto& lnk : graph.GetLinks())
+                                                {
+                                                    if (lnk.EndPin != inPin.ID) continue;
+                                                    Node* found = findTextureSample(lnk.StartPin);
+                                                    if (found) return found;
+                                                }
+                                        }
+                                    return nullptr;
+                                };
+
+                            Node* outputNode = nullptr;
+                            for (auto& n : graph.GetNodes())
+                                if (n->Name == "Material Output") { outputNode = n.get(); break; }
+
+                            if (outputNode)
+                            {
+                                int slot = 0;
+                                std::unordered_set<int> processed;
+
+                                for (auto& inputPin : outputNode->Inputs)
+                                {
+                                    for (auto& lnk : graph.GetLinks())
+                                    {
+                                        if (lnk.EndPin != inputPin.ID) continue;
+                                        Node* texNode = findTextureSample(lnk.StartPin);
+                                        if (texNode && !processed.count(texNode->ID.Get())
+                                            && texNode->Value.TextureVal)
+                                        {
+                                            if (slot == 0)
+                                            {
+                                                entry.Material->AlbedoMap = texNode->Value.TextureVal;
+                                                entry.Material->AlbedoUUID = texNode->Value.TextureUUID;
+                                            }
+                                            processed.insert(texNode->ID.Get());
+                                            ++slot;
+                                        }
+                                    }
                                 }
-                                ++slot;
                             }
                         }
                     }
@@ -176,28 +205,59 @@ namespace axe
                         {
                             auto shader = Shader::Create(
                                 result.VertexShader, result.FragmentShader);
+                           
                             if (shader)
                             {
                                 material->SetShader(shader);
 
-                                int slot = 0;
-                                for (auto& node : graph.GetNodes())
-                                {
-                                    if (node->Name != "Texture Sample") continue;
-                                    if (!node->Value.TextureVal) { ++slot; continue; }
-
-                                    bool isConnected = false;
-                                    for (auto& output : node->Outputs)
-                                        for (auto& link : graph.GetLinks())
-                                            if (link.StartPin == output.ID)
-                                                isConnected = true;
-
-                                    if (isConnected && slot == 0)
+                                // Transfere texturas na ordem correta
+                                std::function<Node* (ed::PinId)> findTextureSample =
+                                    [&](ed::PinId startPin) -> Node*
                                     {
-                                        material->AlbedoMap = node->Value.TextureVal;
-                                        material->AlbedoUUID = node->Value.TextureUUID;
+                                        for (auto& n : graph.GetNodes())
+                                            for (auto& outPin : n->Outputs)
+                                            {
+                                                if (outPin.ID != startPin) continue;
+                                                if (n->Name == "Texture Sample") return n.get();
+                                                for (auto& inPin : n->Inputs)
+                                                    for (auto& lnk : graph.GetLinks())
+                                                    {
+                                                        if (lnk.EndPin != inPin.ID) continue;
+                                                        Node* found = findTextureSample(lnk.StartPin);
+                                                        if (found) return found;
+                                                    }
+                                            }
+                                        return nullptr;
+                                    };
+
+                                Node* outputNode = nullptr;
+                                for (auto& n : graph.GetNodes())
+                                    if (n->Name == "Material Output") { outputNode = n.get(); break; }
+
+                                if (outputNode)
+                                {
+                                    int slot = 0;
+                                    std::unordered_set<int> processed;
+
+                                    for (auto& inputPin : outputNode->Inputs)
+                                    {
+                                        for (auto& lnk : graph.GetLinks())
+                                        {
+                                            if (lnk.EndPin != inputPin.ID) continue;
+                                            Node* texNode = findTextureSample(lnk.StartPin);
+                                            if (texNode && !processed.count(texNode->ID.Get())
+                                                && texNode->Value.TextureVal)
+                                            {
+                                                if (slot == 0)
+                                                {
+                                                    material->AlbedoMap = texNode->Value.TextureVal;
+                                                    material->AlbedoUUID = texNode->Value.TextureUUID;
+                                                }
+                                                processed.insert(texNode->ID.Get());
+                                                ++slot;
+                                            }
+                                        }
                                     }
-                                    ++slot;
                                 }
                             }
                         }

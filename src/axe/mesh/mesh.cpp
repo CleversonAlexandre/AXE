@@ -17,9 +17,11 @@ namespace axe
 
 		BufferLayout layout =
 		{
-			{axe::ShaderDataType::Float3, sizeof(float) * 3, false},
-			{axe::ShaderDataType::Float3, sizeof(float) * 3, false},
-			{axe::ShaderDataType::Float2, sizeof(float) * 2, false}
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false}, //Position
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false}, //Normal
+			{axe::ShaderDataType::Float2, sizeof(float) * 2, false}, //TextCoord
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false}, // Tangent   ← location 3
+			{axe::ShaderDataType::Float3, sizeof(float) * 3, false}  // Bitangent ← location 4	
 		};
 
 		m_VertexArray->AddVertexBuffer(m_VertexBuffer, layout);

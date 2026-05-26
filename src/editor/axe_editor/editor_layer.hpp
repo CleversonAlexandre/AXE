@@ -153,40 +153,7 @@ namespace axe
 					}
 				});
 
-			//auto instantiate = [this](const std::string& uuid)
-			//	{
-			//		auto& registry = m_Scene->GetRegistry();
-
-			//		if (MeshFactory::IsPrimitive(uuid))
-			//		{
-			//			auto mesh = MeshFactory::CreateByUUID(uuid);
-			//			if (!mesh) return;
-
-			//			auto entity = m_Scene->CreateEntity(AssetDatabase::Get().GetByUUID(uuid)->Name);
-			//			auto& mc = registry.emplace<MeshComponent>(entity);
-			//			mc.Data = mesh;
-			//			mc.AssetUUID = uuid;
-			//			m_Context.Select(entity);
-			//		}
-			//		else
-			//		{
-			//			const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-			//			if (!record) return;
-
-			//			LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-			//			if (!asset.MeshData) return;
-
-			//			auto entity = m_Scene->CreateEntity(record->Name);
-			//			auto& mc = registry.emplace<MeshComponent>(entity);
-			//			mc.Data = asset.MeshData;
-			//			mc.AssetUUID = uuid;
-
-			//			if (asset.MaterialData)
-			//				registry.emplace<MaterialComponent>(entity, asset.MaterialData);
-
-			//			m_Context.Select(entity);
-			//		}
-			//	};
+			
 
 			auto instantiate = [this](const std::string& uuid)
 				{
@@ -379,10 +346,6 @@ namespace axe
 					m_Context.Select(entity);
 				});
 
-			
-
-			
-
 			// 4. Inicializa o viewport
 			ViewportWindow* viewport = m_EditorUI->GetViewport();
 			if (viewport)
@@ -433,6 +396,7 @@ namespace axe
 			// 5. Inicializa o renderer
 			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
 			m_ViewportRenderer->Initialize();
+			viewport->SetViewportRenderer(m_ViewportRenderer.get());
 			m_ViewportRenderer->SetScene(m_Scene.get());
 			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
 			m_ViewportRenderer->SetEnvironment(&m_Environment);
@@ -500,19 +464,21 @@ namespace axe
 				else
 				{
 					std::string defaultScene = "resources/default_scene/main.axescene";
-					AXE_EDITOR_INFO("Procurando cena padrão em: {}",
-						std::filesystem::absolute(defaultScene).string());
-
+				
 					if (std::filesystem::exists(defaultScene))
 					{
-						AXE_EDITOR_INFO("Carregando cena padrão do engine.");
+						
 						SceneSerializer::Deserialize(defaultScene, *m_Scene);
 					}
 					else
 					{
-						AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
+						
 						m_Scene->CreateLight("Directional Light");
-						AXE_EDITOR_INFO("Cena vazia criada.");
+
+						auto ppEntity = m_Scene->CreateEntity("Post Process Volume");
+						auto& registry = m_Scene->GetRegistry();
+						registry.emplace<PostProcessComponent>(ppEntity);
+						
 					}
 				}
 			}

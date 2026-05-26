@@ -271,7 +271,7 @@ namespace axe
                 }
 
                 // Desenha preview + nome como selectable
-                ImGui::PushID(uuid.c_str());
+                ImGui::PushID(assetUUID.c_str());
 
                 // Preview
                 if (preview && preview->IsLoaded())

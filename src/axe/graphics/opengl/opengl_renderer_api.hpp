@@ -23,6 +23,8 @@ namespace axe
         void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, uint32_t vertexCount) override;
 
         void SetPolygonMode(PolygonMode mode) override;
+
+        void BindFramebuffer(uint32_t id) override;
     };
 
 } // namespace axe

@@ -59,6 +59,11 @@ namespace axe
         
 
         static void SetPolygonMode(RendererAPI::PolygonMode mode);
+
+        static void BindFramebuffer(uint32_t id)
+        {
+            s_RendererAPI->BindFramebuffer(id);
+        }
         
 
     private:

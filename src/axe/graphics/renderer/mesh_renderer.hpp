@@ -4,7 +4,7 @@
 #include <glm/glm.hpp>
 #include "axe/lighting/directional_light.hpp"
 
-
+#include "axe/scene/scene_environment.hpp"
 
 namespace axe
 {
@@ -23,6 +23,9 @@ namespace axe
 																const DirectionalLight* light = nullptr);		
 		void End();
 		std::shared_ptr<Shader> GetDefaultShader() const { return m_Shader; }
+		void SetEnvironment(const SceneEnvironment* env) { m_Environment = env; }
+		void SetShadowMap(uint32_t depthMapID, const glm::mat4& lightSpaceMatrix);
+		
 	private:
 		std::shared_ptr<Shader> m_Shader;
 		std::shared_ptr<Pipeline> m_Pipeline;
@@ -30,5 +33,10 @@ namespace axe
 
 		glm::mat4 m_ViewProjection{ 1.0f };
 		glm::vec3 m_CameraPosition{ 0.0f };
+
+		const SceneEnvironment* m_Environment = nullptr;
+
+		uint32_t  m_ShadowMapID = 0;
+		glm::mat4 m_LightSpaceMatrix{ 1.0f };
 	};
 }

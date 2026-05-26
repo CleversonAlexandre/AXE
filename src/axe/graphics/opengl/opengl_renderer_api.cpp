@@ -80,4 +80,9 @@ namespace axe
 	{
 		glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
 	}
+
+	void OpenGLRendererAPI::BindFramebuffer(uint32_t id)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, id);
+	}
 }

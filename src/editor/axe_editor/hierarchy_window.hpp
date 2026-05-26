@@ -14,6 +14,7 @@ namespace axe
         HierarchyWindow();
         void SetContext(EditorContext* context);
         void Draw();
+        void CreatePostProcess();
 
         // Criação
         void CreateObject(const std::string& name, const std::string& primitiveUUID);

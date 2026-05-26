@@ -78,6 +78,16 @@ namespace axe
 
         void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
         MaterialThumbnailRenderer* m_ThumbnailRenderer = nullptr;
+
+        void ReloadGraph()
+        {
+            if (!m_Asset) return;
+            m_Graph = std::make_unique<MaterialGraph>();
+            LoadGraph();
+        }
+        static void MarkNeedsReload() { s_NeedsReload = true; }
+        static bool s_NeedsReload;
+
     private:
         std::unique_ptr<Scene> m_PreviewScene;
         std::unique_ptr<ViewportRenderer> m_PreviewRenderer;
@@ -159,6 +169,8 @@ namespace axe
         CommandHistory m_History;
         
         std::unordered_map<int, Link> m_OriginalPinLinks;
+
+        
     };
 
 } // namespace axe

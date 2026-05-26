@@ -14,6 +14,8 @@
 #include "axe/graphics/game_camera.hpp"
 #include "skybox_renderer.hpp"
 #include "axe/scene/scene_environment.hpp"
+#include "axe/graphics/renderer/post_process_pass.hpp"
+#include "axe/graphics/renderer/ssao_pass.hpp"
 
 namespace axe
 {
@@ -51,6 +53,7 @@ namespace axe
 
 		void SetEnvironment(SceneEnvironment* env) { m_Environment = env; }
 		void DrawGrid();
+		void Resize(uint32_t width, uint32_t height);
 
 		SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
 
@@ -71,6 +74,10 @@ namespace axe
 
 		SkyboxRenderer   m_SkyboxRenderer;
 		SceneEnvironment* m_Environment = nullptr;
+
+		std::shared_ptr<PostProcessPass>  m_PostProcess;
+		std::shared_ptr<Framebuffer>      m_HDRFramebuffer;
+		PostProcessSettings               m_PostProcessSettings;
 	};
 
 } // namespace axe

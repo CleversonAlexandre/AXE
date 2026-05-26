@@ -4,15 +4,19 @@
 
 namespace axe
 {
-	struct AXE_API DirectionalLight
-	{
-		glm::vec3 Direction { -0.3f, -1.0f, -0.3f }; // aponta para baixo por padrão
-		glm::vec3 Color		{ 1.0f, 1.0f, 1.0f }; //branco
+    struct AXE_API DirectionalLight
+    {
+        glm::vec3 Direction{ -0.3f, -1.0f, -0.3f };
+        glm::vec3 Color{ 1.0f,  1.0f,  1.0f };
 
-		float Intensity = 1.0f;
-		float AmbientStrength = 0.15f;
-		float SpecularStrength = 0.5f;
-		float Shininess = 32.0f;
-	};
-}//namespace axe
+        float Intensity = 1.0f;
+        float AmbientStrength = 0.15f;
+        float SpecularStrength = 0.5f;
+        float Shininess = 32.0f;
 
+        // Shadow mapping
+        bool  CastShadows = true;
+        float ShadowDistance = 20.0f; // tamanho do frustum ortográfico
+        float ShadowBias = 0.005f;
+    };
+}

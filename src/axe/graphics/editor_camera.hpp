@@ -40,6 +40,8 @@ namespace axe
 
 	
 		glm::mat4 m_ViewMatrix{ 1.0f };
+		float GetViewportWidth()  const { return m_ViewportWidth; }
+		float GetViewportHeight() const { return m_ViewportHeight; }
 
 	private:
 		
@@ -60,6 +62,7 @@ namespace axe
 		float RotationSpeed() const;
 		float ZoomSpeed() const;
 
+		
 		
 
 	private:

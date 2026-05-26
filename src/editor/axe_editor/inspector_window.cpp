@@ -11,9 +11,112 @@
 #include "axe/scene/scene_serializer.hpp"
 
 #include "asset/asset_picker.hpp"
+#include "axe/material/material_compiler.hpp"
+#include "material_editor_window.hpp"
+
 
 namespace axe
 {
+	static std::unique_ptr<MaterialGraph> s_CachedGraph;
+	static std::string s_CachedGraphUUID;	
+	static bool s_GraphCacheDirty = false;
+
+	static void InvalidateGraphCache() { s_CachedGraphUUID = ""; }
+
+	static void SaveCachedGraph(const std::string& assetUUID,
+		entt::registry* registry = nullptr,
+		entt::entity entity = entt::null)
+	{
+		if (!s_CachedGraph) return;
+		const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+		if (!record) return;
+
+		auto graphPath = record->FilePath;
+		graphPath.replace_extension(".axegraph");
+
+		// Lê as posições do arquivo original
+		nlohmann::json originalJ;
+		{
+			std::ifstream fileIn(graphPath);
+			if (fileIn.is_open())
+				try { originalJ = nlohmann::json::parse(fileIn); }
+			catch (...) {}
+		}
+
+		// Serializa o grafo atual
+		nlohmann::json newJ = s_CachedGraph->Serialize();
+
+		// Restaura as posições do arquivo original
+		if (originalJ.contains("nodes") && newJ.contains("nodes"))
+		{
+			auto& origNodes = originalJ["nodes"];
+			auto& newNodes = newJ["nodes"];
+
+			for (int i = 0; i < (int)newNodes.size() && i < (int)origNodes.size(); i++)
+			{
+				if (origNodes[i].contains("pos_x"))
+				{
+					newNodes[i]["pos_x"] = origNodes[i]["pos_x"];
+					newNodes[i]["pos_y"] = origNodes[i]["pos_y"];
+				}
+			}
+		}
+
+		// Salva
+		std::ofstream fileOut(graphPath);
+		if (fileOut.is_open())
+			fileOut << newJ.dump(4);
+
+		// Recompila e aplica
+		auto result = MaterialCompiler::Compile(s_CachedGraph.get());
+		if (result.Success)
+		{
+			try
+			{
+				auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+				if (shader && registry && registry->valid(entity))
+				{
+					auto* mc = registry->try_get<MaterialComponent>(entity);
+					if (mc && mc->Data)
+						mc->Data->SetShader(shader);
+				}
+			}
+			catch (...) {}
+		}
+
+		MaterialEditorWindow::MarkNeedsReload();
+	}
+
+	static std::string FindOutputPinLabel(MaterialGraph* graph, Node* sourceNode)
+	{
+		// Para cada output pin do sourceNode
+		for (auto& outPin : sourceNode->Outputs)
+		{
+			// Percorre todos os links
+			for (auto& link : graph->GetLinks())
+			{
+				if (link.StartPin != outPin.ID) continue;
+
+				// Encontra o node destino
+				for (auto& destNode : graph->GetNodes())
+				{
+					for (auto& inPin : destNode->Inputs)
+					{
+						if (inPin.ID != link.EndPin) continue;
+
+						// Se o destino é o Material Output — retorna o nome do pin
+						if (destNode->Name == "Material Output")
+							return inPin.Name;
+
+						// Senão, continua rastreando recursivamente
+						std::string label = FindOutputPinLabel(graph, destNode.get());
+						if (!label.empty()) return label;
+					}
+				}
+			}
+		}
+		return ""; // não conectado ao output
+	}
 
 	void InspectorWindow::SetContext(EditorContext* context)
 	{
@@ -60,18 +163,24 @@ namespace axe
 			if (light->Data)
 				DrawLight(*light->Data);
 		}
+		else if (auto* pp = registry.try_get<PostProcessComponent>(entity))
+		{
+			DrawPostProcess(*pp);
+		}
 		// Material
 		else if (registry.any_of<MaterialComponent>(entity))
 		{
 			DrawMaterial(entity); // ← passa entity, não o material
 		}
-		else if (!registry.any_of<LightComponent>(entity))
+		else if (!registry.any_of<LightComponent>(entity) &&
+			     !registry.any_of<PostProcessComponent>(entity))
 		{
 			ImGui::Separator();
 			// Objeto sem material — mostra slot vazio para arrastar
 			DrawMaterial(entity);
 		}
 
+		
 		ImGui::End();
 	}
 
@@ -238,7 +347,12 @@ namespace axe
 		ImGui::Spacing();
 
 		if (mc && mc->Data)
-			DrawMaterialParams(*mc->Data);
+		{
+			if (!mc->MaterialAssetUUID.empty())
+				DrawMaterialGraphParams(mc->MaterialAssetUUID, registry, entity);
+			else
+				DrawMaterialParams(*mc->Data); // fallback para materiais sem grafo
+		}
 	}
 	void InspectorWindow::DrawMaterialParams(Material& mat)
 	{
@@ -300,4 +414,158 @@ namespace axe
 			});
 	}
 
+	void InspectorWindow::DrawMaterialGraphParams(const std::string& assetUUID,
+		entt::registry& registry,
+		entt::entity entity)
+	{
+		if (s_GraphCacheDirty)
+		{
+			s_CachedGraphUUID = ""; 
+			s_GraphCacheDirty = false;
+		}
+
+		// Carrega o grafo se mudou o UUID
+		if (assetUUID.empty()) return;
+
+		// Carrega o grafo se mudou o UUID
+		if (s_CachedGraphUUID != assetUUID)
+		{
+			s_CachedGraphUUID = assetUUID;
+			s_CachedGraph.reset();
+
+			const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+			if (!record) return;
+
+			auto graphPath = record->FilePath;
+			graphPath.replace_extension(".axegraph");
+			if (!std::filesystem::exists(graphPath)) return;
+
+			std::ifstream file(graphPath);
+			try
+			{
+				nlohmann::json j = nlohmann::json::parse(file);
+				s_CachedGraph = std::make_unique<MaterialGraph>();
+				s_CachedGraph->Deserialize(j);
+				s_CachedGraph->BuildNodes();
+			}
+			catch (...)
+			{
+				s_CachedGraph.reset();
+				return;
+			}
+		}
+
+		if (!s_CachedGraph) return;
+
+		if (s_CachedGraph->GetNodes().empty()) return;
+
+		// Encontra o Material Output node
+		Node* outputNode = nullptr;
+		for (auto& node : s_CachedGraph->GetNodes())
+			if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+		if (!outputNode) return;
+
+		ImGui::Separator();
+		ImGui::Text("Parâmetros:");
+		ImGui::Spacing();
+
+		bool anyEditable = false;
+
+		// Percorre TODOS os nodes do grafo — não só os conectados ao output
+		// Expõe apenas Float, Color e Texture Sample
+		for (auto& node : s_CachedGraph->GetNodes())
+		{
+			if (node->Name == "Material Output") continue;
+			if (node->Type == NodeType::Comment) continue;
+
+			ImGui::PushID(node->ID.Get());
+
+			if (node->Name == "Float" && node->IsConstant)
+			{
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
+				{
+					anyEditable = true;
+					std::string fullLabel = pinLabel + " [Float]";
+					std::string hiddenId = "##float_" + std::to_string(node->ID.Get());
+					ImGui::TextDisabled("%s", fullLabel.c_str());
+					ImGui::SetNextItemWidth(-1);
+					if (ImGui::DragFloat(hiddenId.c_str(),
+						&node->Value.FloatVal, 0.01f, 0.0f, 1.0f))
+						SaveCachedGraph(assetUUID, &registry, entity);
+				}
+			}
+			else if (node->Name == "Color" && node->IsConstant)
+			{
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
+				{
+					anyEditable = true;
+					std::string fullLabel = pinLabel + " [Color]";
+					std::string hiddenId = "##color_" + std::to_string(node->ID.Get());
+					ImGui::TextDisabled("%s", fullLabel.c_str());
+					ImGui::SetNextItemWidth(-1);
+					if (ImGui::ColorEdit4(hiddenId.c_str(), &node->Value.Vec4Val.x))
+						SaveCachedGraph(assetUUID, &registry, entity);
+				}
+			}
+			else if (node->Name == "Texture Sample")
+			{
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
+				{
+					anyEditable = true;
+					std::string fullLabel = pinLabel + " [Texture]";
+					std::string pickerId = pinLabel + "_" + std::to_string(node->ID.Get());
+					ImGui::TextDisabled("%s", fullLabel.c_str());
+					AssetPicker::Draw(pickerId.c_str(),
+						node->Value.TextureUUID,
+						{ AssetType::Texture },
+						[&](const AssetRecord& record)
+						{
+							node->Value.TextureVal = Texture2D::Create(record.FilePath.string());
+							node->Value.TextureUUID = record.UUID;
+							SaveCachedGraph(assetUUID, &registry, entity);
+						});
+				}
+			}
+
+			ImGui::PopID(); 
+		}
+
+		if (!anyEditable)
+		{
+			ImGui::TextDisabled("Nenhum parâmetro editável.");
+			ImGui::TextDisabled("Adicione nodes Float, Color ou");
+			ImGui::TextDisabled("Texture Sample no graph.");
+		}
+	}
+
+	void InspectorWindow::MarkGraphCacheDirty()
+	{
+		s_GraphCacheDirty = true;
+	}
+
+	void InspectorWindow::DrawPostProcess(PostProcessComponent& pp)
+	{
+		ImGui::Separator();
+		ImGui::Text("Post Process Volume");
+
+		ImGui::Checkbox("Global", &pp.IsGlobal);
+		ImGui::Separator();
+
+		ImGui::Text("Tone Mapping");
+		ImGui::DragFloat("Exposure", &pp.Settings.Exposure, 0.01f, 0.1f, 10.0f);
+
+		ImGui::Separator();
+		ImGui::Text("Bloom");
+		ImGui::Checkbox("Bloom Ativo", &pp.Settings.BloomEnabled);
+		if (pp.Settings.BloomEnabled)
+		{
+			ImGui::DragFloat("Threshold", &pp.Settings.BloomThreshold, 0.01f, 0.0f, 5.0f);
+			ImGui::DragFloat("Intensidade", &pp.Settings.BloomIntensity, 0.01f, 0.0f, 2.0f);
+			ImGui::SliderInt("Blur Passes", &pp.Settings.BloomBlurPasses, 1, 10);
+		}
+	}
 } // namespace axe
