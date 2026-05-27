@@ -6,6 +6,10 @@
 
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/render_command.hpp"
+
+#include <glad/glad.h>
+#include "axe/graphics/renderer/skybox_renderer.hpp"
+
 namespace axe
 {
 
@@ -18,6 +22,7 @@ namespace axe
 		const glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
 		const glm::mat4 projection = camera.GetProjectionMatrix();
 		const glm::vec3 cameraPosition = camera.GetPosition();
+		const glm::mat4 view = camera.GetViewMatrix();
 		uint32_t width = (uint32_t)camera.GetViewportWidth();
 		uint32_t height = (uint32_t)camera.GetViewportHeight();
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
@@ -31,13 +36,16 @@ namespace axe
 
 		RenderShadowPass(scene, light);
 
-		if (m_DeferredEnabled && m_TargetFBO != 0)
+	
+
+		if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
 		{
-			RenderDeferredScene(scene, viewProjection, projection,
+			RenderDeferredScene(scene, viewProjection, view, projection,
 				cameraPosition, selectedEntity, light, width, height);
 		}
 		else
 		{
+	
 			// ✅ Forward — exatamente como estava antes
 			m_MeshRenderer.SetEnvironment(m_Environment);
 			if (m_ShadowPass)
@@ -226,32 +234,17 @@ namespace axe
 
 	void SceneRenderer::RenderDeferredScene(const Scene& scene,
 		const glm::mat4& viewProjection,
+		const glm::mat4& view,
 		const glm::mat4& projection,
 		const glm::vec3& cameraPosition,
 		entt::entity selectedEntity,
 		const DirectionalLight* light,
 		uint32_t width, uint32_t height)
-	{
-		// Inicializa passes se necessário
-		if (!m_GeometryPass)
-		{
-			m_GeometryPass = GeometryPass::Create();
-			m_GeometryPass->Initialize();
-		}
-		if (!m_SSAOPass)
-		{
-			m_SSAOPass = SSAOPass::Create();
-			m_SSAOPass->Initialize(width, height);
-		}
-		if (!m_LightingPass)
-		{
-			m_LightingPass = LightingPass::Create();
-			m_LightingPass->Initialize();
-		}
-		if (!m_GBuffer.IsInitialized())
-			m_GBuffer.Initialize(width, height);
+	{		
 
-		// Resize
+		
+
+		// --- Resize ---
 		if (width != m_Width || height != m_Height)
 		{
 			m_Width = width;
@@ -260,35 +253,85 @@ namespace axe
 			if (m_SSAOPass) m_SSAOPass->Resize(width, height);
 		}
 
-		// 1. Geometry pass
-		m_GeometryPass->Begin(m_GBuffer, viewProjection, cameraPosition);
 		auto roots = const_cast<Scene&>(scene).GetRootEntities();
+
+		// --- 1. Shadow Pass ---
+		// (já chamado antes em RenderScene — não duplica)
+
+		// --- 2. Geometry Pass → G-Buffer ---
+		
+		m_GeometryPass->Begin(m_GBuffer, viewProjection, cameraPosition);
+		
+		int meshCount = 0;
 		for (auto entity : roots)
+		{
+			auto& registry = const_cast<Scene&>(scene).GetRegistry();
+			if (registry.try_get<MeshComponent>(entity))
+				meshCount++;
 			GeometryPassEntity(scene, entity);
-		m_GeometryPass->End();
+		}		
+		m_GeometryPass->End();		
 
-		// 2. SSAO
-		if (m_SSAOSettings.Enabled)
-			m_SSAOPass->Execute(m_GBuffer, projection, m_SSAOSettings);
+		// --- 3. SSAO Pass ---
+		uint32_t ssaoID = 0;
+		if (m_SSAOSettings.Enabled && m_SSAOPass && m_SSAOPass->IsInitialized())
+		{
+			m_SSAOPass->Execute(m_GBuffer, projection, view, m_SSAOSettings);
+			ssaoID = m_SSAOPass->GetOcclusionTextureID();
+		}
 
-		// 3. Lighting — escreve no m_TargetFBO (HDR)
+		// --- 4. Lighting Pass → HDR Framebuffer ---
 		RenderCommand::BindFramebuffer(m_TargetFBO);
 		RenderCommand::SetViewport(0, 0, width, height);
 
-		uint32_t ssaoID = m_SSAOSettings.Enabled ? m_SSAOPass->GetOcclusionTextureID() : 0;
+		// Copia depth do G-Buffer para o HDR
+		// para que o forward pass respeite a profundidade
+		//RenderCommand::BlitDepth(m_GBuffer.GetFramebufferID(), m_TargetFBO, width, height);
+
 		uint32_t shadowID = m_ShadowPass ? m_ShadowPass->GetDepthMapID() : 0;
 		glm::mat4 lsm = m_ShadowPass ? m_ShadowPass->GetLightSpaceMatrix() : glm::mat4(1.0f);
 
 		m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm,
 			cameraPosition, light, m_Environment);
 
-		// 4. Forward por cima — cubo renderer e line renderer
-		m_CubeRenderer.Begin(viewProjection);
-		m_LineRenderer.Begin(viewProjection);
-		for (auto entity : roots)
-			RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
-		m_LineRenderer.End();
-		m_CubeRenderer.End();
+		// --- 5. Skybox --- 
+		// Renderizado após o lighting com depth do G-Buffer já copiado
+		// GL_LEQUAL garante que o skybox aparece atrás de tudo
+		if (m_SkyboxRenderer)
+			m_SkyboxRenderer->RenderDeferred(m_SkyboxView, m_SkyboxProjection);
+		//	m_SkyboxRenderer->Render(m_SkyboxView, m_SkyboxProjection);
+
+		// --- 6. Forward Pass ---
+		// CubeRenderer (objetos sem mesh), LineRenderer (bounding boxes, seleção)
+		RenderCommand::SetDepthTest(true);
+		RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
+
+		//m_CubeRenderer.Begin(viewProjection);
+		//m_LineRenderer.Begin(viewProjection);
+		//for (auto entity : roots)
+		//	RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
+		//m_LineRenderer.End();
+		//m_CubeRenderer.End();
+
+		// --- Restaura estado ---
+		RenderCommand::ResetState();
+	}
+
+	void SceneRenderer::InitializeDeferredPasses(uint32_t width, uint32_t height)
+	{
+		m_GeometryPass = GeometryPass::Create();
+		m_GeometryPass->Initialize();
+
+		m_LightingPass = LightingPass::Create();
+		m_LightingPass->Initialize();
+
+		m_SSAOPass = SSAOPass::Create();
+		m_SSAOPass->Initialize(width, height);
+
+		m_GBuffer.Initialize(width, height);
+
+		m_Width = width;
+		m_Height = height;
 	}
 
 } // namespace axe

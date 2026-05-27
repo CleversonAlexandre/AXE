@@ -9,16 +9,20 @@ namespace axe
         spec.Width = width;
         spec.Height = height;
         spec.Attachments = {
-            FramebufferTextureFormat::RGB16F,          // 0 — Posição
-            FramebufferTextureFormat::RGB16F,          // 1 — Normal
-            FramebufferTextureFormat::RGBA8,           // 2 — Albedo
-            FramebufferTextureFormat::DEPTH32F,        // Depth como textura
+            FramebufferTextureFormat::RGB16F,   // 0 — Posição  (view space)
+            FramebufferTextureFormat::RGB16F,   // 1 — Normal   (view space)
+            FramebufferTextureFormat::RGBA8,    // 2 — Albedo + Metallic
+            FramebufferTextureFormat::RGBA8,    // 3 — PBR (roughness, ao)
+            FramebufferTextureFormat::DEPTH32F, // Depth
         };
-
         m_Framebuffer = Framebuffer::Create(spec);
         m_Initialized = true;
-
         AXE_CORE_INFO("GBuffer initialized ({}x{})", width, height);
+    }
+
+    uint32_t GBuffer::GetFramebufferID() const
+    {
+        return m_Framebuffer ? m_Framebuffer->GetRendererID() : 0;
     }
 
     void GBuffer::Resize(uint32_t width, uint32_t height)
@@ -36,6 +40,7 @@ namespace axe
     uint32_t GBuffer::GetNormalID()   const { return m_Framebuffer->GetColorAttachmentRendererID(1); }
     uint32_t GBuffer::GetAlbedoID()   const { return m_Framebuffer->GetColorAttachmentRendererID(2); }
     uint32_t GBuffer::GetDepthID()    const { return m_Framebuffer->GetDepthAttachmentRendererID(); }
+    uint32_t GBuffer::GetPBRID() const { return m_Framebuffer->GetColorAttachmentRendererID(3); }
 
     uint32_t GBuffer::GetWidth()  const { return m_Framebuffer ? m_Framebuffer->GetSpecification().Width : 0; }
     uint32_t GBuffer::GetHeight() const { return m_Framebuffer ? m_Framebuffer->GetSpecification().Height : 0; }

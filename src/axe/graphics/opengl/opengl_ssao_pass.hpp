@@ -15,7 +15,8 @@ namespace axe
         void Resize(uint32_t width, uint32_t height)     override;
         void Execute(const GBuffer& gbuffer,
             const glm::mat4& projection,
-            const SSAOSettings& settings)        override;
+            const glm::mat4& view,
+            const SSAOSettings& settings) override;
 
         uint32_t GetOcclusionTextureID() const override { return m_OcclusionTex; }
         bool     IsInitialized()         const override { return m_Initialized; }

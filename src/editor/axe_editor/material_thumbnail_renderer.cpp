@@ -20,6 +20,7 @@ namespace axe
     {
         m_Renderer = std::make_unique<ViewportRenderer>();
         m_Renderer->Initialize();
+        m_Renderer->GetSceneRenderer()->SetDeferredSupported(false);
         m_Renderer->SetPickingEnabled(false);
 
         m_Scene = std::make_unique<Scene>();

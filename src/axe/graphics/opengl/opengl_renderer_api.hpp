@@ -25,6 +25,9 @@ namespace axe
         void SetPolygonMode(PolygonMode mode) override;
 
         void BindFramebuffer(uint32_t id) override;
+        void ResetState() override;
+        void BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
+            uint32_t width, uint32_t height) override;
     };
 
 } // namespace axe

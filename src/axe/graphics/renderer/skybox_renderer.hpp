@@ -23,6 +23,7 @@ namespace axe
         bool HasCubemap() const { return m_Cubemap && m_Cubemap->IsLoaded(); }
 
         void Render(const glm::mat4& view, const glm::mat4& projection);
+        void RenderDeferred(const glm::mat4& view, const glm::mat4& projection);
 
     private:
         std::shared_ptr<Shader>         m_Shader;

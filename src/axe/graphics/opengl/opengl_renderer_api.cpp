@@ -85,4 +85,24 @@ namespace axe
 	{
 		glBindFramebuffer(GL_FRAMEBUFFER, id);
 	}
+
+	void OpenGLRendererAPI::ResetState()
+	{
+		glBindVertexArray(0);
+		glUseProgram(0);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glEnable(GL_DEPTH_TEST);
+		glDepthMask(GL_TRUE);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	}
+
+	void OpenGLRendererAPI::BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
+		uint32_t width, uint32_t height)
+	{
+		glBlitNamedFramebuffer(srcFBO, dstFBO,
+			0, 0, width, height,
+			0, 0, width, height,
+			GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	}
 }

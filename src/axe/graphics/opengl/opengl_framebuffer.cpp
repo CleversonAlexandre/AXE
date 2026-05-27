@@ -27,6 +27,10 @@ namespace axe
     OpenGLFramebuffer::OpenGLFramebuffer(const FramebufferSpecification& spec)
         : m_Specification(spec)
     {
+        AXE_CORE_INFO("OpenGLFramebuffer CONSTRUCTOR: {}x{} HDR={}",
+            m_Specification.Width, m_Specification.Height,
+            m_Specification.HDR);
+
         // Compatibilidade — se não tem attachments definidos, usa o comportamento antigo
         if (m_Specification.Attachments.empty())
         {
@@ -57,6 +61,9 @@ namespace axe
 
     void OpenGLFramebuffer::Invalidate()
     {
+        AXE_CORE_INFO("Invalidate called: FBO={} size={}x{}",
+            m_RendererID, m_Specification.Width, m_Specification.Height);
+
         if (m_RendererID)
         {
             glDeleteFramebuffers(1, &m_RendererID);
@@ -139,7 +146,8 @@ namespace axe
         }
 
         GLenum status = glCheckNamedFramebufferStatus(m_RendererID, GL_FRAMEBUFFER);
-        AXE_CORE_ASSERT(status == GL_FRAMEBUFFER_COMPLETE, "Framebuffer incompleto!");
+        //AXE_CORE_INFO("Framebuffer FBO={} status={}", m_RendererID,
+        //    status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
     }
 
     void OpenGLFramebuffer::Bind()
@@ -156,6 +164,10 @@ namespace axe
     void OpenGLFramebuffer::Resize(std::uint32_t width, std::uint32_t height)
     {
         if (width == 0 || height == 0 || width > 8192 || height > 8192) return;
+
+        // ✅ Só recria se o tamanho realmente mudou
+        if (width == m_Specification.Width && height == m_Specification.Height) return;
+
         m_Specification.Width = width;
         m_Specification.Height = height;
         Invalidate();

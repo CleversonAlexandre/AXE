@@ -11,7 +11,7 @@ namespace axe
         void Initialize()                                    override;
         void Begin(GBuffer& gbuffer,
             const glm::mat4& viewProjection,
-            const glm::vec3& cameraPosition)          override;
+            const glm::vec3& cameraPosition) override;
         void DrawMesh(const Mesh& mesh,
             const glm::mat4& model,
             const Material* material = nullptr)     override;

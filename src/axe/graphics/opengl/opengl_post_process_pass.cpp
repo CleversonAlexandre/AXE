@@ -172,6 +172,8 @@ namespace axe
     void OpenGLPostProcessPass::Execute(uint32_t hdrColorID,
         const PostProcessSettings& settings)
     {
+       
+
         glDisable(GL_DEPTH_TEST);
         glBindVertexArray(m_QuadVAO);
 
@@ -179,6 +181,8 @@ namespace axe
 
         GLint destFBO = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destFBO);
+
+
 
         // --- Bloom ---
         if (settings.BloomEnabled)

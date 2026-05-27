@@ -13,6 +13,7 @@
 #include <entt/entt.hpp>
 #include "axe/lighting/directional_light.hpp"
 #include "axe/scene/scene_environment.hpp"
+#include "axe/graphics/renderer/skybox_renderer.hpp"
 
 namespace axe
 {
@@ -42,6 +43,19 @@ namespace axe
 
         MeshRenderer& GetMeshRenderer() { return m_MeshRenderer; }
 
+        void SetSkyboxRenderer(SkyboxRenderer* skybox,
+            const glm::mat4& view,
+            const glm::mat4& projection)
+        {
+            m_SkyboxRenderer = skybox;
+            m_SkyboxView = view;
+            m_SkyboxProjection = projection;
+        }
+
+        void InitializeDeferredPasses(uint32_t width, uint32_t height);
+
+        void SetDeferredSupported(bool supported) { m_DeferredSupported = supported; }
+
     private:
         // Forward — mantido intacto
         CubeRenderer m_CubeRenderer;
@@ -62,22 +76,29 @@ namespace axe
         uint32_t                m_Width = 0;
         uint32_t                m_Height = 0;
 
-        void RenderShadowPass(const Scene& scene, const DirectionalLight* light);
+        // Skybox — passado pelo ViewportRenderer
+        SkyboxRenderer* m_SkyboxRenderer = nullptr;
+        glm::mat4       m_SkyboxView{ 1.0f };
+        glm::mat4       m_SkyboxProjection{ 1.0f };
 
-        // Forward
+        void RenderShadowPass(const Scene& scene, const DirectionalLight* light);
         void RenderEntity(const Scene& scene, entt::entity entity,
             const glm::mat4& parentTransform,
             entt::entity selectedEntity,
             const DirectionalLight* light);
-
-        // Deferred
         void GeometryPassEntity(const Scene& scene, entt::entity entity);
         void RenderDeferredScene(const Scene& scene,
             const glm::mat4& viewProjection,
+            const glm::mat4& view,
             const glm::mat4& projection,
             const glm::vec3& cameraPosition,
             entt::entity selectedEntity,
             const DirectionalLight* light,
             uint32_t width, uint32_t height);
+
+        bool m_DeferredSupported = true;
+
     };
+
+    
 }

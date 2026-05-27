@@ -13,7 +13,7 @@ namespace axe
         float Radius = 0.5f;    // raio de amostragem
         float Bias = 0.025f;  // evita self-occlusion
         float Power = 2.0f;    // intensidade do efeito
-        bool  Enabled = true;
+        bool  Enabled = false;
     };
 
     class AXE_API SSAOPass
@@ -27,6 +27,7 @@ namespace axe
         // Recebe o G-Buffer, escreve textura de oclusão
         virtual void Execute(const GBuffer& gbuffer,
             const glm::mat4& projection,
+            const glm::mat4& view,     
             const SSAOSettings& settings) = 0;
 
         virtual uint32_t GetOcclusionTextureID() const = 0;

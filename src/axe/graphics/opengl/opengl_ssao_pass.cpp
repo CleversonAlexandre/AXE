@@ -21,55 +21,61 @@ namespace axe
     )";
 
     static const char* s_SSAOFrag = R"(
-        #version 460 core
-        out float FragColor;
-        in vec2 v_TexCoord;
+    #version 460 core
+    out float FragColor;
+    in vec2 v_TexCoord;
 
-        uniform sampler2D u_Position;   // world pos
-        uniform sampler2D u_Normal;     // world normal
-        uniform sampler2D u_Noise;      // 4x4 noise
-        uniform mat4      u_Projection;
-        uniform mat4      u_View;
-        uniform vec3      u_Samples[64];
-        uniform int       u_KernelSize;
-        uniform float     u_Radius;
-        uniform float     u_Bias;
-        uniform float     u_Power;
-        uniform vec2      u_NoiseScale;
+    uniform sampler2D u_Position;   // world space
+    uniform sampler2D u_Normal;     // world space
+    uniform sampler2D u_Noise;
+    uniform mat4      u_Projection;
+    uniform mat4      u_View;       // world → view para projetar amostras
+    uniform vec3      u_Samples[64];
+    uniform int       u_KernelSize;
+    uniform float     u_Radius;
+    uniform float     u_Bias;
+    uniform float     u_Power;
+    uniform vec2      u_NoiseScale;
 
-        void main()
+    void main()
+    {
+        vec3 fragPosWorld = texture(u_Position, v_TexCoord).rgb;
+        vec3 normal       = normalize(texture(u_Normal, v_TexCoord).rgb);
+        vec3 noise        = normalize(texture(u_Noise, v_TexCoord * u_NoiseScale).rgb);
+
+        // TBN em world space
+        vec3 tangent   = normalize(noise - normal * dot(noise, normal));
+        vec3 bitangent = cross(normal, tangent);
+        mat3 TBN       = mat3(tangent, bitangent, normal);
+
+        float occlusion = 0.0;
+        for (int i = 0; i < u_KernelSize; i++)
         {
-            vec3 fragPos = texture(u_Position, v_TexCoord).rgb;
-            vec3 normal  = normalize(texture(u_Normal,   v_TexCoord).rgb);
-            vec3 noise   = normalize(texture(u_Noise, v_TexCoord * u_NoiseScale).rgb);
+            // Amostra em world space
+            vec3 samplePos = fragPosWorld + TBN * u_Samples[i] * u_Radius;
 
-            // TBN para orientar o kernel à normal
-            vec3 tangent   = normalize(noise - normal * dot(noise, normal));
-            vec3 bitangent = cross(normal, tangent);
-            mat3 TBN       = mat3(tangent, bitangent, normal);
+            // Converte para clip space para fazer o lookup no G-Buffer
+            vec4 offset = u_Projection * u_View * vec4(samplePos, 1.0);
+            offset.xyz /= offset.w;
+            offset.xyz  = offset.xyz * 0.5 + 0.5;
 
-            float occlusion = 0.0;
-            for (int i = 0; i < u_KernelSize; i++)
-            {
-                // Amostra em world space
-                vec3 samplePos = TBN * u_Samples[i];
-                samplePos = fragPos + samplePos * u_Radius;
+            // Profundidade real da geometria naquele pixel
+            vec3 samplePosReal = texture(u_Position, offset.xy).rgb;
 
-                // Projeta para clip space
-                vec4 offset = u_Projection * u_View * vec4(samplePos, 1.0);
-                offset.xyz /= offset.w;
-                offset.xyz  = offset.xyz * 0.5 + 0.5;
+            // Compara distância à câmera
+            float sampleDepth = length((u_View * vec4(samplePosReal, 1.0)).xyz);
+            float fragDepth   = length((u_View * vec4(samplePos,     1.0)).xyz);
 
-                float sampleDepth = texture(u_Position, offset.xy).z;
-                float rangeCheck  = smoothstep(0.0, 1.0,
-                    u_Radius / abs(fragPos.z - sampleDepth));
-                occlusion += (sampleDepth >= samplePos.z + u_Bias ? 1.0 : 0.0) * rangeCheck;
-            }
+            float rangeCheck = smoothstep(0.0, 1.0,
+                u_Radius / abs(length((u_View * vec4(fragPosWorld, 1.0)).xyz) - sampleDepth));
 
-            occlusion = 1.0 - (occlusion / float(u_KernelSize));
-            FragColor = pow(occlusion, u_Power);
+            occlusion += (sampleDepth >= fragDepth + u_Bias ? 0.0 : 1.0) * rangeCheck;
         }
-    )";
+
+        occlusion = 1.0 - (occlusion / float(u_KernelSize));
+        FragColor = pow(occlusion, u_Power);
+    }
+)";
 
     static const char* s_BlurFrag = R"(
         #version 460 core
@@ -220,6 +226,7 @@ namespace axe
 
     void OpenGLSSAOPass::Execute(const GBuffer& gbuffer,
         const glm::mat4& projection,
+        const glm::mat4& view,
         const SSAOSettings& settings)
     {
         if (!settings.Enabled) return;
@@ -241,6 +248,7 @@ namespace axe
         m_SSAOShader->SetInt("u_Normal", 1);
         m_SSAOShader->SetInt("u_Noise", 2);
         m_SSAOShader->SetMat4("u_Projection", glm::value_ptr(projection));
+        m_SSAOShader->SetMat4("u_View", glm::value_ptr(view));
         m_SSAOShader->SetInt("u_KernelSize", settings.KernelSize);
         m_SSAOShader->SetFloat("u_Radius", settings.Radius);
         m_SSAOShader->SetFloat("u_Bias", settings.Bias);
@@ -267,6 +275,15 @@ namespace axe
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glBindVertexArray(0);
+        glUseProgram(0);
+
+        // Limpa texture units usadas
+        for (int i = 0; i < 3; i++)
+        {
+            glBindTextureUnit(i, 0);
+        }
     }
 }

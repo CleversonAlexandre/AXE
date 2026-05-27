@@ -31,6 +31,9 @@ namespace axe
 
         uint32_t GetWidth()  const;
         uint32_t GetHeight() const;
+        uint32_t GetPBRID() const; // attachment 3
+
+        uint32_t GetFramebufferID() const;
 
     private:
         std::shared_ptr<Framebuffer> m_Framebuffer;

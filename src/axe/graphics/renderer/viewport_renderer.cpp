@@ -33,17 +33,22 @@ namespace axe
 	{
 		m_SceneRenderer = std::make_unique<SceneRenderer>();
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
-
-		m_PostProcess = PostProcessPass::Create();
+		m_SkyboxRenderer.Initialize();
 
 		FramebufferSpecification hdrSpec;
 		hdrSpec.Width = 1280;
 		hdrSpec.Height = 720;
-		hdrSpec.HDR = true;
+		hdrSpec.Attachments = {
+			FramebufferTextureFormat::RGBA16F,
+			FramebufferTextureFormat::DEPTH32F,
+		};
 		m_HDRFramebuffer = Framebuffer::Create(hdrSpec);
 
-		m_SkyboxRenderer.Initialize();
+		m_PostProcess = PostProcessPass::Create();
+		m_PostProcess->Initialize(1280, 720);
 
+		// ✅ Inicializa SSAO aqui — contexto OpenGL garantido
+		m_SceneRenderer->InitializeDeferredPasses(1280, 720);
 	}
 
 
@@ -55,7 +60,7 @@ namespace axe
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
-		// --- Resize HDR se necessário ---
+		// 1. Resize HDR primeiro
 		auto& hdrSpec = m_HDRFramebuffer->GetSpecification();
 		if (hdrSpec.Width != width || hdrSpec.Height != height)
 			m_HDRFramebuffer->Resize(width, height);
@@ -65,9 +70,21 @@ namespace axe
 		else
 			m_PostProcess->Resize(width, height);
 
-		// ✅ Renderiza tudo no HDR framebuffer (antes era framebuffer direto)
-		m_HDRFramebuffer->Bind();
 
+
+		// ✅ 2. SetTarget APÓS resize — ID garantido correto
+		if (m_SceneRenderer)
+		{
+			if (m_Camera && width >= 256 && height >= 256)
+			{
+				m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
+				m_SceneRenderer->SetDeferredEnabled(false);
+				//AXE_CORE_INFO("SetTargetFramebuffer: {}", m_HDRFramebuffer->GetRendererID());
+			}			
+		}
+
+		// 3. Binda HDR e limpa
+		m_HDRFramebuffer->Bind();
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		glDepthMask(GL_TRUE);
 		RenderCommand::SetViewport(0, 0, width, height);
@@ -76,28 +93,6 @@ namespace axe
 
 		entt::entity selected = m_SelectedEntity ? *m_SelectedEntity : entt::null;
 
-		// Skybox
-		if (m_Environment && m_Environment->HasSkybox())
-		{
-			m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
-			if (m_GameCamera)
-			{
-				float aspect = (float)width / (float)height;
-				m_SkyboxRenderer.Render(
-					m_GameCamera->GetViewMatrix(),
-					m_GameCamera->GetProjectionMatrix(aspect));
-			}
-			else if (m_Camera)
-			{
-				m_SkyboxRenderer.Render(
-					m_Camera->GetViewMatrix(),
-					m_Camera->GetProjectionMatrix());
-			}
-		}
-
-		
-
-		// SceneRenderer
 		if (m_GameCamera)
 		{
 			float aspect = height > 0 ? (float)width / (float)height : 1.0f;
@@ -120,12 +115,20 @@ namespace axe
 			}
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
-		
-			//if (m_SceneRenderer)
-			//{
-			//	m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
-			//	m_SceneRenderer->SetDeferredEnabled(true);
-			//}
+
+			// Skybox
+			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox() && m_Camera)
+			{
+				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
+				m_SceneRenderer->SetSkyboxRenderer(
+					&m_SkyboxRenderer,
+					m_Camera->GetViewMatrix(),
+					m_Camera->GetProjectionMatrix());
+			}
+			else if (m_SceneRenderer)
+			{
+				m_SceneRenderer->SetSkyboxRenderer(nullptr, {}, {});
+			}
 
 			if (m_SceneRenderer && m_Scene && m_Camera)
 				m_SceneRenderer->RenderScene(*m_Scene, *m_Camera, selected);
@@ -154,11 +157,10 @@ namespace axe
 
 		m_HDRFramebuffer->Unbind();
 
-		// ✅ Post process: HDR → framebuffer final (que o ImGui lê)
+		// 4. Post process
 		framebuffer.Bind();
 		RenderCommand::SetViewport(0, 0, width, height);
 
-		// Lê PostProcessComponent da cena
 		if (m_Scene)
 		{
 			auto& registry = m_Scene->GetRegistry();
@@ -174,7 +176,6 @@ namespace axe
 			m_PostProcessSettings);
 		framebuffer.Unbind();
 	}
-
 	std::uint32_t ViewportRenderer::PickObject(float mouseX, float mouseY)
 	{
 		std::uint32_t height = m_PickingRenderer.GetFramebufferHeight();

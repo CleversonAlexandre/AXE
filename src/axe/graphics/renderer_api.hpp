@@ -43,6 +43,10 @@ namespace axe
         static std::unique_ptr<RendererAPI> Create();
 
         virtual void BindFramebuffer(uint32_t id) = 0;
+        virtual void ResetState() = 0;
+
+        virtual void BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
+            uint32_t width, uint32_t height) = 0;
 
     private:
         static API s_API;

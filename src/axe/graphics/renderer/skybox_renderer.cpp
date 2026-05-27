@@ -102,4 +102,25 @@ namespace axe
         RenderCommand::SetDepthTest(true);
     }
 
+    void SkyboxRenderer::RenderDeferred(const glm::mat4& view, const glm::mat4& projection)
+    {
+        if (!HasCubemap()) return;
+
+        // ✅ Depth test ON com LEQUAL — skybox aparece atrás da geometria
+        RenderCommand::SetDepthTest(true);
+        RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::LessEqual);
+        RenderCommand::SetCullFace(false);
+
+        m_Shader->Bind();
+        m_Shader->SetMat4("u_View", glm::value_ptr(view));
+        m_Shader->SetMat4("u_Projection", glm::value_ptr(projection));
+        m_Shader->SetInt("u_Skybox", 0);
+        m_Cubemap->Bind(0);
+        m_VertexArray->Bind();
+        RenderCommand::DrawIndexedCount(36);
+
+        RenderCommand::SetCullFace(true);
+        RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
+    }
+
 } // namespace axe
