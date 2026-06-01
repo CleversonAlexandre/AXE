@@ -288,8 +288,8 @@ namespace axe
             vec3 color = ambient + Lo;
 
             // Tone mapping + gamma
-          //  color = color / (color + vec3(1.0));
-          //  color = pow(color, vec3(1.0 / 2.2));
+            color = color / (color + vec3(1.0));
+            color = pow(color, vec3(1.0 / 2.2));
 
             FragColor = vec4(color, u_Color.a);
         }
@@ -321,6 +321,8 @@ namespace axe
     void MeshRenderer::DrawMesh(const Mesh& mesh, const glm::mat4& model,
         const Material* material, const DirectionalLight* light)
     {
+
+    
 
 
         const Material* mat = material ? material : m_DefaultMaterial.get();
@@ -409,10 +411,6 @@ namespace axe
         // IBL — slots 5, 6, 7
         bool hasIBL = m_Environment && m_Environment->HasSkybox() &&
             m_Environment->Skybox->HasIBL();
-
-        //AXE_CORE_INFO("DrawMesh hasIBL={} shader compilado={}",
-        //	hasIBL, material != nullptr && material->GetShader() != nullptr);
-
         
         shader->SetInt("u_HasIBL", hasIBL ? 1 : 0);
 

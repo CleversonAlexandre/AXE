@@ -22,5 +22,6 @@ namespace axe
     private:
         std::shared_ptr<Shader> m_Shader;
         bool m_Initialized = false;
+        glm::mat4 m_ViewProjection{ 1.0f };
     };
 }

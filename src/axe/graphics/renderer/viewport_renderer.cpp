@@ -60,6 +60,8 @@ namespace axe
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
+
+
 		// 1. Resize HDR primeiro
 		auto& hdrSpec = m_HDRFramebuffer->GetSpecification();
 		if (hdrSpec.Width != width || hdrSpec.Height != height)
@@ -70,17 +72,13 @@ namespace axe
 		else
 			m_PostProcess->Resize(width, height);
 
-
-
-		// ✅ 2. SetTarget APÓS resize — ID garantido correto
-		if (m_SceneRenderer)
+		if (m_Camera)
 		{
-			if (m_Camera && width >= 256 && height >= 256)
-			{
-				m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
-				m_SceneRenderer->SetDeferredEnabled(false);
-				//AXE_CORE_INFO("SetTargetFramebuffer: {}", m_HDRFramebuffer->GetRendererID());
-			}			
+			
+			m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
+			m_SceneRenderer->SetDeferredEnabled(!m_PreviewMode);
+			if (m_PreviewMode)
+				m_SceneRenderer->SetDeferredSupported(false);
 		}
 
 		// 3. Binda HDR e limpa
@@ -98,6 +96,17 @@ namespace axe
 			float aspect = height > 0 ? (float)width / (float)height : 1.0f;
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
+
+			// ✅ Seta skybox para o GameCamera também
+			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox())
+			{
+				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
+				m_SceneRenderer->SetSkyboxRenderer(
+					&m_SkyboxRenderer,
+					m_GameCamera->GetViewMatrix(),
+					m_GameCamera->GetProjectionMatrix(aspect));
+			}
+
 			if (m_SceneRenderer && m_Scene)
 				m_SceneRenderer->RenderScene(
 					*m_Scene,

@@ -21,23 +21,20 @@ namespace axe
     }
 
     glm::mat4 ShadowMapPass::CalcLightSpaceMatrix(
-        const glm::vec3& direction, float distance)
+        const glm::vec3& direction, float distance, const glm::vec3& center)
     {
         glm::vec3 dir = glm::normalize(direction);
-        glm::vec3 lightPos = -dir * 20.f;
 
+        // ✅ Usa só XZ da câmera — Y fixo em 0 para centrar no chão
+        glm::vec3 sceneCenter = glm::vec3(center.x, 0.0f, center.z);
+
+        glm::vec3 lightPos = sceneCenter + (-dir * 20.f);
         glm::mat4 lightView = glm::lookAt(
-            lightPos, glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
-
+            lightPos, sceneCenter, glm::vec3(0.f, 1.f, 0.f));
         glm::mat4 lightProj = glm::ortho(
             -distance, distance,
             -distance, distance,
             0.1f, distance * 3.f);
-        //glm::mat4 lightProj = glm::ortho(
-        //    -15.0f, 15.0f,
-        //    -15.0f, 15.0f,
-        //    0.1f, 60.0f);
-
         return lightProj * lightView;
     }
 }

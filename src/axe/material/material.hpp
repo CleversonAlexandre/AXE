@@ -7,6 +7,10 @@
 #include <memory>
 #include <string>
 
+#include <map>
+#include "axe/graphics/texture.hpp"
+
+
 namespace axe
 {
 	class AXE_API Material
@@ -55,10 +59,13 @@ namespace axe
 		bool HasAOMap()         const { return AOMap && AOMap->IsLoaded(); }
 
 		
-
+		std::shared_ptr<Shader> GetGeometryShader() const { return m_GeometryShader; }
+		void SetGeometryShader(std::shared_ptr<Shader> shader) { m_GeometryShader = shader; }
+		std::map<std::string, std::shared_ptr<Texture2D>> SamplerTextures;
 	private:
 		std::string m_Name;
 		std::shared_ptr<Shader> m_Shader;
+		std::shared_ptr<Shader> m_GeometryShader;
 
 	};
 }//namespace axe

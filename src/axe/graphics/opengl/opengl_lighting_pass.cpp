@@ -90,7 +90,7 @@ namespace axe
         projCoords      = projCoords * 0.5 + 0.5;
         if (projCoords.z > 1.0) return 0.0;
 
-        float bias = max(0.005 * (1.0 - dot(normal, lightDir)), 0.0005);
+        float bias = max(0.005 * (1.0 - dot(normal, lightDir)), 0.005);
         float shadow = 0.0;
         vec2 texelSize = 1.0 / textureSize(u_ShadowMap, 0);
         for (int x = -2; x <= 2; x++)
@@ -105,18 +105,20 @@ namespace axe
 
     void main()
     {
+
+        vec3 fragPos = texture(u_Position, v_TexCoord).rgb;        
+        vec3 N       = normalize(texture(u_Normal, v_TexCoord).rgb);
     
-        vec3  fragPos   = texture(u_Position, v_TexCoord).rgb;
-        vec3  N         = normalize(texture(u_Normal, v_TexCoord).rgb);
-        
+
         vec4  albedoM   = texture(u_Albedo, v_TexCoord);
         vec3  albedo    = albedoM.rgb;
+        
+    
         float metallic  = albedoM.a;
-        vec2  pbr       = texture(u_PBR, v_TexCoord).rg;
+        vec2  pbr       = texture(u_PBR, v_TexCoord).rg;    
         float roughness = pbr.r;
         float matAO     = pbr.g;
 
-        // SSAO
         float ao = matAO;
         if (u_HasSSAO == 1)
             ao *= texture(u_SSAO, v_TexCoord).r;
@@ -127,10 +129,9 @@ namespace axe
             return;
         }
 
-        //vec3 V  = normalize(u_CameraPosition - fragPos);
-        vec3 V = normalize(-fragPos);
-        vec3 L  = normalize(-u_LightDirection);
-        vec3 H  = normalize(V + L);
+        vec3 V = normalize(u_CameraPosition - fragPos);
+        vec3 L = normalize(-u_LightDirection);
+        vec3 H = normalize(V + L);
 
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
         vec3 radiance = u_LightColor * u_LightIntensity;
@@ -142,11 +143,11 @@ namespace axe
         vec3 kS = F;
         vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
 
-        vec3 numerator    = NDF * G * F;
+        vec3  numerator   = NDF * G * F;
         float NdotL       = max(dot(N, L), 0.0);
         float NdotV       = max(dot(N, V), 0.0);
         float denominator = 4.0 * NdotV * NdotL + 0.0001;
-        vec3 specular     = numerator / denominator;
+        vec3  specular    = numerator / denominator;
 
         float shadow = 0.0;
         if (u_HasShadowMap == 1)
@@ -161,16 +162,13 @@ namespace axe
             vec3 kD_amb = (1.0 - F_amb) * (1.0 - metallic);
             vec3 irradiance  = texture(u_IrradianceMap, N).rgb;
             vec3 diffuse_ibl = irradiance * albedo;
-
             vec3 R = reflect(-V, N);
-            vec3 prefilteredColor = textureLod(u_PrefilteredMap, R,
-                roughness * 4.0).rgb;
-            vec2 brdf = texture(u_BRDFLut,
-                vec2(max(dot(N, V), 0.0), roughness)).rg;
+            vec3 prefilteredColor = textureLod(u_PrefilteredMap, R, roughness * 4.0).rgb;
+            vec2 brdf = texture(u_BRDFLut, vec2(max(dot(N, V), 0.0), roughness)).rg;
             vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);
-
             ambient = (kD_amb * diffuse_ibl + specular_ibl) * ao;
         }
+        
         else
         {
             ambient = u_AmbientStrength * u_LightColor * albedo * ao;
@@ -178,13 +176,17 @@ namespace axe
 
         vec3 color = ambient + Lo;
         FragColor  = vec4(color, 1.0);
+        
+
     }
 )";
     void OpenGLLightingPass::Initialize()
     {
         try
         {
+        
             m_Shader = Shader::Create(s_QuadVert, s_LightingFrag);
+        
             SetupQuad();
             m_Initialized = true;
             AXE_CORE_INFO("OpenGLLightingPass initialized");
@@ -225,8 +227,13 @@ namespace axe
         const DirectionalLight* light,
         const SceneEnvironment* environment)
     {
+      
         
-
+        if (!m_Shader || !m_Initialized)
+        {
+            AXE_CORE_ERROR("LightingPass: não inicializado!");
+            return;
+        }
         glDisable(GL_DEPTH_TEST);
         glBindVertexArray(m_QuadVAO);
         m_Shader->Bind();
@@ -296,6 +303,7 @@ namespace axe
         else
         {
             m_Shader->SetInt("u_HasIBL", 0);
+          //  AXE_CORE_INFO("");
         }
 
         // Draw

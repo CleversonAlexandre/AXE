@@ -81,7 +81,7 @@ namespace axe
         glm::mat4       m_SkyboxView{ 1.0f };
         glm::mat4       m_SkyboxProjection{ 1.0f };
 
-        void RenderShadowPass(const Scene& scene, const DirectionalLight* light);
+        void RenderShadowPass(const Scene& scene, const DirectionalLight* light, const glm::vec3& cameraPosition = glm::vec3(0.0f));
         void RenderEntity(const Scene& scene, entt::entity entity,
             const glm::mat4& parentTransform,
             entt::entity selectedEntity,

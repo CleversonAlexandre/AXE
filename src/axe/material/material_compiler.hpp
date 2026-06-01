@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
-
+#include <map>
 namespace axe
 {
     // -------------------------------------------------------------------------
@@ -14,8 +14,15 @@ namespace axe
     {
         std::string VertexShader;
         std::string FragmentShader;
+        std::string GeometryFragShader;
         bool        Success = false;
         std::string ErrorMessage;
+
+        std::shared_ptr<Texture2D> AlbedoTexture;
+        std::shared_ptr<Texture2D> NormalTexture;
+        std::shared_ptr<Texture2D> RoughnessTexture;
+        std::shared_ptr<Texture2D> MetallicTexture;
+        std::map<std::string, std::shared_ptr<Texture2D>> SamplerTextures;
     };
 
     // -------------------------------------------------------------------------
@@ -33,7 +40,7 @@ namespace axe
     {
     public:
         static CompiledMaterial Compile(MaterialGraph* graph);
-
+        
     private:
         MaterialCompiler(MaterialGraph* graph);
 

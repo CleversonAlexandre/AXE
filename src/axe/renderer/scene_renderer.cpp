@@ -7,7 +7,7 @@
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/render_command.hpp"
 
-#include <glad/glad.h>
+
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 
 namespace axe
@@ -40,6 +40,7 @@ namespace axe
 
 		if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
 		{
+		
 			RenderDeferredScene(scene, viewProjection, view, projection,
 				cameraPosition, selectedEntity, light, width, height);
 		}
@@ -57,6 +58,8 @@ namespace axe
 			m_LineRenderer.Begin(viewProjection);
 			m_MeshRenderer.Begin(viewProjection, cameraPosition);
 
+			
+
 			auto roots = const_cast<Scene&>(scene).GetRootEntities();
 			for (auto entity : roots)
 				RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
@@ -64,6 +67,8 @@ namespace axe
 			m_MeshRenderer.End();
 			m_LineRenderer.End();
 			m_CubeRenderer.End();
+
+			
 		}
 	}
 
@@ -92,9 +97,20 @@ namespace axe
 				m_ShadowPass->GetDepthMapID(),
 				m_ShadowPass->GetLightSpaceMatrix());
 
+		if (m_SkyboxRenderer)
+		{
+			RenderCommand::SetDepthTest(false);
+			RenderCommand::SetCullFace(false);
+			m_SkyboxRenderer->Render(m_SkyboxView, m_SkyboxProjection);
+			RenderCommand::SetDepthTest(true);
+			RenderCommand::SetCullFace(true);
+		}
+
 		m_CubeRenderer.Begin(viewProjection);
 		m_LineRenderer.Begin(viewProjection);
 		m_MeshRenderer.Begin(viewProjection, cameraPosition);
+
+		
 
 		auto roots = const_cast<Scene&>(scene).GetRootEntities();
 		for (auto entity : roots)
@@ -103,6 +119,8 @@ namespace axe
 		m_MeshRenderer.End();
 		m_LineRenderer.End();
 		m_CubeRenderer.End();
+
+		
 	}
 	
 	void SceneRenderer::RenderEntity(const Scene& scene, entt::entity entity,
@@ -148,7 +166,7 @@ namespace axe
 			for (auto child : rel->Children)
 				RenderEntity(scene, child, glm::mat4(1.0f), selectedEntity, light);
 	}
-	void SceneRenderer::RenderShadowPass(const Scene& scene, const DirectionalLight* light)
+	void SceneRenderer::RenderShadowPass(const Scene& scene, const DirectionalLight* light, const glm::vec3& cameraPosition)
 	{
 		//AXE_CORE_INFO("RenderShadowPass chamado - light: {}", light != nullptr);
 
@@ -161,7 +179,7 @@ namespace axe
 			//m_ShadowPass->Initialize(2048);
 
 		auto lsm = ShadowMapPass::CalcLightSpaceMatrix(
-			light->Direction, light->ShadowDistance);
+			light->Direction, light->ShadowDistance, cameraPosition);
 
 		m_ShadowPass->Begin(lsm);
 
@@ -286,10 +304,12 @@ namespace axe
 
 		// Copia depth do G-Buffer para o HDR
 		// para que o forward pass respeite a profundidade
-		//RenderCommand::BlitDepth(m_GBuffer.GetFramebufferID(), m_TargetFBO, width, height);
+		RenderCommand::BlitDepth(m_GBuffer.GetFramebufferID(), m_TargetFBO, width, height);
 
 		uint32_t shadowID = m_ShadowPass ? m_ShadowPass->GetDepthMapID() : 0;
 		glm::mat4 lsm = m_ShadowPass ? m_ShadowPass->GetLightSpaceMatrix() : glm::mat4(1.0f);
+
+		
 
 		m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm,
 			cameraPosition, light, m_Environment);
@@ -297,6 +317,7 @@ namespace axe
 		// --- 5. Skybox --- 
 		// Renderizado após o lighting com depth do G-Buffer já copiado
 		// GL_LEQUAL garante que o skybox aparece atrás de tudo
+		
 		if (m_SkyboxRenderer)
 			m_SkyboxRenderer->RenderDeferred(m_SkyboxView, m_SkyboxProjection);
 		//	m_SkyboxRenderer->Render(m_SkyboxView, m_SkyboxProjection);
@@ -305,13 +326,13 @@ namespace axe
 		// CubeRenderer (objetos sem mesh), LineRenderer (bounding boxes, seleção)
 		RenderCommand::SetDepthTest(true);
 		RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
-
-		//m_CubeRenderer.Begin(viewProjection);
-		//m_LineRenderer.Begin(viewProjection);
+		
+	//	m_CubeRenderer.Begin(viewProjection);
+	//	m_LineRenderer.Begin(viewProjection);
 		//for (auto entity : roots)
 		//	RenderEntity(scene, entity, glm::mat4(1.0f), selectedEntity, light);
-		//m_LineRenderer.End();
-		//m_CubeRenderer.End();
+	//	m_LineRenderer.End();
+	//	m_CubeRenderer.End();
 
 		// --- Restaura estado ---
 		RenderCommand::ResetState();

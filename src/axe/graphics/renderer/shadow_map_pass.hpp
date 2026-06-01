@@ -28,6 +28,7 @@ namespace axe
         // Utilitário matemático — sem OpenGL, pode ficar aqui
         static glm::mat4 CalcLightSpaceMatrix(
             const glm::vec3& direction,
-            float distance = 20.0f);
+            float distance,
+            const glm::vec3& center = glm::vec3(0.0f)); 
     };
 }

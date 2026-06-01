@@ -231,6 +231,8 @@ namespace axe
     {
         if (!settings.Enabled) return;
 
+        
+
         glDisable(GL_DEPTH_TEST);
         glBindVertexArray(m_QuadVAO);
 

@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <unordered_set>
 
+#include "axe/graphics/texture.hpp"
+
 namespace axe
 {
     MaterialCompiler::MaterialCompiler(MaterialGraph* graph)
@@ -78,14 +80,35 @@ namespace axe
             }
 
             // Depois — todos os Texture Sample não processados ainda
+            //for (auto& node : graph->GetNodes())
+            //{
+            //    if (node->Name != "Texture Sample") continue;
+            //    if (processed.count(node->ID.Get())) continue;
+            //    std::string name = (slot == 0) ? "u_AlbedoMap"
+            //        : "u_Texture_" + std::to_string(slot);
+            //    compiler.m_NodeSamplers[node->ID.Get()] = name;
+            //    ++slot;
+            //}
+
             for (auto& node : graph->GetNodes())
             {
                 if (node->Name != "Texture Sample") continue;
-                if (processed.count(node->ID.Get())) continue;
-                std::string name = (slot == 0) ? "u_AlbedoMap"
-                    : "u_Texture_" + std::to_string(slot);
-                compiler.m_NodeSamplers[node->ID.Get()] = name;
-                ++slot;
+                if (!node->Value.TextureVal) continue;
+
+                auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+                if (it == compiler.m_NodeSamplers.end()) continue;
+
+                if (it != compiler.m_NodeSamplers.end())
+                    result.SamplerTextures[it->second] = node->Value.TextureVal;
+
+                if (it->second == "u_AlbedoMap")
+                    result.AlbedoTexture = node->Value.TextureVal;
+                else if (it->second == "u_Texture_1")
+                    result.NormalTexture = node->Value.TextureVal;
+                else if (it->second == "u_Texture_2")
+                    result.RoughnessTexture = node->Value.TextureVal;
+                else if (it->second == "u_Texture_3")
+                    result.MetallicTexture = node->Value.TextureVal;
             }
         }
 
@@ -279,13 +302,58 @@ namespace axe
         fs << "    }\n\n";
 
         fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n\n";
-        fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
-        fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
+        //fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
+        //fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
         fs << "    FragColor = vec4(finalColor, matOpacity);\n";
         fs << "}\n";
 
-        result.FragmentShader = fs.str();
+        std::stringstream gs;
+        gs << "#version 460 core\n";
+        gs << "layout(location = 0) out vec3 g_Position;\n";
+        gs << "layout(location = 1) out vec3 g_Normal;\n";
+        gs << "layout(location = 2) out vec4 g_Albedo;\n";
+        gs << "layout(location = 3) out vec2 g_PBR;\n\n";
+        gs << "in vec3 v_Normal;\n";
+        gs << "in vec3 v_FragPos;\n";
+        gs << "in vec2 v_TexCoord;\n";
+        gs << "in vec3 v_Tangent;\n";
+        gs << "in vec3 v_Bitangent;\n\n";
 
+        // Declara os mesmos samplers do forward
+        for (auto& node : graph->GetNodes())
+        {
+            if (node->Name != "Texture Sample") continue;
+            auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+            if (it != compiler.m_NodeSamplers.end())
+                gs << "uniform sampler2D " << it->second << ";\n";
+        }
+        gs << "\n";
+
+        gs << "void main()\n{\n";
+        gs << "    vec3 N = normalize(v_Normal);\n\n";
+
+        // Reutiliza o código dos nodes gerado pelo grafo
+        gs << compiler.m_FragmentCode;
+
+        // Normal Map
+        if (normalSrc)
+            gs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n\n";
+
+        // Propriedades do material
+        gs << "    vec3  matBaseColor = " << baseColor << ";\n";
+        gs << "    float matMetallic  = " << metallic << ";\n";
+        gs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n\n";
+
+        // Escreve no G-Buffer
+        gs << "    g_Position = v_FragPos;\n";
+        gs << "    g_Normal   = N;\n";
+        gs << "    g_Albedo   = vec4(matBaseColor, matMetallic);\n";
+        gs << "    g_PBR      = vec2(matRoughness, 1.0);\n";
+        gs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.GeometryFragShader = gs.str();
+        AXE_CORE_INFO("GeometryFragShader:\n{}", result.GeometryFragShader.substr(0, 500));
         // 9. Vertex Shader
         result.VertexShader = R"(
         #version 460 core

@@ -146,8 +146,8 @@ namespace axe
         }
 
         GLenum status = glCheckNamedFramebufferStatus(m_RendererID, GL_FRAMEBUFFER);
-        //AXE_CORE_INFO("Framebuffer FBO={} status={}", m_RendererID,
-        //    status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
+        AXE_CORE_INFO("Framebuffer FBO={} status={}", m_RendererID,
+            status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
     }
 
     void OpenGLFramebuffer::Bind()

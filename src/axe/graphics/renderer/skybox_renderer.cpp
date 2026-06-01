@@ -4,7 +4,7 @@
 #include "axe/graphics/render_command.hpp"
 #include "axe/log/log.hpp"
 #include "axe/utils/glm_config.hpp"
-
+#include <glad/glad.h>
 namespace axe
 {
 
@@ -75,6 +75,7 @@ namespace axe
         };
 
         m_VertexArray->AddVertexBuffer(vb, layout);
+        m_VertexArray->AddVertexBuffer(vb, layout);
 
         auto ib = IndexBuffer::Create(s_Indices, 36);
         m_VertexArray->SetIndexBuffer(ib);
@@ -104,6 +105,8 @@ namespace axe
 
     void SkyboxRenderer::RenderDeferred(const glm::mat4& view, const glm::mat4& projection)
     {
+      
+
         if (!HasCubemap()) return;
 
         // ✅ Depth test ON com LEQUAL — skybox aparece atrás da geometria
@@ -118,7 +121,7 @@ namespace axe
         m_Cubemap->Bind(0);
         m_VertexArray->Bind();
         RenderCommand::DrawIndexedCount(36);
-
+       
         RenderCommand::SetCullFace(true);
         RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
     }

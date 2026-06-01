@@ -16,7 +16,7 @@ namespace axe
 
         // Shadow mapping
         bool  CastShadows = true;
-        float ShadowDistance = 20.0f; // tamanho do frustum ortográfico
+        float ShadowDistance = 50.0f; // tamanho do frustum ortográfico
         float ShadowBias = 0.005f;
     };
 }

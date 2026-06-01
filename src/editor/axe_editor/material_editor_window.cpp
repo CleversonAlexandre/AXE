@@ -68,12 +68,22 @@ namespace axe
         FramebufferSpecification spec;
         spec.Width = 512;
         spec.Height = 512;
+        spec.Attachments = {
+            FramebufferTextureFormat::RGBA16F,
+            FramebufferTextureFormat::DEPTH32F,
+        };
         m_PreviewFramebuffer = Framebuffer::Create(spec);
 
         // Renderer dedicado ao preview — desacoplado do renderer do editor
         m_PreviewRenderer = std::make_unique<ViewportRenderer>();
         m_PreviewRenderer->Initialize();
         m_PreviewRenderer->SetPickingEnabled(false);
+        m_PreviewRenderer->SetPreviewMode(true);
+        //if (m_PreviewRenderer->GetSceneRenderer())
+        //    m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
+
+
+       
 
         // Cena isolada com a esfera de preview
         m_PreviewScene = std::make_unique<Scene>();
@@ -126,9 +136,11 @@ namespace axe
     {
         if (!m_PreviewRenderer || !m_PreviewFramebuffer || !m_PreviewScene) return;
 
-        // Garante que o environment está no ViewportRenderer
-        m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
+        // ✅ Garante forward ANTES de renderizar
+        if (m_PreviewRenderer->GetSceneRenderer())
+            m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
 
+        m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
         if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
             m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
 
@@ -139,6 +151,31 @@ namespace axe
         m_PreviewRenderer->SetScene(m_PreviewScene.get());
         m_PreviewRenderer->RenderToFramebuffer(*m_PreviewFramebuffer, width, height, 0.0f);
     }
+
+    //void MaterialEditorWindow::RenderPreview()
+    //{
+    //    if (!m_PreviewRenderer || !m_PreviewFramebuffer || !m_PreviewScene) return;
+
+    //    // Garante que o environment está no ViewportRenderer
+    //    m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
+
+    //    if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
+    //        m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
+
+    //    //if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
+    //    //{
+    //    //    m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
+    //    //    // ✅ Garante forward com IBL
+    //    //    m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
+    //    //}
+
+    //    uint32_t width = (uint32_t)m_PreviewSize.x;
+    //    uint32_t height = (uint32_t)m_PreviewSize.y;
+    //    if (width == 0 || height == 0) { width = 512; height = 512; }
+
+    //    m_PreviewRenderer->SetScene(m_PreviewScene.get());
+    //    m_PreviewRenderer->RenderToFramebuffer(*m_PreviewFramebuffer, width, height, 0.0f);
+    //}
 
     // -------------------------------------------------------------------------
     // Abertura de material
@@ -508,59 +545,32 @@ namespace axe
         if (!m_Material || !m_Graph) return;
 
         auto result = MaterialCompiler::Compile(m_Graph.get());
-        if (!result.Success)
-        {
-            //AXE_CORE_ERROR("Compilation failed: {}", result.ErrorMessage);
-            LogError("Compilação falhou: " + result.ErrorMessage);
-            return;
-        }
+        if (!result.Success) { LogError("Compilação falhou: " + result.ErrorMessage); return; }
 
         std::shared_ptr<Shader> compiledShader;
-        try
-        {
-            compiledShader = Shader::Create(result.VertexShader, result.FragmentShader);
-        }
-        catch (const std::exception& e)
-        {
-            //AXE_CORE_ERROR("Shader creation failed: {}", e.what());
-
-            LogError(std::string("Shader creation failed: ") + e.what());
-            return;
-        }
-
-        if (!compiledShader)
-        {
-            //AXE_CORE_ERROR("Shader::Create returned null");
-            LogError("Shader::Create retornou null");
-            return;
-        }
+        try { compiledShader = Shader::Create(result.VertexShader, result.FragmentShader); }
+        catch (const std::exception& e) { LogError(std::string("Shader creation failed: ") + e.what()); return; }
+        if (!compiledShader) { LogError("Shader::Create retornou null"); return; }
 
         m_Material->SetShader(compiledShader);
         m_Material->UsePBR = true;
 
-        // Transfere texturas conectadas
-        int slot = 0;
-        for (auto& node : m_Graph->GetNodes())
+        // ✅ Geometry shader para deferred
+        if (!result.GeometryFragShader.empty())
         {
-            if (node->Name != "Texture Sample") continue;
-            if (!node->Value.TextureVal) { ++slot; continue; }
-
-            bool isConnected = false;
-            for (auto& output : node->Outputs)
-                for (auto& link : m_Graph->GetLinks())
-                    if (link.StartPin == output.ID)
-                        isConnected = true;
-
-            if (!isConnected) { ++slot; continue; }
-
-            if (slot == 0)
+            try
             {
-                m_Material->AlbedoMap = node->Value.TextureVal;
-                m_Material->AlbedoUUID = node->Value.TextureUUID;
+                auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
+                if (geometryShader)
+                    m_Material->SetGeometryShader(geometryShader);
             }
-            ++slot;
+            catch (const std::exception& e)
+            {
+                AXE_CORE_WARN("GeometryShader creation failed: {}", e.what());
+            }
         }
-        // Transfere texturas na mesma ordem do compilador
+        m_Material->SamplerTextures = result.SamplerTextures;
+        // ✅ Função para encontrar Texture Sample conectado a um pin
         std::function<Node* (ed::PinId)> findTextureSample =
             [&](ed::PinId startPin) -> Node*
             {
@@ -580,42 +590,50 @@ namespace axe
                 return nullptr;
             };
 
+        // ✅ Encontra output node
         Node* outputNode = nullptr;
         for (auto& n : m_Graph->GetNodes())
             if (n->Name == "Material Output") { outputNode = n.get(); break; }
 
+        // ✅ Limpa texturas — serão preenchidas apenas se houver conexão
+        m_Material->AlbedoMap = nullptr; m_Material->AlbedoUUID = "";
+        m_Material->NormalMap = nullptr; m_Material->NormalUUID = "";
+
+        bool hasAlbedoConnection = false;
         if (outputNode)
         {
-            int slot = 0;
-            std::unordered_set<int> processed;
-
-            for (auto& inputPin : outputNode->Inputs)
+            // Base Color (pin 0)
+            for (auto& lnk : m_Graph->GetLinks())
             {
-                for (auto& lnk : m_Graph->GetLinks())
+                if (lnk.EndPin != outputNode->Inputs[0].ID) continue;
+                Node* texNode = findTextureSample(lnk.StartPin);
+                if (texNode && texNode->Value.TextureVal)
                 {
-                    if (lnk.EndPin != inputPin.ID) continue;
-                    Node* texNode = findTextureSample(lnk.StartPin);
-                    if (texNode && !processed.count(texNode->ID.Get())
-                        && texNode->Value.TextureVal)
-                    {
-                        if (slot == 0)
-                        {
-                            m_Material->AlbedoMap = texNode->Value.TextureVal;
-                            m_Material->AlbedoUUID = texNode->Value.TextureUUID;
-                        }
-                        processed.insert(texNode->ID.Get());
-                        ++slot;
-                    }
+                    m_Material->AlbedoMap = texNode->Value.TextureVal;
+                    m_Material->AlbedoUUID = texNode->Value.TextureUUID;
                 }
+                break;
             }
+
+            // Normal (pin 3)
+            for (auto& lnk : m_Graph->GetLinks())
+            {
+                if (lnk.EndPin != outputNode->Inputs[3].ID) continue;
+                Node* texNode = findTextureSample(lnk.StartPin);
+                if (texNode && texNode->Value.TextureVal)
+                {
+                    m_Material->NormalMap = texNode->Value.TextureVal;
+                    m_Material->NormalUUID = texNode->Value.TextureUUID;
+                }
+                break;
+            }
+
+            if (!hasAlbedoConnection)
+                m_Material->Color = glm::vec4(0.7f, 0.7f, 0.7f, 1.0f);
         }
 
-        if (m_Asset)
-            m_Asset->SetMaterial(m_Material);
-
-        if (!m_Asset->GetFilePath().empty())
-            m_Asset->Save(m_Asset->GetFilePath());
-
+        if (m_Asset) m_Asset->SetMaterial(m_Material);
+        if (!m_Asset->GetFilePath().empty()) m_Asset->Save(m_Asset->GetFilePath());
         SaveGraph();
 
         // Atualiza preview
@@ -631,48 +649,36 @@ namespace axe
             }
         }
 
-        // Aplica o material no mesh selecionado no viewport       
+        // Aplica na cena
         if (m_Context && m_Context->ActiveScene && m_Asset)
         {
             auto& registry = m_Context->ActiveScene->GetRegistry();
-
-            // Obtém o UUID do asset atual
             const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
             if (!record) { LogWarning("Asset não encontrado."); return; }
 
             std::string assetUUID = record->UUID;
             int count = 0;
-
             for (auto entity : registry.view<MaterialComponent>())
             {
                 auto& mc = registry.get<MaterialComponent>(entity);
                 if (mc.MaterialAssetUUID == assetUUID)
                 {
-                    mc.Data = m_Material; // atualiza o ponteiro para o material recompilado
+                    mc.Data = m_Material;
                     ++count;
                 }
             }
-
-            if (count > 0)
-                LogInfo("Material aplicado em " + std::to_string(count) + " objeto(s).");
-            else
-                LogWarning("Nenhum objeto usa este material.");
+            if (count > 0) LogInfo("Material aplicado em " + std::to_string(count) + " objeto(s).");
+            else LogWarning("Nenhum objeto usa este material.");
         }
-        else
-        {
-            LogWarning("Nenhuma cena ativa.");
-        }
+        else LogWarning("Nenhuma cena ativa.");
 
         LogInfo("Shader compilado com sucesso.");
-        // Após compilar com sucesso:
+
         if (m_ThumbnailRenderer && m_Asset)
         {
             const AssetRecord* record = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath());
-            if (record)
-                m_ThumbnailRenderer->Invalidate(record->UUID);
+            if (record) m_ThumbnailRenderer->Invalidate(record->UUID);
         }
-
-
 
         InspectorWindow::MarkGraphCacheDirty();
     }
@@ -1603,43 +1609,76 @@ namespace axe
 
         m_Graph->Deserialize(j);
 
-        // Recompila o shader automaticamente após carregar o grafo
+        // ✅ Compila mas não tenta aplicar na cena — cena pode não estar pronta
         auto result = MaterialCompiler::Compile(m_Graph.get());
-        if (result.Success)
+        if (!result.Success) return;
+
+        try
         {
-            try
+            auto compiledShader = Shader::Create(result.VertexShader, result.FragmentShader);
+            if (compiledShader && m_Material)
+                m_Material->SetShader(compiledShader);
+
+            if (!result.GeometryFragShader.empty())
             {
-                auto compiledShader = Shader::Create(result.VertexShader, result.FragmentShader);
-                if (compiledShader && m_Material)
-                {
-                    m_Material->SetShader(compiledShader);
-
-                    // Restaura texturas conectadas
-                    int slot = 0;
-                    for (auto& node : m_Graph->GetNodes())
-                    {
-                        if (node->Name != "Texture Sample") continue;
-                        if (!node->Value.TextureVal) { ++slot; continue; }
-
-                        bool isConnected = false;
-                        for (auto& output : node->Outputs)
-                            for (auto& link : m_Graph->GetLinks())
-                                if (link.StartPin == output.ID)
-                                    isConnected = true;
-
-                        if (isConnected && slot == 0)
-                        {
-                            m_Material->AlbedoMap = node->Value.TextureVal;
-                            m_Material->AlbedoUUID = node->Value.TextureUUID;
-                        }
-                        ++slot;
-                    }
-                }
+                auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
+                if (geometryShader && m_Material)
+                    m_Material->SetGeometryShader(geometryShader);
             }
-            catch (...) {}
+        }
+        catch (...) {}
+
+        // ✅ Preenche NormalMap
+        Node* outputNode = nullptr;
+        for (auto& n : m_Graph->GetNodes())
+            if (n->Name == "Material Output") { outputNode = n.get(); break; }
+
+        if (outputNode && outputNode->Inputs.size() > 3)
+        {
+            std::function<Node* (ed::PinId)> findTex = [&](ed::PinId startPin) -> Node*
+                {
+                    for (auto& n : m_Graph->GetNodes())
+                        for (auto& outPin : n->Outputs)
+                        {
+                            if (outPin.ID != startPin) continue;
+                            if (n->Name == "Texture Sample") return n.get();
+                            for (auto& inPin : n->Inputs)
+                                for (auto& lnk : m_Graph->GetLinks())
+                                {
+                                    if (lnk.EndPin != inPin.ID) continue;
+                                    Node* found = findTex(lnk.StartPin);
+                                    if (found) return found;
+                                }
+                        }
+                    return nullptr;
+                };
+
+            for (auto& lnk : m_Graph->GetLinks())
+            {
+                if (lnk.EndPin != outputNode->Inputs[3].ID) continue;
+                Node* texNode = findTex(lnk.StartPin);
+                if (texNode && texNode->Value.TextureVal)
+                {
+                    m_Material->NormalMap = texNode->Value.TextureVal;
+                    m_Material->NormalUUID = texNode->Value.TextureUUID;
+                }
+                break;
+            }
+
+            bool hasNormalConnection = false;
+            for (auto& lnk : m_Graph->GetLinks())
+                if (lnk.EndPin == outputNode->Inputs[3].ID)
+                {
+                    hasNormalConnection = true; break;
+                }
+            if (!hasNormalConnection)
+            {
+                m_Material->NormalMap = nullptr;
+                m_Material->NormalUUID = "";
+            }
         }
 
-        AXE_CORE_INFO("MaterialEditorWindow: grafo carregado e shader recompilado.");
+        AXE_CORE_INFO("MaterialEditorWindow: grafo carregado.");
     }
 
     void MaterialEditorWindow::DeleteNodeWithHistory(ed::NodeId nodeId)

@@ -56,7 +56,7 @@ namespace axe
 		void Resize(uint32_t width, uint32_t height);
 
 		SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
-
+		void SetPreviewMode(bool preview) { m_PreviewMode = preview; }
 	/// <summary>
 	/// temp
 	 Scene* GetScene() const { return m_Scene; }
@@ -78,6 +78,7 @@ namespace axe
 		std::shared_ptr<PostProcessPass>  m_PostProcess;
 		std::shared_ptr<Framebuffer>      m_HDRFramebuffer;
 		PostProcessSettings               m_PostProcessSettings;
+		bool m_PreviewMode = false;
 	};
 
 } // namespace axe
