@@ -4,12 +4,14 @@
 #include "axe/mesh/mesh.hpp"
 #include "axe/material/material.hpp"
 #include "axe/lighting/directional_light.hpp"
+#include "axe/lighting/point_light.hpp"
 #include <memory>
 #include <string>
 #include <imgui.h>
 #include <entt/entt.hpp>
 
 #include "axe/graphics/renderer/post_process_pass.hpp"
+#include "axe/graphics/renderer/ssao_pass.hpp"
 
 namespace axe
 {
@@ -44,6 +46,12 @@ namespace axe
 		std::shared_ptr<DirectionalLight> Data;
 	};
 
+	//Point Light
+	struct PointLightComponent
+	{
+		std::shared_ptr<PointLight> Data;
+	};
+
 	struct FolderComponent
 	{
 		ImVec4 Color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
@@ -53,10 +61,11 @@ namespace axe
 		entt::entity Parent = entt::null;
 		std::vector<entt::entity> Children;
 	};
-	
+
 	struct PostProcessComponent
 	{
 		PostProcessSettings Settings;
+		SSAOSettings        SSAO;
 		bool IsGlobal = true; // afeta toda a cena
 	};
 }//namespace axe

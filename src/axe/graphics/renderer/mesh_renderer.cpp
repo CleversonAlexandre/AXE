@@ -1,4 +1,3 @@
-
 #include "axe/utils/glm_config.hpp"
 #include "mesh_renderer.hpp"
 
@@ -298,7 +297,7 @@ namespace axe
 
         m_Shader = Shader::Create(vertexSrc, fragmentSrc);
 
-        
+
 
         PipelineSpecification spec;
         spec.Shader = m_Shader;
@@ -311,7 +310,7 @@ namespace axe
 
     void MeshRenderer::Begin(const glm::mat4& viewProjection, const glm::vec3& cameraPosition)
     {
-    //	AXE_CORE_INFO("MeshRenderer::Begin VP[3][3]={}", viewProjection[3][3]);
+        //	AXE_CORE_INFO("MeshRenderer::Begin VP[3][3]={}", viewProjection[3][3]);
         m_ViewProjection = viewProjection;
         m_ViewProjection = viewProjection;
         m_CameraPosition = cameraPosition;
@@ -322,7 +321,7 @@ namespace axe
         const Material* material, const DirectionalLight* light)
     {
 
-    
+
 
 
         const Material* mat = material ? material : m_DefaultMaterial.get();
@@ -364,24 +363,41 @@ namespace axe
 
 
 
-        // Texturas
-        shader->SetInt("u_AlbedoMap", 0);
-        shader->SetInt("u_NormalMap", 1);
-        shader->SetInt("u_RoughnessMap", 2);
-        shader->SetInt("u_MetallicMap", 3);
-        shader->SetInt("u_AOMap", 4);
+        // Texturas — se material tem shader compilado do graph, usa SamplerTextures
+        // Senão usa os slots fixos padrão
+        if (mat->GetShader() && !mat->SamplerTextures.empty())
+        {
+            int slot = 0;
+            for (auto& [samplerName, tex] : mat->SamplerTextures)
+            {
+                if (tex && tex->IsLoaded())
+                {
+                    glBindTextureUnit(slot, tex->GetRendererID());
+                    shader->SetInt(samplerName, slot);
+                    ++slot;
+                }
+            }
+        }
+        else
+        {
+            shader->SetInt("u_AlbedoMap", 0);
+            shader->SetInt("u_NormalMap", 1);
+            shader->SetInt("u_RoughnessMap", 2);
+            shader->SetInt("u_MetallicMap", 3);
+            shader->SetInt("u_AOMap", 4);
 
-        shader->SetInt("u_HasAlbedoMap", mat->HasAlbedoMap() ? 1 : 0);
-        shader->SetInt("u_HasNormalMap", mat->HasNormalMap() ? 1 : 0);
-        shader->SetInt("u_HasRoughnessMap", mat->HasRoughnessMap() ? 1 : 0);
-        shader->SetInt("u_HasMetallicMap", mat->HasMetallicMap() ? 1 : 0);
-        shader->SetInt("u_HasAOMap", mat->HasAOMap() ? 1 : 0);
+            shader->SetInt("u_HasAlbedoMap", mat->HasAlbedoMap() ? 1 : 0);
+            shader->SetInt("u_HasNormalMap", mat->HasNormalMap() ? 1 : 0);
+            shader->SetInt("u_HasRoughnessMap", mat->HasRoughnessMap() ? 1 : 0);
+            shader->SetInt("u_HasMetallicMap", mat->HasMetallicMap() ? 1 : 0);
+            shader->SetInt("u_HasAOMap", mat->HasAOMap() ? 1 : 0);
 
-        if (mat->HasAlbedoMap())    mat->AlbedoMap->Bind(0);
-        if (mat->HasNormalMap())    mat->NormalMap->Bind(1);
-        if (mat->HasRoughnessMap()) mat->RoughnessMap->Bind(2);
-        if (mat->HasMetallicMap())  mat->MetallicMap->Bind(3);
-        if (mat->HasAOMap())        mat->AOMap->Bind(4);
+            if (mat->HasAlbedoMap())    mat->AlbedoMap->Bind(0);
+            if (mat->HasNormalMap())    mat->NormalMap->Bind(1);
+            if (mat->HasRoughnessMap()) mat->RoughnessMap->Bind(2);
+            if (mat->HasMetallicMap())  mat->MetallicMap->Bind(3);
+            if (mat->HasAOMap())        mat->AOMap->Bind(4);
+        }
 
         // Luz
         if (light)
@@ -391,10 +407,12 @@ namespace axe
             shader->SetFloat3("u_LightColor", light->Color);
             shader->SetFloat("u_LightIntensity", light->Intensity);
             shader->SetFloat("u_AmbientStrength", light->AmbientStrength);
+            shader->SetFloat("u_IBLIntensity", light->IBLIntensity);
         }
         else
         {
             shader->SetBool("u_HasLight", false);
+            shader->SetFloat("u_IBLIntensity", 1.0f);
         }
 
         if (m_ShadowMapID != 0)
@@ -411,11 +429,11 @@ namespace axe
         // IBL — slots 5, 6, 7
         bool hasIBL = m_Environment && m_Environment->HasSkybox() &&
             m_Environment->Skybox->HasIBL();
-        
+
         shader->SetInt("u_HasIBL", hasIBL ? 1 : 0);
 
         if (hasIBL)
-        {			
+        {
             m_Environment->Skybox->BindIrradiance(5);
             m_Environment->Skybox->BindPrefiltered(6);
             m_Environment->Skybox->BindBRDFLut(7);
@@ -425,7 +443,7 @@ namespace axe
             shader->SetInt("u_BRDFLut", 7);
         }
 
-        
+
         // Shadow map — slot 8
         if (m_ShadowMapID != 0)
         {

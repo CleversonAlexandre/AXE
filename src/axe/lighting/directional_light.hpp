@@ -11,6 +11,7 @@ namespace axe
 
         float Intensity = 1.0f;
         float AmbientStrength = 0.15f;
+        float IBLIntensity = 1.0f;   // multiplicador global do IBL difuso + especular
         float SpecularStrength = 0.5f;
         float Shininess = 32.0f;
 

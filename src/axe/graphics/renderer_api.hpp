@@ -14,7 +14,7 @@ namespace axe
 
         enum class PolygonMode { Fill = 0, Line };
 
-        enum class DepthFunc { Less = 0, LessEqual };
+        enum class DepthFunc { Less = 0, LessEqual, Always };
 
         virtual ~RendererAPI() = default;
 
@@ -30,6 +30,19 @@ namespace axe
 
         // Culling
         virtual void SetCullFace(bool enabled) = 0;
+        virtual void SetCullMode(bool frontFace) = 0; // true = cull front, false = cull back
+
+        // Textura
+        virtual void BindTextureUnit(uint32_t slot, uint32_t textureID) = 0;
+
+        // Color write
+        virtual void SetColorWrite(bool enabled) = 0;
+
+        // Stencil
+        virtual void SetStencilTest(bool enabled) = 0;
+        virtual void SetStencilWrite(uint32_t mask) = 0;
+        virtual void SetStencilFunc(uint32_t func, int ref, uint32_t mask) = 0;
+        virtual void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass) = 0;
 
         // Draw
         virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;

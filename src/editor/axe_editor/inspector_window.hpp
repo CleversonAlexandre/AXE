@@ -3,6 +3,7 @@
 #include "editor_context.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/lighting/directional_light.hpp"
+#include "axe/lighting/point_light.hpp"
 #include "axe/material/material.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/scene/transform.hpp"
@@ -30,26 +31,24 @@ namespace axe
             entt::registry& registry,
             entt::entity entity);
 
-        void DrawPostProcess(PostProcessComponent& pp);        
-        
+        void DrawPostProcess(PostProcessComponent& pp);
+
         static void MarkGraphCacheDirty();
     private:
         void DrawTransform(Transform& transform);
-        void DrawMaterial(entt::entity entity);   // slot do asset + drag and drop
-        void DrawMaterialParams(Material& mat);   // parâmetros editáveis
+        void DrawMaterial(entt::entity entity);
+        void DrawMaterialParams(Material& mat);
         void DrawTextureSlot(const char* label,
             std::shared_ptr<Texture2D>& tex,
             std::string& uuid);
         void DrawLight(DirectionalLight& light);
+        void DrawPointLight(PointLight& light);
 
         EditorContext* m_Context = nullptr;
 
         GraphLoadCallback m_GraphLoadCallback;
-        // Cache do grafo atual
         std::unique_ptr<MaterialGraph> m_CachedGraph;
         std::string m_CachedGraphUUID;
-
-
     };
 
 } // namespace axe

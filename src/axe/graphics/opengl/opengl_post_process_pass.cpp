@@ -27,7 +27,9 @@ namespace axe
         uniform sampler2D u_HDRBuffer;
         uniform sampler2D u_BloomBuffer;
         uniform float     u_Exposure;
+        uniform float     u_BloomIntensity;
         uniform int       u_HasBloom;
+        uniform int       u_ToneMapMode; // 0 = Reinhard, 1 = ACES
 
         vec3 ACESFilm(vec3 x)
         {
@@ -39,13 +41,17 @@ namespace axe
         {
             vec3 hdr = texture(u_HDRBuffer, v_TexCoord).rgb;
             if (u_HasBloom == 1)
-                hdr += texture(u_BloomBuffer, v_TexCoord).rgb;
+                hdr += texture(u_BloomBuffer, v_TexCoord).rgb * u_BloomIntensity;
 
-            // Reinhard — mais suave que ACES
-            vec3 mapped = hdr * u_Exposure;
-            mapped = mapped / (mapped + vec3(1.0));
+            hdr *= u_Exposure;
+
+            vec3 mapped;
+            if (u_ToneMapMode == 1)
+                mapped = ACESFilm(hdr);
+            else
+                mapped = hdr / (hdr + vec3(1.0)); // Reinhard
+
             mapped = pow(mapped, vec3(1.0 / 2.2));
-
             FragColor = vec4(mapped, 1.0);
         }
     )";
@@ -172,7 +178,7 @@ namespace axe
     void OpenGLPostProcessPass::Execute(uint32_t hdrColorID,
         const PostProcessSettings& settings)
     {
- 
+
         glDisable(GL_DEPTH_TEST);
         glBindVertexArray(m_QuadVAO);
 
@@ -218,6 +224,8 @@ namespace axe
         glBindTextureUnit(0, hdrColorID);
         m_TonemapShader->SetInt("u_HDRBuffer", 0);
         m_TonemapShader->SetFloat("u_Exposure", settings.Exposure);
+        m_TonemapShader->SetFloat("u_BloomIntensity", settings.BloomIntensity);
+        m_TonemapShader->SetInt("u_ToneMapMode", settings.ToneMapMode);
         if (bloomTex)
         {
             glBindTextureUnit(1, bloomTex);

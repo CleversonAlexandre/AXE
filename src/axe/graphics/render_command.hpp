@@ -48,15 +48,30 @@ namespace axe
             s_RendererAPI->SetCullFace(enabled);
         }
 
+        static void SetCullMode(bool frontFace)
+        {
+            s_RendererAPI->SetCullMode(frontFace);
+        }
+
+        static void SetColorWrite(bool enabled)
+        {
+            s_RendererAPI->SetColorWrite(enabled);
+        }
+
+        static void BindTextureUnit(uint32_t slot, uint32_t textureID)
+        {
+            s_RendererAPI->BindTextureUnit(slot, textureID);
+        }
+
         static void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray);
-        
+
 
         static void DrawIndexedCount(uint32_t indexCount);
-        
+
 
         static void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, uint32_t vertexCount);
-        
-        
+
+
 
         static void SetPolygonMode(RendererAPI::PolygonMode mode);
 
@@ -64,13 +79,33 @@ namespace axe
         {
             s_RendererAPI->BindFramebuffer(id);
         }
-        
+
         static void ResetState() { s_RendererAPI->ResetState(); }
 
         static void BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
             uint32_t width, uint32_t height)
         {
             s_RendererAPI->BlitDepth(srcFBO, dstFBO, width, height);
+        }
+
+        static void SetStencilTest(bool enabled)
+        {
+            s_RendererAPI->SetStencilTest(enabled);
+        }
+
+        static void SetStencilWrite(uint32_t mask)
+        {
+            s_RendererAPI->SetStencilWrite(mask);
+        }
+
+        static void SetStencilFunc(uint32_t func, int ref, uint32_t mask)
+        {
+            s_RendererAPI->SetStencilFunc(func, ref, mask);
+        }
+
+        static void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass)
+        {
+            s_RendererAPI->SetStencilOp(fail, zfail, zpass);
         }
 
     private:

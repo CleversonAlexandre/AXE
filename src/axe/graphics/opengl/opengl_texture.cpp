@@ -60,7 +60,14 @@ namespace axe
         AXE_CORE_INFO("Texture2D: criando textura OpenGL ({}x{}, {} canais)...",
             m_Width, m_Height, channels);
 
-        // USA API ANTIGA (bind-based) em vez de DSA
+        // Limpa erros GL pendentes de operações anteriores para não
+        // confundir erros reais de criação da textura
+        while (glGetError() != GL_NO_ERROR) {}
+
+        // Garante alinhamento correto — texturas de 1 canal (GL_RED)
+        // precisam de alinhamento 1 em vez do padrão 4
+        glPixelStorei(GL_UNPACK_ALIGNMENT, channels == 1 ? 1 : 4);
+
         glGenTextures(1, &m_RendererID);
         glBindTexture(GL_TEXTURE_2D, m_RendererID);
 
@@ -75,6 +82,9 @@ namespace axe
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         glBindTexture(GL_TEXTURE_2D, 0);
+
+        // Restaura alinhamento padrão
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
         // Verifica erros
         GLenum error = glGetError();

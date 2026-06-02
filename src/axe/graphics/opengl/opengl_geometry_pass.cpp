@@ -4,8 +4,8 @@
 #include "axe/graphics/vertex_array.hpp"
 #include "axe/material/material.hpp"
 #include "axe/graphics/texture.hpp"
+#include "axe/graphics/render_command.hpp"
 #include "axe/log/log.hpp"
-#include <glad/glad.h>
 #include "axe/utils/glm_config.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
@@ -54,7 +54,7 @@ namespace axe
     }
     )";
 
-        static const char* s_GeomFrag = R"(
+    static const char* s_GeomFrag = R"(
         #version 460 core
 
         layout(location = 0) out vec3 g_Position;  // world space
@@ -119,21 +119,20 @@ namespace axe
         const glm::mat4& viewProjection,
         const glm::vec3& cameraPosition)
     {
-      
-
         m_ViewProjection = viewProjection;
+        m_CameraPosition = cameraPosition;
 
         gbuffer.Bind();
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
+        RenderCommand::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        RenderCommand::Clear();
+        RenderCommand::SetDepthTest(true);
+        RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
 
         m_Shader->Bind();
         m_Shader->SetMat4("u_ViewProjection", glm::value_ptr(viewProjection));
     }
 
-  
+
     void OpenGLGeometryPass::DrawMesh(const Mesh& mesh,
         const glm::mat4& model,
         const Material* material)
@@ -150,40 +149,27 @@ namespace axe
 
         if (material && material->GetGeometryShader())
         {
-          
-
             glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
             activeShader->SetMat3("u_NormalMatrix", glm::value_ptr(normalMatrix));
+            activeShader->SetFloat3("u_CameraPosition", m_CameraPosition);
 
-            // ✅ Binda texturas pelo nome do sampler
+            // Binda texturas pelo nome do sampler conforme atribuído pelo MaterialCompiler.
+            // SamplerTextures já contém TODAS as texturas (albedo, normal, etc.)
+            // com os slots corretos — não duplicar bindando AlbedoMap/NormalMap
+            // separadamente, pois isso sobrescreveria os slots já configurados.
             int slot = 0;
             for (auto& [samplerName, tex] : material->SamplerTextures)
             {
                 if (tex && tex->IsLoaded())
                 {
-                    glBindTextureUnit(slot, tex->GetRendererID());
+                    RenderCommand::BindTextureUnit(slot, tex->GetRendererID());
                     activeShader->SetInt(samplerName, slot);
                     ++slot;
                 }
             }
-
-            if (material->AlbedoMap && material->AlbedoMap->IsLoaded())
-            {
-                glBindTextureUnit(0, material->AlbedoMap->GetRendererID());
-                activeShader->SetInt("u_AlbedoMap", 0);
-            }
-            // ✅ Sem albedo — binda uma textura branca no slot 0
-            // para evitar leitura de slot vazio
-
-            if (material->NormalMap && material->NormalMap->IsLoaded())
-            {
-                glBindTextureUnit(1, material->NormalMap->GetRendererID());
-                activeShader->SetInt("u_Texture_1", 1);
-            }
         }
         else
         {
-           
             // Shader fixo — uniforms padrão
             activeShader->SetFloat4("u_Color", material ? material->Color : glm::vec4(0.8f));
             activeShader->SetFloat("u_Roughness", material ? material->Roughness : 0.5f);
@@ -191,7 +177,7 @@ namespace axe
 
             if (material && material->AlbedoMap && material->AlbedoMap->IsLoaded())
             {
-                glBindTextureUnit(0, material->AlbedoMap->GetRendererID());
+                RenderCommand::BindTextureUnit(0, material->AlbedoMap->GetRendererID());
                 activeShader->SetInt("u_AlbedoMap", 0);
                 activeShader->SetInt("u_HasAlbedoMap", 1);
             }
@@ -199,7 +185,7 @@ namespace axe
 
             if (material && material->NormalMap && material->NormalMap->IsLoaded())
             {
-                glBindTextureUnit(1, material->NormalMap->GetRendererID());
+                RenderCommand::BindTextureUnit(1, material->NormalMap->GetRendererID());
                 activeShader->SetInt("u_NormalMap", 1);
                 activeShader->SetInt("u_HasNormalMap", 1);
             }
@@ -207,12 +193,11 @@ namespace axe
         }
 
         mesh.GetVertexArray()->Bind();
-        glDrawElements(GL_TRIANGLES, mesh.GetIndexCount(), GL_UNSIGNED_INT, nullptr);
+        RenderCommand::DrawIndexedCount(mesh.GetIndexCount());
     }
 
     void OpenGLGeometryPass::End()
     {
-        glBindVertexArray(0);
-        glUseProgram(0);
+        RenderCommand::ResetState();
     }
 }

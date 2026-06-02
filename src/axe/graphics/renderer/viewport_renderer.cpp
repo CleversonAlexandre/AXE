@@ -27,7 +27,7 @@ namespace axe
 		rotation = eulerAngles(orientation);
 		return true;
 	}
-	
+
 
 	void ViewportRenderer::Initialize()
 	{
@@ -56,7 +56,7 @@ namespace axe
 	{
 		m_PickingEnabled = enabled;
 	}
-	
+
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
@@ -74,7 +74,7 @@ namespace axe
 
 		if (m_Camera)
 		{
-			
+
 			m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
 			m_SceneRenderer->SetDeferredEnabled(!m_PreviewMode);
 			if (m_PreviewMode)
@@ -125,6 +125,21 @@ namespace axe
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
 
+			// Lê PostProcessComponent antes de renderizar para que
+			// SSAOSettings (incluindo Debug) já estejam corretos no frame atual
+			if (m_Scene)
+			{
+				auto& registry = m_Scene->GetRegistry();
+				for (auto entity : registry.view<PostProcessComponent>())
+				{
+					auto& pp = registry.get<PostProcessComponent>(entity);
+					m_PostProcessSettings = pp.Settings;
+					if (m_SceneRenderer)
+						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
+					break;
+				}
+			}
+
 			// Skybox
 			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox() && m_Camera)
 			{
@@ -170,16 +185,6 @@ namespace axe
 		framebuffer.Bind();
 		RenderCommand::SetViewport(0, 0, width, height);
 
-		if (m_Scene)
-		{
-			auto& registry = m_Scene->GetRegistry();
-			for (auto entity : registry.view<PostProcessComponent>())
-			{
-				m_PostProcessSettings = registry.get<PostProcessComponent>(entity).Settings;
-				break;
-			}
-		}
-
 		m_PostProcess->Execute(
 			m_HDRFramebuffer->GetColorAttachmentRendererID(),
 			m_PostProcessSettings);
@@ -204,7 +209,7 @@ namespace axe
 
 	void ViewportRenderer::DrawGuizmo(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
 	{
-		
+
 		if (!m_Scene || !m_SelectedEntity || *m_SelectedEntity == entt::null || !m_Camera)
 			return;
 
@@ -253,7 +258,7 @@ namespace axe
 			}
 		}
 
-		
+
 	}
 
 	void ViewportRenderer::DrawGrid()

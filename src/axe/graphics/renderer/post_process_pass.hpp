@@ -9,10 +9,11 @@ namespace axe
     {
         // Tone Mapping
         float Exposure = 1.0f;
+        int   ToneMapMode = 1;   // 0 = Reinhard, 1 = ACES
 
         // Bloom
         bool  BloomEnabled = false;
-        float BloomThreshold = 1.0f;   // brilho mínimo para extrair
+        float BloomThreshold = 0.7f;
         float BloomIntensity = 0.5f;
         int   BloomBlurPasses = 5;
     };

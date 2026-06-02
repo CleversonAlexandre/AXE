@@ -14,6 +14,7 @@
 #include "axe/lighting/directional_light.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/renderer/skybox_renderer.hpp"
+#include "axe/graphics/renderer/outline_renderer.hpp"
 
 namespace axe
 {
@@ -58,9 +59,10 @@ namespace axe
 
     private:
         // Forward — mantido intacto
-        CubeRenderer m_CubeRenderer;
-        MeshRenderer m_MeshRenderer;
-        LineRenderer m_LineRenderer;
+        CubeRenderer    m_CubeRenderer;
+        MeshRenderer    m_MeshRenderer;
+        LineRenderer    m_LineRenderer;
+        OutlineRenderer m_OutlineRenderer;
         std::shared_ptr<ShadowMapPass> m_ShadowPass;
 
         // Deferred
@@ -100,5 +102,5 @@ namespace axe
 
     };
 
-    
+
 }

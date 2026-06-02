@@ -156,7 +156,7 @@ namespace axe
 			vertices.push_back({ {x, -height * 0.5f, z}, glm::normalize(glm::vec3(x, 0, z)), {(float)i / segments, 0.0f} });
 		}
 
-		// Lateral faces
+		// Lateral faces — CCW visto de fora
 		for (int i = 0; i < segments; i++)
 		{
 			uint32_t top1 = i * 2;
@@ -165,12 +165,12 @@ namespace axe
 			uint32_t bottom2 = (i + 1) * 2 + 1;
 
 			indices.push_back(top1);
-			indices.push_back(bottom1);
 			indices.push_back(top2);
+			indices.push_back(bottom1);
 
 			indices.push_back(bottom1);
-			indices.push_back(bottom2);
 			indices.push_back(top2);
+			indices.push_back(bottom2);
 		}
 
 		uint32_t baseIndex = (uint32_t)vertices.size();
@@ -189,22 +189,22 @@ namespace axe
 			float a1 = glm::two_pi<float>() * i / segments;
 			float a2 = glm::two_pi<float>() * (i + 1) / segments;
 
-			// Top
+			// Top — CCW visto de cima
 			vertices.push_back({ {radius * std::cos(a1), height * 0.5f, radius * std::sin(a1)}, {0,1,0}, {0.5f + 0.5f * std::cos(a1), 0.5f + 0.5f * std::sin(a1)} });
 			vertices.push_back({ {radius * std::cos(a2), height * 0.5f, radius * std::sin(a2)}, {0,1,0}, {0.5f + 0.5f * std::cos(a2), 0.5f + 0.5f * std::sin(a2)} });
 
 			indices.push_back(topCenter);
-			indices.push_back(baseIndex);
 			indices.push_back(baseIndex + 1);
+			indices.push_back(baseIndex);
 			baseIndex += 2;
 
-			// Bottom
+			// Bottom — CCW visto de baixo
 			vertices.push_back({ {radius * std::cos(a1), -height * 0.5f, radius * std::sin(a1)}, {0,-1,0}, {0.5f + 0.5f * std::cos(a1), 0.5f + 0.5f * std::sin(a1)} });
 			vertices.push_back({ {radius * std::cos(a2), -height * 0.5f, radius * std::sin(a2)}, {0,-1,0}, {0.5f + 0.5f * std::cos(a2), 0.5f + 0.5f * std::sin(a2)} });
 
 			indices.push_back(bottomCenter);
-			indices.push_back(baseIndex + 1);
 			indices.push_back(baseIndex);
+			indices.push_back(baseIndex + 1);
 			baseIndex += 2;
 		}
 
@@ -246,13 +246,14 @@ namespace axe
 				uint32_t a = r * (slices + 1) + s;
 				uint32_t b = a + slices + 1;
 
+				// CCW visto de fora
 				indices.push_back(a);
-				indices.push_back(b);
 				indices.push_back(a + 1);
+				indices.push_back(b);
 
 				indices.push_back(b);
-				indices.push_back(b + 1);
 				indices.push_back(a + 1);
+				indices.push_back(b + 1);
 			}
 		}
 

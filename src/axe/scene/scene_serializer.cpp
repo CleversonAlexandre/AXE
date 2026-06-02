@@ -4,11 +4,13 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/mesh_loader.hpp"
 #include "axe/log/log.hpp"
+#include "axe/lighting/point_light.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <imgui.h>
 #include "axe/graphics/renderer/post_process_pass.hpp"
+#include "axe/graphics/renderer/ssao_pass.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 namespace axe
 {
@@ -66,29 +68,29 @@ namespace axe
 				components["Mesh"]["uuid"] = c->AssetUUID;
 			}
 
-			
-			// MaterialComponent
-				if (auto* c = registry.try_get<MaterialComponent>(entity))
-				{
-					if (c->Data)
-					{
-						components["Material"]["material_asset_uuid"] = c->MaterialAssetUUID; 
-						components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
-						components["Material"]["specular_strength"] = c->Data->SpecularStrength;
-						components["Material"]["shininess"] = c->Data->Shininess;
-						components["Material"]["metallic"] = c->Data->Metallic;
-						components["Material"]["roughness"] = c->Data->Roughness;
-						components["Material"]["ao"] = c->Data->AO;
-						components["Material"]["use_pbr"] = c->Data->UsePBR;
 
-						// UUIDs das texturas
-						components["Material"]["albedo_uuid"] = c->Data->AlbedoUUID;
-						components["Material"]["normal_uuid"] = c->Data->NormalUUID;
-						components["Material"]["roughness_uuid"] = c->Data->RoughnessUUID;
-						components["Material"]["metallic_uuid"] = c->Data->MetallicUUID;
-						components["Material"]["ao_uuid"] = c->Data->AOUUID;
-					}
+			// MaterialComponent
+			if (auto* c = registry.try_get<MaterialComponent>(entity))
+			{
+				if (c->Data)
+				{
+					components["Material"]["material_asset_uuid"] = c->MaterialAssetUUID;
+					components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
+					components["Material"]["specular_strength"] = c->Data->SpecularStrength;
+					components["Material"]["shininess"] = c->Data->Shininess;
+					components["Material"]["metallic"] = c->Data->Metallic;
+					components["Material"]["roughness"] = c->Data->Roughness;
+					components["Material"]["ao"] = c->Data->AO;
+					components["Material"]["use_pbr"] = c->Data->UsePBR;
+
+					// UUIDs das texturas
+					components["Material"]["albedo_uuid"] = c->Data->AlbedoUUID;
+					components["Material"]["normal_uuid"] = c->Data->NormalUUID;
+					components["Material"]["roughness_uuid"] = c->Data->RoughnessUUID;
+					components["Material"]["metallic_uuid"] = c->Data->MetallicUUID;
+					components["Material"]["ao_uuid"] = c->Data->AOUUID;
 				}
+			}
 
 			// LightComponent
 			if (auto* c = registry.try_get<LightComponent>(entity))
@@ -99,8 +101,20 @@ namespace axe
 					components["Light"]["color"] = { c->Data->Color.x,      c->Data->Color.y,      c->Data->Color.z };
 					components["Light"]["intensity"] = c->Data->Intensity;
 					components["Light"]["ambient"] = c->Data->AmbientStrength;
+					components["Light"]["ibl_intensity"] = c->Data->IBLIntensity;
 					components["Light"]["specular"] = c->Data->SpecularStrength;
 					components["Light"]["shininess"] = c->Data->Shininess;
+				}
+			}
+			// PointLightComponent
+			if (auto* c = registry.try_get<PointLightComponent>(entity))
+			{
+				if (c->Data)
+				{
+					components["PointLight"]["position"] = { c->Data->Position.x, c->Data->Position.y, c->Data->Position.z };
+					components["PointLight"]["color"] = { c->Data->Color.x,    c->Data->Color.y,    c->Data->Color.z };
+					components["PointLight"]["intensity"] = c->Data->Intensity;
+					components["PointLight"]["radius"] = c->Data->Radius;
 				}
 			}
 			// PostProcessComponent
@@ -112,6 +126,11 @@ namespace axe
 				components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
 				components["PostProcess"]["bloom_intensity"] = c->Settings.BloomIntensity;
 				components["PostProcess"]["bloom_blur_passes"] = c->Settings.BloomBlurPasses;
+				components["PostProcess"]["ssao_enabled"] = c->SSAO.Enabled;
+				components["PostProcess"]["ssao_radius"] = c->SSAO.Radius;
+				components["PostProcess"]["ssao_bias"] = c->SSAO.Bias;
+				components["PostProcess"]["ssao_power"] = c->SSAO.Power;
+				components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
 			}
 
 			// RelationshipComponent
@@ -240,7 +259,7 @@ namespace axe
 						AXE_CORE_WARN("SceneSerializer: asset '{}' não encontrado.", uuid);
 				}
 			}
-			
+
 			// MaterialComponent
 			if (components.contains("Material"))
 			{
@@ -285,15 +304,12 @@ namespace axe
 				{
 					mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
 
-					// Recompila o shader
+					// Recompila o shader a partir do .axegraph
 					if (s_MaterialRecompileCallback && !mc.MaterialAssetUUID.empty())
-					{
-						auto shader = s_MaterialRecompileCallback(mc.MaterialAssetUUID);
-						if (shader) mat->SetShader(shader);
-					}
+						s_MaterialRecompileCallback(mc.MaterialAssetUUID, mat.get());
 				}
 
-							
+
 				registry.emplace<MaterialComponent>(entity, mc);
 			}
 
@@ -306,9 +322,22 @@ namespace axe
 				light->Color = { t["color"][0],     t["color"][1],     t["color"][2] };
 				light->Intensity = t["intensity"];
 				light->AmbientStrength = t["ambient"];
+				light->IBLIntensity = t.value("ibl_intensity", 1.0f);
 				light->SpecularStrength = t["specular"];
 				light->Shininess = t["shininess"];
 				registry.emplace<LightComponent>(entity, light);
+			}
+
+			// PointLightComponent
+			if (components.contains("PointLight"))
+			{
+				auto& t = components["PointLight"];
+				auto pl = std::make_shared<PointLight>();
+				pl->Position = { t["position"][0], t["position"][1], t["position"][2] };
+				pl->Color = { t["color"][0],    t["color"][1],    t["color"][2] };
+				pl->Intensity = t["intensity"];
+				pl->Radius = t["radius"];
+				registry.emplace<PointLightComponent>(entity, pl);
 			}
 
 			// PostProcessComponent
@@ -322,10 +351,15 @@ namespace axe
 				pp.Settings.BloomThreshold = t["bloom_threshold"];
 				pp.Settings.BloomIntensity = t["bloom_intensity"];
 				pp.Settings.BloomBlurPasses = t["bloom_blur_passes"];
+				pp.SSAO.Enabled = t.value("ssao_enabled", false);
+				pp.SSAO.Radius = t.value("ssao_radius", 0.5f);
+				pp.SSAO.Bias = t.value("ssao_bias", 0.025f);
+				pp.SSAO.Power = t.value("ssao_power", 2.0f);
+				pp.SSAO.KernelSize = t.value("ssao_kernel", 64);
 				registry.emplace<PostProcessComponent>(entity, pp);
 			}
 		}
-		
+
 
 
 		// --- Passo 2: reconstrói hierarquia ---
@@ -434,8 +468,19 @@ namespace axe
 					components["Light"]["color"] = { c->Data->Color.x,      c->Data->Color.y,      c->Data->Color.z };
 					components["Light"]["intensity"] = c->Data->Intensity;
 					components["Light"]["ambient"] = c->Data->AmbientStrength;
+					components["Light"]["ibl_intensity"] = c->Data->IBLIntensity;
 					components["Light"]["specular"] = c->Data->SpecularStrength;
 					components["Light"]["shininess"] = c->Data->Shininess;
+				}
+			}
+			if (auto* c = registry.try_get<PointLightComponent>(entity))
+			{
+				if (c->Data)
+				{
+					components["PointLight"]["position"] = { c->Data->Position.x, c->Data->Position.y, c->Data->Position.z };
+					components["PointLight"]["color"] = { c->Data->Color.x,    c->Data->Color.y,    c->Data->Color.z };
+					components["PointLight"]["intensity"] = c->Data->Intensity;
+					components["PointLight"]["radius"] = c->Data->Radius;
 				}
 			}
 			if (auto* c = registry.try_get<PostProcessComponent>(entity))
@@ -446,6 +491,11 @@ namespace axe
 				components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
 				components["PostProcess"]["bloom_intensity"] = c->Settings.BloomIntensity;
 				components["PostProcess"]["bloom_blur_passes"] = c->Settings.BloomBlurPasses;
+				components["PostProcess"]["ssao_enabled"] = c->SSAO.Enabled;
+				components["PostProcess"]["ssao_radius"] = c->SSAO.Radius;
+				components["PostProcess"]["ssao_bias"] = c->SSAO.Bias;
+				components["PostProcess"]["ssao_power"] = c->SSAO.Power;
+				components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
 			}
 
 			e["components"] = components;
@@ -552,6 +602,7 @@ namespace axe
 					light->Color = { t["color"][0],     t["color"][1],     t["color"][2] };
 					light->Intensity = t["intensity"];
 					light->AmbientStrength = t["ambient"];
+					light->IBLIntensity = t.value("ibl_intensity", 1.0f);
 					light->SpecularStrength = t["specular"];
 					light->Shininess = t["shininess"];
 					registry.emplace<LightComponent>(entity, light);

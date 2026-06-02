@@ -20,8 +20,11 @@ namespace axe
 		static std::string SerializeToString(const Scene& scene);
 		static bool DeserializeFromString(const std::string& data, Scene& scene);
 
+		// Callback recebe o UUID do asset e o Material* já criado.
+		// Responsabilidade: compilar o .axegraph e setar os shaders (forward + geometry)
+		// diretamente no material, além de preencher as texturas.
 		using MaterialRecompileCallback =
-			std::function<std::shared_ptr<Shader>(const std::string& assetUUID)>;
+			std::function<void(const std::string& assetUUID, Material* material)>;
 
 		static void SetMaterialRecompileCallback(MaterialRecompileCallback cb)
 		{

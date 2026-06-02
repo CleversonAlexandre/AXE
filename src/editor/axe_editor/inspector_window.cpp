@@ -18,7 +18,7 @@
 namespace axe
 {
 	static std::unique_ptr<MaterialGraph> s_CachedGraph;
-	static std::string s_CachedGraphUUID;	
+	static std::string s_CachedGraphUUID;
 	static bool s_GraphCacheDirty = false;
 
 	static void InvalidateGraphCache() { s_CachedGraphUUID = ""; }
@@ -167,21 +167,40 @@ namespace axe
 		{
 			DrawPostProcess(*pp);
 		}
+		else if (registry.any_of<PointLightComponent>(entity))
+		{
+			// Point Light não recebe material — nada a mostrar aqui
+		}
 		// Material
 		else if (registry.any_of<MaterialComponent>(entity))
 		{
-			DrawMaterial(entity); // ← passa entity, não o material
+			DrawMaterial(entity);
 		}
-		else if (!registry.any_of<LightComponent>(entity) &&
-			     !registry.any_of<PostProcessComponent>(entity))
+		else
 		{
 			ImGui::Separator();
-			// Objeto sem material — mostra slot vazio para arrastar
 			DrawMaterial(entity);
 		}
 
-		
+		// Point Light (pode coexistir com transform)
+		if (auto* plc = registry.try_get<PointLightComponent>(entity))
+		{
+			if (plc->Data)
+				DrawPointLight(*plc->Data);
+		}
+
 		ImGui::End();
+	}
+
+	void InspectorWindow::DrawPointLight(PointLight& light)
+	{
+		ImGui::Separator();
+		ImGui::Text("Point Light");
+		ImGui::TextDisabled("Posicione pelo Transform");
+
+		ImGui::ColorEdit3("Cor", glm::value_ptr(light.Color));
+		ImGui::DragFloat("Intensidade", &light.Intensity, 0.1f, 0.0f, 100.0f);
+		ImGui::DragFloat("Radius", &light.Radius, 0.1f, 0.1f, 200.0f);
 	}
 
 	void InspectorWindow::DrawLight(DirectionalLight& light)
@@ -192,9 +211,12 @@ namespace axe
 		ImGui::DragFloat3("Direção", glm::value_ptr(light.Direction), 0.01f, -1.0f, 1.0f);
 		ImGui::ColorEdit3("Cor", glm::value_ptr(light.Color));
 		ImGui::DragFloat("Intensidade", &light.Intensity, 0.01f, 0.0f, 10.0f);
-		ImGui::DragFloat("Ambient", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
-		ImGui::DragFloat("Specular", &light.SpecularStrength, 0.01f, 0.0f, 1.0f);
-		ImGui::DragFloat("Shininess", &light.Shininess, 1.0f, 1.0f, 256.0f);
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Luz Indireta");
+		ImGui::DragFloat("IBL Intensity", &light.IBLIntensity, 0.01f, 0.0f, 5.0f);
+		ImGui::DragFloat("Ambient Flat", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
+		ImGui::TextDisabled("IBL = reflexos do HDRI   Ambient = luz plana minima");
 	}
 
 	void InspectorWindow::DrawTransform(Transform& t)
@@ -314,10 +336,7 @@ namespace axe
 				auto material = matAsset->GetMaterial();
 
 				if (SceneSerializer::GetMaterialRecompileCallback())
-				{
-					auto shader = SceneSerializer::GetMaterialRecompileCallback()(record.UUID);
-					if (shader) material->SetShader(shader);
-				}
+					SceneSerializer::GetMaterialRecompileCallback()(record.UUID, material.get());
 
 				if (!mc)
 				{
@@ -420,7 +439,7 @@ namespace axe
 	{
 		if (s_GraphCacheDirty)
 		{
-			s_CachedGraphUUID = ""; 
+			s_CachedGraphUUID = "";
 			s_GraphCacheDirty = false;
 		}
 
@@ -531,7 +550,7 @@ namespace axe
 				}
 			}
 
-			ImGui::PopID(); 
+			ImGui::PopID();
 		}
 
 		if (!anyEditable)
@@ -551,21 +570,36 @@ namespace axe
 	{
 		ImGui::Separator();
 		ImGui::Text("Post Process Volume");
-
 		ImGui::Checkbox("Global", &pp.IsGlobal);
-		ImGui::Separator();
 
+		ImGui::Separator();
 		ImGui::Text("Tone Mapping");
 		ImGui::DragFloat("Exposure", &pp.Settings.Exposure, 0.01f, 0.1f, 10.0f);
+		const char* toneModes[] = { "Reinhard", "ACES" };
+		ImGui::Combo("Tone Map", &pp.Settings.ToneMapMode, toneModes, 2);
 
 		ImGui::Separator();
 		ImGui::Text("Bloom");
 		ImGui::Checkbox("Bloom Ativo", &pp.Settings.BloomEnabled);
 		if (pp.Settings.BloomEnabled)
 		{
-			ImGui::DragFloat("Threshold", &pp.Settings.BloomThreshold, 0.01f, 0.0f, 5.0f);
-			ImGui::DragFloat("Intensidade", &pp.Settings.BloomIntensity, 0.01f, 0.0f, 2.0f);
+			ImGui::DragFloat("Threshold", &pp.Settings.BloomThreshold, 0.01f, 0.0f, 3.0f);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Brilho minimo para extrair. Valores menores = mais bloom.");
+			ImGui::DragFloat("Intensidade", &pp.Settings.BloomIntensity, 0.01f, 0.0f, 3.0f);
 			ImGui::SliderInt("Blur Passes", &pp.Settings.BloomBlurPasses, 1, 10);
+		}
+
+		ImGui::Separator();
+		ImGui::Text("SSAO");
+		ImGui::Checkbox("SSAO Ativo", &pp.SSAO.Enabled);
+		if (pp.SSAO.Enabled)
+		{
+			ImGui::DragFloat("Radius", &pp.SSAO.Radius, 0.01f, 0.01f, 2.0f);
+			ImGui::DragFloat("Bias", &pp.SSAO.Bias, 0.001f, 0.0f, 0.1f);
+			ImGui::DragFloat("Power", &pp.SSAO.Power, 0.1f, 0.5f, 8.0f);
+			ImGui::SliderInt("Kernel Size", &pp.SSAO.KernelSize, 8, 64);
+			ImGui::Checkbox("Debug (mostra oclusão)", &pp.SSAO.Debug);
 		}
 	}
 } // namespace axe

@@ -47,7 +47,7 @@ namespace axe
 
 	void OpenGLRendererAPI::Clear()
 	{
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 	}
 
 	void OpenGLRendererAPI::SetDepthTest(bool enabled)
@@ -67,6 +67,7 @@ namespace axe
 		{
 		case DepthFunc::Less:      glDepthFunc(GL_LESS);    break;
 		case DepthFunc::LessEqual: glDepthFunc(GL_LEQUAL);  break;
+		case DepthFunc::Always:    glDepthFunc(GL_ALWAYS);  break;
 		}
 	}
 
@@ -74,6 +75,43 @@ namespace axe
 	{
 		if (enabled) glEnable(GL_CULL_FACE);
 		else         glDisable(GL_CULL_FACE);
+	}
+
+	void OpenGLRendererAPI::SetCullMode(bool frontFace)
+	{
+		glCullFace(frontFace ? GL_FRONT : GL_BACK);
+	}
+
+	void OpenGLRendererAPI::BindTextureUnit(uint32_t slot, uint32_t textureID)
+	{
+		glBindTextureUnit(slot, textureID);
+	}
+
+	void OpenGLRendererAPI::SetColorWrite(bool enabled)
+	{
+		GLboolean v = enabled ? GL_TRUE : GL_FALSE;
+		glColorMask(v, v, v, v);
+	}
+
+	void OpenGLRendererAPI::SetStencilTest(bool enabled)
+	{
+		if (enabled) glEnable(GL_STENCIL_TEST);
+		else         glDisable(GL_STENCIL_TEST);
+	}
+
+	void OpenGLRendererAPI::SetStencilWrite(uint32_t mask)
+	{
+		glStencilMask(mask);
+	}
+
+	void OpenGLRendererAPI::SetStencilFunc(uint32_t func, int ref, uint32_t mask)
+	{
+		glStencilFunc(func, ref, mask);
+	}
+
+	void OpenGLRendererAPI::SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass)
+	{
+		glStencilOp(fail, zfail, zpass);
 	}
 
 	void OpenGLRendererAPI::DrawIndexedCount(uint32_t indexCount)
@@ -100,6 +138,10 @@ namespace axe
 	void OpenGLRendererAPI::BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
 		uint32_t width, uint32_t height)
 	{
+		// Copia depth do G-Buffer (DEPTH32F texture) para o HDR (DEPTH24STENCIL8 renderbuffer).
+		// GL não permite blit entre formatos incompatíveis de depth diretamente,
+		// mas GL_DEPTH_BUFFER_BIT funciona desde que ambos tenham depth attachment.
+		// O stencil do HDR não vem do G-Buffer — é inicializado a 0 pelo Clear().
 		glBlitNamedFramebuffer(srcFBO, dstFBO,
 			0, 0, width, height,
 			0, 0, width, height,

@@ -65,11 +65,11 @@ namespace axe
 
 	public:
 		EditorLayer()
-			: Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>()) 
+			: Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>())
 		{
-			
+
 		}
-		
+
 		void OnAttach() override
 		{
 			AXE_EDITOR_INFO("EditorLayer attached");
@@ -80,7 +80,7 @@ namespace axe
 			m_Context.SelectedEntity = entt::null;
 			m_EditorUI->SetContext(&m_Context);
 
-			
+
 
 			// 2. Carrega cena padrão se existir, senão cria cena vazia
 			//if (ProjectManager::Get().HasStartScene())
@@ -149,11 +149,11 @@ namespace axe
 						auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
 						if (matAsset)
 							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
-							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
+						m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
 					}
 				});
 
-			
+
 
 			auto instantiate = [this](const std::string& uuid)
 				{
@@ -165,17 +165,17 @@ namespace axe
 					// Material — aplica no mesh selecionado
 					if (record->Type == AssetType::Material)
 					{
-						
+
 
 						if (!m_Context.HasSelection()) return;
-						
+
 						entt::entity selected = m_Context.SelectedEntity;
 						if (!registry.valid(selected)) return;
-						
-						if (!registry.all_of<MeshComponent>(selected)) return;
-						
 
-					
+						if (!registry.all_of<MeshComponent>(selected)) return;
+
+
+
 
 						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
 						if (!matAsset) return;
@@ -183,15 +183,9 @@ namespace axe
 						auto material = matAsset->GetMaterial();
 
 						// Usa o mesmo callback do SceneSerializer para recompilar
+						// (aplica forward + geometry shader + texturas direto no material)
 						if (SceneSerializer::GetMaterialRecompileCallback())
-						{
-							auto shader = SceneSerializer::GetMaterialRecompileCallback()(uuid);
-				
-							if (shader)
-								material->SetShader(shader);
-						}
-
-						
+							SceneSerializer::GetMaterialRecompileCallback()(uuid, material.get());
 
 						// Transfere texturas do grafo
 						auto graphPath = record->FilePath;
@@ -236,7 +230,7 @@ namespace axe
 						else
 							registry.emplace<MaterialComponent>(selected, matComp);
 
-					
+
 						AXE_EDITOR_INFO("Material '{}' aplicado.", record->Name);
 						return;
 					}
@@ -317,11 +311,9 @@ namespace axe
 
 						auto material = matAsset->GetMaterial();
 
+						// Recompila forward + geometry shader + texturas
 						if (SceneSerializer::GetMaterialRecompileCallback())
-						{
-							auto shader = SceneSerializer::GetMaterialRecompileCallback()(uuid);
-							if (shader) material->SetShader(shader);
-						}
+							SceneSerializer::GetMaterialRecompileCallback()(uuid, material.get());
 
 						auto matComp = MaterialComponent{ material };
 						matComp.MaterialAssetUUID = uuid;
@@ -335,7 +327,7 @@ namespace axe
 
 					// Mesh de arquivo
 					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-					
+
 					if (!asset.MeshData) return;
 					auto entity = m_Scene->CreateEntity(record->Name);
 					auto& mc = registry.emplace<MeshComponent>(entity);
@@ -408,14 +400,16 @@ namespace axe
 			m_EditorUI->m_MaterialEditorWindow.SetThumbnailRenderer(&m_ThumbnailRenderer);
 
 			SceneSerializer::SetMaterialRecompileCallback(
-				[](const std::string& assetUUID) -> std::shared_ptr<Shader>
+				[](const std::string& assetUUID, Material* material)
 				{
+					if (!material) return;
+
 					const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
-					if (!record) return nullptr;
+					if (!record) return;
 
 					auto graphPath = record->FilePath;
 					graphPath.replace_extension(".axegraph");
-					if (!std::filesystem::exists(graphPath)) return nullptr;
+					if (!std::filesystem::exists(graphPath)) return;
 
 					std::ifstream file(graphPath);
 					try
@@ -425,11 +419,29 @@ namespace axe
 						graph.Deserialize(j);
 
 						auto result = MaterialCompiler::Compile(&graph);
-						if (result.Success)
-							return Shader::Create(result.VertexShader, result.FragmentShader);
+						if (!result.Success) return;
+
+						// Forward shader
+						auto forwardShader = Shader::Create(result.VertexShader, result.FragmentShader);
+						if (forwardShader)
+							material->SetShader(forwardShader);
+
+						// Geometry shader (deferred G-Buffer)
+						if (!result.GeometryFragShader.empty())
+						{
+							auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
+							if (geometryShader)
+								material->SetGeometryShader(geometryShader);
+						}
+
+						// Texturas
+						material->SamplerTextures = result.SamplerTextures;
+						if (result.AlbedoTexture)
+							material->AlbedoMap = result.AlbedoTexture;
+						if (result.NormalTexture)
+							material->NormalMap = result.NormalTexture;
 					}
 					catch (...) {}
-					return nullptr;
 				});
 
 			m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
@@ -442,14 +454,14 @@ namespace axe
 
 		void OnDetach() override
 		{
-			
+
 			m_EditorUI.reset();
 
 		}
 
 		void OnUpdate(float deltaTime) override
-		{	
-			
+		{
+
 
 			// Carrega a cena no primeiro frame (após OpenGL estar pronto)
 			if (!m_SceneLoaded)
@@ -464,21 +476,21 @@ namespace axe
 				else
 				{
 					std::string defaultScene = "resources/default_scene/main.axescene";
-				
+
 					if (std::filesystem::exists(defaultScene))
 					{
-						
+
 						SceneSerializer::Deserialize(defaultScene, *m_Scene);
 					}
 					else
 					{
-						
+
 						m_Scene->CreateLight("Directional Light");
 
 						auto ppEntity = m_Scene->CreateEntity("Post Process Volume");
 						auto& registry = m_Scene->GetRegistry();
 						registry.emplace<PostProcessComponent>(ppEntity);
-						
+
 					}
 				}
 			}
@@ -504,7 +516,7 @@ namespace axe
 				AXE_CORE_ERROR("AssetBrowser é nullptr!");
 			}
 
-			
+
 
 
 			if (m_EditorState == EditorState::Play)
@@ -521,8 +533,8 @@ namespace axe
 				m_EscWasPressed = false;
 			}
 
-		
-			
+
+
 		}
 
 		void DrawPlayToolbar()
@@ -582,7 +594,7 @@ namespace axe
 		void OnRender() override
 
 		{
-			
+
 			m_ThumbnailRenderer.RenderPending();
 
 			// Atualiza câmera antes de renderizar
@@ -626,9 +638,9 @@ namespace axe
 			if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
 				m_EditorUI->m_MaterialEditorWindow.RenderPreview();
 
-			
+
 			m_EditorUI->Draw();
-			
+
 
 
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
@@ -644,14 +656,14 @@ namespace axe
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
 				HandleViewportCameraInput();
 
-			
+
 
 			HandleSceneInput();
 
 			std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
 			EditorApp::Get().GetWindow().SetTitle(title);
 		}
-		
+
 		void SaveScene()
 		{
 			if (!ProjectManager::Get().HasProject()) return;
@@ -711,7 +723,7 @@ namespace axe
 			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
 				LoadScene();
 
-			
+
 		}
 
 
@@ -738,7 +750,7 @@ namespace axe
 				});
 		}
 
-	
+
 		void HandleViewportCameraInput()
 		{
 			if (!m_EditorUI) return;
@@ -884,8 +896,8 @@ namespace axe
 
 
 
-	
-		
+
+
 
 	private:
 		std::unique_ptr<Scene> m_Scene;
@@ -895,7 +907,7 @@ namespace axe
 		std::unique_ptr<EditorUI> m_EditorUI;
 
 		EditorContext m_Context;
-		
+
 
 		float m_DeltaTime = 0.0f;
 		float m_FPS = 0.0f;
@@ -905,6 +917,6 @@ namespace axe
 		bool m_EscWasPressed = false;
 
 		SceneEnvironment m_Environment;
-		
+
 	};
-}    
+}

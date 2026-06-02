@@ -35,7 +35,7 @@ namespace axe
             AXE_CORE_ERROR("MaterialCompiler: {}", result.ErrorMessage);
             return result;
         }
-        
+
         // 2. Atribui samplers — percorre todos os Texture Sample
         {
             int slot = 0;
@@ -133,6 +133,7 @@ namespace axe
         fs << "uniform samplerCube u_PrefilteredMap;\n";
         fs << "uniform sampler2D   u_BRDFLut;\n";
         fs << "uniform int         u_HasIBL;\n\n";
+        fs << "uniform float u_IBLIntensity;\n";
         fs << "uniform float u_AmbientStrength;\n";
 
         // Declara samplers usando m_NodeSamplers já preenchido
@@ -293,15 +294,15 @@ namespace axe
         fs << "                                matRoughness * MAX_REFLECTION_LOD).rgb;\n";
         fs << "        vec2 brdf = texture(u_BRDFLut, vec2(NdotV, matRoughness)).rg;\n";
         fs << "        vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);\n";
-        fs << "        ambient = (kD_amb * diffuse_ibl + specular_ibl) * matAO;\n";
+        fs << "        ambient = (kD_amb * diffuse_ibl + specular_ibl) * matAO * u_IBLIntensity;\n";
         fs << "    }\n";
         fs << "    else\n";
         fs << "    {\n";
-        //fs << "        ambient = matBaseColor * 0.03 * u_LightColor;\n";
         fs << "        ambient = matBaseColor * u_AmbientStrength * u_LightColor;\n";
         fs << "    }\n\n";
 
-        fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n\n";
+        fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n";
+        fs << "    finalColor = max(finalColor, matBaseColor * 0.02);\n\n";
         //fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
         //fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
         fs << "    FragColor = vec4(finalColor, matOpacity);\n";
@@ -404,9 +405,9 @@ namespace axe
     }
 
 
-   // =========================================================================
-   // Percurso do grafo
-   // =========================================================================
+    // =========================================================================
+    // Percurso do grafo
+    // =========================================================================
 
 
     void MaterialCompiler::VisitNode(Node* node)
@@ -418,13 +419,13 @@ namespace axe
         m_VisitedNodes.insert(id);
 
         //Visita inputs primeiro (garante ordem topológica)        
-        for (auto& input : node->Inputs)        
-            VisitPin(&input);        
+        for (auto& input : node->Inputs)
+            VisitPin(&input);
 
         // Depois gera código para este node
         std::string code = GenerateNodeCode(node);
         if (!code.empty())
-            m_FragmentCode += code + "\n";        
+            m_FragmentCode += code + "\n";
     }
 
     void MaterialCompiler::VisitPin(Pin* pin)
@@ -436,9 +437,9 @@ namespace axe
         if (src)VisitNode(src);
     }
 
-       // =========================================================================
-       // Geração de código GLSL por tipo de node
-       // =========================================================================
+    // =========================================================================
+    // Geração de código GLSL por tipo de node
+    // =========================================================================
 
 
     std::string MaterialCompiler::GenerateNodeCode(Node* node)
@@ -633,7 +634,7 @@ namespace axe
             else
                 code << GetGLSLType(typeA) << " " << var
                 << " = pow(max(" << valA << ", 0.0), " << valB << ");";
-                }
+        }
 
         // -----------------------------------------------------------------
         // Lerp — mix(A, B, Alpha)
@@ -710,9 +711,9 @@ namespace axe
             RegisterPin(node->Outputs[0].ID, var, typeV);
             code << GetGLSLType(typeV) << " " << var
                 << " = clamp(" << val << ", " << minVal << ", " << maxVal << ");";
-         }
+        }
 
-                // Abs
+        // Abs
         else if (node->Name == "Abs")
         {
             std::string var = MakeVar("abs");
@@ -724,9 +725,9 @@ namespace axe
 
             RegisterPin(node->Outputs[0].ID, var, type);
             code << GetGLSLType(type) << " " << var << " = abs(" << val << ");";
-            }
+        }
 
-            // OneMinus
+        // OneMinus
         else if (node->Name == "OneMinus")
         {
             std::string var = MakeVar("oneminus");
@@ -742,9 +743,9 @@ namespace axe
             std::string one = (type == PinType::Vec3) ? "vec3(1.0)" :
                 (type == PinType::Vec4) ? "vec4(1.0)" : "1.0";
             code << GetGLSLType(type) << " " << var << " = " << one << " - " << val << ";";
-            }
+        }
 
-            // World Position
+        // World Position
         else if (node->Name == "World Position")
         {
             std::string var = MakeVar("worldpos");
@@ -753,9 +754,9 @@ namespace axe
             RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float); // Y
             RegisterPin(node->Outputs[3].ID, var + ".z", PinType::Float); // Z
             code << "vec3 " << var << " = v_FragPos;";
-            }
+        }
 
-            // Fresnel
+        // Fresnel
         else if (node->Name == "Fresnel")
         {
             std::string var = MakeVar("fresnel");
@@ -816,7 +817,7 @@ namespace axe
                 << "_raw * 2.0 - 1.0);\n";
             code << "vec3 " << var << " = normalize(mat3(v_Tangent, v_Bitangent, v_Normal) * "
                 << var << "_ts * vec3(" << strength << ", " << strength << ", 1.0));";
-                }
+        }
 
         return code.str();
     }

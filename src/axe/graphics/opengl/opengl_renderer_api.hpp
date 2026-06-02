@@ -17,6 +17,13 @@ namespace axe
         void SetDepthFunc(DepthFunc func) override;
 
         void SetCullFace(bool enabled) override;
+        void SetCullMode(bool frontFace) override;
+        void BindTextureUnit(uint32_t slot, uint32_t textureID) override;
+        void SetColorWrite(bool enabled) override;
+        void SetStencilTest(bool enabled) override;
+        void SetStencilWrite(uint32_t mask) override;
+        void SetStencilFunc(uint32_t func, int ref, uint32_t mask) override;
+        void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass) override;
 
         void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) override;
         void DrawIndexedCount(uint32_t indexCount) override;

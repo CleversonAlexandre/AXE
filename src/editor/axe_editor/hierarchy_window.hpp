@@ -15,6 +15,7 @@ namespace axe
         void SetContext(EditorContext* context);
         void Draw();
         void CreatePostProcess();
+        void CreatePointLight();
 
         // Criação
         void CreateObject(const std::string& name, const std::string& primitiveUUID);

@@ -1,6 +1,7 @@
 #include "hierarchy_window.hpp"
 #include "axe/scene/scene_objects.hpp"
 #include "axe/scene/components.hpp"
+#include "axe/lighting/point_light.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 #include <imgui.h>
@@ -218,6 +219,9 @@ namespace axe
             if (ImGui::MenuItem("Luz Direcional"))
                 CreateLight();
 
+            if (ImGui::MenuItem("Point Light"))
+                CreatePointLight();
+
             if (ImGui::MenuItem("Post Process Volume"))
                 CreatePostProcess();
 
@@ -321,6 +325,21 @@ namespace axe
     void HierarchyWindow::CreateLight()
     {
         auto entity = m_Context->ActiveScene->CreateLight();
+        m_Context->Select(entity);
+    }
+
+    void HierarchyWindow::CreatePointLight()
+    {
+        auto& scene = *m_Context->ActiveScene;
+        auto  entity = scene.CreateEntity("Point Light");
+        auto& registry = scene.GetRegistry();
+
+        auto pl = std::make_shared<PointLight>();
+        // Posiciona na origem por padrão — usuário move pelo transform
+        if (auto* tc = registry.try_get<TransformComponent>(entity))
+            pl->Position = tc->Data.Position;
+
+        registry.emplace<PointLightComponent>(entity, pl);
         m_Context->Select(entity);
     }
 

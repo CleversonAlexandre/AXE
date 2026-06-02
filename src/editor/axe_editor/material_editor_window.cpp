@@ -79,11 +79,15 @@ namespace axe
         m_PreviewRenderer->Initialize();
         m_PreviewRenderer->SetPickingEnabled(false);
         m_PreviewRenderer->SetPreviewMode(true);
-        //if (m_PreviewRenderer->GetSceneRenderer())
-        //    m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
 
-
-       
+        // Força forward imediatamente após Initialize — garante que mesmo que
+        // SetPreviewMode seja chamado tarde ou revertido, o SceneRenderer já
+        // começa com deferred desabilitado permanentemente para este renderer.
+        if (m_PreviewRenderer->GetSceneRenderer())
+        {
+            m_PreviewRenderer->GetSceneRenderer()->SetDeferredEnabled(false);
+            m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
+        }
 
         // Cena isolada com a esfera de preview
         m_PreviewScene = std::make_unique<Scene>();
@@ -123,9 +127,9 @@ namespace axe
         m_PreviewEnvironment = std::make_unique<SceneEnvironment>();
         m_PreviewEnvironment->LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
-        
+
         if (m_PreviewRenderer->GetSceneRenderer())
-            m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());        
+            m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
     }
 
     // -------------------------------------------------------------------------
@@ -136,9 +140,13 @@ namespace axe
     {
         if (!m_PreviewRenderer || !m_PreviewFramebuffer || !m_PreviewScene) return;
 
-        // ✅ Garante forward ANTES de renderizar
-        if (m_PreviewRenderer->GetSceneRenderer())
-            m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
+        // Segunda linha de defesa — garante forward mesmo que algo externo
+        // tenha alterado o SceneRenderer entre frames.
+        if (auto* sr = m_PreviewRenderer->GetSceneRenderer())
+        {
+            sr->SetDeferredEnabled(false);
+            sr->SetDeferredSupported(false);
+        }
 
         m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
         if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
@@ -151,31 +159,6 @@ namespace axe
         m_PreviewRenderer->SetScene(m_PreviewScene.get());
         m_PreviewRenderer->RenderToFramebuffer(*m_PreviewFramebuffer, width, height, 0.0f);
     }
-
-    //void MaterialEditorWindow::RenderPreview()
-    //{
-    //    if (!m_PreviewRenderer || !m_PreviewFramebuffer || !m_PreviewScene) return;
-
-    //    // Garante que o environment está no ViewportRenderer
-    //    m_PreviewRenderer->SetEnvironment(m_PreviewEnvironment.get());
-
-    //    if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
-    //        m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
-
-    //    //if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
-    //    //{
-    //    //    m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
-    //    //    // ✅ Garante forward com IBL
-    //    //    m_PreviewRenderer->GetSceneRenderer()->SetDeferredSupported(false);
-    //    //}
-
-    //    uint32_t width = (uint32_t)m_PreviewSize.x;
-    //    uint32_t height = (uint32_t)m_PreviewSize.y;
-    //    if (width == 0 || height == 0) { width = 512; height = 512; }
-
-    //    m_PreviewRenderer->SetScene(m_PreviewScene.get());
-    //    m_PreviewRenderer->RenderToFramebuffer(*m_PreviewFramebuffer, width, height, 0.0f);
-    //}
 
     // -------------------------------------------------------------------------
     // Abertura de material
