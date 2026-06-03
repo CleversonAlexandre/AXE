@@ -1,4 +1,6 @@
 #include "editor_ui.hpp"
+#include "file_dialog.hpp"
+#include "editor_app.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "axe/log/log.hpp"
@@ -13,6 +15,15 @@ namespace axe
 		m_InspectorWindow.Draw();
 		m_ViewportWindow.Draw();
 		m_MaterialEditorWindow.Draw();
+
+		// Painel de Environment — flutuante, abrível pelo menu View
+		if (m_ShowEnvironment && OnDrawEnvironment)
+		{
+			ImGui::SetNextWindowSize(ImVec2(320, 180), ImGuiCond_FirstUseEver);
+			if (ImGui::Begin("Environment", &m_ShowEnvironment))
+				OnDrawEnvironment();
+			ImGui::End();
+		}
 
 		EndDockspace();
 	}
@@ -55,7 +66,7 @@ namespace axe
 		ImGui::PopStyleVar(3); // restaura os 3 estilos que feitos o push
 
 		//Cria o DockSpace dentro da janela host
-		ImGuiIO& io = ImGui::GetIO();		
+		ImGuiIO& io = ImGui::GetIO();
 		if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable)
 		{
 			ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
@@ -78,7 +89,7 @@ namespace axe
 
 	void EditorUI::SetViewportRenderer(ViewportRenderer* renderer)
 	{
-		m_ViewportRenderer = renderer;		
+		m_ViewportRenderer = renderer;
 	}
 
 	void EditorUI::EndDockspace()
@@ -86,20 +97,64 @@ namespace axe
 		ImGui::End(); // fecha a janela host
 	}
 
-	void EditorUI::DrawMenuBar() 
+	void EditorUI::DrawMenuBar()
 	{
 		if (ImGui::BeginMenuBar())
 		{
 			if (ImGui::BeginMenu("File"))
 			{
-				if (ImGui::MenuItem("New Scene", "Ctrl+N")) {}
-				if (ImGui::MenuItem("Open Scene", "Ctrl+O")) {}
-				if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {}
-				ImGui::Separator();
-				if (ImGui::MenuItem("Exit", "Alt+F4"))
+				if (ImGui::MenuItem("Nova Cena", "Ctrl+N"))
 				{
-					// futuramente: EditorApp::Get().Close();
+					if (OnNewScene) OnNewScene();
 				}
+
+				ImGui::Separator();
+
+				if (ImGui::MenuItem("Desfazer", "Ctrl+Z",
+					false, OnCanUndo && OnCanUndo()))
+				{
+					if (OnUndo) OnUndo();
+				}
+
+				if (ImGui::MenuItem("Refazer", "Ctrl+Y",
+					false, OnCanRedo && OnCanRedo()))
+				{
+					if (OnRedo) OnRedo();
+				}
+
+				ImGui::Separator();
+
+				if (ImGui::MenuItem("Abrir Cena...", "Ctrl+O"))
+				{
+					auto path = FileDialog::Open(
+						"AXE Scene\0*.axescene\0All Files\0*.*\0",
+						"Abrir Cena",
+						"axescene");
+					if (!path.empty() && OnOpenScene)
+						OnOpenScene(path.string());
+				}
+
+				if (ImGui::MenuItem("Salvar Cena", "Ctrl+S"))
+				{
+					// Salva no path atual sem dialog
+					if (OnSaveScene) OnSaveScene("");
+				}
+
+				if (ImGui::MenuItem("Salvar Cena Como...", "Ctrl+Shift+S"))
+				{
+					auto path = FileDialog::Save(
+						"AXE Scene\0*.axescene\0All Files\0*.*\0",
+						"Salvar Cena",
+						"axescene");
+					if (!path.empty() && OnSaveScene)
+						OnSaveScene(path.string());
+				}
+
+				ImGui::Separator();
+
+				if (ImGui::MenuItem("Sair", "Alt+F4"))
+					EditorApp::Get().Close();
+
 				ImGui::EndMenu();
 			}
 
@@ -109,6 +164,8 @@ namespace axe
 				ImGui::MenuItem("Viewport", nullptr, &m_ShowViewport);
 				ImGui::MenuItem("Inspector", nullptr, &m_ShowInspector);
 				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);
+				ImGui::Separator();
+				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);
 				ImGui::EndMenu();
 			}
 
@@ -122,9 +179,9 @@ namespace axe
 		// O ImGui salva o layout no imgui.ini e restaura nas próximas vezes
 		static bool layoutBuilt = false;
 		if (layoutBuilt) return;
-			layoutBuilt = true;
+		layoutBuilt = true;
 
-			//Limpa qualquer layout existente e começa do zero
+		//Limpa qualquer layout existente e começa do zero
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
@@ -162,9 +219,9 @@ namespace axe
 
 	}
 
-	
-		
-		
-		
-	
+
+
+
+
+
 }

@@ -28,6 +28,11 @@ namespace axe
             s_RendererAPI->Clear();
         }
 
+        static void ClearColorDepth()
+        {
+            s_RendererAPI->ClearColorDepth();
+        }
+
         static void SetDepthTest(bool enabled)
         {
             s_RendererAPI->SetDepthTest(enabled);
@@ -58,6 +63,28 @@ namespace axe
             s_RendererAPI->SetColorWrite(enabled);
         }
 
+        static void SetStencilTest(bool enabled)
+        {
+            s_RendererAPI->SetStencilTest(enabled);
+        }
+
+        static void SetStencilWrite(uint32_t mask)
+        {
+            s_RendererAPI->SetStencilWrite(mask);
+        }
+
+        // func: GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, etc.
+        static void SetStencilFunc(uint32_t func, int ref, uint32_t mask)
+        {
+            s_RendererAPI->SetStencilFunc(func, ref, mask);
+        }
+
+        // fail/zfail/zpass: GL_KEEP, GL_REPLACE, GL_ZERO, etc.
+        static void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass)
+        {
+            s_RendererAPI->SetStencilOp(fail, zfail, zpass);
+        }
+
         static void BindTextureUnit(uint32_t slot, uint32_t textureID)
         {
             s_RendererAPI->BindTextureUnit(slot, textureID);
@@ -86,26 +113,6 @@ namespace axe
             uint32_t width, uint32_t height)
         {
             s_RendererAPI->BlitDepth(srcFBO, dstFBO, width, height);
-        }
-
-        static void SetStencilTest(bool enabled)
-        {
-            s_RendererAPI->SetStencilTest(enabled);
-        }
-
-        static void SetStencilWrite(uint32_t mask)
-        {
-            s_RendererAPI->SetStencilWrite(mask);
-        }
-
-        static void SetStencilFunc(uint32_t func, int ref, uint32_t mask)
-        {
-            s_RendererAPI->SetStencilFunc(func, ref, mask);
-        }
-
-        static void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass)
-        {
-            s_RendererAPI->SetStencilOp(fail, zfail, zpass);
         }
 
     private:

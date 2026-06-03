@@ -2,6 +2,8 @@
 
 #include "axe/layers/layer.hpp"
 #include "editor_ui.hpp"
+#include "file_dialog.hpp"
+#include "axe/core/command_history.hpp"
 
 #include "GLFW/glfw3.h"
 #include <iostream>
@@ -65,11 +67,11 @@ namespace axe
 
 	public:
 		EditorLayer()
-			: Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>())
+			: Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>()) 
 		{
-
+			
 		}
-
+		
 		void OnAttach() override
 		{
 			AXE_EDITOR_INFO("EditorLayer attached");
@@ -80,7 +82,77 @@ namespace axe
 			m_Context.SelectedEntity = entt::null;
 			m_EditorUI->SetContext(&m_Context);
 
+			// Callbacks do menu File
+			m_EditorUI->OnNewScene = [this]()
+			{
+				m_Scene = std::make_unique<Scene>();
+				m_Context.ActiveScene    = m_Scene.get();
+				m_Context.SelectedEntity = entt::null;
+				m_ViewportRenderer->SetScene(m_Scene.get());
+				m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
+				m_CurrentScenePath.clear();
+				EnsureEnvironmentComponent();
+				AXE_EDITOR_INFO("Nova cena criada.");
+			};
 
+			m_EditorUI->OnOpenScene = [this](const std::string& path)
+			{
+				m_Scene = std::make_unique<Scene>();
+				m_Context.ActiveScene    = m_Scene.get();
+				m_Context.SelectedEntity = entt::null;
+				m_ViewportRenderer->SetScene(m_Scene.get());
+				m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
+				SceneSerializer::Deserialize(path, *m_Scene);
+				m_CurrentScenePath = path;
+				EnsureEnvironmentComponent();
+				AXE_EDITOR_INFO("Cena aberta: {}", path);
+			};
+
+			m_EditorUI->OnSaveScene = [this](const std::string& path)
+			{
+				std::string savePath = path.empty() ? m_CurrentScenePath : path;
+				if (savePath.empty())
+				{
+					// Nenhum path definido — abre Save As
+					m_EditorUI->OnSaveScene(
+						FileDialog::Save(
+							"AXE Scene\0*.axescene\0",
+							"Salvar Cena",
+							"axescene").string());
+					return;
+				}
+				SceneSerializer::Serialize(*m_Scene, savePath);
+				m_CurrentScenePath = savePath;
+				AXE_EDITOR_INFO("Cena salva em: {}", savePath);
+			};
+
+			m_EditorUI->OnUndo     = [this]() { m_CommandHistory.Undo(); };
+			m_EditorUI->OnRedo     = [this]() { m_CommandHistory.Redo(); };
+			m_EditorUI->OnCanUndo  = [this]() { return m_CommandHistory.CanUndo(); };
+			m_EditorUI->OnCanRedo  = [this]() { return m_CommandHistory.CanRedo(); };
+			m_EditorUI->OnDrawEnvironment = [this]()
+			{
+				std::string shortPath = m_Environment.SkyboxPath.empty() ? "Nenhum" :
+					std::filesystem::path(m_Environment.SkyboxPath).filename().string();
+				ImGui::TextDisabled("HDRI:");
+				ImGui::SameLine();
+				ImGui::Text("%s", shortPath.c_str());
+
+				if (ImGui::Button("Carregar HDRI..."))
+				{
+					auto p = FileDialog::Open(
+						"HDR Image\0*.hdr;*.exr\0All Files\0*.*\0",
+						"Selecionar HDRI", "hdr");
+					if (!p.empty())
+						m_Environment.LoadHDRI(p.string());
+				}
+
+				ImGui::Separator();
+				ImGui::DragFloat("Rotação Skybox", &m_Environment.SkyboxRotation,
+					1.0f, -360.0f, 360.0f);
+			};
+
+			
 
 			// 2. Carrega cena padrão se existir, senão cria cena vazia
 			//if (ProjectManager::Get().HasStartScene())
@@ -136,7 +208,11 @@ namespace axe
 					m_Context.Select(entity);
 
 					if (ProjectManager::Get().HasProject())
-						AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+					{
+						auto& root = ProjectManager::Get().GetCurrent().RootPath;
+						AssetDatabase::Get().Save(root);
+						m_EditorUI->GetAssetBrowser()->SaveFolders(root);
+					}
 
 					AXE_CORE_INFO("EditorLayer: '{}' importado. UUID: {}", name, uuid);
 				}
@@ -149,11 +225,11 @@ namespace axe
 						auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
 						if (matAsset)
 							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
-						m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
+							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
 					}
 				});
 
-
+			
 
 			auto instantiate = [this](const std::string& uuid)
 				{
@@ -165,17 +241,17 @@ namespace axe
 					// Material — aplica no mesh selecionado
 					if (record->Type == AssetType::Material)
 					{
-
+						
 
 						if (!m_Context.HasSelection()) return;
-
+						
 						entt::entity selected = m_Context.SelectedEntity;
 						if (!registry.valid(selected)) return;
-
+						
 						if (!registry.all_of<MeshComponent>(selected)) return;
+						
 
-
-
+					
 
 						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
 						if (!matAsset) return;
@@ -230,7 +306,7 @@ namespace axe
 						else
 							registry.emplace<MaterialComponent>(selected, matComp);
 
-
+					
 						AXE_EDITOR_INFO("Material '{}' aplicado.", record->Name);
 						return;
 					}
@@ -327,7 +403,7 @@ namespace axe
 
 					// Mesh de arquivo
 					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-
+					
 					if (!asset.MeshData) return;
 					auto entity = m_Scene->CreateEntity(record->Name);
 					auto& mc = registry.emplace<MeshComponent>(entity);
@@ -388,6 +464,7 @@ namespace axe
 			// 5. Inicializa o renderer
 			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
 			m_ViewportRenderer->Initialize();
+			m_ViewportRenderer->SetCommandHistory(&m_CommandHistory);
 			viewport->SetViewportRenderer(m_ViewportRenderer.get());
 			m_ViewportRenderer->SetScene(m_Scene.get());
 			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
@@ -449,19 +526,24 @@ namespace axe
 
 			m_EditorUI->m_MaterialEditorWindow.Initialize();
 
+			// Carrega pastas virtuais do projeto atual
+			if (ProjectManager::Get().HasProject())
+				m_EditorUI->GetAssetBrowser()->LoadFolders(
+					ProjectManager::Get().GetCurrent().RootPath);
+
 
 		}
 
 		void OnDetach() override
 		{
-
+			
 			m_EditorUI.reset();
 
 		}
 
 		void OnUpdate(float deltaTime) override
-		{
-
+		{	
+			
 
 			// Carrega a cena no primeiro frame (após OpenGL estar pronto)
 			if (!m_SceneLoaded)
@@ -476,22 +558,24 @@ namespace axe
 				else
 				{
 					std::string defaultScene = "resources/default_scene/main.axescene";
-
+				
 					if (std::filesystem::exists(defaultScene))
 					{
-
 						SceneSerializer::Deserialize(defaultScene, *m_Scene);
 					}
 					else
 					{
-
 						m_Scene->CreateLight("Directional Light");
 
 						auto ppEntity = m_Scene->CreateEntity("Post Process Volume");
-						auto& registry = m_Scene->GetRegistry();
-						registry.emplace<PostProcessComponent>(ppEntity);
+						auto& reg = m_Scene->GetRegistry();
+						reg.emplace<PostProcessComponent>(ppEntity);
 
+						m_Scene->CreateFolder("Enviroment");
 					}
+
+					// Garante que a entity Enviroment tem EnvironmentComponent
+					EnsureEnvironmentComponent();
 				}
 			}
 
@@ -516,7 +600,7 @@ namespace axe
 				AXE_CORE_ERROR("AssetBrowser é nullptr!");
 			}
 
-
+			
 
 
 			if (m_EditorState == EditorState::Play)
@@ -533,8 +617,8 @@ namespace axe
 				m_EscWasPressed = false;
 			}
 
-
-
+		
+			
 		}
 
 		void DrawPlayToolbar()
@@ -594,7 +678,7 @@ namespace axe
 		void OnRender() override
 
 		{
-
+			
 			m_ThumbnailRenderer.RenderPending();
 
 			// Atualiza câmera antes de renderizar
@@ -627,41 +711,76 @@ namespace axe
 				if (viewport)
 				{
 					// Gizmo só no modo Edit
-					if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
-					{
-						m_ViewportRenderer->DrawGuizmo(
-							viewport->GetBoundsMin(),
-							viewport->GetBoundsMax());
-					}
+					//if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
+					//{
+					//	m_ViewportRenderer->DrawGuizmo(
+					//		viewport->GetBoundsMin(),
+					//		viewport->GetBoundsMax());
+					//}
 				}
 			}
 			if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
 				m_EditorUI->m_MaterialEditorWindow.RenderPreview();
 
-
+			
 			m_EditorUI->Draw();
-
+			
 
 
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
 			{
 				ViewportWindow* viewport = m_EditorUI->GetViewport();
-				if (viewport)
-					m_ViewportRenderer->DrawGuizmo(
-						viewport->GetBoundsMin(),
-						viewport->GetBoundsMax());
+				//if (viewport)
+				//	m_ViewportRenderer->DrawGuizmo(
+				//		viewport->GetBoundsMin(),
+				//		viewport->GetBoundsMax());
 			}
 
 			// Input de câmera só no modo Edit
 			if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
 				HandleViewportCameraInput();
 
-
+			
 
 			HandleSceneInput();
 
 			std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
 			EditorApp::Get().GetWindow().SetTitle(title);
+		}
+		
+		// Garante que a cena tem uma entity com EnvironmentComponent.
+		// Procura pela entity "Enviroment" (Folder) existente — se não tiver
+		// o componente, adiciona com valores padrão.
+		void EnsureEnvironmentComponent()
+		{
+			if (!m_Scene) return;
+			auto& registry = m_Scene->GetRegistry();
+
+			// Procura entity com nome "Enviroment"
+			for (auto entity : registry.view<NameComponent>())
+			{
+				auto& name = registry.get<NameComponent>(entity).Name;
+				if (name == "Enviroment" || name == "Environment")
+				{
+					if (!registry.any_of<EnvironmentComponent>(entity))
+					{
+						auto& ec = registry.emplace<EnvironmentComponent>(entity);
+						ec.HDRIPath       = m_Environment.SkyboxPath.empty()
+							? "resources/quarry_04_puresky_2k.hdr"
+							: m_Environment.SkyboxPath;
+						ec.SkyboxRotation = m_Environment.SkyboxRotation;
+					}
+					return;
+				}
+			}
+
+			// Não encontrou — cria nova entity
+			auto envEntity = m_Scene->CreateFolder("Enviroment");
+			auto& ec = registry.emplace<EnvironmentComponent>(envEntity);
+			ec.HDRIPath       = m_Environment.SkyboxPath.empty()
+				? "resources/quarry_04_puresky_2k.hdr"
+				: m_Environment.SkyboxPath;
+			ec.SkyboxRotation = 0.0f;
 		}
 
 		void SaveScene()
@@ -709,21 +828,48 @@ namespace axe
 		{
 			ImGuiIO& io = ImGui::GetIO();
 
+			// Undo / Redo
+			if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+				m_CommandHistory.Undo();
+
+			if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) ||
+				(io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))))
+				m_CommandHistory.Redo();
+
 			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
 			{
-				// Se o material editor estiver focado, salva o grafo
 				if (m_EditorUI->m_MaterialEditorWindow.IsOpen() &&
 					m_EditorUI->m_MaterialEditorWindow.IsFocused())
 					m_EditorUI->m_MaterialEditorWindow.SaveGraph();
-				else
-					SaveScene(); // caso contrário salva a cena
+				else if (m_EditorUI->OnSaveScene)
+					m_EditorUI->OnSaveScene(m_CurrentScenePath);
 			}
 
+			if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S))
+			{
+				auto path = FileDialog::Save(
+					"AXE Scene\0*.axescene\0",
+					"Salvar Cena Como",
+					"axescene");
+				if (!path.empty() && m_EditorUI->OnSaveScene)
+					m_EditorUI->OnSaveScene(path.string());
+			}
 
 			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
-				LoadScene();
+			{
+				auto path = FileDialog::Open(
+					"AXE Scene\0*.axescene\0All Files\0*.*\0",
+					"Abrir Cena",
+					"axescene");
+				if (!path.empty() && m_EditorUI->OnOpenScene)
+					m_EditorUI->OnOpenScene(path.string());
+			}
 
-
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
+			{
+				if (m_EditorUI->OnNewScene)
+					m_EditorUI->OnNewScene();
+			}
 		}
 
 
@@ -750,7 +896,7 @@ namespace axe
 				});
 		}
 
-
+	
 		void HandleViewportCameraInput()
 		{
 			if (!m_EditorUI) return;
@@ -896,18 +1042,20 @@ namespace axe
 
 
 
-
-
+	
+		
 
 	private:
 		std::unique_ptr<Scene> m_Scene;
 		bool m_SceneLoaded = false;
+		std::string m_CurrentScenePath;
 
 		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
 		std::unique_ptr<EditorUI> m_EditorUI;
 
 		EditorContext m_Context;
 
+		CommandHistory m_CommandHistory; // undo/redo global do editor
 
 		float m_DeltaTime = 0.0f;
 		float m_FPS = 0.0f;
@@ -917,6 +1065,6 @@ namespace axe
 		bool m_EscWasPressed = false;
 
 		SceneEnvironment m_Environment;
-
+		
 	};
 }

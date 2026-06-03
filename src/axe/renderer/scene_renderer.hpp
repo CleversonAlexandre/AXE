@@ -1,5 +1,6 @@
 #pragma once
 #include "axe/core/types.hpp"
+#include "render_queue.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/graphics/renderer/cube_renderer.hpp"
 #include "axe/graphics/editor_camera.hpp"
@@ -10,7 +11,6 @@
 #include "axe/graphics/renderer/geometry_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 #include "axe/graphics/renderer/lighting_pass.hpp"
-#include <entt/entt.hpp>
 #include "axe/lighting/directional_light.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/renderer/skybox_renderer.hpp"
@@ -22,6 +22,17 @@ namespace axe
     {
     public:
         SceneRenderer();
+
+        // --- API principal: recebe RenderQueue já montada ---
+        void Render(const RenderQueue& queue,
+            const glm::mat4& viewProjection,
+            const glm::mat4& view,
+            const glm::mat4& projection,
+            const glm::vec3& cameraPosition,
+            uint32_t width, uint32_t height);
+
+        // --- Compat: monta RenderQueue internamente a partir da Scene ---
+        // Mantido para não quebrar o ViewportRenderer durante a transição
         void RenderScene(const Scene& scene, const EditorCamera& camera,
             entt::entity selectedEntity);
         void RenderScene(const Scene& scene,
@@ -38,9 +49,8 @@ namespace axe
 
         void SetSSAOSettings(const SSAOSettings& s) { m_SSAOSettings = s; }
         void SetTargetFramebuffer(uint32_t fboID) { m_TargetFBO = fboID; }
-
-        // false = forward (atual), true = deferred + SSAO
         void SetDeferredEnabled(bool enabled) { m_DeferredEnabled = enabled; }
+        void SetDeferredSupported(bool supported) { m_DeferredSupported = supported; }
 
         MeshRenderer& GetMeshRenderer() { return m_MeshRenderer; }
 
@@ -54,18 +64,15 @@ namespace axe
         }
 
         void InitializeDeferredPasses(uint32_t width, uint32_t height);
-
-        void SetDeferredSupported(bool supported) { m_DeferredSupported = supported; }
+        void SetEnvironment(const SceneEnvironment* env, bool dummy) {} // overload compat
 
     private:
-        // Forward — mantido intacto
         CubeRenderer    m_CubeRenderer;
         MeshRenderer    m_MeshRenderer;
         LineRenderer    m_LineRenderer;
         OutlineRenderer m_OutlineRenderer;
-        std::shared_ptr<ShadowMapPass> m_ShadowPass;
 
-        // Deferred
+        std::shared_ptr<ShadowMapPass> m_ShadowPass;
         GBuffer                        m_GBuffer;
         std::shared_ptr<GeometryPass>  m_GeometryPass;
         std::shared_ptr<SSAOPass>      m_SSAOPass;
@@ -75,32 +82,34 @@ namespace axe
         const SceneEnvironment* m_Environment = nullptr;
         uint32_t                m_TargetFBO = 0;
         bool                    m_DeferredEnabled = false;
+        bool                    m_DeferredSupported = true;
         uint32_t                m_Width = 0;
         uint32_t                m_Height = 0;
 
-        // Skybox — passado pelo ViewportRenderer
         SkyboxRenderer* m_SkyboxRenderer = nullptr;
         glm::mat4       m_SkyboxView{ 1.0f };
         glm::mat4       m_SkyboxProjection{ 1.0f };
 
-        void RenderShadowPass(const Scene& scene, const DirectionalLight* light, const glm::vec3& cameraPosition = glm::vec3(0.0f));
+        // Passes internos
+        void RenderShadowPass(const RenderQueue& queue,
+            const glm::vec3& cameraPosition = glm::vec3(0.0f));
+        void RenderForward(const RenderQueue& queue,
+            const glm::mat4& viewProjection,
+            const glm::vec3& cameraPosition);
+        void RenderDeferred(const RenderQueue& queue,
+            const glm::mat4& viewProjection,
+            const glm::mat4& view,
+            const glm::mat4& projection,
+            const glm::vec3& cameraPosition,
+            uint32_t width, uint32_t height);
+
+        // Compat helpers — usados pelos RenderScene legados
+        void RenderShadowPassLegacy(const Scene& scene, const DirectionalLight* light,
+            const glm::vec3& cameraPosition = glm::vec3(0.0f));
         void RenderEntity(const Scene& scene, entt::entity entity,
             const glm::mat4& parentTransform,
             entt::entity selectedEntity,
             const DirectionalLight* light);
         void GeometryPassEntity(const Scene& scene, entt::entity entity);
-        void RenderDeferredScene(const Scene& scene,
-            const glm::mat4& viewProjection,
-            const glm::mat4& view,
-            const glm::mat4& projection,
-            const glm::vec3& cameraPosition,
-            entt::entity selectedEntity,
-            const DirectionalLight* light,
-            uint32_t width, uint32_t height);
-
-        bool m_DeferredSupported = true;
-
     };
-
-
 }

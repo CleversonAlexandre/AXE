@@ -77,7 +77,7 @@ namespace axe
         static std::unordered_map<uint32_t, bool> s_OpenState;
         bool& isOpen = s_OpenState[(uint32_t)entity];
 
-        // Cor para pastas
+        // Cor para pastas — aplicada no ícone E no nome
         if (isFolder)
         {
             auto& folder = registry.get<FolderComponent>(entity);
@@ -95,30 +95,47 @@ namespace axe
         }
         else
         {
-            // Alinha com nós que têm arrow (22px)
             ImGui::Dummy(ImVec2(22.0f, 0.0f));
             ImGui::SameLine();
         }
 
-        if (isFolder) ImGui::PopStyleColor();
-
         // Ícone
         auto& icons = EditorIconLibrary::Get();
         std::shared_ptr<Texture2D> icon;
-        if (isFolder)     icon = icons.GetFolder();
-        else if (isLight) icon = icons.GetDirectionalLight();
-        else              icon = icons.GetMesh();
+
+        bool isPointLight = registry.any_of<PointLightComponent>(entity);
+        bool isPostProcess = registry.any_of<PostProcessComponent>(entity);
+        bool isEnvironment = registry.any_of<EnvironmentComponent>(entity);
+        bool isMesh = registry.any_of<MeshComponent>(entity);
+
+        if (isEnvironment)       icon = icons.GetEnvironment();
+        else if (isPostProcess)  icon = icons.GetPostProcess();
+        else if (isPointLight)   icon = icons.GetPointLight();
+        else if (isFolder)       icon = icons.GetFolder();
+        else if (isLight)        icon = icons.GetDirectionalLight();
+        else if (isMesh)         icon = icons.GetMesh();
+        else                     icon = icons.GetMesh();
+
+        if (!icon || !icon->IsLoaded()) icon = icons.GetMesh();
+
+        // Aplica tint de cor da pasta também no ícone
+        ImVec4 iconTint = ImVec4(1, 1, 1, 1);
+        if (isFolder)
+        {
+            auto& folder = registry.get<FolderComponent>(entity);
+            iconTint = ImVec4(folder.Color.x, folder.Color.y, folder.Color.z, folder.Color.w);
+        }
 
         if (icon && icon->IsLoaded())
         {
             ImGui::Image(
                 (ImTextureID)(uintptr_t)icon->GetRendererID(),
-                ImVec2(16, 16), ImVec2(0, 1), ImVec2(1, 0)
+                ImVec2(16, 16), ImVec2(0, 1), ImVec2(1, 0), iconTint
             );
             ImGui::SameLine();
         }
 
-        // Rename inline ou Selectable
+        // Rename inline ou Selectable — cor da pasta ainda ativa aqui
         if (isRenaming)
         {
             ImGui::SetNextItemWidth(140.0f);
@@ -133,6 +150,8 @@ namespace axe
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape))
                 m_Renaming = false;
+
+            if (isFolder) ImGui::PopStyleColor();
         }
         else
         {
@@ -182,6 +201,9 @@ namespace axe
                 ImGui::EndPopup();
             }
         }
+
+        // Remove cor da pasta após desenhar o nome
+        if (isFolder) ImGui::PopStyleColor();
 
         // Filhos
         if (isOpen && rel)
@@ -348,9 +370,27 @@ namespace axe
         if (!m_Context->HasSelection()) return;
 
         entt::entity entity = m_Context->SelectedEntity;
+        auto& scene = *m_Context->ActiveScene;
+        auto& registry = scene.GetRegistry();
+
+        // Serializa o estado do entity para poder restaurar
+        auto* name = registry.try_get<NameComponent>(entity);
+        std::string entityName = name ? name->Name : "Entity";
+
         m_Context->ClearSelection();
         m_Renaming = false;
-        m_Context->ActiveScene->DestroyEntity(entity);
+
+        if (m_History)
+        {
+            // Undo de delete é complexo — por ora só destrói sem undo
+            // (seria necessário serializar/deserializar o entity completo)
+            scene.DestroyEntity(entity);
+            // TODO: implementar serialização por entity para suportar undo de delete
+        }
+        else
+        {
+            scene.DestroyEntity(entity);
+        }
     }
 
     void HierarchyWindow::DuplicateSelected()

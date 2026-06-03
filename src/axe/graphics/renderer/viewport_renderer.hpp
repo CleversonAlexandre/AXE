@@ -6,6 +6,8 @@
 #include "picking_renderer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
+#include "axe/scene/transform.hpp"
+#include "axe/core/command_history.hpp"
 #include <entt/entt.hpp>
 #include <memory>
 #include <imgui.h>
@@ -46,6 +48,8 @@ namespace axe
 		std::uint32_t PickObject(float mouseX, float mouseY);
 		void ResizePicking(std::uint32_t width, std::uint32_t height);
 
+		void SetCommandHistory(CommandHistory* history) { m_CommandHistory = history; }
+
 		ImGuizmo::OPERATION m_GuizmoOperation = ImGuizmo::TRANSLATE;
 		std::unique_ptr<EditorCamera> m_Camera;
 
@@ -57,13 +61,17 @@ namespace axe
 
 		SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
 		void SetPreviewMode(bool preview) { m_PreviewMode = preview; }
-	/// <summary>
-	/// temp
-	 Scene* GetScene() const { return m_Scene; }
-	 void SetPickingEnabled(bool enabled);
-	/// </summary>
+		/// <summary>
+		/// temp
+		Scene* GetScene() const { return m_Scene; }
+		void SetPickingEnabled(bool enabled);
+		/// </summary>
 	private:
 		bool m_PickingEnabled = true;
+
+		CommandHistory* m_CommandHistory = nullptr;
+		bool            m_GizmoWasUsing = false;
+		Transform       m_TransformSnapshot;
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;
 

@@ -124,7 +124,7 @@ namespace axe
 
         gbuffer.Bind();
         RenderCommand::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        RenderCommand::Clear();
+        RenderCommand::ClearColorDepth(); // G-Buffer não tem stencil — não usar Clear()
         RenderCommand::SetDepthTest(true);
         RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
 

@@ -28,14 +28,13 @@ namespace axe
     in vec3 v_TexCoords;
     uniform samplerCube u_Skybox;
 
-    vec3 ToneMap(vec3 hdr) { return hdr / (hdr + vec3(1.0)); }
-
     void main()
     {
-        vec3 color = texture(u_Skybox, v_TexCoords).rgb;
-        color      = ToneMap(color);
-        color      = pow(color, vec3(1.0 / 2.2));
-        FragColor  = vec4(color, 1.0);
+        // Espelha X para corrigir orientação após fix do winding order
+        vec3 dir = vec3(-v_TexCoords.x, v_TexCoords.y, v_TexCoords.z);
+        vec3 color = texture(u_Skybox, dir).rgb;
+        // Sem tone mapping aqui — o PostProcess já aplica ACES/Reinhard
+        FragColor = vec4(color, 1.0);
     }
 )";
 
@@ -105,7 +104,7 @@ namespace axe
 
     void SkyboxRenderer::RenderDeferred(const glm::mat4& view, const glm::mat4& projection)
     {
-      
+
 
         if (!HasCubemap()) return;
 
@@ -121,7 +120,7 @@ namespace axe
         m_Cubemap->Bind(0);
         m_VertexArray->Bind();
         RenderCommand::DrawIndexedCount(36);
-       
+
         RenderCommand::SetCullFace(true);
         RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
     }

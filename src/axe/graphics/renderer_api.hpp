@@ -21,7 +21,8 @@ namespace axe
         // Estado
         virtual void SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height) = 0;
         virtual void SetClearColor(float r, float g, float b, float a) = 0;
-        virtual void Clear() = 0;
+        virtual void Clear() = 0;               // color + depth + stencil
+        virtual void ClearColorDepth() = 0;     // color + depth apenas (sem stencil)
 
         // Depth
         virtual void SetDepthTest(bool enabled) = 0;

@@ -22,17 +22,16 @@ namespace axe
 
 	class EditorApp
 	{
-		public:
-			EditorApp();
-			virtual ~EditorApp();
+	public:
+		EditorApp();
+		virtual ~EditorApp();
 
-			void Run();
+		void Run();
+		void OnEvent(Event& e);
+		void Close() { m_Running = false; }
 
-			void OnEvent(Event& e);
-
-			inline static EditorApp& Get() { return *s_Instance; }
-
-			inline Window& GetWindow() { return *m_Window; }
+		inline static EditorApp& Get() { return *s_Instance; }
+		inline Window& GetWindow() { return *m_Window; }
 
 
 	private:
@@ -41,7 +40,7 @@ namespace axe
 		std::unique_ptr<Window> m_Window;
 		std::unique_ptr<EditorUI> m_EditorUI;
 		bool m_Running = true;
-		
+
 		static EditorApp* s_Instance;
 		std::unique_ptr<GraphicsDevice> m_Graphics;
 

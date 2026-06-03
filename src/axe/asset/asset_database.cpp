@@ -175,7 +175,6 @@ namespace axe
 
 	void AssetDatabase::Save(const std::filesystem::path& projectRoot)
 	{
-		// Salva índice completo em axe_assets.json
 		json j = json::array();
 		for (const auto& [uuid, record] : m_Records)
 		{
@@ -184,6 +183,7 @@ namespace axe
 			entry["path"] = record.FilePath.string();
 			entry["type"] = AssetTypeToString(record.Type);
 			entry["name"] = record.Name;
+			entry["virtual_folder"] = record.VirtualFolder;
 			j.push_back(entry);
 		}
 
@@ -194,7 +194,7 @@ namespace axe
 	}
 
 	void AssetDatabase::Load(const std::filesystem::path& projectRoot)
-	{		
+	{
 
 		std::filesystem::path indexPath = projectRoot / "axe_assets.json";
 		if (!std::filesystem::exists(indexPath))
@@ -219,6 +219,7 @@ namespace axe
 				record.FilePath = entry.value("path", "");
 				record.Type = AssetTypeFromString(entry.value("type", "Unknown"));
 				record.Name = entry.value("name", "");
+				record.VirtualFolder = entry.value("virtual_folder", "");
 
 				if (!record.UUID.empty() && std::filesystem::exists(record.FilePath))
 				{
@@ -260,7 +261,7 @@ namespace axe
 	{
 		m_Records.clear();
 		m_PathIndex.clear();
-		RegisterPrimitives(); 
+		RegisterPrimitives();
 	}
 
 

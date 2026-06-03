@@ -167,11 +167,18 @@ namespace axe
 		{
 			DrawPostProcess(*pp);
 		}
+		else if (auto* ec = registry.try_get<EnvironmentComponent>(entity))
+		{
+			DrawEnvironment(*ec);
+		}
+		else if (auto* folder = registry.try_get<FolderComponent>(entity))
+		{
+			DrawFolder(*folder);
+		}
 		else if (registry.any_of<PointLightComponent>(entity))
 		{
-			// Point Light não recebe material — nada a mostrar aqui
+			// Point Light — inspector só mostra o DrawPointLight abaixo
 		}
-		// Material
 		else if (registry.any_of<MaterialComponent>(entity))
 		{
 			DrawMaterial(entity);
@@ -192,8 +199,51 @@ namespace axe
 		ImGui::End();
 	}
 
-	void InspectorWindow::DrawPointLight(PointLight& light)
+	void InspectorWindow::DrawFolder(FolderComponent& folder)
 	{
+		ImGui::Separator();
+		ImGui::Text("Pasta");
+
+		// Cor da pasta
+		float col[4] = {
+			folder.Color.x, folder.Color.y,
+			folder.Color.z, folder.Color.w
+		};
+		if (ImGui::ColorEdit4("Cor", col))
+			folder.Color = { col[0], col[1], col[2], col[3] };
+
+		ImGui::TextDisabled("Arraste objetos para dentro desta pasta na hierarchy.");
+	}
+
+	void InspectorWindow::DrawEnvironment(EnvironmentComponent& ec)
+	{
+		ImGui::Separator();
+		ImGui::Text("Environment");
+
+		// Path do HDRI com botão para abrir
+		ImGui::TextDisabled("HDRI:");
+		ImGui::SameLine();
+		std::string shortPath = ec.HDRIPath.empty() ? "Nenhum" :
+			std::filesystem::path(ec.HDRIPath).filename().string();
+		ImGui::Text("%s", shortPath.c_str());
+
+		if (ImGui::Button("Carregar HDRI..."))
+		{
+			auto path = FileDialog::Open(
+				"HDR Image\0*.hdr;*.exr\0All Files\0*.*\0",
+				"Selecionar HDRI",
+				"hdr");
+			if (!path.empty())
+				ec.HDRIPath = path.string();
+		}
+
+		ImGui::Separator();
+		ImGui::DragFloat("Rotação Skybox", &ec.SkyboxRotation, 1.0f, -360.0f, 360.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Rotação em Y do HDRI em graus");
+	}
+
+	void InspectorWindow::DrawPointLight(PointLight& light) {
 		ImGui::Separator();
 		ImGui::Text("Point Light");
 		ImGui::TextDisabled("Posicione pelo Transform");

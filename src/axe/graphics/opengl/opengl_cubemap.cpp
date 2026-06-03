@@ -316,6 +316,18 @@ namespace axe
 
 	bool OpenGLCubemap::LoadFromHDRI(const std::string& filepath)
 	{
+		// Salva estado OpenGL antes de qualquer operação —
+		// esse método pode ser chamado durante o render e não deve
+		// corromper o framebuffer, viewport ou depth state ativos
+		GLint prevFBO = 0;
+		GLint prevViewport[4];
+		GLboolean prevDepthMask;
+		GLboolean prevDepthTest;
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+		glGetIntegerv(GL_VIEWPORT, prevViewport);
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+		glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
+
 		// 1. Carrega o HDRI como float
 		stbi_set_flip_vertically_on_load(true);
 		int width, height, channels;
@@ -344,7 +356,7 @@ namespace axe
 		uint32_t cubemapSize = 512;
 		glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_RendererID);
 		glBindTexture(GL_TEXTURE_CUBE_MAP, m_RendererID);
-	
+
 		for (int i = 0; i < 6; i++)
 			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
 				cubemapSize, cubemapSize, 0, GL_RGB, GL_FLOAT, nullptr);
@@ -364,11 +376,6 @@ namespace axe
 		glBindRenderbuffer(GL_RENDERBUFFER, captureRBO);
 		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, cubemapSize, cubemapSize);
 		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, captureRBO);
-
-		//glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-		//glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-		// ← Gera mips DEPOIS de alocar
-		glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
 		// 5. Matrizes de captura — 6 direções do cubo
 		glm::mat4 captureProjection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
@@ -407,6 +414,14 @@ namespace axe
 		glEnableVertexAttribArray(0);
 		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
 
+		// Limpa erros GL pendentes de operações anteriores
+		while (glGetError() != GL_NO_ERROR) {}
+
+		// Desabilita cull face — a câmera está dentro do cubo e precisa
+		// ver as faces internas para a captura equiretangular
+		glDisable(GL_CULL_FACE);
+		glEnable(GL_DEPTH_TEST);
+
 		for (int i = 0; i < 6; i++)
 		{
 			equirectShader->SetMat4("u_View", glm::value_ptr(captureViews[i]));
@@ -416,6 +431,10 @@ namespace axe
 			glBindVertexArray(cubeVAO);
 			glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
 		}
+
+		// Gera mipmaps DEPOIS de todas as faces estarem renderizadas
+		glBindTexture(GL_TEXTURE_CUBE_MAP, m_RendererID);
+		glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
 		// Gera os mapas IBL
 		GenerateIrradianceMap(captureFBO, captureRBO, cubeVAO, captureViews, captureProjection);
@@ -429,7 +448,16 @@ namespace axe
 		glDeleteTextures(1, &hdrTexture);
 		glDeleteVertexArrays(1, &cubeVAO);
 		glDeleteBuffers(1, &cubeVBO);
-		glDeleteBuffers(1, &cubeEBO);								
+		glDeleteBuffers(1, &cubeEBO);
+
+		// Restaura estado OpenGL anterior
+		glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+		glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+		glDepthMask(prevDepthMask);
+		if (prevDepthTest) glEnable(GL_DEPTH_TEST);
+		else               glDisable(GL_DEPTH_TEST);
+		glBindVertexArray(0);
+		glUseProgram(0);
 
 		m_Loaded = true;
 		AXE_CORE_INFO("CubemapTexture: cubemap gerado com sucesso.");
@@ -491,6 +519,7 @@ namespace axe
 		glBindTextureUnit(0, m_RendererID);
 
 		glViewport(0, 0, size, size);
+		glDisable(GL_CULL_FACE); // câmera dentro do cubo — precisa ver faces internas
 		for (int i = 0; i < 6; i++)
 		{
 			shader->SetMat4("u_View", glm::value_ptr(views[i]));
@@ -529,6 +558,7 @@ namespace axe
 		glBindTextureUnit(0, m_RendererID);
 
 		glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+		glDisable(GL_CULL_FACE); // câmera dentro do cubo — precisa ver faces internas
 
 		for (uint32_t mip = 0; mip < numMips; mip++)
 		{

@@ -59,12 +59,22 @@ namespace axe
 	struct AssetRecord
 	{
 		std::string           UUID;
-		std::filesystem::path FilePath;   // caminho absoluto
+		std::filesystem::path FilePath;
 		AssetType             Type = AssetType::Unknown;
-		std::string           Name;       // nome sem extensão
+		std::string           Name;
+		std::string           VirtualFolder = ""; // pasta virtual no browser
 
 		bool IsValid() const { return !UUID.empty() && !FilePath.empty(); }
 	};
-	
+
+	// Pasta virtual do asset browser — pode ter cor e subpastas
+	struct VirtualFolderDef
+	{
+		std::string Name;
+		std::string Parent = "";  // "" = raiz
+		uint32_t    Color = 0xFFFFFFFF; // RGBA
+		bool        Expanded = true;
+	};
+
 
 } // namespace axe

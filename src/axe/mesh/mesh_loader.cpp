@@ -75,8 +75,7 @@ namespace axe
 
 		const aiScene* scene = importer.ReadFile(filepath,
 			aiProcess_Triangulate |
-			aiProcess_GenNormals  |
-			aiProcess_FlipUVs	  |
+			aiProcess_GenSmoothNormals | // só gera se o mesh não tiver normais
 			aiProcess_CalcTangentSpace
 		);
 
@@ -94,7 +93,47 @@ namespace axe
 
 		AXE_CORE_INFO("MeshLoader: carregando '{}' ({} mesh(es) encontrada(s))", filepath, scene->mNumMeshes);
 
-		return ProcessMesh(scene->mMeshes[0], scene);
+		if (scene->mNumMeshes == 1)
+			return ProcessMesh(scene->mMeshes[0], scene);
+
+		// Múltiplos meshes — combina vértices e índices direto do Assimp
+		std::vector<Vertex>   allVertices;
+		std::vector<uint32_t> allIndices;
+
+		for (uint32_t m = 0; m < scene->mNumMeshes; m++)
+		{
+			aiMesh* aiMesh = scene->mMeshes[m];
+			uint32_t vertexOffset = (uint32_t)allVertices.size();
+
+			for (uint32_t i = 0; i < aiMesh->mNumVertices; i++)
+			{
+				Vertex v;
+				v.Position = { aiMesh->mVertices[i].x, aiMesh->mVertices[i].y, aiMesh->mVertices[i].z };
+				if (aiMesh->HasNormals())
+					v.Normal = { aiMesh->mNormals[i].x, aiMesh->mNormals[i].y, aiMesh->mNormals[i].z };
+				if (aiMesh->mTextureCoords[0])
+					v.TexCoord = { aiMesh->mTextureCoords[0][i].x, aiMesh->mTextureCoords[0][i].y };
+				if (aiMesh->HasTangentsAndBitangents())
+				{
+					v.Tangent = { aiMesh->mTangents[i].x,   aiMesh->mTangents[i].y,   aiMesh->mTangents[i].z };
+					v.Bitangent = { aiMesh->mBitangents[i].x, aiMesh->mBitangents[i].y, aiMesh->mBitangents[i].z };
+				}
+				allVertices.push_back(v);
+			}
+
+			for (uint32_t i = 0; i < aiMesh->mNumFaces; i++)
+			{
+				const aiFace& face = aiMesh->mFaces[i];
+				for (uint32_t j = 0; j < face.mNumIndices; j++)
+					allIndices.push_back(face.mIndices[j] + vertexOffset);
+			}
+		}
+
+		AXE_CORE_INFO("MeshLoader: combinado {} vértices, {} índices", allVertices.size(), allIndices.size());
+
+		LoadedAsset combined;
+		combined.MeshData = std::make_shared<Mesh>(allVertices, allIndices);
+		return combined;
 	}
 
 	LoadedAsset MeshLoader::ProcessMesh(void* aiMeshPtr, const void* aiScenePtr)
@@ -118,7 +157,7 @@ namespace axe
 				v.TexCoord = { mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y };
 			else
 				v.TexCoord = { 0.0f, 0.0f };
-			
+
 			if (mesh->HasTangentsAndBitangents())
 			{
 				v.Tangent = { mesh->mTangents[i].x,   mesh->mTangents[i].y,   mesh->mTangents[i].z };

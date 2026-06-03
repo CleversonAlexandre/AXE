@@ -14,7 +14,7 @@ namespace axe
 	void EditorIconLibrary::Load(const std::string& resourcesPath)
 	{
 		auto load = [&](const std::string& filename) -> std::shared_ptr<Texture2D>
-		{
+			{
 				std::string path = resourcesPath + "/icons/" + filename;
 				if (!std::filesystem::exists(path))
 				{
@@ -22,7 +22,7 @@ namespace axe
 					return nullptr;
 				}
 				return Texture2D::Create(path);
-		};
+			};
 
 		m_IconMesh = load("icon_mesh.png");
 		m_IconTexture = load("icon_texture.png");
@@ -37,6 +37,11 @@ namespace axe
 		m_IconCompile = load("check.png");
 
 		m_IconDirectionalLight = load("directional_light.png");
+		m_IconPointLight = load("point_light.png");
+		// PostProcess e Environment usam ícones existentes como fallback
+		// até termos arte dedicada
+		m_IconPostProcess = load("camera.png");
+		m_IconEnvironment = load("icon_scene.png"); // globo/ambiente
 
 		m_Loaded = true;
 		AXE_CORE_INFO("EditorIconLibrary: ícones carregados.");
@@ -44,14 +49,16 @@ namespace axe
 
 	std::shared_ptr<Texture2D> EditorIconLibrary::GetForType(const std::string& type) const
 	{
-		if (type == "Mesh") return m_IconMesh;
-		if (type == "Texture") return m_IconTexture;
-		if (type == "Scene") return m_IconScene;
-		if (type == "Folder") return m_IconFolder;
-		if (type == "Script") return m_IconScript;
-		if (type == "Audio") return m_IconAudio;
-		if (type == "Material") return m_Material;
-		return m_IconMesh; 
-
+		if (type == "Mesh")        return m_IconMesh;
+		if (type == "Texture")     return m_IconTexture;
+		if (type == "Scene")       return m_IconScene;
+		if (type == "Folder")      return m_IconFolder;
+		if (type == "Script")      return m_IconScript;
+		if (type == "Audio")       return m_IconAudio;
+		if (type == "Material")    return m_Material;
+		if (type == "PointLight")  return m_IconPointLight;
+		if (type == "PostProcess") return m_IconPostProcess;
+		if (type == "Environment") return m_IconEnvironment;
+		return m_IconMesh;
 	}
 }//namespace axe

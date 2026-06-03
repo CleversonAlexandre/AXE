@@ -174,44 +174,43 @@ namespace axe
             return;
         }
 
-        if (u_HasLight == 0)
+        vec3 V = normalize(u_CameraPosition - fragPos);
+        vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+        // --- Luz direcional ---
+        vec3 Lo = vec3(0.0);
+        if (u_HasLight == 1)
         {
-            FragColor = vec4(albedo * ao, 1.0);
-            return;
+            vec3 L = normalize(-u_LightDirection);
+            vec3 H = normalize(V + L);
+
+            vec3 radiance = u_LightColor * u_LightIntensity;
+
+            float NDF = DistributionGGX(N, H, roughness);
+            float G   = GeometrySmith(N, V, L, roughness);
+            vec3  F   = FresnelSchlick(max(dot(H, V), 0.0), F0);
+
+            vec3 kS = F;
+            vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+            vec3  numerator   = NDF * G * F;
+            float NdotL       = max(dot(N, L), 0.0);
+            float NdotV       = max(dot(N, V), 0.0);
+            float denominator = 4.0 * NdotV * NdotL + 0.0001;
+            vec3  specular    = numerator / denominator;
+
+            float shadow = 0.0;
+            if (u_HasShadowMap == 1)
+                shadow = ShadowCalculation(fragPos, N, L);
+
+            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5);
         }
 
-        vec3 V = normalize(u_CameraPosition - fragPos);
-        vec3 L = normalize(-u_LightDirection);
-        vec3 H = normalize(V + L);
-
-        vec3 F0 = mix(vec3(0.04), albedo, metallic);
-        vec3 radiance = u_LightColor * u_LightIntensity;
-
-        float NDF = DistributionGGX(N, H, roughness);
-        float G   = GeometrySmith(N, V, L, roughness);
-        vec3  F   = FresnelSchlick(max(dot(H, V), 0.0), F0);
-
-        vec3 kS = F;
-        vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-        vec3  numerator   = NDF * G * F;
-        float NdotL       = max(dot(N, L), 0.0);
-        float NdotV       = max(dot(N, V), 0.0);
-        float denominator = 4.0 * NdotV * NdotL + 0.0001;
-        vec3  specular    = numerator / denominator;
-
-        float shadow = 0.0;
-        if (u_HasShadowMap == 1)
-            shadow = ShadowCalculation(fragPos, N, L);
-
-        // Luz direcional — ao aplicado levemente para SSAO ser visível
-        // mesmo em áreas iluminadas diretamente
-        vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5);
-
-        // Point lights
+        // --- Point lights --- (independente da direcional)
         for (int i = 0; i < u_NumPointLights; i++)
             Lo += CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0);
 
+        // --- Ambient / IBL --- (independente da direcional)
         vec3 ambient;
         if (u_HasIBL == 1)
         {
@@ -223,13 +222,14 @@ namespace axe
             vec3 prefilteredColor = textureLod(u_PrefilteredMap, R, roughness * 4.0).rgb;
             vec2 brdf = texture(u_BRDFLut, vec2(max(dot(N, V), 0.0), roughness)).rg;
             vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);
-            // AmbientStrength controla o quanto do IBL contribui para o ambient
-            // permitindo escurecer o ambient mesmo com IBL ativo
-            ambient = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity * u_AmbientStrength;
+
+            vec3 ibl = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity;
+            vec3 flatAmbient = u_AmbientStrength * albedo * ao;
+            ambient = ibl + flatAmbient;
         }
         else
         {
-            ambient = u_AmbientStrength * u_LightColor * albedo * ao;
+            ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao;
         }
 
         vec3 color = ambient + Lo;
@@ -292,6 +292,7 @@ namespace axe
         }
 
         glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE); // preserva o depth copiado pelo BlitDepth para o skybox
         glBindVertexArray(m_QuadVAO);
         m_Shader->Bind();
 
@@ -342,6 +343,7 @@ namespace axe
         {
             m_Shader->SetInt("u_HasLight", 0);
             m_Shader->SetFloat("u_IBLIntensity", 1.0f);
+            m_Shader->SetFloat("u_AmbientStrength", 0.0f); // sem flat ambient sem luz
         }
 
         m_Shader->SetFloat3("u_CameraPosition", cameraPosition);

@@ -74,11 +74,28 @@ namespace axe
 
 		if (m_Camera)
 		{
-
 			m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
 			m_SceneRenderer->SetDeferredEnabled(!m_PreviewMode);
 			if (m_PreviewMode)
 				m_SceneRenderer->SetDeferredSupported(false);
+		}
+
+		// Sincroniza HDRI ANTES de bindar o framebuffer —
+		// LoadFromHDRI muda viewport e FBO internamente, deve rodar com estado limpo
+		if (m_Scene)
+		{
+			auto& registry = m_Scene->GetRegistry();
+			for (auto entity : registry.view<EnvironmentComponent>())
+			{
+				auto& ec = registry.get<EnvironmentComponent>(entity);
+				if (m_Environment)
+				{
+					m_Environment->SkyboxRotation = ec.SkyboxRotation;
+					if (!ec.HDRIPath.empty() && ec.HDRIPath != m_Environment->SkyboxPath)
+						m_Environment->LoadHDRI(ec.HDRIPath);
+				}
+				break;
+			}
 		}
 
 		// 3. Binda HDR e limpa
@@ -125,8 +142,7 @@ namespace axe
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
 
-			// Lê PostProcessComponent antes de renderizar para que
-			// SSAOSettings (incluindo Debug) já estejam corretos no frame atual
+			// Lê PostProcessComponent antes de renderizar
 			if (m_Scene)
 			{
 				auto& registry = m_Scene->GetRegistry();
@@ -146,7 +162,7 @@ namespace axe
 				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
 				m_SceneRenderer->SetSkyboxRenderer(
 					&m_SkyboxRenderer,
-					m_Camera->GetViewMatrix(),
+					m_Environment->GetSkyboxView(m_Camera->GetViewMatrix()),
 					m_Camera->GetProjectionMatrix());
 			}
 			else if (m_SceneRenderer)
@@ -229,7 +245,8 @@ namespace axe
 		if (width <= 0.0f || height <= 0.0f) return;
 
 		ImGuizmo::SetOrthographic(false);
-		ImGuizmo::SetDrawlist();
+		//ImGuizmo::SetDrawlist();
+		ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
 		ImGuizmo::SetRect(boundsMin.x, boundsMin.y, width, height);
 
 		glm::mat4 view = m_Camera->GetViewMatrix();
@@ -246,6 +263,13 @@ namespace axe
 
 		if (ImGuizmo::IsUsing())
 		{
+			// Salva transform antes da primeira modificação
+			if (!m_GizmoWasUsing)
+			{
+				m_TransformSnapshot = tc->Data;
+				m_GizmoWasUsing = true;
+			}
+
 			tc->Data.WorldMatrix = model;
 			tc->Data.UseWorldMatrix = true;
 
@@ -255,6 +279,31 @@ namespace axe
 				tc->Data.Position = position;
 				tc->Data.Rotation = rotation;
 				tc->Data.Scale = scale;
+			}
+		}
+		else if (m_GizmoWasUsing)
+		{
+			// Gizmo soltou — registra comando de undo
+			m_GizmoWasUsing = false;
+
+			if (m_CommandHistory)
+			{
+				Transform before = m_TransformSnapshot;
+				Transform after = tc->Data;
+				entt::entity ent = *m_SelectedEntity;
+				auto* scene = m_Scene;
+
+				m_CommandHistory->Push({
+					"Mover objeto",
+					[scene, ent, after]() {
+						auto* t = scene->GetRegistry().try_get<TransformComponent>(ent);
+						if (t) t->Data = after;
+					},
+					[scene, ent, before]() {
+						auto* t = scene->GetRegistry().try_get<TransformComponent>(ent);
+						if (t) t->Data = before;
+					}
+					});
 			}
 		}
 

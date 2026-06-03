@@ -8,6 +8,7 @@
 #include "axe/material/material_asset.hpp"
 #include "axe/scene/transform.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "file_dialog.hpp"
 #include <entt/entt.hpp>
 
 #include "node_graph/material_graph.hpp"
@@ -43,6 +44,8 @@ namespace axe
             std::string& uuid);
         void DrawLight(DirectionalLight& light);
         void DrawPointLight(PointLight& light);
+        void DrawEnvironment(EnvironmentComponent& ec);
+        void DrawFolder(FolderComponent& folder);
 
         EditorContext* m_Context = nullptr;
 

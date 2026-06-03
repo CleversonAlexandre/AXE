@@ -68,4 +68,15 @@ namespace axe
 		SSAOSettings        SSAO;
 		bool IsGlobal = true; // afeta toda a cena
 	};
+
+	// Componente que liga uma entity ao SceneEnvironment do editor
+	// Permite editar HDRI e rotação do skybox pelo inspector
+	struct EnvironmentComponent
+	{
+		std::string HDRIPath;
+		float       SkyboxRotation = 0.0f;
+		std::shared_ptr<DirectionalLight> Data;
+	};
+	
+ 
 }//namespace axe
