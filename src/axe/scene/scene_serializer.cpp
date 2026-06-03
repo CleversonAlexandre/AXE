@@ -12,6 +12,8 @@
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
+#include "axe/scene/scene_environment.hpp"
+
 namespace axe
 {
 
@@ -19,13 +21,20 @@ namespace axe
 
 	SceneSerializer::MaterialRecompileCallback SceneSerializer::s_MaterialRecompileCallback = nullptr;
 
-	bool SceneSerializer::Serialize(const Scene& scene, const std::filesystem::path& filepath)
+	bool SceneSerializer::Serialize(const Scene& scene, const std::filesystem::path& filepath,
+		const SceneEnvironment* env)
 	{
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
 
 		json root;
 		root["scene"]["name"] = filepath.stem().string();
 		root["scene"]["version"] = "1.0";
+
+		if (env)
+		{
+			root["scene"]["environment"]["hdri_path"] = env->SkyboxPath;
+			root["scene"]["environment"]["skybox_rotation"] = env->SkyboxRotation;
+		}
 
 		json entities = json::array();
 
@@ -170,7 +179,8 @@ namespace axe
 		return true;
 	}
 
-	bool SceneSerializer::Deserialize(const std::filesystem::path& filepath, Scene& scene)
+	bool SceneSerializer::Deserialize(const std::filesystem::path& filepath, Scene& scene,
+		SceneEnvironment* env)
 	{
 		if (!std::filesystem::exists(filepath))
 		{
@@ -182,7 +192,19 @@ namespace axe
 		if (!file.is_open()) return false;
 
 		json root;
-		try { root = json::parse(file); }
+		try { 
+			root = json::parse(file); 
+
+			if (env && root["scene"].contains("environment"))
+			{
+				auto& envJson = root["scene"]["environment"];
+				std::string hdriPath = envJson.value("hdri_path", "");
+				env->SkyboxRotation = envJson.value("skybox_rotation", 0.0f);
+				if (!hdriPath.empty() && std::filesystem::exists(hdriPath))
+					env->LoadHDRI(hdriPath);
+			}
+		}
+
 		catch (const json::exception& e)
 		{
 			AXE_CORE_ERROR("SceneSerializer: erro ao parsear '{}': {}", filepath.string(), e.what());

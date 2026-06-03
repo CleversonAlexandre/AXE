@@ -245,20 +245,34 @@ namespace axe
 		if (width <= 0.0f || height <= 0.0f) return;
 
 		ImGuizmo::SetOrthographic(false);
-		//ImGuizmo::SetDrawlist();
 		ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
 		ImGuizmo::SetRect(boundsMin.x, boundsMin.y, width, height);
+
+		// Grid
+		if (ShowGrid)
+			DrawGrid();
 
 		glm::mat4 view = m_Camera->GetViewMatrix();
 		glm::mat4 projection = m_Camera->GetProjectionMatrix();
 		glm::mat4 model = tc->Data.GetMatrix();
+
+		// Snap
+		float snapValues[3] = { SnapValue, SnapValue, SnapValue };
+		if (m_GuizmoOperation == ImGuizmo::ROTATE)
+			snapValues[0] = snapValues[1] = snapValues[2] = SnapAngle;
+		else if (m_GuizmoOperation == ImGuizmo::SCALE)
+			snapValues[0] = snapValues[1] = snapValues[2] = SnapScale;
+
+		const float* snap = SnapEnabled ? snapValues : nullptr;
 
 		ImGuizmo::Manipulate(
 			glm::value_ptr(view),
 			glm::value_ptr(projection),
 			m_GuizmoOperation,
 			ImGuizmo::LOCAL,
-			glm::value_ptr(model)
+			glm::value_ptr(model),
+			nullptr,
+			snap
 		);
 
 		if (ImGuizmo::IsUsing())

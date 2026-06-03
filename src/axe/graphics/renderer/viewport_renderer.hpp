@@ -50,6 +50,12 @@ namespace axe
 
 		void SetCommandHistory(CommandHistory* history) { m_CommandHistory = history; }
 
+		bool  ShowGrid = true;
+		bool  SnapEnabled = false;
+		float SnapValue = 0.5f;   // unidades para translate
+		float SnapAngle = 15.0f;  // graus para rotate
+		float SnapScale = 0.1f;   // para scale
+
 		ImGuizmo::OPERATION m_GuizmoOperation = ImGuizmo::TRANSLATE;
 		std::unique_ptr<EditorCamera> m_Camera;
 

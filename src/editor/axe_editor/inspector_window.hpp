@@ -46,6 +46,7 @@ namespace axe
         void DrawPointLight(PointLight& light);
         void DrawEnvironment(EnvironmentComponent& ec);
         void DrawFolder(FolderComponent& folder);
+        void DrawCamera(CameraComponent& cam);
 
         EditorContext* m_Context = nullptr;
 

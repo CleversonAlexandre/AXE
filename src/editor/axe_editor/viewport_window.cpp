@@ -50,7 +50,7 @@ namespace axe
 		AXE_CORE_INFO("ViewportWindow initialized successfully");
 	}
 
-		
+
 
 	void ViewportWindow::Draw()
 	{
@@ -72,7 +72,7 @@ namespace axe
 			OnResize(width, height);
 		}
 
-	
+
 		//m_IsHovered = ImGui::IsWindowHovered();
 		m_IsFocused = ImGui::IsWindowFocused();
 
@@ -93,7 +93,7 @@ namespace axe
 
 				m_BoundsMin = { imagePos.x, imagePos.y };
 				m_BoundsMax = { imagePos.x + viewportSize.x, imagePos.y + viewportSize.y };
-				
+
 				if (m_GuizmoCallback)
 				{
 					m_GuizmoCallback(m_BoundsMin, m_BoundsMax);
@@ -104,7 +104,7 @@ namespace axe
 		{
 			ImGui::Text("Initializing viewport...");
 			m_IsHovered = false;
-		}		
+		}
 
 		// Drag and drop do Asset Browser para o viewport
 		if (ImGui::BeginDragDropTarget())
@@ -165,7 +165,7 @@ namespace axe
 
 		//Fundo da toolbar 
 		draw->AddRectFilled(
-			ImVec2(startX - 6, startY -4),
+			ImVec2(startX - 6, startY - 4),
 			ImVec2(startX + totalW + 6, startY + btnH + 4),
 			IM_COL32(30, 30, 30, 200), 4.0f
 		);
@@ -199,15 +199,55 @@ namespace axe
 		// Botão Stop
 		ImGui::SetCursorScreenPos(ImVec2(startX + (btnW + gap) * 2, startY));
 		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-
 		if (ImGui::Button("Stop", ImVec2(btnW, btnH)) && state != 0)
 			m_PlayActionCallback(2);
-
 		ImGui::PopStyleColor();
 
+		// Controles de Grid e Snap — lado direito da toolbar
+		if (m_ViewportRenderer)
+		{
+			float rightX = wpos.x + wsize.x - 220.0f;
+			float rightY = startY;
+
+			// Grid toggle
+			ImGui::SetCursorScreenPos(ImVec2(rightX, rightY));
+			bool& showGrid = m_ViewportRenderer->ShowGrid;
+			if (showGrid)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
+			else
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+			if (ImGui::Button("Grid", ImVec2(50, btnH)))
+				showGrid = !showGrid;
+			ImGui::PopStyleColor();
+
+			// Snap toggle
+			ImGui::SetCursorScreenPos(ImVec2(rightX + 54, rightY));
+			bool& snapEnabled = m_ViewportRenderer->SnapEnabled;
+			if (snapEnabled)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.1f, 1.0f));
+			else
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+			if (ImGui::Button("Snap", ImVec2(50, btnH)))
+				snapEnabled = !snapEnabled;
+			ImGui::PopStyleColor();
+
+			// Valor do snap
+			if (snapEnabled)
+			{
+				ImGui::SetCursorScreenPos(ImVec2(rightX + 108, rightY));
+				ImGui::SetNextItemWidth(100.0f);
+
+				if (m_ViewportRenderer->m_GuizmoOperation == ImGuizmo::ROTATE)
+					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapAngle, 1.0f, 1.0f, 90.0f, "%.0f°");
+				else if (m_ViewportRenderer->m_GuizmoOperation == ImGuizmo::SCALE)
+					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapScale, 0.05f, 0.05f, 2.0f, "%.2f");
+				else
+					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapValue, 0.1f, 0.1f, 10.0f, "%.1f");
+			}
+		}
 	}
 
 
 
-	
+
 }
