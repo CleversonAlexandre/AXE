@@ -36,6 +36,10 @@ namespace axe
 		spec.Width = 1280;
 		spec.Height = 720;
 		spec.HDR = true;
+		spec.Attachments = {
+			FramebufferTextureFormat::RGBA8,        // color
+			FramebufferTextureFormat::DEPTH24STENCIL8 // depth para o grid
+		};
 
 		m_Framebuffer = Framebuffer::Create(spec);
 
@@ -95,9 +99,7 @@ namespace axe
 				m_BoundsMax = { imagePos.x + viewportSize.x, imagePos.y + viewportSize.y };
 
 				if (m_GuizmoCallback)
-				{
 					m_GuizmoCallback(m_BoundsMin, m_BoundsMax);
-				}
 			}
 		}
 		else

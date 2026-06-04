@@ -462,6 +462,7 @@ namespace axe
 			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
 			m_ViewportRenderer->Initialize();
 			m_ViewportRenderer->SetCommandHistory(&m_CommandHistory);
+			m_EditorUI->GetHierarchy()->SetCommandHistory(&m_CommandHistory);
 			viewport->SetViewportRenderer(m_ViewportRenderer.get());
 			m_ViewportRenderer->SetScene(m_Scene.get());
 			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);

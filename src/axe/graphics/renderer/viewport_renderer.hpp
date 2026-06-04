@@ -13,6 +13,7 @@
 #include <imgui.h>
 #include <ImGuizmo.h>
 
+#include "axe/graphics/renderer/grid_renderer.hpp"
 #include "axe/graphics/game_camera.hpp"
 #include "skybox_renderer.hpp"
 #include "axe/scene/scene_environment.hpp"
@@ -87,6 +88,7 @@ namespace axe
 		GameCamera* m_GameCamera = nullptr;
 
 		SkyboxRenderer   m_SkyboxRenderer;
+		GridRenderer     m_GridRenderer;
 		SceneEnvironment* m_Environment = nullptr;
 
 		std::shared_ptr<PostProcessPass>  m_PostProcess;

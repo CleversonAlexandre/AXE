@@ -192,8 +192,8 @@ namespace axe
 		if (!file.is_open()) return false;
 
 		json root;
-		try { 
-			root = json::parse(file); 
+		try {
+			root = json::parse(file);
 
 			if (env && root["scene"].contains("environment"))
 			{
@@ -640,5 +640,408 @@ namespace axe
 		}
 	}
 
+
+	std::string SceneSerializer::SerializeEntity(entt::entity entity, const Scene& scene)
+	{
+		auto& registry = const_cast<Scene&>(scene).GetRegistry();
+		if (!registry.valid(entity)) return "";
+
+		json e;
+		e["id"] = (uint32_t)entity;
+		json components;
+
+		if (registry.any_of<FolderComponent>(entity))
+		{
+			auto& folder = registry.get<FolderComponent>(entity);
+			components["Folder"]["color"] = {
+				folder.Color.x, folder.Color.y, folder.Color.z, folder.Color.w };
+		}
+
+		if (auto* c = registry.try_get<NameComponent>(entity))
+			components["Name"]["name"] = c->Name;
+
+		if (auto* c = registry.try_get<TransformComponent>(entity))
+		{
+			components["Transform"]["position"] = { c->Data.Position.x, c->Data.Position.y, c->Data.Position.z };
+			components["Transform"]["rotation"] = { c->Data.Rotation.x, c->Data.Rotation.y, c->Data.Rotation.z };
+			components["Transform"]["scale"] = { c->Data.Scale.x,    c->Data.Scale.y,    c->Data.Scale.z };
+		}
+
+		if (auto* c = registry.try_get<MeshComponent>(entity))
+			components["Mesh"]["uuid"] = c->AssetUUID;
+
+		if (auto* c = registry.try_get<MaterialComponent>(entity))
+		{
+			if (c->Data)
+			{
+				components["Material"]["material_asset_uuid"] = c->MaterialAssetUUID;
+				components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
+				components["Material"]["specular_strength"] = c->Data->SpecularStrength;
+				components["Material"]["shininess"] = c->Data->Shininess;
+				components["Material"]["metallic"] = c->Data->Metallic;
+				components["Material"]["roughness"] = c->Data->Roughness;
+				components["Material"]["ao"] = c->Data->AO;
+				components["Material"]["use_pbr"] = c->Data->UsePBR;
+				components["Material"]["albedo_uuid"] = c->Data->AlbedoUUID;
+				components["Material"]["normal_uuid"] = c->Data->NormalUUID;
+				components["Material"]["roughness_uuid"] = c->Data->RoughnessUUID;
+				components["Material"]["metallic_uuid"] = c->Data->MetallicUUID;
+				components["Material"]["ao_uuid"] = c->Data->AOUUID;
+			}
+		}
+
+		if (auto* c = registry.try_get<LightComponent>(entity))
+		{
+			if (c->Data)
+			{
+				components["Light"]["direction"] = { c->Data->Direction.x, c->Data->Direction.y, c->Data->Direction.z };
+				components["Light"]["color"] = { c->Data->Color.x,     c->Data->Color.y,     c->Data->Color.z };
+				components["Light"]["intensity"] = c->Data->Intensity;
+				components["Light"]["ambient"] = c->Data->AmbientStrength;
+				components["Light"]["ibl_intensity"] = c->Data->IBLIntensity;
+				components["Light"]["specular"] = c->Data->SpecularStrength;
+				components["Light"]["shininess"] = c->Data->Shininess;
+			}
+		}
+
+		if (auto* c = registry.try_get<PointLightComponent>(entity))
+		{
+			if (c->Data)
+			{
+				components["PointLight"]["position"] = { c->Data->Position.x, c->Data->Position.y, c->Data->Position.z };
+				components["PointLight"]["color"] = { c->Data->Color.x,    c->Data->Color.y,    c->Data->Color.z };
+				components["PointLight"]["intensity"] = c->Data->Intensity;
+				components["PointLight"]["radius"] = c->Data->Radius;
+			}
+		}
+
+		if (auto* c = registry.try_get<PostProcessComponent>(entity))
+		{
+			components["PostProcess"]["is_global"] = c->IsGlobal;
+			components["PostProcess"]["exposure"] = c->Settings.Exposure;
+			components["PostProcess"]["bloom_enabled"] = c->Settings.BloomEnabled;
+			components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
+			components["PostProcess"]["bloom_intensity"] = c->Settings.BloomIntensity;
+			components["PostProcess"]["bloom_blur_passes"] = c->Settings.BloomBlurPasses;
+			components["PostProcess"]["ssao_enabled"] = c->SSAO.Enabled;
+			components["PostProcess"]["ssao_radius"] = c->SSAO.Radius;
+			components["PostProcess"]["ssao_bias"] = c->SSAO.Bias;
+			components["PostProcess"]["ssao_power"] = c->SSAO.Power;
+			components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
+		}
+
+		if (auto* c = registry.try_get<CameraComponent>(entity))
+		{
+			components["Camera"]["fov"] = c->Fov;
+			components["Camera"]["near"] = c->NearClip;
+			components["Camera"]["far"] = c->FarClip;
+			components["Camera"]["move_speed"] = c->MoveSpeed;
+			components["Camera"]["sensitivity"] = c->Sensitivity;
+			components["Camera"]["is_primary"] = c->IsPrimary;
+		}
+
+		// RelationshipComponent — salva IDs para reconstruir hierarquia no undo
+		if (auto* rel = registry.try_get<RelationshipComponent>(entity))
+		{
+			if (rel->Parent != entt::null)
+				components["Relationship"]["parent"] = (uint32_t)rel->Parent;
+			if (!rel->Children.empty())
+			{
+				json children = json::array();
+				for (auto child : rel->Children)
+					children.push_back((uint32_t)child);
+				components["Relationship"]["children"] = children;
+			}
+		}
+
+		e["components"] = components;
+		return e.dump();
+	}
+
+	entt::entity SceneSerializer::DeserializeEntity(const std::string& data, Scene& scene)
+	{
+		if (data.empty()) return entt::null;
+
+		try
+		{
+			json e = json::parse(data);
+			auto& registry = scene.GetRegistry();
+			const auto& components = e["components"];
+
+			entt::entity entity;
+			if (components.contains("Folder"))
+				entity = scene.CreateFolder("Folder");
+			else
+				entity = scene.CreateEntity("Entity");
+
+			if (components.contains("Name"))
+				if (auto* c = registry.try_get<NameComponent>(entity))
+					c->Name = components["Name"]["name"];
+
+			if (components.contains("Folder"))
+				if (auto* f = registry.try_get<FolderComponent>(entity))
+				{
+					auto& t = components["Folder"]["color"];
+					f->Color = ImVec4(t[0], t[1], t[2], t[3]);
+				}
+
+			if (components.contains("Transform"))
+			{
+				auto& c = registry.get_or_emplace<TransformComponent>(entity);
+				auto& t = components["Transform"];
+				c.Data.Position = { t["position"][0], t["position"][1], t["position"][2] };
+				c.Data.Rotation = { t["rotation"][0], t["rotation"][1], t["rotation"][2] };
+				c.Data.Scale = { t["scale"][0],    t["scale"][1],    t["scale"][2] };
+			}
+
+			if (components.contains("Mesh"))
+			{
+				std::string uuid = components["Mesh"]["uuid"];
+				auto& mc = registry.emplace<MeshComponent>(entity);
+				mc.AssetUUID = uuid;
+				if (MeshFactory::IsPrimitive(uuid))
+					mc.Data = MeshFactory::CreateByUUID(uuid);
+				else
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+					if (record && std::filesystem::exists(record->FilePath))
+					{
+						auto loaded = MeshLoader::Load(record->FilePath.string());
+						mc.Data = loaded.MeshData;
+					}
+				}
+			}
+
+			if (components.contains("Material"))
+			{
+				auto& t = components["Material"];
+				auto mat = std::make_shared<Material>(nullptr, "Material");
+				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
+				mat->SpecularStrength = t["specular_strength"];
+				mat->Shininess = t["shininess"];
+				if (t.contains("metallic"))  mat->Metallic = t["metallic"];
+				if (t.contains("roughness")) mat->Roughness = t["roughness"];
+				if (t.contains("ao"))        mat->AO = t["ao"];
+				if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
+
+				auto mc = MaterialComponent{ mat };
+				if (t.contains("material_asset_uuid"))
+				{
+					mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
+					if (s_MaterialRecompileCallback && !mc.MaterialAssetUUID.empty())
+						s_MaterialRecompileCallback(mc.MaterialAssetUUID, mat.get());
+				}
+				registry.emplace<MaterialComponent>(entity, mc);
+			}
+
+			if (components.contains("Light"))
+			{
+				auto& t = components["Light"];
+				auto light = std::make_shared<DirectionalLight>();
+				light->Direction = { t["direction"][0], t["direction"][1], t["direction"][2] };
+				light->Color = { t["color"][0],     t["color"][1],     t["color"][2] };
+				light->Intensity = t["intensity"];
+				light->AmbientStrength = t["ambient"];
+				light->IBLIntensity = t.value("ibl_intensity", 1.0f);
+				light->SpecularStrength = t["specular"];
+				light->Shininess = t["shininess"];
+				registry.emplace<LightComponent>(entity, light);
+			}
+
+			if (components.contains("PointLight"))
+			{
+				auto& t = components["PointLight"];
+				auto pl = std::make_shared<PointLight>();
+				pl->Position = { t["position"][0], t["position"][1], t["position"][2] };
+				pl->Color = { t["color"][0],    t["color"][1],    t["color"][2] };
+				pl->Intensity = t["intensity"];
+				pl->Radius = t["radius"];
+				registry.emplace<PointLightComponent>(entity, pl);
+			}
+
+			if (components.contains("PostProcess"))
+			{
+				auto& t = components["PostProcess"];
+				PostProcessComponent pp;
+				pp.IsGlobal = t["is_global"];
+				pp.Settings.Exposure = t["exposure"];
+				pp.Settings.BloomEnabled = t["bloom_enabled"];
+				pp.Settings.BloomThreshold = t["bloom_threshold"];
+				pp.Settings.BloomIntensity = t["bloom_intensity"];
+				pp.Settings.BloomBlurPasses = t["bloom_blur_passes"];
+				pp.SSAO.Enabled = t.value("ssao_enabled", false);
+				pp.SSAO.Radius = t.value("ssao_radius", 0.5f);
+				pp.SSAO.Bias = t.value("ssao_bias", 0.025f);
+				pp.SSAO.Power = t.value("ssao_power", 2.0f);
+				pp.SSAO.KernelSize = t.value("ssao_kernel", 64);
+				registry.emplace<PostProcessComponent>(entity, pp);
+			}
+
+			if (components.contains("Camera"))
+			{
+				auto& t = components["Camera"];
+				CameraComponent cam;
+				cam.Fov = t.value("fov", 60.0f);
+				cam.NearClip = t.value("near", 0.1f);
+				cam.FarClip = t.value("far", 1000.0f);
+				cam.MoveSpeed = t.value("move_speed", 5.0f);
+				cam.Sensitivity = t.value("sensitivity", 0.1f);
+				cam.IsPrimary = t.value("is_primary", true);
+				registry.emplace<CameraComponent>(entity, cam);
+			}
+
+			return entity;
+		}
+		catch (const json::exception& ex)
+		{
+			AXE_CORE_ERROR("SceneSerializer::DeserializeEntity falhou: {}", ex.what());
+			return entt::null;
+		}
+	}
+
+	entt::entity SceneSerializer::DeserializeEntities(
+		const std::vector<std::string>& snapshots, Scene& scene)
+	{
+		if (snapshots.empty()) return entt::null;
+
+		auto& registry = scene.GetRegistry();
+
+		// Mapa de ID antigo → entity nova
+		std::unordered_map<uint32_t, entt::entity> idMap;
+
+		// Passo 1 — cria todas as entities sem hierarquia
+		for (const auto& snap : snapshots)
+		{
+			if (snap.empty()) continue;
+			try
+			{
+				json e = json::parse(snap);
+				uint32_t oldID = e["id"];
+				const auto& components = e["components"];
+
+				entt::entity entity;
+				if (components.contains("Folder"))
+					entity = scene.CreateFolder("Folder");
+				else
+					entity = scene.CreateEntity("Entity");
+
+				idMap[oldID] = entity;
+
+				if (components.contains("Name"))
+					if (auto* c = registry.try_get<NameComponent>(entity))
+						c->Name = components["Name"]["name"];
+
+				if (components.contains("Folder"))
+					if (auto* f = registry.try_get<FolderComponent>(entity))
+					{
+						auto& t = components["Folder"]["color"];
+						f->Color = ImVec4(t[0], t[1], t[2], t[3]);
+					}
+
+				if (components.contains("Transform"))
+				{
+					auto& c = registry.get_or_emplace<TransformComponent>(entity);
+					auto& t = components["Transform"];
+					c.Data.Position = { t["position"][0], t["position"][1], t["position"][2] };
+					c.Data.Rotation = { t["rotation"][0], t["rotation"][1], t["rotation"][2] };
+					c.Data.Scale = { t["scale"][0],    t["scale"][1],    t["scale"][2] };
+				}
+
+				if (components.contains("Mesh"))
+				{
+					std::string uuid = components["Mesh"]["uuid"];
+					auto& mc = registry.emplace<MeshComponent>(entity);
+					mc.AssetUUID = uuid;
+					if (MeshFactory::IsPrimitive(uuid))
+						mc.Data = MeshFactory::CreateByUUID(uuid);
+					else
+					{
+						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+						if (record && std::filesystem::exists(record->FilePath))
+						{
+							auto loaded = MeshLoader::Load(record->FilePath.string());
+							mc.Data = loaded.MeshData;
+						}
+					}
+				}
+
+				if (components.contains("Material"))
+				{
+					auto& t = components["Material"];
+					auto  mat = std::make_shared<Material>(nullptr, "Material");
+					mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
+					mat->SpecularStrength = t["specular_strength"];
+					mat->Shininess = t["shininess"];
+					if (t.contains("metallic"))  mat->Metallic = t["metallic"];
+					if (t.contains("roughness")) mat->Roughness = t["roughness"];
+					if (t.contains("ao"))        mat->AO = t["ao"];
+					if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
+					auto mc = MaterialComponent{ mat };
+					if (t.contains("material_asset_uuid"))
+					{
+						mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
+						if (s_MaterialRecompileCallback && !mc.MaterialAssetUUID.empty())
+							s_MaterialRecompileCallback(mc.MaterialAssetUUID, mat.get());
+					}
+					registry.emplace<MaterialComponent>(entity, mc);
+				}
+
+				if (components.contains("PointLight"))
+				{
+					auto& t = components["PointLight"];
+					auto pl = std::make_shared<PointLight>();
+					pl->Position = { t["position"][0], t["position"][1], t["position"][2] };
+					pl->Color = { t["color"][0],    t["color"][1],    t["color"][2] };
+					pl->Intensity = t["intensity"];
+					pl->Radius = t["radius"];
+					registry.emplace<PointLightComponent>(entity, pl);
+				}
+			}
+			catch (...) {}
+		}
+
+		// Passo 2 — reconstrói hierarquia com IDs mapeados
+		for (const auto& snap : snapshots)
+		{
+			if (snap.empty()) continue;
+			try
+			{
+				json e = json::parse(snap);
+				uint32_t oldID = e["id"];
+				if (!idMap.count(oldID)) continue;
+
+				entt::entity entity = idMap[oldID];
+				const auto& components = e["components"];
+
+				if (components.contains("Relationship"))
+				{
+					auto& rel = components["Relationship"];
+					// Só seta parent se o pai está no mesmo grupo restaurado
+					if (rel.contains("parent"))
+					{
+						uint32_t oldParent = rel["parent"];
+						if (idMap.count(oldParent))
+							scene.SetParent(entity, idMap[oldParent]);
+					}
+				}
+			}
+			catch (...) {}
+		}
+
+		// Retorna a primeira entity (raiz do grupo)
+		if (!idMap.empty())
+		{
+			try
+			{
+				json first = json::parse(snapshots[0]);
+				uint32_t firstID = first["id"];
+				if (idMap.count(firstID))
+					return idMap[firstID];
+			}
+			catch (...) {}
+		}
+
+		return entt::null;
+	}
 
 } // namespace axe

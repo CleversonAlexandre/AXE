@@ -15,6 +15,8 @@ namespace axe
 
         void SetDepthTest(bool enabled) override;
         void SetDepthWrite(bool enabled) override;
+        void SetBlend(bool enabled) override;
+        void SetBlendFunc(uint32_t src, uint32_t dst) override;
         void SetDepthFunc(DepthFunc func) override;
 
         void SetCullFace(bool enabled) override;

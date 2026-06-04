@@ -166,14 +166,40 @@ namespace axe
     void AssetBrowser::MoveAssetToFolder(const std::string& uuid, const std::string& folder)
     {
         auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
-        if (rec)
+        if (!rec) return;
+
+        // Move arquivo fisicamente para a pasta de destino
+        if (ProjectManager::Get().HasProject() && !folder.empty())
         {
-            rec->VirtualFolder = folder;
-            SaveIfProject();
+            auto targetDir = ProjectManager::Get().GetCurrent().AssetsPath / folder;
+            std::filesystem::create_directories(targetDir);
+
+            auto newPath = targetDir / rec->FilePath.filename();
+            if (rec->FilePath != newPath && std::filesystem::exists(rec->FilePath))
+            {
+                std::error_code ec;
+                std::filesystem::rename(rec->FilePath, newPath, ec);
+                if (!ec)
+                {
+                    AXE_CORE_INFO("AssetBrowser: '{}' movido para '{}'",
+                        rec->Name, targetDir.string());
+                    rec->FilePath = newPath;
+                }
+            }
         }
+
+        rec->VirtualFolder = folder;
+        SaveIfProject();
     }
 
     // ==================== Pastas virtuais ====================
+
+    // Retorna o path físico no disco para uma pasta virtual
+    static std::filesystem::path GetDiskPath(const std::string& virtualPath)
+    {
+        if (!ProjectManager::Get().HasProject()) return {};
+        return ProjectManager::Get().GetCurrent().AssetsPath / virtualPath;
+    }
 
     void AssetBrowser::CreateFolder(const std::string& name, const std::string& parent)
     {
@@ -182,11 +208,23 @@ namespace axe
             if (GetFullFolderPath(f.Name, f.Parent) == fullPath) return;
 
         m_Folders.push_back({ name, parent, 0xFF4A9EFF });
+
+        // Cria pasta física no disco
+        auto diskPath = GetDiskPath(fullPath);
+        if (!diskPath.empty())
+        {
+            std::error_code ec;
+            std::filesystem::create_directories(diskPath, ec);
+            if (!ec)
+                AXE_CORE_INFO("AssetBrowser: pasta criada no disco: {}", diskPath.string());
+        }
+
         SaveIfProject();
     }
 
     void AssetBrowser::DeleteFolder(const std::string& folderPath)
     {
+        // Move assets da pasta para a raiz no database
         for (auto& [uuid, record] : const_cast<std::unordered_map<std::string, AssetRecord>&>(
             const_cast<const AssetDatabase&>(AssetDatabase::Get()).GetAll()))
         {
@@ -203,6 +241,18 @@ namespace axe
         if (m_SelectedFolder == folderPath)
             m_SelectedFolder = "";
 
+        // Deleta pasta física do disco recursivamente
+        auto diskPath = GetDiskPath(folderPath);
+        if (!diskPath.empty() && std::filesystem::exists(diskPath))
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(diskPath, ec);
+            if (!ec)
+                AXE_CORE_INFO("AssetBrowser: pasta '{}' deletada do disco.", diskPath.string());
+            else
+                AXE_CORE_ERROR("AssetBrowser: falha ao deletar '{}': {}", diskPath.string(), ec.message());
+        }
+
         SaveIfProject();
     }
 
@@ -213,12 +263,42 @@ namespace axe
             if (GetFullFolderPath(f.Name, f.Parent) == oldPath)
             {
                 std::string newPath = GetFullFolderPath(newName, f.Parent);
-                for (auto& [uuid, record] : const_cast<std::unordered_map<std::string, AssetRecord>&>(
-                    const_cast<const AssetDatabase&>(AssetDatabase::Get()).GetAll()))
+
+                // Renomeia pasta física no disco
+                auto oldDisk = GetDiskPath(oldPath);
+                auto newDisk = GetDiskPath(newPath);
+                if (!oldDisk.empty() && std::filesystem::exists(oldDisk))
                 {
-                    if (record.VirtualFolder == oldPath)
-                        record.VirtualFolder = newPath;
+                    std::error_code ec;
+                    std::filesystem::rename(oldDisk, newDisk, ec);
+                    if (!ec)
+                    {
+                        // Atualiza paths dos assets que estão na pasta
+                        for (auto& [uuid, record] : const_cast<std::unordered_map<std::string, AssetRecord>&>(
+                            const_cast<const AssetDatabase&>(AssetDatabase::Get()).GetAll()))
+                        {
+                            // Atualiza VirtualFolder
+                            if (record.VirtualFolder == oldPath)
+                                record.VirtualFolder = newPath;
+
+                            // Atualiza FilePath se o arquivo estava na pasta antiga
+                            auto relPath = record.FilePath.lexically_relative(oldDisk);
+                            if (!relPath.empty() && relPath.native()[0] != '.')
+                                record.FilePath = newDisk / relPath;
+                        }
+                    }
                 }
+                else
+                {
+                    // Pasta só virtual — só atualiza VirtualFolder
+                    for (auto& [uuid, record] : const_cast<std::unordered_map<std::string, AssetRecord>&>(
+                        const_cast<const AssetDatabase&>(AssetDatabase::Get()).GetAll()))
+                    {
+                        if (record.VirtualFolder == oldPath)
+                            record.VirtualFolder = newPath;
+                    }
+                }
+
                 f.Name = newName;
                 if (m_SelectedFolder == oldPath) m_SelectedFolder = newPath;
                 break;
@@ -252,8 +332,18 @@ namespace axe
         auto path = projectRoot / "axe_browser.json";
         if (!std::filesystem::exists(path))
         {
-            // Primeira vez — salva as pastas padrão para criar o arquivo
+            // Primeira vez — salva as pastas padrão e cria no disco
             SaveFolders(projectRoot);
+            if (ProjectManager::Get().HasProject())
+            {
+                for (auto& f : m_Folders)
+                {
+                    auto diskPath = ProjectManager::Get().GetCurrent().AssetsPath /
+                        GetFullFolderPath(f.Name, f.Parent);
+                    std::error_code ec;
+                    std::filesystem::create_directories(diskPath, ec);
+                }
+            }
             return;
         }
 
@@ -263,7 +353,7 @@ namespace axe
         try
         {
             auto j = nlohmann::json::parse(file);
-            if (j.empty()) return; // arquivo vazio — mantém padrões
+            if (j.empty()) return;
 
             m_Folders.clear();
             for (const auto& entry : j)
@@ -275,6 +365,18 @@ namespace axe
                 f.Expanded = entry.value("expanded", true);
                 if (!f.Name.empty())
                     m_Folders.push_back(f);
+            }
+
+            // Garante que todas as pastas existem no disco
+            if (ProjectManager::Get().HasProject())
+            {
+                for (auto& f : m_Folders)
+                {
+                    auto diskPath = ProjectManager::Get().GetCurrent().AssetsPath /
+                        GetFullFolderPath(f.Name, f.Parent);
+                    std::error_code ec;
+                    std::filesystem::create_directories(diskPath, ec);
+                }
             }
         }
         catch (...) {}
@@ -334,7 +436,10 @@ namespace axe
         if (ImGui::IsWindowFocused() && !m_SelectedFolder.empty())
         {
             if (ImGui::IsKeyPressed(ImGuiKey_Delete))
-                DeleteFolder(m_SelectedFolder);
+            {
+                m_DeleteConfirmFolder = m_SelectedFolder;
+                m_DeleteConfirmFolderDiskPath = GetDiskPath(m_SelectedFolder).string();
+            }
 
             if (ImGui::IsKeyPressed(ImGuiKey_F2))
             {
@@ -390,7 +495,56 @@ namespace axe
             }
         }
 
-        // Popup de cor de pasta
+        // Modal de confirmação de exclusão de PASTA
+        if (!m_DeleteConfirmFolder.empty())
+        {
+            ImGui::OpenPopup("##confirm_delete_folder");
+            if (ImGui::BeginPopupModal("##confirm_delete_folder", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                ImGui::Text("ATENÇÃO — Esta ação é irreversível!");
+                ImGui::PopStyleColor();
+
+                ImGui::Separator();
+                ImGui::Text("A pasta '%s' será excluída:", m_DeleteConfirmFolder.c_str());
+                ImGui::Spacing();
+
+                ImGui::BulletText("Do editor (organização virtual)");
+                ImGui::BulletText("Do disco permanentemente:");
+                ImGui::Indent(20.0f);
+                ImGui::TextDisabled("%s", m_DeleteConfirmFolderDiskPath.c_str());
+                ImGui::Unindent(20.0f);
+
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+                ImGui::Text("Todos os arquivos dentro da pasta serao perdidos!");
+                ImGui::PopStyleColor();
+
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+                if (ImGui::Button("Excluir permanentemente", ImVec2(200, 0)))
+                {
+                    DeleteFolder(m_DeleteConfirmFolder);
+                    m_DeleteConfirmFolder.clear();
+                    m_DeleteConfirmFolderDiskPath.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopStyleColor(2);
+
+                ImGui::SameLine();
+                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                {
+                    m_DeleteConfirmFolder.clear();
+                    m_DeleteConfirmFolderDiskPath.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
         if (!m_ColorPickerFolder.empty())
         {
             ImGui::OpenPopup("##folder_color");
@@ -627,8 +781,14 @@ namespace axe
 
         ImGui::Separator();
 
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.3f, 0.3f, 1));
         if (ImGui::MenuItem("Excluir Pasta", "Del"))
-            DeleteFolder(folderPath);
+        {
+            m_DeleteConfirmFolder = folderPath;
+            auto diskPath = GetDiskPath(folderPath);
+            m_DeleteConfirmFolderDiskPath = diskPath.string();
+        }
+        ImGui::PopStyleColor();
     }
 
     void AssetBrowser::DrawAssetContextMenu(const AssetRecord& record)

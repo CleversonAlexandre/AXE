@@ -7,7 +7,7 @@
 #include "axe/scene/components.hpp"
 #include "axe/utils/glm_config.hpp"
 
-#include <glad/glad.h>
+// viewport_renderer.cpp — sem includes diretos de OpenGL
 #include <imgui.h>
 #include <ImGuizmo.h>
 
@@ -34,6 +34,7 @@ namespace axe
 		m_SceneRenderer = std::make_unique<SceneRenderer>();
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
 		m_SkyboxRenderer.Initialize();
+		m_GridRenderer.Initialize();
 
 		FramebufferSpecification hdrSpec;
 		hdrSpec.Width = 1280;
@@ -100,8 +101,8 @@ namespace axe
 
 		// 3. Binda HDR e limpa
 		m_HDRFramebuffer->Bind();
-		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-		glDepthMask(GL_TRUE);
+		RenderCommand::SetColorWrite(true);
+		RenderCommand::SetDepthWrite(true);
 		RenderCommand::SetViewport(0, 0, width, height);
 		RenderCommand::SetClearColor(0.1f, 0.1f, 0.12f, 1.0f);
 		RenderCommand::Clear();
@@ -173,6 +174,13 @@ namespace axe
 			if (m_SceneRenderer && m_Scene && m_Camera)
 				m_SceneRenderer->RenderScene(*m_Scene, *m_Camera, selected);
 
+			// Grid — dentro do HDR framebuffer, com valores lineares baixos
+			// que sobrevivem ao tone mapping sem saturar
+			if (ShowGrid && m_Camera)
+				m_GridRenderer.Render(
+					m_Camera->GetViewMatrix(),
+					m_Camera->GetProjectionMatrix());
+
 			// Picking
 			if (m_Scene && m_Camera && m_PickingEnabled)
 			{
@@ -204,6 +212,7 @@ namespace axe
 		m_PostProcess->Execute(
 			m_HDRFramebuffer->GetColorAttachmentRendererID(),
 			m_PostProcessSettings);
+
 		framebuffer.Unbind();
 	}
 	std::uint32_t ViewportRenderer::PickObject(float mouseX, float mouseY)
@@ -247,10 +256,6 @@ namespace axe
 		ImGuizmo::SetOrthographic(false);
 		ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
 		ImGuizmo::SetRect(boundsMin.x, boundsMin.y, width, height);
-
-		// Grid
-		if (ShowGrid)
-			DrawGrid();
 
 		glm::mat4 view = m_Camera->GetViewMatrix();
 		glm::mat4 projection = m_Camera->GetProjectionMatrix();
@@ -327,19 +332,7 @@ namespace axe
 	void ViewportRenderer::DrawGrid()
 	{
 		if (!m_Camera) return;
-
-		static const float identityMatrix[16] = {
-			1.f, 0.f, 0.f, 0.f,
-			0.f, 1.f, 0.f, 0.f,
-			0.f, 0.f, 1.f, 0.f,
-			0.f, 0.f, 0.f, 1.f
-		};
-
-		ImGuizmo::DrawGrid(
-			glm::value_ptr(m_Camera->GetViewMatrix()),
-			glm::value_ptr(m_Camera->GetProjectionMatrix()),
-			identityMatrix, 100.f
-		);
+		m_GridRenderer.Render(m_Camera->GetViewMatrix(), m_Camera->GetProjectionMatrix());
 	}
 
 	void ViewportRenderer::Resize(uint32_t width, uint32_t height)

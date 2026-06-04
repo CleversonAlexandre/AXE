@@ -66,6 +66,17 @@ namespace axe
 		glDepthMask(enabled ? GL_TRUE : GL_FALSE);
 	}
 
+	void OpenGLRendererAPI::SetBlend(bool enabled)
+	{
+		if (enabled) glEnable(GL_BLEND);
+		else         glDisable(GL_BLEND);
+	}
+
+	void OpenGLRendererAPI::SetBlendFunc(uint32_t src, uint32_t dst)
+	{
+		glBlendFunc(src, dst);
+	}
+
 	void OpenGLRendererAPI::SetDepthFunc(DepthFunc func)
 	{
 		switch (func)

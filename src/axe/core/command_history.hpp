@@ -25,28 +25,31 @@ namespace axe
 		//Executa um comando eo adiciona ao histórico
 		void Push(Command cmd)
 		{
-		
 			if (m_Index + 1 < (int)m_History.size())
 				m_History.resize(m_Index + 1);
 
-			cmd.Execute();
+			// Execute pode ser nullptr quando a ação já foi executada
+			// (ex: criar/deletar na hierarchy já aconteceu antes do Push)
+			if (cmd.Execute)
+				cmd.Execute();
+
 			m_History.push_back(std::move(cmd));
 			m_Index = (int)m_History.size() - 1;
 		}
 		void Undo()
 		{
 			if (!CanUndo()) return;
-	
+
 			m_RedoStack.push_back(m_History[m_Index]);
-			m_History[m_Index].Undo();
+			if (m_History[m_Index].Undo) m_History[m_Index].Undo();
 			--m_Index;
 		}
 		void Redo()
 		{
 			if (!CanRedo()) return;
-			
+
 			++m_Index;
-			m_History[m_Index].Execute();
+			if (m_History[m_Index].Execute) m_History[m_Index].Execute();
 
 			// Garante que o índice não ultrapassa o tamanho
 			m_Index = std::min(m_Index, (int)m_History.size() - 1);
@@ -77,7 +80,7 @@ namespace axe
 			m_Index = -1;
 		}
 
-		
+
 		void ReplaceTop(Command cmd)
 		{
 			if (m_History.empty())
@@ -98,6 +101,6 @@ namespace axe
 		std::vector<Command> m_RedoStack;
 		int m_Index = -1;
 
-		
+
 	};
 }//namespace axe

@@ -33,6 +33,8 @@ namespace axe
         std::function<void()> OnRedo;
         std::function<bool()> OnCanUndo;
         std::function<bool()> OnCanRedo;
+        HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
+
 
     private:
         void BeginDockspace();
@@ -40,7 +42,7 @@ namespace axe
         void DrawMenuBar();
         void BuildDefaultLayout(ImGuiID dockspaceId);
 
-        HierarchyWindow m_HierarchyWindow;
+        HierarchyWindow m_HierarchyWindow;        
         ViewportWindow  m_ViewportWindow;
         InspectorWindow m_InspectorWindow;
         AssetBrowser    m_AssetBowserWindow;

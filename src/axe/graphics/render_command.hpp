@@ -43,6 +43,16 @@ namespace axe
             s_RendererAPI->SetDepthWrite(enabled);
         }
 
+        static void SetBlend(bool enabled)
+        {
+            s_RendererAPI->SetBlend(enabled);
+        }
+
+        static void SetBlendFunc(uint32_t src, uint32_t dst)
+        {
+            s_RendererAPI->SetBlendFunc(src, dst);
+        }
+
         static void SetDepthFunc(RendererAPI::DepthFunc func)
         {
             s_RendererAPI->SetDepthFunc(func);

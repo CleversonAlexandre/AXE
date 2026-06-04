@@ -45,6 +45,10 @@ namespace axe
         virtual void SetStencilFunc(uint32_t func, int ref, uint32_t mask) = 0;
         virtual void SetStencilOp(uint32_t fail, uint32_t zfail, uint32_t zpass) = 0;
 
+        // Blending
+        virtual void SetBlend(bool enabled) = 0;
+        virtual void SetBlendFunc(uint32_t src, uint32_t dst) = 0;
+
         // Draw
         virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;
         virtual void DrawIndexedCount(uint32_t indexCount) = 0;

@@ -1,6 +1,7 @@
 #include "hierarchy_window.hpp"
 #include "axe/scene/scene_objects.hpp"
 #include "axe/scene/components.hpp"
+#include "axe/scene/scene_serializer.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
@@ -151,6 +152,7 @@ namespace axe
             if (ImGui::IsKeyPressed(ImGuiKey_Escape))
                 m_Renaming = false;
 
+            // Pop da cor da pasta — só aqui no branch de rename
             if (isFolder) ImGui::PopStyleColor();
         }
         else
@@ -200,10 +202,10 @@ namespace axe
                 DrawContextMenuObject(entity);
                 ImGui::EndPopup();
             }
-        }
 
-        // Remove cor da pasta após desenhar o nome
-        if (isFolder) ImGui::PopStyleColor();
+            // Pop da cor da pasta — só no branch de selectable
+            if (isFolder) ImGui::PopStyleColor();
+        }
 
         // Filhos
         if (isOpen && rel)
@@ -300,10 +302,29 @@ namespace axe
         m_Context->Select(entity);
     }
 
+    static void RegisterCreateUndo(CommandHistory* history, EditorContext* ctx,
+        Scene* scene, entt::entity entity, const std::string& desc)
+    {
+        if (!history) return;
+        history->Push({
+            desc,
+            nullptr,
+            [scene, entity, ctx]()
+            {
+                if (scene->GetRegistry().valid(entity))
+                {
+                    ctx->ClearSelection();
+                    scene->DestroyEntity(entity);
+                }
+            }
+            });
+    }
+
     void HierarchyWindow::CreateObject(const std::string& name, const std::string& primitiveUUID)
     {
-        auto entity = m_Context->ActiveScene->CreateEntity(name);
-        auto& registry = m_Context->ActiveScene->GetRegistry();
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateEntity(name);
+        auto& registry = scene->GetRegistry();
 
         if (!primitiveUUID.empty())
         {
@@ -316,53 +337,56 @@ namespace axe
             }
         }
 
-        // Se há uma pasta selecionada, coloca o objeto dentro dela
         if (m_Context->HasSelection())
         {
             auto selected = m_Context->SelectedEntity;
             if (registry.any_of<FolderComponent>(selected))
-                m_Context->ActiveScene->SetParent(entity, selected);
+                scene->SetParent(entity, selected);
         }
 
         m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar " + name);
     }
 
     void HierarchyWindow::CreateFolder()
     {
-        auto entity = m_Context->ActiveScene->CreateFolder("Folder");
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateFolder("Folder");
+        auto& registry = scene->GetRegistry();
 
-        // Se há uma pasta selecionada, cria dentro dela
-        auto& registry = m_Context->ActiveScene->GetRegistry();
         if (m_Context->HasSelection())
         {
             auto selected = m_Context->SelectedEntity;
             if (registry.any_of<FolderComponent>(selected))
-                m_Context->ActiveScene->SetParent(entity, selected);
+                scene->SetParent(entity, selected);
         }
 
         m_Context->Select(entity);
-        StartRename(entity); // começa renomeando imediatamente
+        StartRename(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Pasta");
     }
 
     void HierarchyWindow::CreateLight()
     {
-        auto entity = m_Context->ActiveScene->CreateLight();
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateLight();
         m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Luz Direcional");
     }
 
     void HierarchyWindow::CreatePointLight()
     {
-        auto& scene = *m_Context->ActiveScene;
-        auto  entity = scene.CreateEntity("Point Light");
-        auto& registry = scene.GetRegistry();
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateEntity("Point Light");
+        auto& registry = scene->GetRegistry();
 
         auto pl = std::make_shared<PointLight>();
-        // Posiciona na origem por padrão — usuário move pelo transform
         if (auto* tc = registry.try_get<TransformComponent>(entity))
             pl->Position = tc->Data.Position;
 
         registry.emplace<PointLightComponent>(entity, pl);
         m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Point Light");
     }
 
     void HierarchyWindow::DeleteSelected()
@@ -370,26 +394,57 @@ namespace axe
         if (!m_Context->HasSelection()) return;
 
         entt::entity entity = m_Context->SelectedEntity;
-        auto& scene = *m_Context->ActiveScene;
-        auto& registry = scene.GetRegistry();
+        auto* scene = m_Context->ActiveScene;
+        auto& registry = scene->GetRegistry();
 
-        // Serializa o estado do entity para poder restaurar
-        auto* name = registry.try_get<NameComponent>(entity);
-        std::string entityName = name ? name->Name : "Entity";
+        auto* nameComp = registry.try_get<NameComponent>(entity);
+        std::string entityName = nameComp ? nameComp->Name : "Entity";
+
+        // Serializa a entity e todos os filhos recursivamente
+        std::vector<std::string> snapshots;
+        std::function<void(entt::entity)> collectSnapshots = [&](entt::entity e)
+            {
+                if (!registry.valid(e)) return;
+                snapshots.push_back(SceneSerializer::SerializeEntity(e, *scene));
+                if (auto* rel = registry.try_get<RelationshipComponent>(e))
+                    for (auto child : rel->Children)
+                        collectSnapshots(child);
+            };
+        collectSnapshots(entity);
 
         m_Context->ClearSelection();
         m_Renaming = false;
 
-        if (m_History)
+        // Destrói recursivamente — filhos primeiro
+        std::function<void(entt::entity)> destroyRecursive = [&](entt::entity e)
+            {
+                if (!registry.valid(e)) return;
+                if (auto* rel = registry.try_get<RelationshipComponent>(e))
+                {
+                    auto children = rel->Children; // copia pois vai ser modificado
+                    for (auto child : children)
+                        destroyRecursive(child);
+                }
+                scene->DestroyEntity(e);
+            };
+        destroyRecursive(entity);
+
+        if (m_History && !snapshots.empty())
         {
-            // Undo de delete é complexo — por ora só destrói sem undo
-            // (seria necessário serializar/deserializar o entity completo)
-            scene.DestroyEntity(entity);
-            // TODO: implementar serialização por entity para suportar undo de delete
-        }
-        else
-        {
-            scene.DestroyEntity(entity);
+            EditorContext* ctx = m_Context;
+            Scene* scn = scene;
+            auto           snaps = snapshots;
+
+            m_History->Push({
+                "Deletar " + entityName,
+                nullptr,
+                [ctx, scn, snaps]()
+                {
+                    entt::entity root = SceneSerializer::DeserializeEntities(snaps, *scn);
+                    if (root != entt::null)
+                        ctx->Select(root);
+                }
+                });
         }
     }
 
@@ -402,12 +457,24 @@ namespace axe
             m_Context->Select(copy);
     }
 
+    void HierarchyWindow::CreateCamera()
+    {
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateEntity("Camera");
+        auto& registry = scene->GetRegistry();
+        registry.emplace<CameraComponent>(entity);
+        m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Câmera");
+    }
+
     void HierarchyWindow::CreatePostProcess()
     {
-        auto entity = m_Context->ActiveScene->CreateEntity("Post Process Volume");
-        auto& registry = m_Context->ActiveScene->GetRegistry();
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateEntity("Post Process Volume");
+        auto& registry = scene->GetRegistry();
         registry.emplace<PostProcessComponent>(entity);
         m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Post Process");
     }
 
 } // namespace axe

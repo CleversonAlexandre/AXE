@@ -23,6 +23,14 @@ namespace axe
 		static std::string SerializeToString(const Scene& scene);
 		static bool DeserializeFromString(const std::string& data, Scene& scene);
 
+		// Serialização por entity — para undo/redo de criar/deletar
+		static std::string  SerializeEntity(entt::entity entity, const Scene& scene);
+		static entt::entity DeserializeEntity(const std::string& data, Scene& scene);
+
+		// Restaura um grupo de entities (ex: pasta + filhos) reconstruindo a hierarquia
+		// Retorna a entity raiz (primeira da lista)
+		static entt::entity DeserializeEntities(const std::vector<std::string>& snapshots, Scene& scene);
+
 		using MaterialRecompileCallback =
 			std::function<void(const std::string& assetUUID, Material* material)>;
 

@@ -15,38 +15,39 @@
 
 namespace axe
 {
-	//Nome do objeto - todo entity tem um
+	// Nome do objeto
 	struct NameComponent
 	{
 		std::string Name = "Entity";
 	};
 
-	//Transform - posição, rotação, escala 
+	// Transform
 	struct TransformComponent
 	{
 		Transform Data;
 	};
-	//Mesh - geometria do objet
+
+	// Mesh
 	struct MeshComponent
 	{
 		std::shared_ptr<Mesh> Data;
 		std::string           AssetUUID;
 	};
 
-	//Metrial - shader + cor
+	// Material
 	struct MaterialComponent
 	{
 		std::shared_ptr<Material> Data;
 		std::string MaterialAssetUUID;
 	};
 
-	//Luz direcional
+	// Luz direcional
 	struct LightComponent
 	{
 		std::shared_ptr<DirectionalLight> Data;
 	};
 
-	//Point Light
+	// Point Light
 	struct PointLightComponent
 	{
 		std::shared_ptr<PointLight> Data;
@@ -56,6 +57,7 @@ namespace axe
 	{
 		ImVec4 Color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
 	};
+
 	struct RelationshipComponent
 	{
 		entt::entity Parent = entt::null;
@@ -66,17 +68,25 @@ namespace axe
 	{
 		PostProcessSettings Settings;
 		SSAOSettings        SSAO;
-		bool IsGlobal = true; // afeta toda a cena
+		bool IsGlobal = true;
 	};
 
-	// Componente que liga uma entity ao SceneEnvironment do editor
-	// Permite editar HDRI e rotação do skybox pelo inspector
+	// Câmera de jogo
+	struct CameraComponent
+	{
+		float Fov = 60.0f;
+		float NearClip = 0.1f;
+		float FarClip = 1000.0f;
+		float MoveSpeed = 5.0f;
+		float Sensitivity = 0.1f;
+		bool  IsPrimary = true;
+	};
+
+	// Environment
 	struct EnvironmentComponent
 	{
 		std::string HDRIPath;
 		float       SkyboxRotation = 0.0f;
-		std::shared_ptr<DirectionalLight> Data;
 	};
-	
- 
-}//namespace axe
+
+} // namespace axe

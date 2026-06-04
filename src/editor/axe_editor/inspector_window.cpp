@@ -1,1075 +1,486 @@
-#pragma once
-
-#include "axe/layers/layer.hpp"
-#include "editor_ui.hpp"
-#include "file_dialog.hpp"
-#include "axe/core/command_history.hpp"
-
-#include "GLFW/glfw3.h"
-#include <iostream>
-
-#include "axe/graphics/renderer/viewport_renderer.hpp"
-#include "axe/graphics/framebuffer.hpp"
-#include "axe/scene//scene.hpp"
-#include "axe/mesh/mesh_factory.hpp"
-
+#include "inspector_window.hpp"
+#include "axe/utils/glm_config.hpp"
 #include <imgui.h>
-#include <ImGuizmo.h>
-#include <glm/glm.hpp>
+#include <cstdint>
+#include <algorithm>
 
-#include "axe/graphics/editor_camera.hpp"
-
-#include "editor_context.hpp"
-
-
-#include "axe/mesh/mesh_loader.hpp"
-#include "axe/mesh/primitive_uuid.hpp"
 #include "axe/asset/asset_database.hpp"
-#include "axe/project/project_manager.hpp"
-#include <filesystem>
-
+#include "axe/graphics/texture.hpp"
+#include "axe/log/log.hpp"
+#include "axe/material/material_asset.hpp"
 #include "axe/scene/scene_serializer.hpp"
-#include "editor_icon_library.hpp"
 
-
-#include "axe/graphics/game_camera.hpp"
-#include "axe/events/key_event.hpp"
-#include "axe/input/key_codes.hpp"
-
+#include "asset/asset_picker.hpp"
+#include "axe/material/material_compiler.hpp"
 #include "material_editor_window.hpp"
 
-#include "node_graph/material_graph.hpp"
-#include "axe/material/material_compiler.hpp"
-#include <nlohmann/json.hpp>
-#include <fstream>
 
-#include "material_thumbnail_renderer.hpp"
 namespace axe
 {
-	// EditorLayer contém toda a UI do editor
-	// É uma layer normal — fica abaixo do ImGuiLayer
+	static std::unique_ptr<MaterialGraph> s_CachedGraph;
+	static std::string s_CachedGraphUUID;
+	static bool s_GraphCacheDirty = false;
 
-	class EditorLayer : public Layer
+	static void InvalidateGraphCache() { s_CachedGraphUUID = ""; }
+
+	static void SaveCachedGraph(const std::string& assetUUID,
+		entt::registry* registry = nullptr,
+		entt::entity entity = entt::null)
 	{
-		enum class EditorState { Edit, Play, Pause };
-		// membros privados — adiciona:
-		EditorState              m_EditorState = EditorState::Edit;
-		GameCamera               m_GameCamera;
-		std::string              m_SceneSnapshot; // JSON da cena antes do Play
-		//float                    m_DeltaTime = 0.0f;
+		if (!s_CachedGraph) return;
+		const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+		if (!record) return;
 
-		class EditorCamera;
+		auto graphPath = record->FilePath;
+		graphPath.replace_extension(".axegraph");
 
-
-
-	public:
-		EditorLayer()
-			: Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>())
+		nlohmann::json originalJ;
 		{
-
+			std::ifstream fileIn(graphPath);
+			if (fileIn.is_open())
+				try { originalJ = nlohmann::json::parse(fileIn); }
+			catch (...) {}
 		}
 
-		void OnAttach() override
+		nlohmann::json newJ = s_CachedGraph->Serialize();
+
+		if (originalJ.contains("nodes") && newJ.contains("nodes"))
 		{
-			AXE_EDITOR_INFO("EditorLayer attached");
-
-			// 1. Cria a cena
-			m_Scene = std::make_unique<Scene>();
-			m_Context.ActiveScene = m_Scene.get();
-			m_Context.SelectedEntity = entt::null;
-			m_EditorUI->SetContext(&m_Context);
-
-			// Callbacks do menu File
-			m_EditorUI->OnNewScene = [this]()
+			auto& origNodes = originalJ["nodes"];
+			auto& newNodes = newJ["nodes"];
+			for (int i = 0; i < (int)newNodes.size() && i < (int)origNodes.size(); i++)
+				if (origNodes[i].contains("pos_x"))
 				{
-					m_Scene = std::make_unique<Scene>();
-					m_Context.ActiveScene = m_Scene.get();
-					m_Context.SelectedEntity = entt::null;
-					m_ViewportRenderer->SetScene(m_Scene.get());
-					m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-					m_CurrentScenePath.clear();
-					EnsureEnvironmentComponent();
-					AXE_EDITOR_INFO("Nova cena criada.");
-				};
-
-			m_EditorUI->OnOpenScene = [this](const std::string& path)
-				{
-					m_Scene = std::make_unique<Scene>();
-					m_Context.ActiveScene = m_Scene.get();
-					m_Context.SelectedEntity = entt::null;
-					m_ViewportRenderer->SetScene(m_Scene.get());
-					m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-					SceneSerializer::Deserialize(path, *m_Scene, &m_Environment);
-					m_CurrentScenePath = path;
-					EnsureEnvironmentComponent();
-					AXE_EDITOR_INFO("Cena aberta: {}", path);
-				};
-
-			m_EditorUI->OnSaveScene = [this](const std::string& path)
-				{
-					std::string savePath = path.empty() ? m_CurrentScenePath : path;
-					if (savePath.empty())
-					{
-						// Nenhum path definido — abre Save As
-						m_EditorUI->OnSaveScene(
-							FileDialog::Save(
-								"AXE Scene\0*.axescene\0",
-								"Salvar Cena",
-								"axescene").string());
-						return;
-					}
-					SceneSerializer::Serialize(*m_Scene, savePath, &m_Environment);
-					m_CurrentScenePath = savePath;
-					AXE_EDITOR_INFO("Cena salva em: {}", savePath);
-				};
-
-			m_EditorUI->OnUndo = [this]() { m_CommandHistory.Undo(); };
-			m_EditorUI->OnRedo = [this]() { m_CommandHistory.Redo(); };
-			m_EditorUI->OnCanUndo = [this]() { return m_CommandHistory.CanUndo(); };
-			m_EditorUI->OnCanRedo = [this]() { return m_CommandHistory.CanRedo(); };
-			m_EditorUI->OnDrawEnvironment = [this]()
-				{
-					std::string shortPath = m_Environment.SkyboxPath.empty() ? "Nenhum" :
-						std::filesystem::path(m_Environment.SkyboxPath).filename().string();
-					ImGui::TextDisabled("HDRI:");
-					ImGui::SameLine();
-					ImGui::Text("%s", shortPath.c_str());
-
-					if (ImGui::Button("Carregar HDRI..."))
-					{
-						auto p = FileDialog::Open(
-							"HDR Image\0*.hdr;*.exr\0All Files\0*.*\0",
-							"Selecionar HDRI", "hdr");
-						if (!p.empty())
-							m_Environment.LoadHDRI(p.string());
-					}
-
-					ImGui::Separator();
-					ImGui::DragFloat("Rotação Skybox", &m_Environment.SkyboxRotation,
-						1.0f, -360.0f, 360.0f);
-				};
-
-
-
-			// 2. Carrega cena padrão se existir, senão cria cena vazia
-			//if (ProjectManager::Get().HasStartScene())
-			//{
-			//	SceneSerializer::Deserialize(
-			//		ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
-			//}
-			//else
-			//{
-			//	// Tenta carregar cena padrão do engine
-			//	std::string defaultScene = "resources/default_scene/main.axescene";
-			//	AXE_EDITOR_INFO("Procurando cena padrão em: {}",
-			//		std::filesystem::absolute(defaultScene).string());
-
-			//	if (std::filesystem::exists(defaultScene))
-			//	{
-			//		AXE_EDITOR_INFO("Carregando cena padrão do engine.");
-			//		SceneSerializer::Deserialize(defaultScene, *m_Scene, &m_Environment);
-			//	}
-			//	else
-			//	{
-			//		// Cena realmente vazia
-			//		AXE_EDITOR_INFO("Arquivo não encontrado: {}", defaultScene);
-			//		m_Scene->CreateLight("Directional Light");
-			//		AXE_EDITOR_INFO("Cena vazia criada.");
-			//	}
-			//}
-
-			// 3. Registra callback do AssetBrowser
-			m_EditorUI->GetAssetBrowser()->SetFileDropCallback(
-				[this](const std::string& filepath)
-				{
-					std::string uuid = AssetDatabase::Get().Register(filepath);
-
-					LoadedAsset asset = MeshLoader::Load(filepath);
-					if (!asset.MeshData)
-					{
-						AXE_CORE_ERROR("EditorLayer: falha ao carregar '{}'", filepath);
-						return;
-					}
-
-					std::string name = std::filesystem::path(filepath).stem().string();
-					auto& registry = m_Scene->GetRegistry();
-					entt::entity entity = m_Scene->CreateEntity(name);
-
-					auto& mc = registry.emplace<MeshComponent>(entity);
-					mc.Data = asset.MeshData;
-					mc.AssetUUID = uuid;
-
-					if (asset.MaterialData)
-						registry.emplace<MaterialComponent>(entity, asset.MaterialData);
-
-					m_Context.Select(entity);
-
-					if (ProjectManager::Get().HasProject())
-					{
-						auto& root = ProjectManager::Get().GetCurrent().RootPath;
-						AssetDatabase::Get().Save(root);
-						m_EditorUI->GetAssetBrowser()->SaveFolders(root);
-					}
-
-					AXE_CORE_INFO("EditorLayer: '{}' importado. UUID: {}", name, uuid);
+					newNodes[i]["pos_x"] = origNodes[i]["pos_x"];
+					newNodes[i]["pos_y"] = origNodes[i]["pos_y"];
 				}
-			);
-
-			m_EditorUI->GetAssetBrowser()->SetAssetOpenCallback([this](const AssetRecord& record)
-				{
-					if (record.Type == AssetType::Material)
-					{
-						auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
-						if (matAsset)
-							m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
-						m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
-					}
-				});
-
-
-
-			auto instantiate = [this](const std::string& uuid)
-				{
-					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-					if (!record) return;
-
-					auto& registry = m_Scene->GetRegistry(); // ← move para cá
-
-					// Material — aplica no mesh selecionado
-					if (record->Type == AssetType::Material)
-					{
-
-
-						if (!m_Context.HasSelection()) return;
-
-						entt::entity selected = m_Context.SelectedEntity;
-						if (!registry.valid(selected)) return;
-
-						if (!registry.all_of<MeshComponent>(selected)) return;
-
-
-
-
-						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
-						if (!matAsset) return;
-
-						auto material = matAsset->GetMaterial();
-
-						// Usa o mesmo callback do SceneSerializer para recompilar
-						// (aplica forward + geometry shader + texturas direto no material)
-						if (SceneSerializer::GetMaterialRecompileCallback())
-							SceneSerializer::GetMaterialRecompileCallback()(uuid, material.get());
-
-						// Transfere texturas do grafo
-						auto graphPath = record->FilePath;
-						graphPath.replace_extension(".axegraph");
-						if (std::filesystem::exists(graphPath))
-						{
-							std::ifstream file(graphPath);
-							try
-							{
-								nlohmann::json j = nlohmann::json::parse(file);
-								MaterialGraph graph;
-								graph.Deserialize(j);
-
-								int slot = 0;
-								for (auto& node : graph.GetNodes())
-								{
-									if (node->Name != "Texture Sample") continue;
-									if (!node->Value.TextureVal) { ++slot; continue; }
-
-									bool isConnected = false;
-									for (auto& output : node->Outputs)
-										for (auto& link : graph.GetLinks())
-											if (link.StartPin == output.ID)
-												isConnected = true;
-
-									if (isConnected && slot == 0)
-									{
-										material->AlbedoMap = node->Value.TextureVal;
-										material->AlbedoUUID = node->Value.TextureUUID;
-									}
-									++slot;
-								}
-							}
-							catch (...) {}
-						}
-
-						auto matComp = MaterialComponent{ material };
-						matComp.MaterialAssetUUID = uuid;
-
-						if (registry.all_of<MaterialComponent>(selected))
-							registry.get<MaterialComponent>(selected) = matComp;
-						else
-							registry.emplace<MaterialComponent>(selected, matComp);
-
-
-						AXE_EDITOR_INFO("Material '{}' aplicado.", record->Name);
-						return;
-					}
-
-					// Mesh primitivo
-					if (MeshFactory::IsPrimitive(uuid))
-					{
-						auto mesh = MeshFactory::CreateByUUID(uuid);
-						if (!mesh) return;
-
-						auto entity = m_Scene->CreateEntity(record->Name);
-						auto& mc = registry.emplace<MeshComponent>(entity);
-						mc.Data = mesh;
-						mc.AssetUUID = uuid;
-						m_Context.Select(entity);
-						return;
-					}
-
-					// Mesh de arquivo
-					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-					if (!asset.MeshData) return;
-
-					auto entity = m_Scene->CreateEntity(record->Name);
-					auto& mc = registry.emplace<MeshComponent>(entity);
-					mc.Data = asset.MeshData;
-					mc.AssetUUID = uuid;
-
-					if (asset.MaterialData)
-						registry.emplace<MaterialComponent>(entity, asset.MaterialData);
-
-					m_Context.Select(entity);
-				};
-
-			m_EditorUI->GetAssetBrowser()->SetInstantiateCallback(instantiate);
-			//m_EditorUI->GetViewport()->SetAssetDropCallback(instantiate);
-			m_EditorUI->GetViewport()->SetAssetDropCallback(
-				[this](const std::string& uuid, float mouseX, float mouseY)
-				{
-					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-					if (!record) return;
-
-					auto& registry = m_Scene->GetRegistry();
-
-					// Se for material, usa picking para encontrar o mesh sob o cursor
-					if (record->Type == AssetType::Material)
-					{
-						uint32_t pickID = m_ViewportRenderer->PickObject(mouseX, mouseY);
-						if (pickID != 0)
-						{
-							entt::entity picked = (entt::entity)pickID;
-							if (registry.valid(picked))
-								m_Context.Select(picked);
-						}
-					}
-
-					// Chama o instantiate diretamente — sem referência ao lambda local
-					if (MeshFactory::IsPrimitive(uuid))
-					{
-						auto mesh = MeshFactory::CreateByUUID(uuid);
-						if (!mesh) return;
-						auto entity = m_Scene->CreateEntity(record->Name);
-						auto& mc = registry.emplace<MeshComponent>(entity);
-						mc.Data = mesh;
-						mc.AssetUUID = uuid;
-						m_Context.Select(entity);
-						return;
-					}
-
-					if (record->Type == AssetType::Material)
-					{
-						if (!m_Context.HasSelection()) return;
-						entt::entity selected = m_Context.SelectedEntity;
-						if (!registry.valid(selected)) return;
-						if (!registry.all_of<MeshComponent>(selected)) return;
-
-						auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
-						if (!matAsset) return;
-
-						auto material = matAsset->GetMaterial();
-
-						// Recompila forward + geometry shader + texturas
-						if (SceneSerializer::GetMaterialRecompileCallback())
-							SceneSerializer::GetMaterialRecompileCallback()(uuid, material.get());
-
-						auto matComp = MaterialComponent{ material };
-						matComp.MaterialAssetUUID = uuid;
-
-						if (registry.all_of<MaterialComponent>(selected))
-							registry.get<MaterialComponent>(selected) = matComp;
-						else
-							registry.emplace<MaterialComponent>(selected, matComp);
-						return;
-					}
-
-					// Mesh de arquivo
-					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
-
-					if (!asset.MeshData) return;
-					auto entity = m_Scene->CreateEntity(record->Name);
-					auto& mc = registry.emplace<MeshComponent>(entity);
-					mc.Data = asset.MeshData;
-					mc.AssetUUID = uuid;
-					if (asset.MaterialData)
-						registry.emplace<MaterialComponent>(entity, asset.MaterialData);
-					m_Context.Select(entity);
-				});
-
-			// 4. Inicializa o viewport
-			ViewportWindow* viewport = m_EditorUI->GetViewport();
-			if (viewport)
-			{
-				viewport->Initialize();
-				viewport->SetGuizmoCallback([this](const glm::vec2& min, const glm::vec2& max)
-					{
-						m_ViewportRenderer->DrawGuizmo(min, max);
-					});
-			}
-			else
-			{
-				AXE_EDITOR_ERROR("ViewportWindow is null during OnAttach!");
-			}
-
-
-			viewport->SetPlayStateCallback([this]() -> int
-				{
-					if (m_EditorState == EditorState::Play)  return 1;
-					if (m_EditorState == EditorState::Pause) return 2;
-					return 0;
-				});
-
-			viewport->SetPlayActionCallback([this](int action)
-				{
-					if (action == 0) // Play
-					{
-						if (m_EditorState == EditorState::Edit)
-						{
-							EnterPlay();
-						}
-						else if (m_EditorState == EditorState::Pause)
-						{
-							m_Context.ClearSelection();
-							ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-							EditorApp::Get().GetWindow().CaptureCursor(true);
-							m_GameCamera.MouseCaptured = true;
-							m_GameCamera.m_FirstMouse = true;
-							m_ViewportRenderer->SetGameCamera(&m_GameCamera);
-							m_EditorState = EditorState::Play;
-							AXE_EDITOR_INFO("Modo Play retomado.");
-						}
-					}
-					else if (action == 1) EnterPause();
-					else if (action == 2) EnterEdit();
-				});
-
-			// 5. Inicializa o renderer
-			m_ViewportRenderer = std::make_unique<axe::ViewportRenderer>();
-			m_ViewportRenderer->Initialize();
-			m_ViewportRenderer->SetCommandHistory(&m_CommandHistory);
-			viewport->SetViewportRenderer(m_ViewportRenderer.get());
-			m_ViewportRenderer->SetScene(m_Scene.get());
-			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-			m_ViewportRenderer->SetEnvironment(&m_Environment);
-
-			m_EditorUI->SetViewportRenderer(m_ViewportRenderer.get());
-
-			m_ThumbnailRenderer.Initialize();
-			m_EditorUI->GetAssetBrowser()->SetThumbnailRenderer(&m_ThumbnailRenderer);
-			m_EditorUI->m_MaterialEditorWindow.SetThumbnailRenderer(&m_ThumbnailRenderer);
-
-			SceneSerializer::SetMaterialRecompileCallback(
-				[](const std::string& assetUUID, Material* material)
-				{
-					if (!material) return;
-
-					const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
-					if (!record) return;
-
-					auto graphPath = record->FilePath;
-					graphPath.replace_extension(".axegraph");
-					if (!std::filesystem::exists(graphPath)) return;
-
-					std::ifstream file(graphPath);
-					try
-					{
-						nlohmann::json j = nlohmann::json::parse(file);
-						MaterialGraph graph;
-						graph.Deserialize(j);
-
-						auto result = MaterialCompiler::Compile(&graph);
-						if (!result.Success) return;
-
-						// Forward shader
-						auto forwardShader = Shader::Create(result.VertexShader, result.FragmentShader);
-						if (forwardShader)
-							material->SetShader(forwardShader);
-
-						// Geometry shader (deferred G-Buffer)
-						if (!result.GeometryFragShader.empty())
-						{
-							auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
-							if (geometryShader)
-								material->SetGeometryShader(geometryShader);
-						}
-
-						// Texturas
-						material->SamplerTextures = result.SamplerTextures;
-						if (result.AlbedoTexture)
-							material->AlbedoMap = result.AlbedoTexture;
-						if (result.NormalTexture)
-							material->NormalMap = result.NormalTexture;
-					}
-					catch (...) {}
-				});
-
-			m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
-			EditorIconLibrary::Get().Load("resources");
-
-			m_EditorUI->m_MaterialEditorWindow.Initialize();
-
-			// Carrega pastas virtuais do projeto atual
-			if (ProjectManager::Get().HasProject())
-				m_EditorUI->GetAssetBrowser()->LoadFolders(
-					ProjectManager::Get().GetCurrent().RootPath);
-
-
 		}
 
-		void OnDetach() override
+		std::ofstream fileOut(graphPath);
+		if (fileOut.is_open())
+			fileOut << newJ.dump(4);
+
+		auto result = MaterialCompiler::Compile(s_CachedGraph.get());
+		if (result.Success)
 		{
+			try
+			{
+				auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+				if (shader && registry && registry->valid(entity))
+				{
+					auto* mc = registry->try_get<MaterialComponent>(entity);
+					if (mc && mc->Data)
+						mc->Data->SetShader(shader);
+				}
+			}
+			catch (...) {}
+		}
+		MaterialEditorWindow::MarkNeedsReload();
+	}
 
-			m_EditorUI.reset();
+	static std::string FindOutputPinLabel(MaterialGraph* graph, Node* sourceNode)
+	{
+		for (auto& outPin : sourceNode->Outputs)
+			for (auto& link : graph->GetLinks())
+			{
+				if (link.StartPin != outPin.ID) continue;
+				for (auto& destNode : graph->GetNodes())
+					for (auto& inPin : destNode->Inputs)
+					{
+						if (inPin.ID != link.EndPin) continue;
+						if (destNode->Name == "Material Output") return inPin.Name;
+						std::string label = FindOutputPinLabel(graph, destNode.get());
+						if (!label.empty()) return label;
+					}
+			}
+		return "";
+	}
 
+	void InspectorWindow::SetContext(EditorContext* context) { m_Context = context; }
+
+	void InspectorWindow::Draw()
+	{
+		if (!ImGui::Begin("Inspector")) { ImGui::End(); return; }
+
+		if (!m_Context || !m_Context->HasSelection())
+		{
+			ImGui::TextDisabled("Nenhum objeto selecionado.");
+			ImGui::End();
+			return;
 		}
 
-		void OnUpdate(float deltaTime) override
+		auto& registry = m_Context->ActiveScene->GetRegistry();
+		entt::entity entity = m_Context->SelectedEntity;
+
+		if (auto* name = registry.try_get<NameComponent>(entity))
 		{
+			char nameBuffer[256];
+			std::memset(nameBuffer, 0, sizeof(nameBuffer));
+			std::strncpy(nameBuffer, name->Name.c_str(), sizeof(nameBuffer) - 1);
+			if (ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer)))
+				name->Name = nameBuffer;
+		}
 
+		ImGui::Separator();
 
-			// Carrega a cena no primeiro frame (após OpenGL estar pronto)
-			if (!m_SceneLoaded)
+		if (auto* transform = registry.try_get<TransformComponent>(entity))
+			DrawTransform(transform->Data);
+
+		if (auto* light = registry.try_get<LightComponent>(entity))
+		{
+			if (light->Data) DrawLight(*light->Data);
+		}
+		else if (auto* pp = registry.try_get<PostProcessComponent>(entity))
+			DrawPostProcess(*pp);
+		else if (auto* ec = registry.try_get<EnvironmentComponent>(entity))
+			DrawEnvironment(*ec);
+		else if (auto* cam = registry.try_get<CameraComponent>(entity))
+			DrawCamera(*cam);
+		else if (auto* folder = registry.try_get<FolderComponent>(entity))
+			DrawFolder(*folder);
+		else if (registry.any_of<PointLightComponent>(entity)) {}
+		else if (registry.any_of<MaterialComponent>(entity))
+			DrawMaterial(entity);
+		else
+		{
+			ImGui::Separator();
+			DrawMaterial(entity);
+		}
+
+		if (auto* plc = registry.try_get<PointLightComponent>(entity))
+			if (plc->Data) DrawPointLight(*plc->Data);
+
+		ImGui::End();
+	}
+
+	void InspectorWindow::DrawCamera(CameraComponent& cam)
+	{
+		ImGui::Separator();
+		ImGui::Text("Câmera");
+		ImGui::Checkbox("Câmera Principal", &cam.IsPrimary);
+		ImGui::DragFloat("FOV", &cam.Fov, 0.5f, 10.0f, 170.0f);
+		ImGui::DragFloat("Near Clip", &cam.NearClip, 0.01f, 0.001f, 10.0f);
+		ImGui::DragFloat("Far Clip", &cam.FarClip, 1.0f, 10.0f, 10000.0f);
+		ImGui::Separator();
+		ImGui::TextDisabled("Controles (modo Play)");
+		ImGui::DragFloat("Velocidade", &cam.MoveSpeed, 0.1f, 0.1f, 100.0f);
+		ImGui::DragFloat("Sensibilidade", &cam.Sensitivity, 0.01f, 0.01f, 5.0f);
+	}
+
+	void InspectorWindow::DrawFolder(FolderComponent& folder)
+	{
+		ImGui::Separator();
+		ImGui::Text("Pasta");
+		float col[4] = { folder.Color.x, folder.Color.y, folder.Color.z, folder.Color.w };
+		if (ImGui::ColorEdit4("Cor", col))
+			folder.Color = { col[0], col[1], col[2], col[3] };
+		ImGui::TextDisabled("Arraste objetos para dentro desta pasta na hierarchy.");
+	}
+
+	void InspectorWindow::DrawEnvironment(EnvironmentComponent& ec)
+	{
+		ImGui::Separator();
+		ImGui::Text("Environment");
+		ImGui::TextDisabled("HDRI:");
+		ImGui::SameLine();
+		std::string shortPath = ec.HDRIPath.empty() ? "Nenhum" :
+			std::filesystem::path(ec.HDRIPath).filename().string();
+		ImGui::Text("%s", shortPath.c_str());
+		if (ImGui::Button("Carregar HDRI..."))
+		{
+			auto path = FileDialog::Open("HDR Image\0*.hdr;*.exr\0All Files\0*.*\0", "Selecionar HDRI", "hdr");
+			if (!path.empty()) ec.HDRIPath = path.string();
+		}
+		ImGui::Separator();
+		ImGui::DragFloat("Rotação Skybox", &ec.SkyboxRotation, 1.0f, -360.0f, 360.0f);
+	}
+
+	void InspectorWindow::DrawPointLight(PointLight& light)
+	{
+		ImGui::Separator();
+		ImGui::Text("Point Light");
+		ImGui::TextDisabled("Posicione pelo Transform");
+		ImGui::ColorEdit3("Cor", glm::value_ptr(light.Color));
+		ImGui::DragFloat("Intensidade", &light.Intensity, 0.1f, 0.0f, 100.0f);
+		ImGui::DragFloat("Radius", &light.Radius, 0.1f, 0.1f, 200.0f);
+	}
+
+	void InspectorWindow::DrawLight(DirectionalLight& light)
+	{
+		ImGui::Separator();
+		ImGui::Text("Luz Direcional");
+		ImGui::DragFloat3("Direção", glm::value_ptr(light.Direction), 0.01f, -1.0f, 1.0f);
+		ImGui::ColorEdit3("Cor", glm::value_ptr(light.Color));
+		ImGui::DragFloat("Intensidade", &light.Intensity, 0.01f, 0.0f, 10.0f);
+		ImGui::Separator();
+		ImGui::TextDisabled("Luz Indireta");
+		ImGui::DragFloat("IBL Intensity", &light.IBLIntensity, 0.01f, 0.0f, 5.0f);
+		ImGui::DragFloat("Ambient Flat", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
+	}
+
+	void InspectorWindow::DrawTransform(Transform& t)
+	{
+		ImGui::Text("Transform");
+		bool changed = false;
+		if (ImGui::DragFloat3("Position", &t.Position.x, 0.1f)) changed = true;
+		glm::vec3 rotDeg = glm::degrees(t.Rotation);
+		if (ImGui::DragFloat3("Rotation", glm::value_ptr(rotDeg), 0.5f))
+		{
+			t.Rotation = glm::radians(rotDeg);
+			changed = true;
+		}
+		glm::vec3 scaleCopy = t.Scale;
+		if (ImGui::DragFloat3("Scale", &scaleCopy.x, 0.05f))
+		{
+			t.Scale.x = std::max(scaleCopy.x, 0.001f);
+			t.Scale.y = std::max(scaleCopy.y, 0.001f);
+			t.Scale.z = std::max(scaleCopy.z, 0.001f);
+			changed = true;
+		}
+		if (changed) { t.UseWorldMatrix = false; t.WorldMatrix = t.GetMatrix(); }
+	}
+
+	void InspectorWindow::DrawTextureSlot(const char* label,
+		std::shared_ptr<Texture2D>& tex, std::string& uuid)
+	{
+		ImGui::PushID(label);
+		ImVec2 size(48, 48);
+		if (tex && tex->IsLoaded())
+			ImGui::Image((ImTextureID)(uintptr_t)tex->GetRendererID(), size, ImVec2(0, 1), ImVec2(1, 0));
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 1.0f));
+			ImGui::Button("##empty", size);
+			ImGui::PopStyleColor();
+		}
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_UUID"))
 			{
-				m_SceneLoaded = true;
-
-				if (ProjectManager::Get().HasStartScene())
+				std::string droppedUUID = (const char*)payload->Data;
+				const AssetRecord* record = AssetDatabase::Get().GetByUUID(droppedUUID);
+				if (record && record->Type == AssetType::Texture)
 				{
-					SceneSerializer::Deserialize(
-						ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
+					tex = Texture2D::Create(record->FilePath.string());
+					uuid = droppedUUID;
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+		ImGui::SameLine();
+		ImGui::BeginGroup();
+		ImGui::Text("%s", label);
+		if (tex && tex->IsLoaded())
+		{
+			ImGui::TextDisabled("%dx%d", tex->GetWidth(), tex->GetHeight());
+			if (ImGui::SmallButton("X")) { tex = nullptr; uuid = ""; }
+		}
+		else ImGui::TextDisabled("Nenhuma");
+		ImGui::EndGroup();
+		ImGui::PopID();
+		ImGui::Spacing();
+	}
+
+	void InspectorWindow::DrawMaterial(entt::entity entity)
+	{
+		auto& registry = m_Context->ActiveScene->GetRegistry();
+		auto* mc = registry.try_get<MaterialComponent>(entity);
+
+		ImGui::Separator();
+		ImGui::Text("Material");
+		ImGui::Spacing();
+
+		std::string uuid = mc ? mc->MaterialAssetUUID : "";
+
+		if (AssetPicker::Draw("Material", uuid, { AssetType::Material },
+			[&](const AssetRecord& record)
+			{
+				auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
+				if (!matAsset) return;
+				auto material = matAsset->GetMaterial();
+				if (SceneSerializer::GetMaterialRecompileCallback())
+					SceneSerializer::GetMaterialRecompileCallback()(record.UUID, material.get());
+				if (!mc)
+				{
+					auto& comp = registry.emplace<MaterialComponent>(entity, material);
+					comp.MaterialAssetUUID = record.UUID;
+					mc = registry.try_get<MaterialComponent>(entity);
 				}
 				else
 				{
-					std::string defaultScene = "resources/default_scene/main.axescene";
-
-					if (std::filesystem::exists(defaultScene))
-					{
-						SceneSerializer::Deserialize(defaultScene, *m_Scene, &m_Environment);
-					}
-					else
-					{
-						m_Scene->CreateLight("Directional Light");
-
-						auto ppEntity = m_Scene->CreateEntity("Post Process Volume");
-						auto& reg = m_Scene->GetRegistry();
-						reg.emplace<PostProcessComponent>(ppEntity);
-
-						m_Scene->CreateFolder("Enviroment");
-					}
-
-					// Garante que a entity Enviroment tem EnvironmentComponent
-					EnsureEnvironmentComponent();
+					mc->Data = material;
+					mc->MaterialAssetUUID = record.UUID;
 				}
-			}
+			}))
+		{
+			if (uuid.empty() && mc) { registry.remove<MaterialComponent>(entity); mc = nullptr; }
+			else if (!uuid.empty() && mc) mc->MaterialAssetUUID = uuid;
+		}
 
-			m_DeltaTime = deltaTime;
-
-			m_FPSAccumulator += 1.0f / deltaTime;
-			m_FPSSamples++;
-			if (m_FPSSamples >= 60)
-			{
-				m_FPS = m_FPSAccumulator / m_FPSSamples;
-				m_FPSAccumulator = 0.0f;
-				m_FPSSamples = 0;
-			}
-
-			// PROTEÇÃO
-			if (m_EditorUI && m_EditorUI->GetAssetBrowser())
-			{
-				m_EditorUI->GetAssetBrowser()->Update();
-			}
+		ImGui::Spacing();
+		if (mc && mc->Data)
+		{
+			if (!mc->MaterialAssetUUID.empty())
+				DrawMaterialGraphParams(mc->MaterialAssetUUID, registry, entity);
 			else
+				DrawMaterialParams(*mc->Data);
+		}
+	}
+
+	void InspectorWindow::DrawMaterialParams(Material& mat)
+	{
+		bool usePBR = mat.UsePBR;
+		if (ImGui::Checkbox("PBR", &usePBR)) mat.UsePBR = usePBR;
+		ImGui::Separator();
+		if (!mat.UsePBR)
+		{
+			ImGui::ColorEdit4("Cor", glm::value_ptr(mat.Color));
+			ImGui::DragFloat("Specular", &mat.SpecularStrength, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Shininess", &mat.Shininess, 1.0f, 1.0f, 256.0f);
+			return;
+		}
+		ImGui::DragFloat("Metallic", &mat.Metallic, 0.01f, 0.0f, 1.0f);
+		ImGui::DragFloat("Roughness", &mat.Roughness, 0.01f, 0.0f, 1.0f);
+		ImGui::DragFloat("AO", &mat.AO, 0.01f, 0.0f, 1.0f);
+		ImGui::Separator();
+		ImGui::Text("Texturas:");
+		ImGui::Spacing();
+		AssetPicker::Draw("Albedo", mat.AlbedoUUID, { AssetType::Texture }, [&](const AssetRecord& r) { mat.AlbedoMap = Texture2D::Create(r.FilePath.string()); mat.AlbedoUUID = r.UUID; });
+		AssetPicker::Draw("Normal", mat.NormalUUID, { AssetType::Texture }, [&](const AssetRecord& r) { mat.NormalMap = Texture2D::Create(r.FilePath.string()); mat.NormalUUID = r.UUID; });
+		AssetPicker::Draw("Roughness", mat.RoughnessUUID, { AssetType::Texture }, [&](const AssetRecord& r) { mat.RoughnessMap = Texture2D::Create(r.FilePath.string()); mat.RoughnessUUID = r.UUID; });
+		AssetPicker::Draw("Metallic", mat.MetallicUUID, { AssetType::Texture }, [&](const AssetRecord& r) { mat.MetallicMap = Texture2D::Create(r.FilePath.string()); mat.MetallicUUID = r.UUID; });
+		AssetPicker::Draw("AO", mat.AOUUID, { AssetType::Texture }, [&](const AssetRecord& r) { mat.AOMap = Texture2D::Create(r.FilePath.string()); mat.AOUUID = r.UUID; });
+	}
+
+	void InspectorWindow::DrawMaterialGraphParams(const std::string& assetUUID,
+		entt::registry& registry, entt::entity entity)
+	{
+		if (s_GraphCacheDirty) { s_CachedGraphUUID = ""; s_GraphCacheDirty = false; }
+		if (assetUUID.empty()) return;
+
+		if (s_CachedGraphUUID != assetUUID)
+		{
+			s_CachedGraphUUID = assetUUID;
+			s_CachedGraph.reset();
+			const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+			if (!record) return;
+			auto graphPath = record->FilePath;
+			graphPath.replace_extension(".axegraph");
+			if (!std::filesystem::exists(graphPath)) return;
+			std::ifstream file(graphPath);
+			try
 			{
-				AXE_CORE_ERROR("AssetBrowser é nullptr!");
+				nlohmann::json j = nlohmann::json::parse(file);
+				s_CachedGraph = std::make_unique<MaterialGraph>();
+				s_CachedGraph->Deserialize(j);
+				s_CachedGraph->BuildNodes();
 			}
-
-
-
-
-			if (m_EditorState == EditorState::Play)
-			{
-				m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
-
-				bool escNow = EditorApp::Get().GetWindow().IsKeyDown((int)Key::Escape);
-				if (escNow && !m_EscWasPressed)
-					EnterPause();
-				m_EscWasPressed = escNow;
-			}
-			else
-			{
-				m_EscWasPressed = false;
-			}
-
-
-
+			catch (...) { s_CachedGraph.reset(); return; }
 		}
 
-		void DrawPlayToolbar()
+		if (!s_CachedGraph || s_CachedGraph->GetNodes().empty()) return;
+
+		Node* outputNode = nullptr;
+		for (auto& node : s_CachedGraph->GetNodes())
+			if (node->Name == "Material Output") { outputNode = node.get(); break; }
+		if (!outputNode) return;
+
+		ImGui::Separator();
+		ImGui::Text("Parâmetros:");
+		ImGui::Spacing();
+
+		bool anyEditable = false;
+		for (auto& node : s_CachedGraph->GetNodes())
 		{
-			ImGui::SetNextWindowPos(
-				ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 30.0f),
-				ImGuiCond_Always, ImVec2(0.5f, 0.0f)
-			);
-			ImGui::SetNextWindowSize(ImVec2(160, 40), ImGuiCond_Always);
-			ImGui::SetNextWindowBgAlpha(0.85f);
+			if (node->Name == "Material Output" || node->Type == NodeType::Comment) continue;
+			ImGui::PushID(node->ID.Get());
 
-			ImGuiWindowFlags flags =
-				ImGuiWindowFlags_NoDecoration |
-				ImGuiWindowFlags_NoMove |
-				ImGuiWindowFlags_NoDocking |
-				ImGuiWindowFlags_NoSavedSettings;
-
-			ImGui::Begin("##toolbar", nullptr, flags);
-
-			bool isEdit = m_EditorState == EditorState::Edit;
-			bool isPlay = m_EditorState == EditorState::Play;
-			bool isPause = m_EditorState == EditorState::Pause;
-
-			// Botão Play
-			if (isPlay)
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-
-			if (ImGui::Button("▶ Play", ImVec2(50, 26)))
+			if (node->Name == "Float" && node->IsConstant)
 			{
-				if (isEdit)        EnterPlay();
-				else if (isPause) { m_GameCamera.MouseCaptured = true; m_EditorState = EditorState::Play; }
-			}
-
-			if (isPlay) ImGui::PopStyleColor();
-
-			ImGui::SameLine();
-
-			// Botão Pause
-			if (isPause)
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
-
-			if (ImGui::Button("⏸", ImVec2(26, 26)) && isPlay)
-				EnterPause();
-
-			if (isPause) ImGui::PopStyleColor();
-
-			ImGui::SameLine();
-
-			// Botão Stop
-			if (ImGui::Button("⏹", ImVec2(26, 26)) && !isEdit)
-				EnterEdit();
-
-			ImGui::End();
-		}
-
-
-		void OnRender() override
-		{
-			m_ThumbnailRenderer.RenderPending();
-
-			// Atualiza câmera antes de renderizar
-			if (m_EditorState == EditorState::Play)
-				m_ViewportRenderer->SetGameCamera(&m_GameCamera);
-			else
-				m_ViewportRenderer->SetGameCamera(nullptr);
-
-			if (m_EditorUI)
-			{
-				ViewportWindow* viewport = m_EditorUI->GetViewport();
-				if (viewport && viewport->IsInitialized())
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
 				{
-					auto framebuffer = viewport->GetFramebuffer();
-					if (framebuffer && viewport->GetWidth() > 0 && viewport->GetHeight() > 0)
-					{
-						m_ViewportRenderer->RenderToFramebuffer(
-							*framebuffer,
-							viewport->GetWidth(),
-							viewport->GetHeight(),
-							EditorApp::Get().GetWindow().GetTime()
-						);
-					}
+					anyEditable = true;
+					ImGui::TextDisabled("%s [Float]", pinLabel.c_str());
+					ImGui::SetNextItemWidth(-1);
+					if (ImGui::DragFloat(("##f" + std::to_string(node->ID.Get())).c_str(), &node->Value.FloatVal, 0.01f, 0.0f, 1.0f))
+						SaveCachedGraph(assetUUID, &registry, entity);
 				}
 			}
-
-			if (m_EditorUI)
+			else if (node->Name == "Color" && node->IsConstant)
 			{
-				if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
-					m_EditorUI->m_MaterialEditorWindow.RenderPreview();
-
-				m_EditorUI->Draw();
-
-				// Input de câmera só no modo Edit
-				if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
-					HandleViewportCameraInput();
-
-
-
-				HandleSceneInput();
-
-				std::string title = "AXE Engine — " + std::to_string((int)m_FPS) + " FPS";
-				EditorApp::Get().GetWindow().SetTitle(title);
-			}
-		} // fim OnRender
-
-		// Garante que a cena tem uma entity com EnvironmentComponent.
-		// Procura pela entity "Enviroment" (Folder) existente — se não tiver
-		// o componente, adiciona com valores padrão.
-		void EnsureEnvironmentComponent()
-		{
-			if (!m_Scene) return;
-			auto& registry = m_Scene->GetRegistry();
-
-			// Procura entity com nome "Enviroment"
-			for (auto entity : registry.view<NameComponent>())
-			{
-				auto& name = registry.get<NameComponent>(entity).Name;
-				if (name == "Enviroment" || name == "Environment")
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
 				{
-					if (!registry.any_of<EnvironmentComponent>(entity))
-					{
-						auto& ec = registry.emplace<EnvironmentComponent>(entity);
-						ec.HDRIPath = m_Environment.SkyboxPath.empty()
-							? "resources/quarry_04_puresky_2k.hdr"
-							: m_Environment.SkyboxPath;
-						ec.SkyboxRotation = m_Environment.SkyboxRotation;
-					}
-					return;
+					anyEditable = true;
+					ImGui::TextDisabled("%s [Color]", pinLabel.c_str());
+					ImGui::SetNextItemWidth(-1);
+					if (ImGui::ColorEdit4(("##c" + std::to_string(node->ID.Get())).c_str(), &node->Value.Vec4Val.x))
+						SaveCachedGraph(assetUUID, &registry, entity);
 				}
 			}
-
-			// Não encontrou — cria nova entity
-			auto envEntity = m_Scene->CreateFolder("Enviroment");
-			auto& ec = registry.emplace<EnvironmentComponent>(envEntity);
-			ec.HDRIPath = m_Environment.SkyboxPath.empty()
-				? "resources/quarry_04_puresky_2k.hdr"
-				: m_Environment.SkyboxPath;
-			ec.SkyboxRotation = 0.0f;
-		}
-
-		void SaveScene()
-		{
-			if (!ProjectManager::Get().HasProject()) return;
-
-			auto scenePath = ProjectManager::Get().GetCurrent().AssetsPath
-				/ "Scenes" / "main.axescene";
-
-			SceneSerializer::Serialize(*m_Scene, scenePath, &m_Environment);
-
-			// Define como cena padrão automaticamente
-			auto& project = ProjectManager::Get().GetCurrent();
-			project.StartScene = "Assets/Scenes/main.axescene";
-			ProjectManager::Get().SaveProject();
-
-			AXE_EDITOR_INFO("Cena salva e definida como padrão.");
-		}
-		void LoadScene()
-		{
-			if (!ProjectManager::Get().HasProject()) return;
-
-			auto scenePath = ProjectManager::Get().GetCurrent().AssetsPath
-				/ "Scenes" / "main.axescene";
-
-			if (!std::filesystem::exists(scenePath))
+			else if (node->Name == "Texture Sample")
 			{
-				AXE_CORE_WARN("EditorLayer: cena não encontrada em '{}'", scenePath.string());
-				return;
-			}
-
-			// Limpa a cena atual
-			m_Scene = std::make_unique<Scene>();
-			m_Context.ActiveScene = m_Scene.get();
-			m_Context.SelectedEntity = entt::null;
-
-			// Atualiza ponteiros do renderer
-			m_ViewportRenderer->SetScene(m_Scene.get());
-			m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-
-			// Carrega a cena
-			SceneSerializer::Deserialize(scenePath, *m_Scene, &m_Environment);
-		}
-		void HandleSceneInput()
-		{
-			ImGuiIO& io = ImGui::GetIO();
-
-			// Undo / Redo
-			if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
-				m_CommandHistory.Undo();
-
-			if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) ||
-				(io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))))
-				m_CommandHistory.Redo();
-
-			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
-			{
-				if (m_EditorUI->m_MaterialEditorWindow.IsOpen() &&
-					m_EditorUI->m_MaterialEditorWindow.IsFocused())
-					m_EditorUI->m_MaterialEditorWindow.SaveGraph();
-				else if (m_EditorUI->OnSaveScene)
-					m_EditorUI->OnSaveScene(m_CurrentScenePath);
-			}
-
-			if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S))
-			{
-				auto path = FileDialog::Save(
-					"AXE Scene\0*.axescene\0",
-					"Salvar Cena Como",
-					"axescene");
-				if (!path.empty() && m_EditorUI->OnSaveScene)
-					m_EditorUI->OnSaveScene(path.string());
-			}
-
-			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O))
-			{
-				auto path = FileDialog::Open(
-					"AXE Scene\0*.axescene\0All Files\0*.*\0",
-					"Abrir Cena",
-					"axescene");
-				if (!path.empty() && m_EditorUI->OnOpenScene)
-					m_EditorUI->OnOpenScene(path.string());
-			}
-
-			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
-			{
-				if (m_EditorUI->OnNewScene)
-					m_EditorUI->OnNewScene();
-			}
-		}
-
-
-		void OnEvent(Event& e) override
-		{
-			EventDispatcher dispatcher(e);
-
-			dispatcher.Dispatch<FileDropEvent>([this](FileDropEvent& event)
+				std::string pinLabel = FindOutputPinLabel(s_CachedGraph.get(), node.get());
+				if (!pinLabel.empty())
 				{
-					m_EditorUI->GetAssetBrowser()->OnFileDrop(event.GetPath());
-					return true;
-				});
-
-			// Escape no modo Play → pausa
-			dispatcher.Dispatch<KeyPressedEvent>([this](KeyPressedEvent& event)
-				{
-					if (m_EditorState == EditorState::Play &&
-						event.GetKeyCode() == GLFW_KEY_ESCAPE)
-					{
-						EnterPause();
-						return true;
-					}
-					return false;
-				});
-		}
-
-
-		void HandleViewportCameraInput()
-		{
-			if (!m_EditorUI) return;
-
-			ViewportWindow* viewport = m_EditorUI->GetViewport();
-			if (!viewport || !viewport->IsHovered()) return;
-
-			ImGuiIO& io = ImGui::GetIO();
-
-			// Teclas de perspectiva e gizmo
-			if (ImGui::IsKeyPressed(ImGuiKey_P))
-			{
-				m_ViewportRenderer->m_Camera->isPerspective = !m_ViewportRenderer->m_Camera->isPerspective;
-				if (!m_ViewportRenderer->m_Camera->isPerspective)
-					m_ViewportRenderer->m_Camera->viewHeight = m_ViewportRenderer->m_Camera->viewWidth * io.DisplaySize.y / io.DisplaySize.x;
-				AXE_EDITOR_INFO("Perspective mode: {}", m_ViewportRenderer->m_Camera->isPerspective);
-			}
-
-			if (viewport->IsFocused())
-			{
-				if (ImGui::IsKeyPressed(ImGuiKey_R)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::ROTATE;
-				if (ImGui::IsKeyPressed(ImGuiKey_S)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::SCALE;
-				if (ImGui::IsKeyPressed(ImGuiKey_T)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::TRANSLATE;
-			}
-
-			// Picking — ANTES do bloco Alt
-			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-				!io.KeyAlt && !ImGuizmo::IsOver())
-			{
-				ImVec2 boundsMin = { viewport->GetBoundsMin().x, viewport->GetBoundsMin().y };
-				ImVec2 mousePos = ImGui::GetMousePos();
-
-				float localX = mousePos.x - boundsMin.x;
-				float localY = mousePos.y - boundsMin.y;
-
-				if (localX >= 0 && localY >= 0 &&
-					localX < viewport->GetWidth() &&
-					localY < viewport->GetHeight())
-				{
-					std::uint32_t pickID = m_ViewportRenderer->PickObject(localX, localY);
-
-					if (pickID == 0)
-						m_Context.ClearSelection();
-					else
-					{
-						entt::entity picked = (entt::entity)pickID;
-						if (m_Scene->GetRegistry().valid(picked))
-							m_Context.Select(picked);
-						else
-							m_Context.ClearSelection();
-					}
-				}
-			}
-
-			// Câmera orbital — só com Alt
-			const bool alt = io.KeyAlt;
-			if (!alt) return;
-
-			glm::vec2 delta = viewport->GetMouseDelta();
-			delta *= 0.003f;
-
-			if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
-				m_ViewportRenderer->OnMouseRotate(delta);
-			else if (ImGui::IsMouseDown(ImGuiMouseButton_Middle))
-				m_ViewportRenderer->OnMousePan(delta);
-			else if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
-				m_ViewportRenderer->OnMouseZoom(delta.y * 10.0f);
-
-			if (io.MouseWheel != 0.0f)
-				m_ViewportRenderer->OnMouseZoom(io.MouseWheel);
-		}
-
-		void EnterPlay()
-		{
-			if (m_EditorState != EditorState::Edit) return;
-
-			m_SceneSnapshot = SceneSerializer::SerializeToString(*m_Scene);
-
-			// Lê CameraComponent da cena se existir
-			if (m_Scene)
-			{
-				auto& registry = m_Scene->GetRegistry();
-				for (auto entity : registry.view<CameraComponent>())
-				{
-					auto& cam = registry.get<CameraComponent>(entity);
-					if (cam.IsPrimary)
-					{
-						m_GameCamera.Fov = cam.Fov;
-						m_GameCamera.NearClip = cam.NearClip;
-						m_GameCamera.FarClip = cam.FarClip;
-						m_GameCamera.MoveSpeed = cam.MoveSpeed;
-						m_GameCamera.Sensitivity = cam.Sensitivity;
-
-						// Posição vem do TransformComponent se existir
-						if (auto* tc = registry.try_get<TransformComponent>(entity))
+					anyEditable = true;
+					ImGui::TextDisabled("%s [Texture]", pinLabel.c_str());
+					AssetPicker::Draw((pinLabel + "_" + std::to_string(node->ID.Get())).c_str(),
+						node->Value.TextureUUID, { AssetType::Texture },
+						[&](const AssetRecord& record)
 						{
-							m_GameCamera.Reset(
-								tc->Data.Position,
-								tc->Data.Rotation.y,
-								tc->Data.Rotation.x
-							);
-						}
-						break;
-					}
+							node->Value.TextureVal = Texture2D::Create(record.FilePath.string());
+							node->Value.TextureUUID = record.UUID;
+							SaveCachedGraph(assetUUID, &registry, entity);
+						});
 				}
 			}
-
-			// Se não há câmera na cena, usa posição da editor camera
-			auto& editorCam = m_ViewportRenderer->m_Camera;
-			if (!m_Scene || m_Scene->GetRegistry().view<CameraComponent>().empty())
-			{
-				m_GameCamera.Reset(
-					editorCam->GetPosition(),
-					glm::degrees(editorCam->GetYaw()),
-					glm::degrees(editorCam->GetPitch())
-				);
-			}
-
-			m_GameCamera.MouseCaptured = true;
-			m_GameCamera.m_FirstMouse = true;
-
-			m_Context.ClearSelection();
-			m_EditorState = EditorState::Play;
-
-			ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-			EditorApp::Get().GetWindow().CaptureCursor(true);
-
-			AXE_EDITOR_INFO("Modo Play iniciado.");
+			ImGui::PopID();
 		}
 
-		void EnterPause()
+		if (!anyEditable)
 		{
-			if (m_EditorState != EditorState::Play) return;
-
-			m_GameCamera.MouseCaptured = false;
-			m_EditorState = EditorState::Pause;
-
-			// Garante que volta para EditorCamera
-			m_ViewportRenderer->SetGameCamera(nullptr);  // ← está aqui?
-
-			ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
-			EditorApp::Get().GetWindow().CaptureCursor(false);
-
-			AXE_EDITOR_INFO("Modo Pause — editor ativo.");
+			ImGui::TextDisabled("Nenhum parâmetro editável.");
+			ImGui::TextDisabled("Adicione nodes Float, Color ou Texture Sample no graph.");
 		}
+	}
 
-		void EnterEdit()
+	void InspectorWindow::MarkGraphCacheDirty() { s_GraphCacheDirty = true; }
+
+	void InspectorWindow::DrawPostProcess(PostProcessComponent& pp)
+	{
+		ImGui::Separator();
+		ImGui::Text("Post Process Volume");
+		ImGui::Checkbox("Global", &pp.IsGlobal);
+
+		ImGui::Separator();
+		ImGui::Text("Tone Mapping");
+		ImGui::DragFloat("Exposure", &pp.Settings.Exposure, 0.01f, 0.1f, 10.0f);
+		const char* toneModes[] = { "Reinhard", "ACES" };
+		ImGui::Combo("Tone Map", &pp.Settings.ToneMapMode, toneModes, 2);
+
+		ImGui::Separator();
+		ImGui::Text("Bloom");
+		ImGui::Checkbox("Bloom Ativo", &pp.Settings.BloomEnabled);
+		if (pp.Settings.BloomEnabled)
 		{
-			if (m_EditorState == EditorState::Edit) return;
-
-			GLFWwindow* window = (GLFWwindow*)EditorApp::Get().GetWindow().GetNativeWindow();
-			if (window)
-				glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-
-			// Restaura snapshot da cena
-			if (!m_SceneSnapshot.empty())
-			{
-				m_Scene = std::make_unique<Scene>();
-				m_Context.ActiveScene = m_Scene.get();
-				m_Context.SelectedEntity = entt::null;
-				m_ViewportRenderer->SetScene(m_Scene.get());
-				m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-
-				SceneSerializer::DeserializeFromString(m_SceneSnapshot, *m_Scene);
-				m_SceneSnapshot.clear();
-			}
-
-			m_GameCamera.MouseCaptured = false;
-			m_EditorState = EditorState::Edit;
-
-			ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
-			AXE_EDITOR_INFO("Modo Edit restaurado.");
+			ImGui::DragFloat("Threshold", &pp.Settings.BloomThreshold, 0.01f, 0.0f, 3.0f);
+			ImGui::DragFloat("Intensidade", &pp.Settings.BloomIntensity, 0.01f, 0.0f, 3.0f);
+			ImGui::SliderInt("Blur Passes", &pp.Settings.BloomBlurPasses, 1, 10);
 		}
 
+		ImGui::Separator();
+		ImGui::Text("SSAO");
+		ImGui::Checkbox("SSAO Ativo", &pp.SSAO.Enabled);
+		if (pp.SSAO.Enabled)
+		{
+			ImGui::DragFloat("Radius", &pp.SSAO.Radius, 0.01f, 0.01f, 2.0f);
+			ImGui::DragFloat("Bias", &pp.SSAO.Bias, 0.001f, 0.0f, 0.1f);
+			ImGui::DragFloat("Power", &pp.SSAO.Power, 0.1f, 0.5f, 8.0f);
+			ImGui::SliderInt("Kernel Size", &pp.SSAO.KernelSize, 8, 64);
+			ImGui::Checkbox("Debug (mostra oclusão)", &pp.SSAO.Debug);
+		}
+	}
 
-
-
-
-
-	private:
-		std::unique_ptr<Scene> m_Scene;
-		bool m_SceneLoaded = false;
-		std::string m_CurrentScenePath;
-
-		std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
-		std::unique_ptr<EditorUI> m_EditorUI;
-
-		EditorContext m_Context;
-
-		CommandHistory m_CommandHistory;
-
-		MaterialThumbnailRenderer m_ThumbnailRenderer;
-
-		float m_DeltaTime = 0.0f;
-		float m_FPS = 0.0f;
-		float m_FPSAccumulator = 0.0f;
-		int m_FPSSamples = 0;
-
-		bool m_EscWasPressed = false;
-
-		SceneEnvironment m_Environment;
-
-	};
-}
+} // namespace axe

@@ -122,6 +122,7 @@ namespace axe
         // Confirmação de exclusão
         std::string m_DeleteConfirmUUID = "";
         std::string m_DeleteConfirmFolder = "";
+        std::string m_DeleteConfirmFolderDiskPath = "";
     };
 
 } // namespace axe
