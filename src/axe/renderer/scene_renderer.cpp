@@ -185,7 +185,7 @@ namespace axe
     {
         glm::mat4 viewProjection = projection * view;
         auto queue = SceneCollector::Collect(scene, (uint32_t)selectedEntity);
-        Render(queue, viewProjection, view, projection, cameraPosition, 0, 0);
+        Render(queue, viewProjection, view, projection, cameraPosition, m_Width, m_Height);
     }
 
     // =============================================================================

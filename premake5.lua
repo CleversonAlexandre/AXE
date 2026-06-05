@@ -27,13 +27,14 @@ IncludeDir["entt"] = "src/vendor/entt/src"
 IncludeDir["nlohmann"] = "src/vendor"
 IncludeDir["stb"] = "src/vendor/stb"
 IncludeDir["imguinodeeditor"] = "src/vendor/imgui-node-editor"
-
+IncludeDir["Jolt"] = "src/vendor/JoltPhysics"
 
 
 include "src/vendor/simdjson/singleheader"
 include "src/vendor/spdlog"
 include "src/vendor/GLFW"
 include "src/vendor/Glad"
+include "src/vendor/JoltPhysics"
 -- include "src/vendor/assimp"
 
 
@@ -93,7 +94,8 @@ project "axe"
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.stb}",
-         "%{IncludeDir.imguinodeeditor}",
+        "%{IncludeDir.imguinodeeditor}",
+        "%{IncludeDir.Jolt}",
 
     }
    libdirs
@@ -107,7 +109,8 @@ project "axe"
         "GLFW",
         "opengl32",
         "Glad",
-        "assimp-vc145-mt"
+        "assimp-vc145-mt",
+        "Jolt"
     }
 
     defines
@@ -122,8 +125,8 @@ project "axe"
     dependson
     {
         "simdjson",
-        "spdlog"
-     
+        "spdlog",
+        "Jolt"
     }
 
     filter "files:src/vendor/imgui-node-editor/**.cpp"

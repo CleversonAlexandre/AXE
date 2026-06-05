@@ -61,6 +61,14 @@ namespace axe
 			return m_Index >= -1 && m_Index + 1 < (int)m_History.size();
 		}
 
+		// Limpa todo o histórico — usar quando a cena é substituída
+		void Clear()
+		{
+			m_History.clear();
+			m_RedoStack.clear();
+			m_Index = -1;
+		}
+
 		const std::string& GetUndoName() const
 		{
 			static std::string empty;
@@ -71,13 +79,6 @@ namespace axe
 		{
 			static std::string empty;
 			return CanRedo() ? m_RedoStack.back().Name : empty;
-		}
-
-		void Clear()
-		{
-			m_History.clear();
-			m_RedoStack.clear();
-			m_Index = -1;
 		}
 
 

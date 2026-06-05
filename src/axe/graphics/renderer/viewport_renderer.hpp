@@ -14,6 +14,7 @@
 #include <ImGuizmo.h>
 
 #include "axe/graphics/renderer/grid_renderer.hpp"
+#include "axe/graphics/renderer/collider_debug_renderer.hpp"
 #include "axe/graphics/game_camera.hpp"
 #include "skybox_renderer.hpp"
 #include "axe/scene/scene_environment.hpp"
@@ -52,6 +53,7 @@ namespace axe
 		void SetCommandHistory(CommandHistory* history) { m_CommandHistory = history; }
 
 		bool  ShowGrid = true;
+		bool  ShowColliders = true; // wireframe dos colliders no editor
 		bool  SnapEnabled = false;
 		float SnapValue = 0.5f;   // unidades para translate
 		float SnapAngle = 15.0f;  // graus para rotate
@@ -88,7 +90,8 @@ namespace axe
 		GameCamera* m_GameCamera = nullptr;
 
 		SkyboxRenderer   m_SkyboxRenderer;
-		GridRenderer     m_GridRenderer;
+		GridRenderer            m_GridRenderer;
+		ColliderDebugRenderer   m_ColliderDebugRenderer;
 		SceneEnvironment* m_Environment = nullptr;
 
 		std::shared_ptr<PostProcessPass>  m_PostProcess;

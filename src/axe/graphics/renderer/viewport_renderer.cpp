@@ -35,6 +35,7 @@ namespace axe
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
 		m_SkyboxRenderer.Initialize();
 		m_GridRenderer.Initialize();
+		m_ColliderDebugRenderer.Initialize();
 
 		FramebufferSpecification hdrSpec;
 		hdrSpec.Width = 1280;
@@ -73,7 +74,14 @@ namespace axe
 		else
 			m_PostProcess->Resize(width, height);
 
-		if (m_Camera)
+		// Configura SceneRenderer para editor camera OU game camera
+		if (m_GameCamera)
+		{
+			m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
+			m_SceneRenderer->SetDeferredEnabled(true);
+			m_SceneRenderer->SetDeferredSupported(true);
+		}
+		else if (m_Camera)
 		{
 			m_SceneRenderer->SetTargetFramebuffer(m_HDRFramebuffer->GetRendererID());
 			m_SceneRenderer->SetDeferredEnabled(!m_PreviewMode);
@@ -112,10 +120,24 @@ namespace axe
 		if (m_GameCamera)
 		{
 			float aspect = height > 0 ? (float)width / (float)height : 1.0f;
+
+			// Lê PostProcess igual ao modo editor
+			if (m_Scene)
+			{
+				auto& registry = m_Scene->GetRegistry();
+				for (auto entity : registry.view<PostProcessComponent>())
+				{
+					auto& pp = registry.get<PostProcessComponent>(entity);
+					m_PostProcessSettings = pp.Settings;
+					if (m_SceneRenderer)
+						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
+					break;
+				}
+			}
+
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
 
-			// ✅ Seta skybox para o GameCamera também
 			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox())
 			{
 				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
@@ -212,6 +234,13 @@ namespace axe
 		m_PostProcess->Execute(
 			m_HDRFramebuffer->GetColorAttachmentRendererID(),
 			m_PostProcessSettings);
+
+		// Collider wireframes — só no modo editor
+		if (ShowColliders && m_Camera && !m_GameCamera && m_Scene)
+			m_ColliderDebugRenderer.Render(
+				*m_Scene,
+				m_Camera->GetViewMatrix(),
+				m_Camera->GetProjectionMatrix());
 
 		framebuffer.Unbind();
 	}

@@ -49,6 +49,9 @@ namespace axe
 
         void SetSSAOSettings(const SSAOSettings& s) { m_SSAOSettings = s; }
         void SetTargetFramebuffer(uint32_t fboID) { m_TargetFBO = fboID; }
+        uint32_t GetTargetFBO() const { return m_TargetFBO; }
+        bool IsDeferredEnabled() const { return m_DeferredEnabled; }
+        bool IsDeferredSupported() const { return m_DeferredSupported; }
         void SetDeferredEnabled(bool enabled) { m_DeferredEnabled = enabled; }
         void SetDeferredSupported(bool supported) { m_DeferredSupported = supported; }
 

@@ -4,6 +4,7 @@
 #include "editor_ui.hpp"
 #include "file_dialog.hpp"
 #include "axe/core/command_history.hpp"
+#include "axe/physics/physics_world.hpp"
 
 #include "GLFW/glfw3.h"
 #include <iostream>
@@ -94,6 +95,11 @@ namespace axe
 
 			m_EditorUI->OnOpenScene = [this](const std::string& path)
 				{
+					if (m_EditorState != EditorState::Edit)
+					{
+						AXE_EDITOR_WARN("Não é possível carregar cena durante o Play. Pressione Stop primeiro.");
+						return;
+					}
 					m_Scene = std::make_unique<Scene>();
 					m_Context.ActiveScene = m_Scene.get();
 					m_Context.SelectedEntity = entt::null;
@@ -107,10 +113,14 @@ namespace axe
 
 			m_EditorUI->OnSaveScene = [this](const std::string& path)
 				{
+					if (m_EditorState != EditorState::Edit)
+					{
+						AXE_EDITOR_WARN("Não é possível salvar cena durante o Play. Pressione Stop primeiro.");
+						return;
+					}
 					std::string savePath = path.empty() ? m_CurrentScenePath : path;
 					if (savePath.empty())
 					{
-						// Nenhum path definido — abre Save As
 						m_EditorUI->OnSaveScene(
 							FileDialog::Save(
 								"AXE Scene\0*.axescene\0",
@@ -127,6 +137,7 @@ namespace axe
 			m_EditorUI->OnRedo = [this]() { m_CommandHistory.Redo(); };
 			m_EditorUI->OnCanUndo = [this]() { return m_CommandHistory.CanUndo(); };
 			m_EditorUI->OnCanRedo = [this]() { return m_CommandHistory.CanRedo(); };
+			m_EditorUI->IsPlaying = [this]() { return m_EditorState != EditorState::Edit; };
 			m_EditorUI->OnDrawEnvironment = [this]()
 				{
 					std::string shortPath = m_Environment.SkyboxPath.empty() ? "Nenhum" :
@@ -569,7 +580,7 @@ namespace axe
 						auto& reg = m_Scene->GetRegistry();
 						reg.emplace<PostProcessComponent>(ppEntity);
 
-						m_Scene->CreateFolder("Enviroment");
+						m_Scene->CreateEntity("Enviroment");
 					}
 
 					// Garante que a entity Enviroment tem EnvironmentComponent
@@ -604,6 +615,9 @@ namespace axe
 			if (m_EditorState == EditorState::Play)
 			{
 				m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
+
+				// Atualiza física
+				m_PhysicsWorld.OnUpdate(*m_Scene, deltaTime);
 
 				bool escNow = EditorApp::Get().GetWindow().IsKeyDown((int)Key::Escape);
 				if (escNow && !m_EscWasPressed)
@@ -729,11 +743,21 @@ namespace axe
 			if (!m_Scene) return;
 			auto& registry = m_Scene->GetRegistry();
 
-			// Procura entity com nome "Enviroment"
+			// Busca entity que JÁ tem EnvironmentComponent — essa é a correta
+			for (auto entity : registry.view<EnvironmentComponent>())
+			{
+				// Remove FolderComponent se existir por engano
+				if (registry.any_of<FolderComponent>(entity))
+					registry.remove<FolderComponent>(entity);
+				return; // já existe, não precisa criar
+			}
+
+			// Busca entity com nome exato "Enviroment" SEM FolderComponent
+			// (entity criada corretamente como entity normal)
 			for (auto entity : registry.view<NameComponent>())
 			{
 				auto& name = registry.get<NameComponent>(entity).Name;
-				if (name == "Enviroment" || name == "Environment")
+				if (name == "Enviroment" && !registry.any_of<FolderComponent>(entity))
 				{
 					if (!registry.any_of<EnvironmentComponent>(entity))
 					{
@@ -747,8 +771,8 @@ namespace axe
 				}
 			}
 
-			// Não encontrou — cria nova entity
-			auto envEntity = m_Scene->CreateFolder("Enviroment");
+			// Não encontrou — cria nova entity normal (não pasta)
+			auto envEntity = m_Scene->CreateEntity("Enviroment");
 			auto& ec = registry.emplace<EnvironmentComponent>(envEntity);
 			ec.HDRIPath = m_Environment.SkyboxPath.empty()
 				? "resources/quarry_04_puresky_2k.hdr"
@@ -758,6 +782,11 @@ namespace axe
 
 		void SaveScene()
 		{
+			if (m_EditorState != EditorState::Edit)
+			{
+				AXE_EDITOR_WARN("Pressione Stop antes de salvar a cena.");
+				return;
+			}
 			if (!ProjectManager::Get().HasProject()) return;
 
 			auto scenePath = ProjectManager::Get().GetCurrent().AssetsPath
@@ -765,15 +794,20 @@ namespace axe
 
 			SceneSerializer::Serialize(*m_Scene, scenePath, &m_Environment);
 
-			// Define como cena padrão automaticamente
 			auto& project = ProjectManager::Get().GetCurrent();
 			project.StartScene = "Assets/Scenes/main.axescene";
 			ProjectManager::Get().SaveProject();
 
 			AXE_EDITOR_INFO("Cena salva e definida como padrão.");
 		}
+
 		void LoadScene()
 		{
+			if (m_EditorState != EditorState::Edit)
+			{
+				AXE_EDITOR_WARN("Pressione Stop antes de carregar uma cena.");
+				return;
+			}
 			if (!ProjectManager::Get().HasProject()) return;
 
 			auto scenePath = ProjectManager::Get().GetCurrent().AssetsPath
@@ -948,6 +982,9 @@ namespace axe
 
 			m_SceneSnapshot = SceneSerializer::SerializeToString(*m_Scene);
 
+			// Inicia física
+			m_PhysicsWorld.OnSceneStart(*m_Scene);
+
 			// Lê CameraComponent da cena se existir
 			if (m_Scene)
 			{
@@ -991,6 +1028,8 @@ namespace axe
 			m_GameCamera.MouseCaptured = true;
 			m_GameCamera.m_FirstMouse = true;
 
+			m_ViewportRenderer->SetGameCamera(&m_GameCamera);
+
 			m_Context.ClearSelection();
 			m_EditorState = EditorState::Play;
 
@@ -1020,6 +1059,9 @@ namespace axe
 		{
 			if (m_EditorState == EditorState::Edit) return;
 
+			// Para física
+			m_PhysicsWorld.OnSceneStop(*m_Scene);
+
 			GLFWwindow* window = (GLFWwindow*)EditorApp::Get().GetWindow().GetNativeWindow();
 			if (window)
 				glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -1035,9 +1077,19 @@ namespace axe
 
 				SceneSerializer::DeserializeFromString(m_SceneSnapshot, *m_Scene);
 				m_SceneSnapshot.clear();
+
+				// Migra entities Environment com ícone errado
+				EnsureEnvironmentComponent();
+
+				m_CommandHistory.Clear();
+
+				// Notifica a hierarchy para atualizar com a nova cena
+				if (m_EditorUI)
+					m_EditorUI->GetHierarchy()->SetContext(&m_Context);
 			}
 
 			m_GameCamera.MouseCaptured = false;
+			m_ViewportRenderer->SetGameCamera(nullptr); // volta para editor camera
 			m_EditorState = EditorState::Edit;
 
 			ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
@@ -1062,6 +1114,7 @@ namespace axe
 		CommandHistory m_CommandHistory;
 
 		MaterialThumbnailRenderer m_ThumbnailRenderer;
+		PhysicsWorld m_PhysicsWorld;
 
 		float m_DeltaTime = 0.0f;
 		float m_FPS = 0.0f;

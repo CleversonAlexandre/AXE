@@ -1,0 +1,10 @@
+^C:\USERS\CLEVER\DOCUMENTS\AXE\SRC\VENDOR\JOLTPHYSICS\BUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build -BC:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build --check-stamp-file C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

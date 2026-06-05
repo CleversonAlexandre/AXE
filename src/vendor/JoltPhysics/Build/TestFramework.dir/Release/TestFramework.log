@@ -1,0 +1,53 @@
+﻿  Building Custom Rule C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeLists.txt
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\FontVertexShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\LineVertexShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\TriangleDepthVertexShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\TriangleVertexShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\UIVertexShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\FontPixelShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\LinePixelShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\TriangleDepthPixelShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\TrianglePixelShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\UIPixelShader.cso
+  compilation object save succeeded; see C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\UIPixelShaderUntextured.cso
+  cmake_pch.cxx
+  Application.cpp
+  DebugUI.cpp
+  Perlin.cpp
+  BlitSurface.cpp
+  LoadBMP.cpp
+  LoadTGA.cpp
+  Surface.cpp
+  ZoomImage.cpp
+  DebugRendererImp.cpp
+  Font.cpp
+  Renderer.cpp
+  RenderPrimitive.cpp
+  UIAnimation.cpp
+  UIAnimationSlide.cpp
+  UIButton.cpp
+  UICheckBox.cpp
+  UIComboBox.cpp
+  UIElement.cpp
+  UIHorizontalStack.cpp
+  UIImage.cpp
+  UIManager.cpp
+  UISlider.cpp
+  UIStaticText.cpp
+  UITextButton.cpp
+  UIVerticalStack.cpp
+  CustomMemoryHook.cpp
+  ReadData.cpp
+  KeyboardWin.cpp
+  MouseWin.cpp
+  ConstantBufferDX12.cpp
+  FatalErrorIfFailedDX12.cpp
+  PipelineStateDX12.cpp
+  RendererDX12.cpp
+  RenderInstancesDX12.cpp
+  RenderPrimitiveDX12.cpp
+  TextureDX12.cpp
+  AssetStream.cpp
+  Log.cpp
+  ApplicationWindowWin.cpp
+  TestFramework.vcxproj -> C:\Users\Clever\Documents\AXE\src\vendor\JoltPhysics\Build\Release\TestFramework.lib

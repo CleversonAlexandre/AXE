@@ -124,7 +124,16 @@ namespace axe
 
 				ImGui::Separator();
 
-				if (ImGui::MenuItem("Abrir Cena...", "Ctrl+O"))
+				bool playing = IsPlaying && IsPlaying();
+
+				if (playing)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+					ImGui::TextDisabled("  (Stop para salvar/carregar)");
+					ImGui::PopStyleColor();
+				}
+
+				if (ImGui::MenuItem("Abrir Cena...", "Ctrl+O", false, !playing))
 				{
 					auto path = FileDialog::Open(
 						"AXE Scene\0*.axescene\0All Files\0*.*\0",
@@ -134,13 +143,12 @@ namespace axe
 						OnOpenScene(path.string());
 				}
 
-				if (ImGui::MenuItem("Salvar Cena", "Ctrl+S"))
+				if (ImGui::MenuItem("Salvar Cena", "Ctrl+S", false, !playing))
 				{
-					// Salva no path atual sem dialog
 					if (OnSaveScene) OnSaveScene("");
 				}
 
-				if (ImGui::MenuItem("Salvar Cena Como...", "Ctrl+Shift+S"))
+				if (ImGui::MenuItem("Salvar Cena Como...", "Ctrl+Shift+S", false, !playing))
 				{
 					auto path = FileDialog::Save(
 						"AXE Scene\0*.axescene\0All Files\0*.*\0",

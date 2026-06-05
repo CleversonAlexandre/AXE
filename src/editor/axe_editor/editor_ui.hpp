@@ -33,9 +33,10 @@ namespace axe
         std::function<void()> OnRedo;
         std::function<bool()> OnCanUndo;
         std::function<bool()> OnCanRedo;
+        std::function<bool()> IsPlaying;
         HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
 
-
+       
     private:
         void BeginDockspace();
         void EndDockspace();

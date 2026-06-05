@@ -7,34 +7,41 @@
 #include "axe/graphics/vertex_array.hpp"
 namespace axe
 {
-		class VertexArray;
-		class VertexBuffer;
-		class IndexBuffer;
+	class VertexArray;
+	class VertexBuffer;
+	class IndexBuffer;
 
-		struct Vertex
-		{
-			glm::vec3 Position;
-			glm::vec3 Normal;
-			glm::vec2 TexCoord;
-			glm::vec3 Tangent;
-			glm::vec3 Bitangent;
+	struct Vertex
+	{
+		glm::vec3 Position;
+		glm::vec3 Normal;
+		glm::vec2 TexCoord;
+		glm::vec3 Tangent;
+		glm::vec3 Bitangent;
 
-		};
+	};
 
-		class AXE_API Mesh
-		{
-		public:
-			Mesh(const std::vector<Vertex>& vertices, const std::vector<std::uint32_t>& indices);
+	class AXE_API Mesh
+	{
+	public:
+		Mesh(const std::vector<Vertex>& vertices, const std::vector<std::uint32_t>& indices);
 
-			std::shared_ptr<VertexArray> GetVertexArray() const { return m_VertexArray; }
-			std::uint32_t GetIndexCount() const { return m_IndexCount; }
+		std::shared_ptr<VertexArray> GetVertexArray() const { return m_VertexArray; }
+		std::uint32_t GetIndexCount() const { return m_IndexCount; }
 
-		private:
-			std::shared_ptr<VertexArray> m_VertexArray;
-			std::shared_ptr<VertexBuffer> m_VertexBuffer;
-			std::shared_ptr<IndexBuffer> m_IndexBuffer;
+		// Acesso aos dados para physics collision
+		const std::vector<Vertex>& GetVertices() const { return m_Vertices; }
+		const std::vector<std::uint32_t>& GetIndices()  const { return m_Indices; }
 
-			std::uint32_t m_IndexCount = 0;
-		};
-	
+	private:
+		std::shared_ptr<VertexArray>  m_VertexArray;
+		std::shared_ptr<VertexBuffer> m_VertexBuffer;
+		std::shared_ptr<IndexBuffer>  m_IndexBuffer;
+
+		std::vector<Vertex>     m_Vertices; // guardados para physics
+		std::vector<uint32_t>   m_Indices;
+
+		std::uint32_t m_IndexCount = 0;
+	};
+
 }

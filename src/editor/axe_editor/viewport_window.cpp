@@ -36,10 +36,6 @@ namespace axe
 		spec.Width = 1280;
 		spec.Height = 720;
 		spec.HDR = true;
-		spec.Attachments = {
-			FramebufferTextureFormat::RGBA8,        // color
-			FramebufferTextureFormat::DEPTH24STENCIL8 // depth para o grid
-		};
 
 		m_Framebuffer = Framebuffer::Create(spec);
 
@@ -174,17 +170,16 @@ namespace axe
 
 		//Botão Play
 		ImGui::SetCursorScreenPos(ImVec2(startX, startY));
-		if (state == 1) //play ativo
+		if (state == 1)
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
 		else
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.24f, 0.25f, 1.0f));
 		if (ImGui::Button("Play", ImVec2(btnW, btnH)))
 		{
-			if (state == 0) m_PlayActionCallback(0); // Edit → Play
-			if (state == 2) m_PlayActionCallback(0); // Pause → Play
+			if (state == 0) m_PlayActionCallback(0);
+			if (state == 2) m_PlayActionCallback(0);
 		}
 		ImGui::PopStyleColor();
-
 
 		// Botão Pause
 		ImGui::SetCursorScreenPos(ImVec2(startX + btnW + gap, startY));
@@ -192,18 +187,47 @@ namespace axe
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
 		else
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-
 		if (ImGui::Button("Pause", ImVec2(btnW, btnH)) && state == 1)
 			m_PlayActionCallback(1);
-
 		ImGui::PopStyleColor();
 
-		// Botão Stop
+		// Botão Stop — desabilitado no modo editor
 		ImGui::SetCursorScreenPos(ImVec2(startX + (btnW + gap) * 2, startY));
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-		if (ImGui::Button("Stop", ImVec2(btnW, btnH)) && state != 0)
-			m_PlayActionCallback(2);
-		ImGui::PopStyleColor();
+		if (state == 0)
+		{
+			// Modo editor — botão cinza escuro desabilitado
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+			ImGui::BeginDisabled(true);
+			ImGui::Button("Stop", ImVec2(btnW, btnH));
+			ImGui::EndDisabled();
+			ImGui::PopStyleColor(4);
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+			if (ImGui::Button("Stop", ImVec2(btnW, btnH)))
+				m_PlayActionCallback(2);
+			ImGui::PopStyleColor();
+		}
+
+		// Aviso visual durante Play — só desenho, não afeta layout dos botões
+		if (state == 1 || state == 2)
+		{
+			float warnW = 340.0f;
+			float warnX = wpos.x + (wsize.x - warnW) * 0.5f;
+			float warnY = startY + btnH + 6.0f;
+			draw->AddRectFilled(
+				ImVec2(warnX, warnY),
+				ImVec2(warnX + warnW, warnY + 18.0f),
+				IM_COL32(160, 70, 0, 200), 3.0f);
+			draw->AddText(
+				ImVec2(warnX + 8, warnY + 3),
+				IM_COL32(255, 220, 100, 255),
+				"Modo Play — modificacoes serao descartadas ao dar Stop");
+		}
 
 		// Controles de Grid e Snap — lado direito da toolbar
 		if (m_ViewportRenderer)

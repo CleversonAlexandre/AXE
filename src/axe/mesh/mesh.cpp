@@ -34,5 +34,9 @@ namespace axe
 		m_VertexArray->SetIndexBuffer(m_IndexBuffer);
 
 		m_IndexCount = static_cast<std::uint32_t>(indices.size());
+
+		// Guarda cópia para uso em physics collision
+		m_Vertices = vertices;
+		m_Indices = indices;
 	}
 }

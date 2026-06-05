@@ -142,6 +142,42 @@ namespace axe
 				components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
 			}
 
+			// Física
+			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
+			{
+				components["Rigidbody"]["type"] = (int)c->Type;
+				components["Rigidbody"]["mass"] = c->Mass;
+				components["Rigidbody"]["friction"] = c->Friction;
+				components["Rigidbody"]["restitution"] = c->Restitution;
+				components["Rigidbody"]["linear_damping"] = c->LinearDamping;
+				components["Rigidbody"]["angular_damping"] = c->AngularDamping;
+				components["Rigidbody"]["use_gravity"] = c->UseGravity;
+				components["Rigidbody"]["lock_rot_x"] = c->LockRotX;
+				components["Rigidbody"]["lock_rot_y"] = c->LockRotY;
+				components["Rigidbody"]["lock_rot_z"] = c->LockRotZ;
+			}
+
+			if (auto* c = registry.try_get<ColliderComponent>(entity))
+			{
+				components["Collider"]["shape"] = (int)c->Shape;
+				components["Collider"]["offset"] = { c->Offset.x,      c->Offset.y,      c->Offset.z };
+				components["Collider"]["half_extent"] = { c->HalfExtent.x,  c->HalfExtent.y,  c->HalfExtent.z };
+				components["Collider"]["radius"] = c->Radius;
+				components["Collider"]["height"] = c->Height;
+				components["Collider"]["capsule_radius"] = c->CapsuleRadius;
+				components["Collider"]["is_trigger"] = c->IsTrigger;
+			}
+
+			if (auto* c = registry.try_get<CharacterControllerComponent>(entity))
+			{
+				components["CharacterController"]["height"] = c->Height;
+				components["CharacterController"]["radius"] = c->Radius;
+				components["CharacterController"]["max_slope"] = c->MaxSlopeAngle;
+				components["CharacterController"]["step_height"] = c->StepHeight;
+				components["CharacterController"]["max_speed"] = c->MaxSpeed;
+				components["CharacterController"]["jump_force"] = c->JumpForce;
+			}
+
 			// RelationshipComponent
 			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
 			{
@@ -380,6 +416,50 @@ namespace axe
 				pp.SSAO.KernelSize = t.value("ssao_kernel", 64);
 				registry.emplace<PostProcessComponent>(entity, pp);
 			}
+
+			if (components.contains("Rigidbody"))
+			{
+				auto& t = components["Rigidbody"];
+				RigidbodyComponent rb;
+				rb.Type = (BodyType)t.value("type", 0);
+				rb.Mass = t.value("mass", 1.0f);
+				rb.Friction = t.value("friction", 0.5f);
+				rb.Restitution = t.value("restitution", 0.0f);
+				rb.LinearDamping = t.value("linear_damping", 0.05f);
+				rb.AngularDamping = t.value("angular_damping", 0.05f);
+				rb.UseGravity = t.value("use_gravity", true);
+				rb.LockRotX = t.value("lock_rot_x", false);
+				rb.LockRotY = t.value("lock_rot_y", false);
+				rb.LockRotZ = t.value("lock_rot_z", false);
+				registry.emplace<RigidbodyComponent>(entity, rb);
+			}
+
+			if (components.contains("Collider"))
+			{
+				auto& t = components["Collider"];
+				ColliderComponent col;
+				col.Shape = (ColliderShape)t.value("shape", 0);
+				col.Offset = { t["offset"][0],      t["offset"][1],      t["offset"][2] };
+				col.HalfExtent = { t["half_extent"][0], t["half_extent"][1], t["half_extent"][2] };
+				col.Radius = t.value("radius", 0.5f);
+				col.Height = t.value("height", 1.8f);
+				col.CapsuleRadius = t.value("capsule_radius", 0.3f);
+				col.IsTrigger = t.value("is_trigger", false);
+				registry.emplace<ColliderComponent>(entity, col);
+			}
+
+			if (components.contains("CharacterController"))
+			{
+				auto& t = components["CharacterController"];
+				CharacterControllerComponent cc;
+				cc.Height = t.value("height", 1.8f);
+				cc.Radius = t.value("radius", 0.3f);
+				cc.MaxSlopeAngle = t.value("max_slope", 45.0f);
+				cc.StepHeight = t.value("step_height", 0.3f);
+				cc.MaxSpeed = t.value("max_speed", 5.0f);
+				cc.JumpForce = t.value("jump_force", 5.0f);
+				registry.emplace<CharacterControllerComponent>(entity, cc);
+			}
 		}
 
 
@@ -411,8 +491,6 @@ namespace axe
 
 	std::string SceneSerializer::SerializeToString(const Scene& scene)
 	{
-		// Reutiliza a lógica existente mas escreve para string
-		// Cria um path temporário em memória — usamos stringstream
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
 
 		json root;
@@ -429,6 +507,15 @@ namespace axe
 			e["id"] = (uint32_t)entity;
 			json components;
 
+			// FolderComponent
+			if (registry.any_of<FolderComponent>(entity))
+			{
+				auto& folder = registry.get<FolderComponent>(entity);
+				components["Folder"]["color"] = {
+					folder.Color.x, folder.Color.y,
+					folder.Color.z, folder.Color.w };
+			}
+
 			if (auto* c = registry.try_get<NameComponent>(entity))
 				components["Name"]["name"] = c->Name;
 
@@ -442,52 +529,32 @@ namespace axe
 			if (auto* c = registry.try_get<MeshComponent>(entity))
 				components["Mesh"]["uuid"] = c->AssetUUID;
 
-			// MaterialComponent
-			if (components.contains("Material"))
+			if (auto* c = registry.try_get<MaterialComponent>(entity))
 			{
-				auto& t = components["Material"];
-				auto mat = std::make_shared<Material>(nullptr, "Material");
-
-				mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
-				mat->SpecularStrength = t["specular_strength"];
-				mat->Shininess = t["shininess"];
-
-				// PBR
-				if (t.contains("metallic"))  mat->Metallic = t["metallic"];
-				if (t.contains("roughness")) mat->Roughness = t["roughness"];
-				if (t.contains("ao"))        mat->AO = t["ao"];
-				if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
-
-				// Texturas — carrega pelo UUID
-				auto LoadTex = [&](const std::string& key, std::string& uuid,
-					std::shared_ptr<Texture2D>& tex)
-					{
-						if (!t.contains(key)) return;
-						uuid = t[key].get<std::string>();
-						if (uuid.empty()) return;
-
-						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-						if (record && std::filesystem::exists(record->FilePath))
-							tex = Texture2D::Create(record->FilePath.string());
-						else
-							AXE_CORE_WARN("SceneSerializer: textura '{}' não encontrada.", uuid);
-					};
-
-				LoadTex("albedo_uuid", mat->AlbedoUUID, mat->AlbedoMap);
-				LoadTex("normal_uuid", mat->NormalUUID, mat->NormalMap);
-				LoadTex("roughness_uuid", mat->RoughnessUUID, mat->RoughnessMap);
-				LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
-				LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
-
-				registry.emplace<MaterialComponent>(entity, mat);
+				if (c->Data)
+				{
+					components["Material"]["material_asset_uuid"] = c->MaterialAssetUUID;
+					components["Material"]["color"] = { c->Data->Color.r, c->Data->Color.g, c->Data->Color.b, c->Data->Color.a };
+					components["Material"]["specular_strength"] = c->Data->SpecularStrength;
+					components["Material"]["shininess"] = c->Data->Shininess;
+					components["Material"]["metallic"] = c->Data->Metallic;
+					components["Material"]["roughness"] = c->Data->Roughness;
+					components["Material"]["ao"] = c->Data->AO;
+					components["Material"]["use_pbr"] = c->Data->UsePBR;
+					components["Material"]["albedo_uuid"] = c->Data->AlbedoUUID;
+					components["Material"]["normal_uuid"] = c->Data->NormalUUID;
+					components["Material"]["roughness_uuid"] = c->Data->RoughnessUUID;
+					components["Material"]["metallic_uuid"] = c->Data->MetallicUUID;
+					components["Material"]["ao_uuid"] = c->Data->AOUUID;
+				}
 			}
 
 			if (auto* c = registry.try_get<LightComponent>(entity))
 			{
 				if (c->Data)
 				{
-					components["Light"]["direction"] = { c->Data->Direction.x,  c->Data->Direction.y,  c->Data->Direction.z };
-					components["Light"]["color"] = { c->Data->Color.x,      c->Data->Color.y,      c->Data->Color.z };
+					components["Light"]["direction"] = { c->Data->Direction.x, c->Data->Direction.y, c->Data->Direction.z };
+					components["Light"]["color"] = { c->Data->Color.x,     c->Data->Color.y,     c->Data->Color.z };
 					components["Light"]["intensity"] = c->Data->Intensity;
 					components["Light"]["ambient"] = c->Data->AmbientStrength;
 					components["Light"]["ibl_intensity"] = c->Data->IBLIntensity;
@@ -495,6 +562,7 @@ namespace axe
 					components["Light"]["shininess"] = c->Data->Shininess;
 				}
 			}
+
 			if (auto* c = registry.try_get<PointLightComponent>(entity))
 			{
 				if (c->Data)
@@ -505,6 +573,7 @@ namespace axe
 					components["PointLight"]["radius"] = c->Data->Radius;
 				}
 			}
+
 			if (auto* c = registry.try_get<PostProcessComponent>(entity))
 			{
 				components["PostProcess"]["is_global"] = c->IsGlobal;
@@ -520,6 +589,65 @@ namespace axe
 				components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
 			}
 
+			if (auto* c = registry.try_get<CameraComponent>(entity))
+			{
+				components["Camera"]["fov"] = c->Fov;
+				components["Camera"]["near"] = c->NearClip;
+				components["Camera"]["far"] = c->FarClip;
+				components["Camera"]["move_speed"] = c->MoveSpeed;
+				components["Camera"]["sensitivity"] = c->Sensitivity;
+				components["Camera"]["is_primary"] = c->IsPrimary;
+			}
+
+			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
+			{
+				components["Rigidbody"]["type"] = (int)c->Type;
+				components["Rigidbody"]["mass"] = c->Mass;
+				components["Rigidbody"]["friction"] = c->Friction;
+				components["Rigidbody"]["restitution"] = c->Restitution;
+				components["Rigidbody"]["linear_damping"] = c->LinearDamping;
+				components["Rigidbody"]["angular_damping"] = c->AngularDamping;
+				components["Rigidbody"]["use_gravity"] = c->UseGravity;
+				components["Rigidbody"]["lock_rot_x"] = c->LockRotX;
+				components["Rigidbody"]["lock_rot_y"] = c->LockRotY;
+				components["Rigidbody"]["lock_rot_z"] = c->LockRotZ;
+			}
+
+			if (auto* c = registry.try_get<ColliderComponent>(entity))
+			{
+				components["Collider"]["shape"] = (int)c->Shape;
+				components["Collider"]["offset"] = { c->Offset.x, c->Offset.y, c->Offset.z };
+				components["Collider"]["half_extent"] = { c->HalfExtent.x, c->HalfExtent.y, c->HalfExtent.z };
+				components["Collider"]["radius"] = c->Radius;
+				components["Collider"]["height"] = c->Height;
+				components["Collider"]["capsule_radius"] = c->CapsuleRadius;
+				components["Collider"]["is_trigger"] = c->IsTrigger;
+			}
+
+			if (auto* c = registry.try_get<CharacterControllerComponent>(entity))
+			{
+				components["CharacterController"]["height"] = c->Height;
+				components["CharacterController"]["radius"] = c->Radius;
+				components["CharacterController"]["max_slope"] = c->MaxSlopeAngle;
+				components["CharacterController"]["step_height"] = c->StepHeight;
+				components["CharacterController"]["max_speed"] = c->MaxSpeed;
+				components["CharacterController"]["jump_force"] = c->JumpForce;
+			}
+
+			// RelationshipComponent — essencial para restaurar hierarquia
+			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
+			{
+				if (rel->Parent != entt::null)
+					components["Relationship"]["parent"] = (uint32_t)rel->Parent;
+				if (!rel->Children.empty())
+				{
+					json children = json::array();
+					for (auto child : rel->Children)
+						children.push_back((uint32_t)child);
+					components["Relationship"]["children"] = children;
+				}
+			}
+
 			e["components"] = components;
 			entities.push_back(e);
 		}
@@ -528,25 +656,41 @@ namespace axe
 		return root.dump();
 	}
 
+
 	bool SceneSerializer::DeserializeFromString(const std::string& data, Scene& scene)
 	{
 		try
 		{
 			json root = json::parse(data);
-
-			// Reutiliza a lógica do Deserialize
 			auto& registry = scene.GetRegistry();
 
+			// Mapa de ID antigo -> entity nova
+			std::unordered_map<uint32_t, entt::entity> idMap;
+
+			// Passo 1: cria entities e componentes
 			for (const auto& e : root["entities"])
 			{
-				entt::entity entity = scene.CreateEntity("Entity");
+				uint32_t oldID = e["id"];
 				const auto& components = e["components"];
 
+				entt::entity entity;
+				if (components.contains("Folder"))
+					entity = scene.CreateFolder("Folder");
+				else
+					entity = scene.CreateEntity("Entity");
+
+				idMap[oldID] = entity;
+
 				if (components.contains("Name"))
-				{
-					auto* c = registry.try_get<NameComponent>(entity);
-					if (c) c->Name = components["Name"]["name"];
-				}
+					if (auto* c = registry.try_get<NameComponent>(entity))
+						c->Name = components["Name"]["name"];
+
+				if (components.contains("Folder"))
+					if (auto* f = registry.try_get<FolderComponent>(entity))
+					{
+						auto& col = components["Folder"]["color"];
+						f->Color = ImVec4(col[0], col[1], col[2], col[3]);
+					}
 
 				if (components.contains("Transform"))
 				{
@@ -562,7 +706,6 @@ namespace axe
 					std::string uuid = components["Mesh"]["uuid"];
 					auto& mc = registry.emplace<MeshComponent>(entity);
 					mc.AssetUUID = uuid;
-
 					if (MeshFactory::IsPrimitive(uuid))
 						mc.Data = MeshFactory::CreateByUUID(uuid);
 					else
@@ -576,50 +719,47 @@ namespace axe
 					}
 				}
 
-				// MaterialComponent
 				if (components.contains("Material"))
 				{
 					auto& t = components["Material"];
 					auto mat = std::make_shared<Material>(nullptr, "Material");
-
 					mat->Color = { t["color"][0], t["color"][1], t["color"][2], t["color"][3] };
 					mat->SpecularStrength = t["specular_strength"];
 					mat->Shininess = t["shininess"];
-
-					// PBR
 					if (t.contains("metallic"))  mat->Metallic = t["metallic"];
 					if (t.contains("roughness")) mat->Roughness = t["roughness"];
 					if (t.contains("ao"))        mat->AO = t["ao"];
 					if (t.contains("use_pbr"))   mat->UsePBR = t["use_pbr"];
 
-					// Texturas — carrega pelo UUID
-					auto LoadTex = [&](const std::string& key, std::string& uuid,
-						std::shared_ptr<Texture2D>& tex)
+					auto LoadTex = [&](const std::string& key, std::string& uuid, std::shared_ptr<Texture2D>& tex)
 						{
 							if (!t.contains(key)) return;
 							uuid = t[key].get<std::string>();
 							if (uuid.empty()) return;
-
 							const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
 							if (record && std::filesystem::exists(record->FilePath))
 								tex = Texture2D::Create(record->FilePath.string());
-							else
-								AXE_CORE_WARN("SceneSerializer: textura '{}' não encontrada.", uuid);
 						};
-
 					LoadTex("albedo_uuid", mat->AlbedoUUID, mat->AlbedoMap);
 					LoadTex("normal_uuid", mat->NormalUUID, mat->NormalMap);
 					LoadTex("roughness_uuid", mat->RoughnessUUID, mat->RoughnessMap);
 					LoadTex("metallic_uuid", mat->MetallicUUID, mat->MetallicMap);
 					LoadTex("ao_uuid", mat->AOUUID, mat->AOMap);
 
-					registry.emplace<MaterialComponent>(entity, mat);
+					auto mc = MaterialComponent{ mat };
+					if (t.contains("material_asset_uuid"))
+					{
+						mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
+						if (s_MaterialRecompileCallback && !mc.MaterialAssetUUID.empty())
+							s_MaterialRecompileCallback(mc.MaterialAssetUUID, mat.get());
+					}
+					registry.emplace<MaterialComponent>(entity, mc);
 				}
 
 				if (components.contains("Light"))
 				{
 					auto& t = components["Light"];
-					auto  light = std::make_shared<DirectionalLight>();
+					auto light = std::make_shared<DirectionalLight>();
 					light->Direction = { t["direction"][0], t["direction"][1], t["direction"][2] };
 					light->Color = { t["color"][0],     t["color"][1],     t["color"][2] };
 					light->Intensity = t["intensity"];
@@ -629,8 +769,115 @@ namespace axe
 					light->Shininess = t["shininess"];
 					registry.emplace<LightComponent>(entity, light);
 				}
+
+				if (components.contains("PointLight"))
+				{
+					auto& t = components["PointLight"];
+					auto pl = std::make_shared<PointLight>();
+					pl->Position = { t["position"][0], t["position"][1], t["position"][2] };
+					pl->Color = { t["color"][0],    t["color"][1],    t["color"][2] };
+					pl->Intensity = t["intensity"];
+					pl->Radius = t["radius"];
+					registry.emplace<PointLightComponent>(entity, pl);
+				}
+
+				if (components.contains("PostProcess"))
+				{
+					auto& t = components["PostProcess"];
+					PostProcessComponent pp;
+					pp.IsGlobal = t["is_global"];
+					pp.Settings.Exposure = t["exposure"];
+					pp.Settings.BloomEnabled = t["bloom_enabled"];
+					pp.Settings.BloomThreshold = t["bloom_threshold"];
+					pp.Settings.BloomIntensity = t["bloom_intensity"];
+					pp.Settings.BloomBlurPasses = t["bloom_blur_passes"];
+					pp.SSAO.Enabled = t.value("ssao_enabled", false);
+					pp.SSAO.Radius = t.value("ssao_radius", 0.5f);
+					pp.SSAO.Bias = t.value("ssao_bias", 0.025f);
+					pp.SSAO.Power = t.value("ssao_power", 2.0f);
+					pp.SSAO.KernelSize = t.value("ssao_kernel", 64);
+					registry.emplace<PostProcessComponent>(entity, pp);
+				}
+
+				if (components.contains("Camera"))
+				{
+					auto& t = components["Camera"];
+					CameraComponent cam;
+					cam.Fov = t.value("fov", 60.0f);
+					cam.NearClip = t.value("near", 0.1f);
+					cam.FarClip = t.value("far", 1000.0f);
+					cam.MoveSpeed = t.value("move_speed", 5.0f);
+					cam.Sensitivity = t.value("sensitivity", 0.1f);
+					cam.IsPrimary = t.value("is_primary", true);
+					registry.emplace<CameraComponent>(entity, cam);
+				}
+
+				if (components.contains("Rigidbody"))
+				{
+					auto& t = components["Rigidbody"];
+					RigidbodyComponent rb;
+					rb.Type = (BodyType)t.value("type", 0);
+					rb.Mass = t.value("mass", 1.0f);
+					rb.Friction = t.value("friction", 0.5f);
+					rb.Restitution = t.value("restitution", 0.0f);
+					rb.LinearDamping = t.value("linear_damping", 0.05f);
+					rb.AngularDamping = t.value("angular_damping", 0.05f);
+					rb.UseGravity = t.value("use_gravity", true);
+					rb.LockRotX = t.value("lock_rot_x", false);
+					rb.LockRotY = t.value("lock_rot_y", false);
+					rb.LockRotZ = t.value("lock_rot_z", false);
+					registry.emplace<RigidbodyComponent>(entity, rb);
+				}
+
+				if (components.contains("Collider"))
+				{
+					auto& t = components["Collider"];
+					ColliderComponent col;
+					col.Shape = (ColliderShape)t.value("shape", 0);
+					col.Offset = { t["offset"][0],      t["offset"][1],      t["offset"][2] };
+					col.HalfExtent = { t["half_extent"][0], t["half_extent"][1], t["half_extent"][2] };
+					col.Radius = t.value("radius", 0.5f);
+					col.Height = t.value("height", 1.8f);
+					col.CapsuleRadius = t.value("capsule_radius", 0.3f);
+					col.IsTrigger = t.value("is_trigger", false);
+					registry.emplace<ColliderComponent>(entity, col);
+				}
+
+				if (components.contains("CharacterController"))
+				{
+					auto& t = components["CharacterController"];
+					CharacterControllerComponent cc;
+					cc.Height = t.value("height", 1.8f);
+					cc.Radius = t.value("radius", 0.3f);
+					cc.MaxSlopeAngle = t.value("max_slope", 45.0f);
+					cc.StepHeight = t.value("step_height", 0.3f);
+					cc.MaxSpeed = t.value("max_speed", 5.0f);
+					cc.JumpForce = t.value("jump_force", 5.0f);
+					registry.emplace<CharacterControllerComponent>(entity, cc);
+				}
 			}
 
+			// Passo 2: reconstrói hierarquia
+			for (const auto& e : root["entities"])
+			{
+				uint32_t oldID = e["id"];
+				if (!idMap.count(oldID)) continue;
+				entt::entity entity = idMap[oldID];
+				const auto& components = e["components"];
+
+				if (components.contains("Relationship"))
+				{
+					auto& rel = components["Relationship"];
+					if (rel.contains("parent"))
+					{
+						uint32_t oldParent = rel["parent"];
+						if (idMap.count(oldParent))
+							scene.SetParent(entity, idMap[oldParent]);
+					}
+				}
+			}
+
+			AXE_CORE_INFO("SceneSerializer: snapshot restaurado.");
 			return true;
 		}
 		catch (const json::exception& e)

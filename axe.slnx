@@ -8,6 +8,7 @@
   <Project Path="src\axe\axe.vcxproj" Id="635F880B-CF68-887C-58E4-9E7CC4EC937C">
     <BuildDependency Project="simdjson.vcxproj" />
     <BuildDependency Project="src\vendor\spdlog\src\vendor\spdlog\spdlog.vcxproj" />
+    <BuildDependency Project="src\vendor\JoltPhysics\Jolt.vcxproj" />
   </Project>
   <Project Path="src\editor\editor.vcxproj" Id="AC2EC5FA-98D0-EFD0-818B-03256DCC7621" DefaultStartup="true">
     <BuildDependency Project="src\axe\axe.vcxproj" />
@@ -15,6 +16,8 @@
   <Project Path="Glad.vcxproj" Id="BDD6857C-A90D-870D-52FA-6C103E10030F">
   </Project>
   <Project Path="GLFW.vcxproj" Id="154B857C-0182-860D-AA6E-6C109684020F">
+  </Project>
+  <Project Path="src\vendor\JoltPhysics\Jolt.vcxproj" Id="1E8A877C-0AC1-880D-B3AD-6E109FC3040F">
   </Project>
   <Project Path="simdjson.vcxproj" Id="4CCD7835-389A-D340-61B3-C1E84DDF08CF">
   </Project>

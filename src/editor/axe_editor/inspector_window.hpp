@@ -47,8 +47,17 @@ namespace axe
         void DrawEnvironment(EnvironmentComponent& ec);
         void DrawFolder(FolderComponent& folder);
         void DrawCamera(CameraComponent& cam);
+        void DrawRigidbody(entt::entity entity, entt::registry& registry);
+        void DrawCollider(entt::entity entity, entt::registry& registry);
+        void DrawCharacterController(entt::entity entity, entt::registry& registry);
 
         EditorContext* m_Context = nullptr;
+
+        // Remoção pendente — executa no início do próximo frame
+        // para não corromper o estado do ImGui durante o Draw
+        enum class PendingRemove { None, Rigidbody, Collider, CharacterController };
+        PendingRemove m_PendingRemove = PendingRemove::None;
+        entt::entity   m_PendingRemoveEntity = entt::null;
 
         GraphLoadCallback m_GraphLoadCallback;
         std::unique_ptr<MaterialGraph> m_CachedGraph;

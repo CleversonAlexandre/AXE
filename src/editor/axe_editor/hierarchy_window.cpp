@@ -19,6 +19,8 @@ namespace axe
     void HierarchyWindow::SetContext(EditorContext* context)
     {
         m_Context = context;
+        m_Renaming = false;
+        m_RenamingEntity = entt::null;
     }
 
     void HierarchyWindow::Draw()
@@ -261,7 +263,6 @@ namespace axe
         if (ImGui::MenuItem("Duplicar", "Ctrl+D"))
             DuplicateSelected();
 
-        // Opção de remover do pai
         auto& registry = m_Context->ActiveScene->GetRegistry();
         auto* rel = registry.try_get<RelationshipComponent>(entity);
         if (rel && rel->Parent != entt::null)
@@ -269,6 +270,21 @@ namespace axe
             if (ImGui::MenuItem("Remover do grupo"))
                 m_Context->ActiveScene->RemoveParent(entity);
         }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Adicionar Componente:");
+
+        if (!registry.any_of<RigidbodyComponent>(entity))
+            if (ImGui::MenuItem("Rigidbody"))
+                registry.emplace<RigidbodyComponent>(entity);
+
+        if (!registry.any_of<ColliderComponent>(entity))
+            if (ImGui::MenuItem("Collider"))
+                registry.emplace<ColliderComponent>(entity);
+
+        if (!registry.any_of<CharacterControllerComponent>(entity))
+            if (ImGui::MenuItem("Character Controller"))
+                registry.emplace<CharacterControllerComponent>(entity);
 
         ImGui::Separator();
 

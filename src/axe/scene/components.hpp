@@ -5,6 +5,7 @@
 #include "axe/material/material.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/physics/physics_components.hpp"
 #include <memory>
 #include <string>
 #include <imgui.h>
