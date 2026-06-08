@@ -1,0 +1,130 @@
+#include "script_compiler.hpp"
+#include "dll_loader.hpp"
+#include "axe/log/log.hpp"
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <filesystem>
+#include <sstream>
+
+namespace axe
+{
+    std::string ScriptCompiler::s_CompilerPath;
+
+    std::string ScriptCompiler::GetCompilerPath()
+    {
+        if (s_CompilerPath.empty())
+            s_CompilerPath = DllLoader::FindMSVCCompiler();
+        return s_CompilerPath;
+    }
+
+    bool ScriptCompiler::Compile(
+        const std::string& cppPath,
+        const std::string& dllOutput,
+        const std::string& engineIncludeDir,
+        CompileCallback callback)
+    {
+        std::string compiler = GetCompilerPath();
+        if (compiler.empty())
+        {
+            std::string msg = "MSVC não encontrado. Instale o Visual Studio Build Tools.";
+            AXE_CORE_ERROR("ScriptCompiler: {}", msg);
+            if (callback) callback(msg, false);
+            return false;
+        }
+
+        // Garante que o diretório de saída existe
+        std::filesystem::create_directories(
+            std::filesystem::path(dllOutput).parent_path());
+
+        // Monta o comando de compilação
+        // /LD        = gera DLL
+        // /O2        = otimização
+        // /EHsc      = exceções C++
+        // /std:c++17 = padrão C++17
+        // /I         = include do engine
+        // /Fe        = arquivo de saída
+        std::ostringstream cmd;
+        cmd << "\"" << compiler << "\""
+            << " /LD /O2 /EHsc /std:c++17"
+            << " /I\"" << engineIncludeDir << "\""
+            << " /Fe\"" << dllOutput << "\""
+            << " \"" << cppPath << "\""
+            << " /link /DLL";
+
+        AXE_CORE_INFO("ScriptCompiler: compilando '{}'...", cppPath);
+        AXE_CORE_INFO("ScriptCompiler: cmd = {}", cmd.str());
+
+        std::string output;
+        bool ok = RunProcess(cmd.str(), output);
+
+        if (ok)
+        {
+            AXE_CORE_INFO("ScriptCompiler: compilação bem-sucedida → '{}'", dllOutput);
+            if (callback) callback("Compilação bem-sucedida.", true);
+        }
+        else
+        {
+            AXE_CORE_ERROR("ScriptCompiler: erro de compilação:\n{}", output);
+            if (callback) callback(output, false);
+        }
+
+        return ok;
+    }
+
+    bool ScriptCompiler::RunProcess(const std::string& cmdLine, std::string& output)
+    {
+        // Pipe para capturar stdout/stderr
+        HANDLE hReadPipe, hWritePipe;
+        SECURITY_ATTRIBUTES sa = {};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+
+        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+            return false;
+        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOA si = {};
+        si.cb = sizeof(si);
+        si.hStdOutput = hWritePipe;
+        si.hStdError = hWritePipe;
+        si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+
+        PROCESS_INFORMATION pi = {};
+
+        std::string cmd = cmdLine;
+        bool created = CreateProcessA(
+            nullptr, cmd.data(), nullptr, nullptr,
+            TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+        CloseHandle(hWritePipe);
+
+        if (!created)
+        {
+            CloseHandle(hReadPipe);
+            return false;
+        }
+
+        // Lê a saída do processo
+        char buf[4096];
+        DWORD bytesRead;
+        while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, nullptr) && bytesRead > 0)
+        {
+            buf[bytesRead] = '\0';
+            output += buf;
+        }
+
+        WaitForSingleObject(pi.hProcess, INFINITE);
+
+        DWORD exitCode = 0;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(hReadPipe);
+
+        return exitCode == 0;
+    }
+
+} // namespace axe

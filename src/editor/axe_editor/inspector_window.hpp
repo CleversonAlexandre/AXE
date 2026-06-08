@@ -10,8 +10,10 @@
 #include "axe/asset/asset_database.hpp"
 #include "file_dialog.hpp"
 #include <entt/entt.hpp>
+#include <functional>
 
 #include "node_graph/material_graph.hpp"
+#include "axe/script/script_component.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <filesystem>
@@ -35,6 +37,9 @@ namespace axe
         void DrawPostProcess(PostProcessComponent& pp);
 
         static void MarkGraphCacheDirty();
+
+        // Callback para abrir o editor de script
+        std::function<void(entt::entity, ScriptComponent*)> m_OnOpenScript;
     private:
         void DrawTransform(Transform& transform);
         void DrawMaterial(entt::entity entity);
@@ -54,14 +59,15 @@ namespace axe
         EditorContext* m_Context = nullptr;
 
         // Remoção pendente — executa no início do próximo frame
-        // para não corromper o estado do ImGui durante o Draw
-        enum class PendingRemove { None, Rigidbody, Collider, CharacterController };
-        PendingRemove m_PendingRemove = PendingRemove::None;
+        enum class PendingRemove { None, Rigidbody, Collider, CharacterController, Script };
+        PendingRemove  m_PendingRemove = PendingRemove::None;
         entt::entity   m_PendingRemoveEntity = entt::null;
+
 
         GraphLoadCallback m_GraphLoadCallback;
         std::unique_ptr<MaterialGraph> m_CachedGraph;
         std::string m_CachedGraphUUID;
     };
 
+    
 } // namespace axe

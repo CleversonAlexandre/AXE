@@ -6,6 +6,7 @@
 #include "asset_browser.hpp"
 #include "editor_context.hpp"
 #include "material_editor_window.hpp"
+#include "script_graph_window.hpp"
 #include <imgui.h>
 #include <functional>
 
@@ -23,6 +24,7 @@ namespace axe
         ViewportWindow* GetViewport() { return &m_ViewportWindow; }
         AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
         MaterialEditorWindow m_MaterialEditorWindow;
+        ScriptGraphWindow    m_ScriptGraphWindow;
 
         // Callbacks conectados pelo EditorLayer
         std::function<void()> OnNewScene;
@@ -33,19 +35,20 @@ namespace axe
         std::function<void()> OnRedo;
         std::function<bool()> OnCanUndo;
         std::function<bool()> OnCanRedo;
-        std::function<bool()> IsPlaying;
-        HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
+        std::function<bool()> IsPlaying; // retorna true se estiver em Play ou Pause
 
-       
+        HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
+        InspectorWindow m_InspectorWindow;
     private:
         void BeginDockspace();
         void EndDockspace();
         void DrawMenuBar();
         void BuildDefaultLayout(ImGuiID dockspaceId);
 
-        HierarchyWindow m_HierarchyWindow;        
+        HierarchyWindow m_HierarchyWindow;
+        
         ViewportWindow  m_ViewportWindow;
-        InspectorWindow m_InspectorWindow;
+        
         AssetBrowser    m_AssetBowserWindow;
 
         bool m_ShowHierarchy = true;

@@ -534,6 +534,13 @@ namespace axe
 			EditorIconLibrary::Get().Load("resources");
 
 			m_EditorUI->m_MaterialEditorWindow.Initialize();
+			m_EditorUI->m_ScriptGraphWindow.Initialize();
+
+			// Conecta o botão "Editar Script" do inspector à janela de script
+			m_EditorUI->m_InspectorWindow.m_OnOpenScript = [this](entt::entity e, ScriptComponent* sc)
+				{
+					m_EditorUI->m_ScriptGraphWindow.OpenForEntity(e, sc);
+				};
 
 			// Carrega pastas virtuais do projeto atual
 			if (ProjectManager::Get().HasProject())
@@ -721,6 +728,14 @@ namespace axe
 					m_EditorUI->m_MaterialEditorWindow.RenderPreview();
 
 				m_EditorUI->Draw();
+
+				if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
+				{
+					// Passa a textura do viewport para o 3D preview
+					auto* vp = m_EditorUI->GetViewport();
+					if (vp) m_EditorUI->m_ScriptGraphWindow.SetViewportTexture(vp->GetTextureID());
+					m_EditorUI->m_ScriptGraphWindow.Draw();
+				}
 
 				// Input de câmera só no modo Edit
 				if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)

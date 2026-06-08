@@ -11,6 +11,7 @@
 #include "axe/log/log.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/scene/scene_serializer.hpp"
+#include "axe/script/script_component.hpp"
 
 #include "asset/asset_picker.hpp"
 #include "axe/material/material_compiler.hpp"
@@ -22,6 +23,37 @@ namespace axe
 	static std::unique_ptr<MaterialGraph> s_CachedGraph;
 	static std::string s_CachedGraphUUID;
 	static bool s_GraphCacheDirty = false;
+
+	static bool DrawComponentHeader(const char* label, entt::entity entity, int componentIdx, bool* outRemove)
+	{
+		*outRemove = false;
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		float available = ImGui::GetContentRegionAvail().x;
+
+		// ID único: inclui entity e componente no label para evitar conflito
+		std::string headerId = std::string(label) + "##hdr_" +
+			std::to_string((uint32_t)entity) + "_" + std::to_string(componentIdx);
+		std::string btnId = "x##x_" +
+			std::to_string((uint32_t)entity) + "_" + std::to_string(componentIdx);
+
+		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.28f, 0.28f, 0.32f, 1.0f));
+		bool open = ImGui::CollapsingHeader(headerId.c_str(),
+			ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+		ImGui::PopStyleColor(2);
+
+		ImGui::SameLine(available - 18.0f);
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
+		if (ImGui::SmallButton(btnId.c_str()))
+			*outRemove = true;
+		ImGui::PopStyleColor(3);
+
+		return open;
+	}
 
 	static void InvalidateGraphCache() { s_CachedGraphUUID = ""; }
 
@@ -113,6 +145,7 @@ namespace axe
 				case PendingRemove::Rigidbody:           reg.remove<RigidbodyComponent>(m_PendingRemoveEntity);           break;
 				case PendingRemove::Collider:            reg.remove<ColliderComponent>(m_PendingRemoveEntity);            break;
 				case PendingRemove::CharacterController: reg.remove<CharacterControllerComponent>(m_PendingRemoveEntity); break;
+				case PendingRemove::Script:              reg.remove<ScriptComponent>(m_PendingRemoveEntity);              break;
 				default: break;
 				}
 			}
@@ -177,6 +210,34 @@ namespace axe
 			DrawCollider(entity, registry);
 		if (registry.any_of<CharacterControllerComponent>(entity))
 			DrawCharacterController(entity, registry);
+
+		// Script
+		if (registry.any_of<ScriptComponent>(entity))
+		{
+			auto& sc = registry.get<ScriptComponent>(entity);
+			bool remove = false;
+			bool open = DrawComponentHeader("Script", entity, 3, &remove);
+			if (remove) { m_PendingRemove = PendingRemove::Script; m_PendingRemoveEntity = entity; }
+			else if (open)
+			{
+				ImGui::Text("Script: %s", sc.ScriptName.c_str());
+				ImGui::Spacing();
+
+				float btnW = ImGui::GetContentRegionAvail().x;
+				if (ImGui::Button("  Editar Script  ", ImVec2(btnW, 0)))
+				{
+					if (m_OnOpenScript)
+						m_OnOpenScript(entity, &sc);
+				}
+
+				if (sc.IsCompiled)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+					ImGui::TextUnformatted("  Script compilado");
+					ImGui::PopStyleColor();
+				}
+			}
+		}
 
 		// Botão Add Component
 		ImGui::Spacing();
@@ -281,6 +342,24 @@ namespace axe
 			else if (ImGui::MenuItem("  Material"))
 			{
 				registry.emplace<MaterialComponent>(entity);
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("Script");
+			ImGui::Separator();
+
+			if (registry.any_of<ScriptComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Script (ja adicionado)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Script"))
+			{
+				auto& sc = registry.emplace<ScriptComponent>(entity);
+				if (auto* nc = registry.try_get<NameComponent>(entity))
+					sc.ScriptName = nc->Name + "Script";
 				ImGui::CloseCurrentPopup();
 			}
 
@@ -621,164 +700,135 @@ namespace axe
 		}
 	}
 
+	// ==================== Física ====================
 
-static bool DrawComponentHeader(const char* label, entt::entity entity, int componentIdx, bool* outRemove)
-{
-	*outRemove = false;
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	float available = ImGui::GetContentRegionAvail().x;
-
-	// ID único: inclui entity e componente no label para evitar conflito
-	std::string headerId = std::string(label) + "##hdr_" +
-		std::to_string((uint32_t)entity) + "_" + std::to_string(componentIdx);
-	std::string btnId = "x##x_" +
-		std::to_string((uint32_t)entity) + "_" + std::to_string(componentIdx);
-
-	ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
-	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.28f, 0.28f, 0.32f, 1.0f));
-	bool open = ImGui::CollapsingHeader(headerId.c_str(),
-		ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
-	ImGui::PopStyleColor(2);
-
-	ImGui::SameLine(available - 18.0f);
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.4f, 0.4f, 1.0f));
-	if (ImGui::SmallButton(btnId.c_str()))
-		*outRemove = true;
-	ImGui::PopStyleColor(3);
-
-	return open;
-}
-
-void InspectorWindow::DrawRigidbody(entt::entity entity, entt::registry& registry)
-{
-	auto* rb = registry.try_get<RigidbodyComponent>(entity);
-	if (!rb) return;
-
-	bool remove = false;
-	bool open = DrawComponentHeader("Rigidbody", entity, 0, &remove);
-	if (remove) { m_PendingRemove = PendingRemove::Rigidbody; m_PendingRemoveEntity = entity; return; }
-	if (!open) return;
-
-	const char* types[] = { "Static", "Dynamic", "Kinematic" };
-	int typeIdx = (int)rb->Type;
-	if (ImGui::Combo("Tipo", &typeIdx, types, 3))
-		rb->Type = (BodyType)typeIdx;
-
-	if (rb->Type != BodyType::Static)
+		// Helper — header de componente com botão X para remover
+	void InspectorWindow::DrawRigidbody(entt::entity entity, entt::registry& registry)
 	{
-		ImGui::DragFloat("Massa", &rb->Mass, 0.1f, 0.01f, 1000.0f);
-		ImGui::DragFloat("Friccao", &rb->Friction, 0.01f, 0.0f, 1.0f);
-		ImGui::DragFloat("Restitution", &rb->Restitution, 0.01f, 0.0f, 1.0f);
-		ImGui::DragFloat("Linear Damp", &rb->LinearDamping, 0.01f, 0.0f, 1.0f);
-		ImGui::DragFloat("Angular Damp", &rb->AngularDamping, 0.01f, 0.0f, 1.0f);
-		ImGui::Checkbox("Usar Gravidade", &rb->UseGravity);
-		ImGui::Spacing();
-		ImGui::TextDisabled("Travar Rotacao:");
-		ImGui::SameLine(); ImGui::Checkbox("X##rx", &rb->LockRotX);
-		ImGui::SameLine(); ImGui::Checkbox("Y##ry", &rb->LockRotY);
-		ImGui::SameLine(); ImGui::Checkbox("Z##rz", &rb->LockRotZ);
-	}
-}
+		auto* rb = registry.try_get<RigidbodyComponent>(entity);
+		if (!rb) return;
 
-void InspectorWindow::DrawCollider(entt::entity entity, entt::registry& registry)
-{
-	auto* col = registry.try_get<ColliderComponent>(entity);
-	if (!col) return;
+		bool remove = false;
+		bool open = DrawComponentHeader("Rigidbody", entity, 0, &remove);
+		if (remove) { m_PendingRemove = PendingRemove::Rigidbody; m_PendingRemoveEntity = entity; return; }
+		if (!open) return;
 
-	bool remove = false;
-	bool open = DrawComponentHeader("Collider", entity, 1, &remove);
-	if (remove) { m_PendingRemove = PendingRemove::Collider; m_PendingRemoveEntity = entity; return; }
-	if (!open) return;
+		const char* types[] = { "Static", "Dynamic", "Kinematic" };
+		int typeIdx = (int)rb->Type;
+		if (ImGui::Combo("Tipo", &typeIdx, types, 3))
+			rb->Type = (BodyType)typeIdx;
 
-	const char* shapes[] = { "Box", "Sphere", "Capsule", "Mesh (Static)", "Convex Hull" };
-	int shapeIdx = (int)col->Shape;
-	if (ImGui::Combo("Forma", &shapeIdx, shapes, 5))
-		col->Shape = (ColliderShape)shapeIdx;
-
-	// Dica de uso
-	auto* rb = registry.try_get<RigidbodyComponent>(entity);
-	if (rb && rb->Type != BodyType::Static &&
-		(col->Shape == ColliderShape::Box ||
-			col->Shape == ColliderShape::Sphere ||
-			col->Shape == ColliderShape::Capsule ||
-			col->Shape == ColliderShape::ConvexHull))
-	{
-		// ok — shape compatível com dynamic
-	}
-	else if (col->Shape == ColliderShape::Mesh && rb && rb->Type != BodyType::Static)
-	{
-		// já mostrado abaixo
-	}
-	else if (rb && rb->Type != BodyType::Static && col->Shape == ColliderShape::Box)
-	{
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-		ImGui::TextDisabled("Dica: use Convex Hull para formato exato dinamico");
-		ImGui::PopStyleColor();
+		if (rb->Type != BodyType::Static)
+		{
+			ImGui::DragFloat("Massa", &rb->Mass, 0.1f, 0.01f, 1000.0f);
+			ImGui::DragFloat("Friccao", &rb->Friction, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Restitution", &rb->Restitution, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Linear Damp", &rb->LinearDamping, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Angular Damp", &rb->AngularDamping, 0.01f, 0.0f, 1.0f);
+			ImGui::Checkbox("Usar Gravidade", &rb->UseGravity);
+			ImGui::Spacing();
+			ImGui::TextDisabled("Travar Rotacao:");
+			ImGui::SameLine(); ImGui::Checkbox("X##rx", &rb->LockRotX);
+			ImGui::SameLine(); ImGui::Checkbox("Y##ry", &rb->LockRotY);
+			ImGui::SameLine(); ImGui::Checkbox("Z##rz", &rb->LockRotZ);
+		}
 	}
 
-	ImGui::Checkbox("Is Trigger", &col->IsTrigger);
-	ImGui::Checkbox("Debug Wireframe", &col->ShowDebug);
-	ImGui::DragFloat3("Offset", &col->Offset.x, 0.01f);
-
-	switch (col->Shape)
+	void InspectorWindow::DrawCollider(entt::entity entity, entt::registry& registry)
 	{
-	case ColliderShape::Box:
-		ImGui::DragFloat3("Half Extent", &col->HalfExtent.x, 0.01f, 0.01f, 100.0f);
-		break;
-	case ColliderShape::Sphere:
-		ImGui::DragFloat("Raio", &col->Radius, 0.01f, 0.01f, 100.0f);
-		break;
-	case ColliderShape::Capsule:
-		ImGui::DragFloat("Altura", &col->Height, 0.01f, 0.1f, 10.0f);
-		ImGui::DragFloat("Raio Capsule", &col->CapsuleRadius, 0.01f, 0.01f, 5.0f);
-		break;
-	case ColliderShape::Mesh:
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
-		ImGui::TextWrapped("Mesh exato do objeto. Use apenas com Rigidbody Static.");
-		ImGui::PopStyleColor();
-		// Avisa se Rigidbody for Dynamic
-		if (auto* rb = registry.try_get<RigidbodyComponent>(entity))
-			if (rb->Type != BodyType::Static)
-			{
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-				ImGui::TextWrapped("AVISO: Mesh Collider requer Rigidbody Static!");
-				ImGui::PopStyleColor();
-			}
-		break;
-	case ColliderShape::ConvexHull:
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
-		ImGui::TextWrapped("Convex Hull do mesh. Funciona com Dynamic e Kinematic.");
-		ImGui::PopStyleColor();
-		break;
+		auto* col = registry.try_get<ColliderComponent>(entity);
+		if (!col) return;
+
+		bool remove = false;
+		bool open = DrawComponentHeader("Collider", entity, 1, &remove);
+		if (remove) { m_PendingRemove = PendingRemove::Collider; m_PendingRemoveEntity = entity; return; }
+		if (!open) return;
+
+		const char* shapes[] = { "Box", "Sphere", "Capsule", "Mesh (Static)", "Convex Hull" };
+		int shapeIdx = (int)col->Shape;
+		if (ImGui::Combo("Forma", &shapeIdx, shapes, 5))
+			col->Shape = (ColliderShape)shapeIdx;
+
+		// Dica de uso
+		auto* rb = registry.try_get<RigidbodyComponent>(entity);
+		if (rb && rb->Type != BodyType::Static &&
+			(col->Shape == ColliderShape::Box ||
+				col->Shape == ColliderShape::Sphere ||
+				col->Shape == ColliderShape::Capsule ||
+				col->Shape == ColliderShape::ConvexHull))
+		{
+			// ok — shape compatível com dynamic
+		}
+		else if (col->Shape == ColliderShape::Mesh && rb && rb->Type != BodyType::Static)
+		{
+			// já mostrado abaixo
+		}
+		else if (rb && rb->Type != BodyType::Static && col->Shape == ColliderShape::Box)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+			ImGui::TextDisabled("Dica: use Convex Hull para formato exato dinamico");
+			ImGui::PopStyleColor();
+		}
+
+		ImGui::Checkbox("Is Trigger", &col->IsTrigger);
+		ImGui::Checkbox("Debug Wireframe", &col->ShowDebug);
+		ImGui::DragFloat3("Offset", &col->Offset.x, 0.01f);
+
+		switch (col->Shape)
+		{
+		case ColliderShape::Box:
+			ImGui::DragFloat3("Half Extent", &col->HalfExtent.x, 0.01f, 0.01f, 100.0f);
+			break;
+		case ColliderShape::Sphere:
+			ImGui::DragFloat("Raio", &col->Radius, 0.01f, 0.01f, 100.0f);
+			break;
+		case ColliderShape::Capsule:
+			ImGui::DragFloat("Altura", &col->Height, 0.01f, 0.1f, 10.0f);
+			ImGui::DragFloat("Raio Capsule", &col->CapsuleRadius, 0.01f, 0.01f, 5.0f);
+			break;
+		case ColliderShape::Mesh:
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
+			ImGui::TextWrapped("Mesh exato do objeto. Use apenas com Rigidbody Static.");
+			ImGui::PopStyleColor();
+			// Avisa se Rigidbody for Dynamic
+			if (auto* rb = registry.try_get<RigidbodyComponent>(entity))
+				if (rb->Type != BodyType::Static)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+					ImGui::TextWrapped("AVISO: Mesh Collider requer Rigidbody Static!");
+					ImGui::PopStyleColor();
+				}
+			break;
+		case ColliderShape::ConvexHull:
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
+			ImGui::TextWrapped("Convex Hull do mesh. Funciona com Dynamic e Kinematic.");
+			ImGui::PopStyleColor();
+			break;
+		}
 	}
-}
 
-void InspectorWindow::DrawCharacterController(entt::entity entity, entt::registry& registry)
-{
-	auto* cc = registry.try_get<CharacterControllerComponent>(entity);
-	if (!cc) return;
-
-	bool remove = false;
-	bool open = DrawComponentHeader("Character Controller", entity, 2, &remove);
-	if (remove) { m_PendingRemove = PendingRemove::CharacterController; m_PendingRemoveEntity = entity; return; }
-	if (!open) return;
-
-	ImGui::DragFloat("Altura", &cc->Height, 0.01f, 0.5f, 5.0f);
-	ImGui::DragFloat("Raio", &cc->Radius, 0.01f, 0.1f, 2.0f);
-	ImGui::DragFloat("Max Slope", &cc->MaxSlopeAngle, 0.5f, 0.0f, 89.0f);
-	ImGui::DragFloat("Step Height", &cc->StepHeight, 0.01f, 0.0f, 1.0f);
-	ImGui::DragFloat("Max Speed", &cc->MaxSpeed, 0.1f, 0.0f, 50.0f);
-	ImGui::DragFloat("Jump Force", &cc->JumpForce, 0.1f, 0.0f, 50.0f);
-
-	if (cc->IsCreated)
+	void InspectorWindow::DrawCharacterController(entt::entity entity, entt::registry& registry)
 	{
-		ImGui::Spacing();
-		ImGui::TextDisabled("Grounded: %s", cc->IsGrounded ? "Sim" : "Nao");
+		auto* cc = registry.try_get<CharacterControllerComponent>(entity);
+		if (!cc) return;
+
+		bool remove = false;
+		bool open = DrawComponentHeader("Character Controller", entity, 2, &remove);
+		if (remove) { m_PendingRemove = PendingRemove::CharacterController; m_PendingRemoveEntity = entity; return; }
+		if (!open) return;
+
+		ImGui::DragFloat("Altura", &cc->Height, 0.01f, 0.5f, 5.0f);
+		ImGui::DragFloat("Raio", &cc->Radius, 0.01f, 0.1f, 2.0f);
+		ImGui::DragFloat("Max Slope", &cc->MaxSlopeAngle, 0.5f, 0.0f, 89.0f);
+		ImGui::DragFloat("Step Height", &cc->StepHeight, 0.01f, 0.0f, 1.0f);
+		ImGui::DragFloat("Max Speed", &cc->MaxSpeed, 0.1f, 0.0f, 50.0f);
+		ImGui::DragFloat("Jump Force", &cc->JumpForce, 0.1f, 0.0f, 50.0f);
+
+		if (cc->IsCreated)
+		{
+			ImGui::Spacing();
+			ImGui::TextDisabled("Grounded: %s", cc->IsGrounded ? "Sim" : "Nao");
+		}
 	}
-}
 
 } // namespace axe
