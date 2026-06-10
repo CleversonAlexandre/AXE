@@ -206,6 +206,87 @@ namespace axe
             return node;
         }
 
+        // ── COMPONENTES — nodes gerados dinamicamente pelo ScriptAsset ──
+        if (t == "GetTransform")
+        {
+            auto node = makeNode(baseId, "Get Transform", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Rotation", ScriptPinType::Vec3, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Scale", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetTransform")
+        {
+            auto node = makeNode(baseId, "Set Transform", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Rotation", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Scale", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetPosition")
+        {
+            auto node = makeNode(baseId, "Get Position", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetPosition")
+        {
+            auto node = makeNode(baseId, "Set Position", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetRigidbody")
+        {
+            auto node = makeNode(baseId, "Get Rigidbody", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Mass", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Velocity", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetRigidbodyVelocity")
+        {
+            auto node = makeNode(baseId, "Set Velocity", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Velocity", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetCollider")
+        {
+            auto node = makeNode(baseId, "Get Collider", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Is Trigger", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Half Extent", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetCharacterController")
+        {
+            auto node = makeNode(baseId, "Get Character Ctrl", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Is Grounded", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Velocity", ScriptPinType::Vec3, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Max Speed", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CharacterMove")
+        {
+            auto node = makeNode(baseId, "Character Move", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Direction", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Speed", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CharacterJump")
+        {
+            auto node = makeNode(baseId, "Character Jump", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Force", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         AXE_CORE_WARN("ScriptGraph: tipo de node desconhecido '{}'", type);
         return nullptr;
     }

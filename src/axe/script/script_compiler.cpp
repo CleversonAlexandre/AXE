@@ -18,6 +18,23 @@ namespace axe
         return s_CompilerPath;
     }
 
+    static std::string FindVcVarsAll(const std::string& clExePath)
+    {
+        // cl.exe fica em: .../MSVC/<ver>/bin/Hostx64/x64/cl.exe
+        // vcvarsall.bat fica em: .../VC/Auxiliary/Build/vcvarsall.bat
+        std::filesystem::path cl(clExePath);
+        // Sobe: x64 -> Hostx64 -> bin -> <ver> -> MSVC -> VC -> VS root
+        auto msvcBin = cl.parent_path().parent_path().parent_path(); // .../MSVC/<ver>
+        auto msvcRoot = msvcBin.parent_path().parent_path();          // .../VC/Tools/MSVC -> .../VC
+        // Porém a estrutura é: VC/Tools/MSVC/<ver>/bin/...
+        // vcvarsall está em: VC/Auxiliary/Build/
+        auto vcDir = msvcRoot.parent_path().parent_path(); // .../VC
+        auto vcvarsall = vcDir / "Auxiliary" / "Build" / "vcvarsall.bat";
+        if (std::filesystem::exists(vcvarsall))
+            return vcvarsall.string();
+        return "";
+    }
+
     bool ScriptCompiler::Compile(
         const std::string& cppPath,
         const std::string& dllOutput,
@@ -44,13 +61,32 @@ namespace axe
         // /std:c++17 = padrão C++17
         // /I         = include do engine
         // /Fe        = arquivo de saída
+        // Localiza vcvarsall.bat no mesmo VS que tem o cl.exe
+        // e wrapa o comando para configurar o ambiente INCLUDE/LIB
+        std::string vcvarsall = FindVcVarsAll(compiler);
+
         std::ostringstream cmd;
-        cmd << "\"" << compiler << "\""
-            << " /LD /O2 /EHsc /std:c++17"
-            << " /I\"" << engineIncludeDir << "\""
-            << " /Fe\"" << dllOutput << "\""
-            << " \"" << cppPath << "\""
-            << " /link /DLL";
+        if (!vcvarsall.empty())
+        {
+            // Chama vcvarsall x64 antes do cl.exe no mesmo shell
+            cmd << "cmd /C \"\""
+                << vcvarsall << "\" x64 && "
+                << "\"" << compiler << "\""
+                << " /LD /O2 /EHsc /std:c++17"
+                << " /I\"" << engineIncludeDir << "\""
+                << " /Fe\"" << dllOutput << "\""
+                << " \"" << cppPath << "\""
+                << " /link /DLL\"";
+        }
+        else
+        {
+            cmd << "\"" << compiler << "\""
+                << " /LD /O2 /EHsc /std:c++17"
+                << " /I\"" << engineIncludeDir << "\""
+                << " /Fe\"" << dllOutput << "\""
+                << " \"" << cppPath << "\""
+                << " /link /DLL";
+        }
 
         AXE_CORE_INFO("ScriptCompiler: compilando '{}'...", cppPath);
         AXE_CORE_INFO("ScriptCompiler: cmd = {}", cmd.str());

@@ -39,7 +39,8 @@ namespace axe
         static void MarkGraphCacheDirty();
 
         // Callback para abrir o editor de script
-        std::function<void(entt::entity, ScriptComponent*)> m_OnOpenScript;
+        //std::function<void(entt::entity, ScriptComponent*)> m_OnOpenScript;
+        std::function<void(entt::entity,ScriptComponent*, entt::registry*)> m_OnOpenScript;
     private:
         void DrawTransform(Transform& transform);
         void DrawMaterial(entt::entity entity);

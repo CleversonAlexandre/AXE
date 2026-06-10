@@ -26,6 +26,7 @@
 #include "axe/mesh/mesh_loader.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/script/script_asset.hpp"
 #include "axe/project/project_manager.hpp"
 #include <filesystem>
 
@@ -535,11 +536,40 @@ namespace axe
 
 			m_EditorUI->m_MaterialEditorWindow.Initialize();
 			m_EditorUI->m_ScriptGraphWindow.Initialize();
+			m_EditorUI->m_ScriptGraphWindow.SetInspectorWindow(&m_EditorUI->m_InspectorWindow);
 
-			// Conecta o botão "Editar Script" do inspector à janela de script
-			m_EditorUI->m_InspectorWindow.m_OnOpenScript = [this](entt::entity e, ScriptComponent* sc)
+			// Abre script editor ao clicar duas vezes num .axescript no Asset Browser
+			m_EditorUI->GetAssetBrowser()->SetScriptOpenCallback([this](const std::string& uuid)
 				{
-					m_EditorUI->m_ScriptGraphWindow.OpenForEntity(e, sc);
+					AXE_CORE_INFO("ScriptOpenCallback chamado, uuid={}", uuid);
+					const auto* rec = AssetDatabase::Get().GetByUUID(uuid);
+					if (!rec)
+					{
+						AXE_CORE_ERROR("ScriptOpenCallback: UUID nao encontrado no AssetDatabase");
+						return;
+					}
+					AXE_CORE_INFO("ScriptOpenCallback: abrindo {}", rec->FilePath.string());
+					auto asset = ScriptAsset::LoadFromFile(rec->FilePath);
+					if (!asset)
+					{
+						AXE_CORE_ERROR("ScriptOpenCallback: falha ao carregar ScriptAsset");
+						return;
+					}
+					m_EditorUI->m_ScriptGraphWindow.OpenForAsset(asset);
+					AXE_CORE_INFO("ScriptOpenCallback: OpenForAsset chamado, IsOpen={}", m_EditorUI->m_ScriptGraphWindow.IsOpen());
+				});
+
+			// Mantém compatibilidade: inspector ainda pode abrir por entidade
+			m_EditorUI->m_InspectorWindow.m_OnOpenScript = [this](entt::entity e, ScriptComponent* sc, entt::registry* registry)
+				{
+					// Se o ScriptComponent tem um asset path, abre pelo asset
+					if (!sc->ScriptAssetPath.empty())
+					{
+						auto asset = ScriptAsset::LoadFromFile(sc->ScriptAssetPath);
+						if (asset) { m_EditorUI->m_ScriptGraphWindow.OpenForAsset(asset); return; }
+					}
+					// Fallback: abre pelo componente antigo
+					m_EditorUI->m_ScriptGraphWindow.OpenForEntity(e, sc, registry);
 				};
 
 			// Carrega pastas virtuais do projeto atual
@@ -727,15 +757,14 @@ namespace axe
 				if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
 					m_EditorUI->m_MaterialEditorWindow.RenderPreview();
 
+				// Preview isolado do Script Editor (antes do ImGui frame)
+				if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
+					m_EditorUI->m_ScriptGraphWindow.RenderPreview();
+
 				m_EditorUI->Draw();
 
 				if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
-				{
-					// Passa a textura do viewport para o 3D preview
-					auto* vp = m_EditorUI->GetViewport();
-					if (vp) m_EditorUI->m_ScriptGraphWindow.SetViewportTexture(vp->GetTextureID());
 					m_EditorUI->m_ScriptGraphWindow.Draw();
-				}
 
 				// Input de câmera só no modo Edit
 				if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)

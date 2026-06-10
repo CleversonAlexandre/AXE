@@ -24,7 +24,7 @@ namespace axe
 		if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")return AssetType::Texture;
 		if (ext == ".axescene")                              return AssetType::Scene;
 		if (ext == ".wav" || ext == ".mp3")                  return AssetType::Audio;
-		if (ext == ".lua")                                   return AssetType::Script;
+		if (ext == ".lua" || ext == ".axescript")           return AssetType::Script;
 		if (ext == ".axemat")                                return AssetType::Material;
 		return AssetType::Unknown;
 	}

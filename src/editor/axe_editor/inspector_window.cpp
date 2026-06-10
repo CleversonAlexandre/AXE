@@ -227,7 +227,7 @@ namespace axe
 				if (ImGui::Button("  Editar Script  ", ImVec2(btnW, 0)))
 				{
 					if (m_OnOpenScript)
-						m_OnOpenScript(entity, &sc);
+						m_OnOpenScript(entity, &sc, &registry);
 				}
 
 				if (sc.IsCompiled)

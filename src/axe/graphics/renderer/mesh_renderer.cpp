@@ -97,6 +97,7 @@ namespace axe
         uniform samplerCube u_PrefilteredMap;
         uniform sampler2D   u_BRDFLut;
         uniform int         u_HasIBL;
+        uniform float       u_IBLIntensity;
 
         const float PI = 3.14159265359;
 
@@ -268,7 +269,7 @@ namespace axe
                 vec2 brdf         = texture(u_BRDFLut, vec2(max(dot(N, V), 0.0), roughness)).rg;
                 vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);
 
-                ambient = (kD_amb * diffuse_ibl + specular_ibl) * ao;
+                ambient = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity;
             }
             else
             {

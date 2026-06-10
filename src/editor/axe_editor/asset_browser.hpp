@@ -22,6 +22,7 @@ namespace axe
         using FileDropCallback = std::function<void(const std::string&)>;
         using InstantiateCallback = std::function<void(const std::string&)>;
         using AssetOpenCallback = std::function<void(const AssetRecord&)>;
+        using ScriptOpenCallback = std::function<void(const std::string& uuid)>;
         using MaterialDropCallback = std::function<void(const std::string& uuid)>;
 
         AssetBrowser() = default;
@@ -30,6 +31,7 @@ namespace axe
         void SetFileDropCallback(FileDropCallback cb) { m_FileDropCallback = cb; }
         void SetInstantiateCallback(InstantiateCallback cb) { m_InstantiateCallback = cb; }
         void SetAssetOpenCallback(AssetOpenCallback cb) { m_AssetOpenCallback = cb; }
+        void SetScriptOpenCallback(ScriptOpenCallback cb) { m_OnOpenScript = cb; }
         void SetMaterialDropCallback(MaterialDropCallback cb) { m_MaterialDropCallback = cb; }
         void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
 
@@ -82,6 +84,7 @@ namespace axe
         FileDropCallback    m_FileDropCallback;
         InstantiateCallback m_InstantiateCallback;
         AssetOpenCallback   m_AssetOpenCallback;
+        ScriptOpenCallback  m_OnOpenScript;
         MaterialDropCallback m_MaterialDropCallback;
 
         std::string m_SelectedFolder = "";   // path completo da pasta selecionada

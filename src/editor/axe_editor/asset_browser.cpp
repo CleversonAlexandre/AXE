@@ -3,6 +3,7 @@
 #include "axe/asset/asset_database.hpp"
 #include "axe/project/project_manager.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe/script/script_asset.hpp"
 #include <imgui.h>
 #include <filesystem>
 #include <fstream>
@@ -795,7 +796,14 @@ namespace axe
     {
         if (ImGui::MenuItem("Abrir"))
         {
-            if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            if (record.FilePath.extension() == ".axescript")
+            {
+                if (m_OnOpenScript) m_OnOpenScript(record.UUID);
+            }
+            else
+            {
+                if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            }
         }
 
         if (ImGui::MenuItem("Abrir no Explorer"))
@@ -861,6 +869,47 @@ namespace axe
 
                 if (ProjectManager::Get().HasProject())
                     AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+            }
+
+            ImGui::Separator();
+
+            // ── Novo Script ────────────────────────────────────────────────
+            if (ImGui::BeginMenu("Script"))
+            {
+                struct ScriptTypeEntry { const char* label; const char* type; const char* desc; };
+                static const ScriptTypeEntry entries[] = {
+                    { "Entity",       "Entity",       "Objeto generico com Transform" },
+                    { "Agent",        "Agent",        "Controlavel pelo player ou AI" },
+                    { "Character",    "Character",    "Agent + CharacterController" },
+                    { "StaticObject", "StaticObject", "So visual, sem fisica" },
+                    { "Trigger",      "Trigger",      "Colisao invisivel, dispara eventos" },
+                };
+                for (auto& e : entries)
+                {
+                    if (ImGui::MenuItem(e.label))
+                    {
+                        if (!ProjectManager::Get().HasProject()) break;
+                        auto dir = ProjectManager::Get().GetCurrent().AssetsPath / "Scripts";
+                        std::filesystem::create_directories(dir);
+                        auto path = dir / (std::string("New") + e.type + ".axescript");
+                        int idx = 1;
+                        while (std::filesystem::exists(path))
+                            path = dir / (std::string("New") + e.type + "_" + std::to_string(idx++) + ".axescript");
+
+                        auto scriptAsset = ScriptAsset::Create(path.stem().string(),
+                            ScriptClassTypeFromString(e.type));
+                        scriptAsset->Save(path);
+                        auto uuid = AssetDatabase::Get().Register(path.string());
+                        auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
+                        if (rec) rec->VirtualFolder = m_SelectedFolder;
+                        AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+                        // Abre o editor imediatamente
+                        if (m_OnOpenScript) m_OnOpenScript(uuid);
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.desc);
+                }
+                ImGui::EndMenu();
             }
             ImGui::EndMenu();
         }
@@ -1063,8 +1112,16 @@ namespace axe
 
         if (dclicked)
         {
-            if (m_InstantiateCallback) m_InstantiateCallback(record.UUID);
-            if (m_AssetOpenCallback)   m_AssetOpenCallback(record);
+            // Duplo clique em .axescript abre o Script Editor
+            if (record.FilePath.extension() == ".axescript")
+            {
+                if (m_OnOpenScript) m_OnOpenScript(record.UUID);
+            }
+            else
+            {
+                if (m_InstantiateCallback) m_InstantiateCallback(record.UUID);
+                if (m_AssetOpenCallback)   m_AssetOpenCallback(record);
+            }
         }
 
         if (hovered && !dclicked)
