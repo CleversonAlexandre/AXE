@@ -73,6 +73,19 @@ namespace axe
 	};
 
 	// Câmera de jogo
+	// ── Spring Arm ───────────────────────────────────────────────────────────
+	// Define a posição da câmera em relação à entidade (braço de câmera).
+	// Usado pelo GameCamera em modo ThirdPerson.
+	struct SpringArmComponent
+	{
+		float Length = 5.0f;    // distância atrás do pawn
+		float HeightOffset = 2.0f; // altura acima do pawn
+		glm::vec3 SocketOffset = { 0, 0, 0 }; // offset lateral/depth fino
+		float LagSpeed = 8.0f;   // suavização do follow (lerp)
+		bool  EnableCameraLag = true;
+		bool  MouseRotates = true;  // mouse orbita a câmera
+	};
+
 	struct CameraComponent
 	{
 		float Fov = 60.0f;

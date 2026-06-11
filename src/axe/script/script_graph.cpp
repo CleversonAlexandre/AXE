@@ -274,7 +274,11 @@ namespace axe
             auto node = makeNode(baseId, "Character Move", ScriptNodeCategory::Action);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Direction", ScriptPinType::Vec3, ed::PinKind::Input);
-            node->Inputs.emplace_back(m_NextId++, "Speed", ScriptPinType::Float, ed::PinKind::Input);
+            {
+                ScriptPin spd(m_NextId++, "Speed", ScriptPinType::Float, ed::PinKind::Input);
+                spd.DefaultFloat = 5.0f;
+                node->Inputs.push_back(spd);
+            }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -282,7 +286,11 @@ namespace axe
         {
             auto node = makeNode(baseId, "Character Jump", ScriptNodeCategory::Action);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
-            node->Inputs.emplace_back(m_NextId++, "Force", ScriptPinType::Float, ed::PinKind::Input);
+            {
+                ScriptPin force(m_NextId++, "Force", ScriptPinType::Float, ed::PinKind::Input);
+                force.DefaultFloat = 5.0f;
+                node->Inputs.push_back(force);
+            }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -396,7 +404,12 @@ namespace axe
             for (const auto& pin : node->Inputs)
                 jn["inputs"].push_back({
                     {"id", (int)pin.ID.Get()}, {"name", pin.Name},
-                    {"type", (int)pin.Type}, {"kind", (int)pin.Kind}
+                    {"type", (int)pin.Type}, {"kind", (int)pin.Kind},
+                    {"default_float", pin.DefaultFloat},
+                    {"default_bool", pin.DefaultBool},
+                    {"default_int", pin.DefaultInt},
+                    {"default_string", pin.DefaultString},
+                    {"default_vec3", {pin.DefaultVec3.x, pin.DefaultVec3.y, pin.DefaultVec3.z}}
                     });
             for (const auto& pin : node->Outputs)
                 jn["outputs"].push_back({
@@ -438,6 +451,12 @@ namespace axe
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
                     (ScriptPinType)jp["type"].get<int>(), (ed::PinKind)jp["kind"].get<int>());
+                pin.DefaultFloat = jp.value("default_float", 0.0f);
+                pin.DefaultBool = jp.value("default_bool", false);
+                pin.DefaultInt = jp.value("default_int", 0);
+                pin.DefaultString = jp.value("default_string", std::string(""));
+                if (jp.contains("default_vec3") && jp["default_vec3"].is_array())
+                    pin.DefaultVec3 = { jp["default_vec3"][0], jp["default_vec3"][1], jp["default_vec3"][2] };
                 node->Inputs.push_back(std::move(pin));
             }
 
@@ -445,6 +464,12 @@ namespace axe
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
                     (ScriptPinType)jp["type"].get<int>(), (ed::PinKind)jp["kind"].get<int>());
+                pin.DefaultFloat = jp.value("default_float", 0.0f);
+                pin.DefaultBool = jp.value("default_bool", false);
+                pin.DefaultInt = jp.value("default_int", 0);
+                pin.DefaultString = jp.value("default_string", std::string(""));
+                if (jp.contains("default_vec3") && jp["default_vec3"].is_array())
+                    pin.DefaultVec3 = { jp["default_vec3"][0], jp["default_vec3"][1], jp["default_vec3"][2] };
                 node->Outputs.push_back(std::move(pin));
             }
 

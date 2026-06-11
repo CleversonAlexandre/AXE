@@ -1593,16 +1593,54 @@ namespace axe
 
         std::string scriptName = m_ScriptAsset ? m_ScriptAsset->GetName() :
             m_Component ? m_Component->ScriptName : "Script";
-        m_ConsoleLines.push_back("[Script Editor] Gerando C++...");
-        std::string code = ScriptGraphCompiler::Generate(*m_Graph, scriptName);
-        std::filesystem::path dir = "temp_scripts";
+
+        // ── Resolve paths absolutos a partir do executável ────────────────────
+        // editor.exe fica em:  bin/<config>/editor/editor.exe
+        // Subindo 3 níveis chegamos na raiz do projeto onde está /src
+        char exeBuf[MAX_PATH] = {};
+        GetModuleFileNameA(nullptr, exeBuf, MAX_PATH);
+        std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
+        std::filesystem::path root = (exeDir / ".." / ".." / "..").lexically_normal();
+        std::filesystem::path vendor = root / "src" / "vendor";
+
+        // Todos os include paths que o script compilado precisa
+        // (mirrors dos includedirs do premake5.lua para o projeto axe)
+        std::vector<std::filesystem::path> includes = {
+            root / "src",                       // axe/script/script_base.hpp, etc.
+            vendor / "glm",                     // glm/glm.hpp
+            vendor / "entt" / "src",            // entt/entt.hpp
+            vendor / "spdlog" / "include",      // spdlog/spdlog.h
+            vendor / "spdlog",                  // fallback caso inclua sem /include
+        };
+
+        // axe.lib — gerado na mesma config/plataforma que o editor
+        // bin/<config>/axe/axe.lib  (targetdir do projeto axe no premake)
+        std::filesystem::path axeLib = exeDir / ".." / "axe" / "axe.lib";
+        axeLib = axeLib.lexically_normal();
+
+        // temp_scripts ao lado do executável
+        std::filesystem::path dir = exeDir / "temp_scripts";
         std::filesystem::create_directories(dir);
+
         auto cpp = (dir / (scriptName + ".cpp")).string();
         auto dll = (dir / (scriptName + ".dll")).string();
+
+        m_ConsoleLines.push_back("[Script Editor] Gerando C++...");
+        std::string code = ScriptGraphCompiler::Generate(*m_Graph, scriptName);
         std::ofstream f(cpp); f << code; f.close();
         m_ConsoleLines.push_back("[Script Editor] .cpp salvo: " + cpp);
+
+        // Monta string de includes para passar ao ScriptCompiler
+        // Formato: path1;path2;path3  (separados por ;)
+        std::string includeStr;
+        for (auto& inc : includes)
+        {
+            if (!includeStr.empty()) includeStr += ";";
+            includeStr += inc.string();
+        }
+
         m_Msg = "Compilando..."; m_MsgOk = true; m_MsgTimer = 2.0f;
-        bool ok = ScriptCompiler::Compile(cpp, dll, "src",
+        bool ok = ScriptCompiler::Compile(cpp, dll, includeStr, axeLib.string(),
             [this](const std::string& msg, bool success)
             {
                 m_Msg = success ? "Compilado!" : "Erro";
@@ -1611,6 +1649,7 @@ namespace axe
                 while (std::getline(ss, ln))
                     m_ConsoleLines.push_back(success ? "[OK] " + ln : "[ERROR] " + ln);
             });
+
         if (ok)
         {
             if (m_Component) { m_Component->DllPath = dll; m_Component->IsCompiled = true; }

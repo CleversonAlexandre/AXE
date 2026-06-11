@@ -15,7 +15,15 @@ namespace axe
 		std::shared_ptr<Texture2D> GetTexture() const { return m_IconTexture; }
 		std::shared_ptr<Texture2D> GetScene() const { return m_IconScene; }
 		std::shared_ptr<Texture2D> GetFolder() const { return m_IconFolder; }
-		std::shared_ptr<Texture2D> GetScript() const { return m_IconScript; }
+		std::shared_ptr<Texture2D> GetScript()        const { return m_IconScript; }
+		std::shared_ptr<Texture2D> GetScriptEntity()  const { return m_IconScriptEntity; }
+		std::shared_ptr<Texture2D> GetScriptAgent()   const { return m_IconScriptAgent; }
+		std::shared_ptr<Texture2D> GetScriptCharacter() const { return m_IconScriptCharacter; }
+		std::shared_ptr<Texture2D> GetScriptStatic()  const { return m_IconScriptStatic; }
+		std::shared_ptr<Texture2D> GetScriptTrigger() const { return m_IconScriptTrigger; }
+
+		// Retorna ícone de script pelo ScriptClassType string
+		std::shared_ptr<Texture2D> GetScriptForClass(const std::string& classType) const;
 		std::shared_ptr<Texture2D> GetAudio() const { return m_IconAudio; }
 		std::shared_ptr<Texture2D> GetMaterial() const { return m_Material; }
 		std::shared_ptr<Texture2D> GetDirectionalLight() const { return m_IconDirectionalLight; }
@@ -48,6 +56,11 @@ namespace axe
 		std::shared_ptr<Texture2D> m_IconScene;
 		std::shared_ptr<Texture2D> m_IconFolder;
 		std::shared_ptr<Texture2D> m_IconScript;
+		std::shared_ptr<Texture2D> m_IconScriptEntity;
+		std::shared_ptr<Texture2D> m_IconScriptAgent;
+		std::shared_ptr<Texture2D> m_IconScriptCharacter;
+		std::shared_ptr<Texture2D> m_IconScriptStatic;
+		std::shared_ptr<Texture2D> m_IconScriptTrigger;
 		std::shared_ptr<Texture2D> m_IconAudio;
 		std::shared_ptr<Texture2D> m_Material;
 		std::shared_ptr<Texture2D> m_IconDirectionalLight;

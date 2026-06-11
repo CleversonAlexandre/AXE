@@ -40,7 +40,7 @@ namespace axe
 
         // Callback para abrir o editor de script
         //std::function<void(entt::entity, ScriptComponent*)> m_OnOpenScript;
-        std::function<void(entt::entity,ScriptComponent*, entt::registry*)> m_OnOpenScript;
+        std::function<void(entt::entity, ScriptComponent*, entt::registry*)> m_OnOpenScript;
     private:
         void DrawTransform(Transform& transform);
         void DrawMaterial(entt::entity entity);
@@ -52,6 +52,7 @@ namespace axe
         void DrawPointLight(PointLight& light);
         void DrawEnvironment(EnvironmentComponent& ec);
         void DrawFolder(FolderComponent& folder);
+        void DrawSpringArm(SpringArmComponent& sa);
         void DrawCamera(CameraComponent& cam);
         void DrawRigidbody(entt::entity entity, entt::registry& registry);
         void DrawCollider(entt::entity entity, entt::registry& registry);
@@ -70,5 +71,5 @@ namespace axe
         std::string m_CachedGraphUUID;
     };
 
-    
+
 } // namespace axe

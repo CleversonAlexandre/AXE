@@ -24,6 +24,10 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
+#include <unordered_map>
 
 namespace Layers
 {
@@ -56,6 +60,18 @@ namespace axe
 
     static JPH::BodyID ToBodyID(uint32_t stored) { return JPH::BodyID(stored); }
 
+    static JPH::TempAllocatorImpl* GetTA()
+    {
+        return static_cast<JPH::TempAllocatorImpl*>(PhysicsSystem::Get().GetTempAllocPtr());
+    }
+    static JPH::PhysicsSystem* GetPS()
+    {
+        return static_cast<JPH::PhysicsSystem*>(PhysicsSystem::Get().GetJoltSystemPtr());
+    }
+
+    // Mapa global de CharacterVirtual por entity
+    static std::unordered_map<entt::entity, JPH::Ref<JPH::CharacterVirtual>> s_Characters;
+
     // ==================== Shape ====================
 
     static JPH::ShapeRefC CreateShape(const ColliderComponent& col, const glm::vec3& scale,
@@ -67,7 +83,9 @@ namespace axe
         case ColliderShape::Box:
         {
             glm::vec3 halfExt = col.HalfExtent * scale;
-            halfExt = glm::max(halfExt, glm::vec3(0.001f));
+            // Garante espessura mínima de 0.05 em qualquer eixo
+            // Evita que floors ultra-finos (Scale Y = 0.001) sejam ignorados pelo Jolt
+            halfExt = glm::max(halfExt, glm::vec3(0.05f));
             JPH::BoxShapeSettings s(ToJolt(halfExt));
             s.mConvexRadius = std::min(0.02f, glm::compMin(halfExt) * 0.1f);
             auto r = s.Create();
@@ -217,6 +235,55 @@ namespace axe
         rb->BodyID = JPH::BodyID::cInvalidBodyID;
     }
 
+    void PhysicsWorld::CreateCharacter(entt::entity entity, Scene& scene)
+    {
+        auto& registry = scene.GetRegistry();
+        auto* cc = registry.try_get<CharacterControllerComponent>(entity);
+        auto* tc = registry.try_get<TransformComponent>(entity);
+        if (!cc || !tc || cc->IsCreated) return;
+
+        JPH::PhysicsSystem* ps = GetPS();
+        if (!ps) return;
+
+        // Cápsula: Height é a altura total, Radius é o raio
+        float halfHeight = std::max(cc->Height * 0.5f - cc->Radius, 0.01f);
+        JPH::CapsuleShapeSettings capsule(halfHeight, std::max(cc->Radius, 0.01f));
+        auto shapeResult = capsule.Create();
+        if (!shapeResult.IsValid())
+        {
+            AXE_CORE_ERROR("PhysicsWorld: falha ao criar shape do CharacterController.");
+            return;
+        }
+
+        JPH::CharacterVirtualSettings settings;
+        settings.mShape = shapeResult.Get();
+        settings.mMaxSlopeAngle = glm::radians(cc->MaxSlopeAngle);
+        settings.mMaxStrength = 100.0f;
+        settings.mBackFaceMode = JPH::EBackFaceMode::CollideWithBackFaces;
+        settings.mPredictiveContactDistance = 0.1f;
+        settings.mPenetrationRecoverySpeed = 1.0f;
+
+        JPH::RVec3 pos(tc->Data.Position.x, tc->Data.Position.y, tc->Data.Position.z);
+        auto character = new JPH::CharacterVirtual(&settings, pos, JPH::Quat::sIdentity(), 0, ps);
+        s_Characters[entity] = character;
+
+        cc->IsCreated = true;
+        cc->CharacterID = (uint32_t)entity; // usa entity ID como handle
+        AXE_CORE_INFO("PhysicsWorld: CharacterController criado (entity {}).", (uint32_t)entity);
+    }
+
+    void PhysicsWorld::DestroyCharacter(entt::entity entity, Scene& scene)
+    {
+        auto it = s_Characters.find(entity);
+        if (it != s_Characters.end())
+        {
+            s_Characters.erase(it);
+            auto* cc = scene.GetRegistry().try_get<CharacterControllerComponent>(entity);
+            if (cc) { cc->IsCreated = false; cc->CharacterID = 0; }
+            AXE_CORE_INFO("PhysicsWorld: CharacterController destruído (entity {}).", (uint32_t)entity);
+        }
+    }
+
     void PhysicsWorld::OnSceneStart(Scene& scene)
     {
         PhysicsSystem::Get().Initialize();
@@ -224,8 +291,48 @@ namespace axe
         registry.view<RigidbodyComponent, ColliderComponent>().each(
             [&](entt::entity entity, RigidbodyComponent&, ColliderComponent&)
             {
+                // Entidades com CharacterController não usam Rigidbody body —
+                // o CharacterVirtual já é o body de física delas
+                if (registry.all_of<CharacterControllerComponent>(entity)) return;
                 CreateBody(entity, scene);
             });
+        // Cria static bodies para entidades com Collider mas sem Rigidbody
+        // (ex: floors, paredes estáticas sem componente Rigidbody explícito)
+        registry.view<ColliderComponent>().each(
+            [&](entt::entity entity, ColliderComponent& col)
+            {
+                // Já tem Rigidbody — será criado pelo loop acima
+                if (registry.all_of<RigidbodyComponent>(entity)) return;
+                // CharacterController — tem seu próprio body
+                if (registry.all_of<CharacterControllerComponent>(entity)) return;
+                // Cria um body estático sintético
+                auto* tc = registry.try_get<TransformComponent>(entity);
+                if (!tc) return;
+                glm::vec3 scale = tc->Data.Scale;
+                const Mesh* mesh = nullptr;
+                if (auto* mc = registry.try_get<MeshComponent>(entity))
+                    if (mc->Data) mesh = mc->Data.get();
+                auto shape = CreateShape(col, scale, mesh);
+                if (!shape) return;
+                auto& bi = GetBI();
+                JPH::BodyCreationSettings settings(
+                    shape,
+                    JPH::RVec3(tc->Data.Position.x, tc->Data.Position.y, tc->Data.Position.z),
+                    ToJoltQuat(tc->Data.Rotation),
+                    JPH::EMotionType::Static, Layers::NON_MOVING);
+                JPH::Body* body = bi.CreateBody(settings);
+                if (!body) return;
+                bi.AddBody(body->GetID(), JPH::EActivation::DontActivate);
+                AXE_CORE_INFO("PhysicsWorld: static body implícito criado (entity {}).", (uint32_t)entity);
+            });
+
+        // Cria CharacterControllers
+        registry.view<CharacterControllerComponent>().each(
+            [&](entt::entity entity, CharacterControllerComponent&)
+            {
+                CreateCharacter(entity, scene);
+            });
+
         AXE_CORE_INFO("PhysicsWorld: cena iniciada.");
     }
 
@@ -237,6 +344,14 @@ namespace axe
             {
                 DestroyBody(entity, scene);
             });
+        // Destroi CharacterControllers
+        registry.view<CharacterControllerComponent>().each(
+            [&](entt::entity entity, CharacterControllerComponent&)
+            {
+                DestroyCharacter(entity, scene);
+            });
+        s_Characters.clear();
+
         AXE_CORE_INFO("PhysicsWorld: cena encerrada.");
     }
 
@@ -261,27 +376,91 @@ namespace axe
                 tc.Data.Rotation = FromJoltRot(bi.GetRotation(id));
                 tc.Data.UseWorldMatrix = false;
             });
-    }
+    
 
-    void PhysicsWorld::AddForce(entt::entity entity, Scene& scene, const glm::vec3& force)
-    {
-        auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
-        if (!rb || !rb->IsCreated) return;
-        JPH::BodyID id = ToBodyID(rb->BodyID);
-        if (!id.IsInvalid()) GetBI().AddForce(id, ToJolt(force));
-    }
+    // ── CharacterController update ──────────────────────────────────────────
+    registry.view<CharacterControllerComponent, TransformComponent>().each(
+        [&](entt::entity entity, CharacterControllerComponent& cc, TransformComponent& tc)
+        {
+            auto it = s_Characters.find(entity);
+            if (it == s_Characters.end() || !it->second) return;
 
-    void PhysicsWorld::AddImpulse(entt::entity entity, Scene& scene, const glm::vec3& impulse)
-    {
-        auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
-        if (!rb || !rb->IsCreated) return;
-        JPH::BodyID id = ToBodyID(rb->BodyID);
-        if (!id.IsInvalid()) GetBI().AddImpulse(id, ToJolt(impulse));
-    }
+            auto& ch = *it->second;
+            JPH::PhysicsSystem* ps = GetPS();
+            JPH::TempAllocatorImpl* ta = GetTA();
+            if (!ps || !ta) return;
 
-    RaycastHit PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDist)
-    {
-        return PhysicsSystem::Get().Raycast(origin, dir, maxDist);
-    }
+            // Monta velocidade: XZ vem do script, Y da gravidade
+            JPH::Vec3 curVel = ch.GetLinearVelocity();
+            JPH::Vec3 gravity = ps->GetGravity();
+
+            // Velocidade horizontal do script
+            float vx = cc.Velocity.x;
+            float vz = cc.Velocity.z;
+
+            // Pulo
+            bool grounded = ch.IsSupported();
+            cc.IsGrounded = grounded;
+            float vy = curVel.GetY();
+
+            if (cc.WantsJump && grounded)
+            {
+                vy = cc.JumpForce;
+                cc.WantsJump = false;
+            }
+            else
+            {
+                // Aplica gravidade
+                vy += gravity.GetY() * deltaTime;
+            }
+
+            ch.SetLinearVelocity(JPH::Vec3(vx, vy, vz));
+
+            // ExtendedUpdate — move, sobe degraus, gruda no chão
+            JPH::CharacterVirtual::ExtendedUpdateSettings euSettings;
+            euSettings.mStickToFloorStepDown = JPH::Vec3(0, -cc.StepHeight, 0);
+            euSettings.mWalkStairsStepUp = JPH::Vec3(0, cc.StepHeight, 0);
+
+            ch.ExtendedUpdate(
+                deltaTime,
+                gravity,
+                euSettings,
+                ps->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                ps->GetDefaultLayerFilter(Layers::MOVING),
+                {},  // BodyFilter
+                {},  // ShapeFilter
+                *ta);
+
+            // Sync posição de volta para o TransformComponent
+            JPH::RVec3 newPos = ch.GetPosition();
+            tc.Data.Position = glm::vec3((float)newPos.GetX(), (float)newPos.GetY(), (float)newPos.GetZ());
+            tc.Data.UseWorldMatrix = false;
+
+            // Reset velocidade XZ (será reescrita pelo script no próximo frame)
+            cc.Velocity.x = 0;
+            cc.Velocity.z = 0;
+        });
+}
+
+void PhysicsWorld::AddForce(entt::entity entity, Scene& scene, const glm::vec3& force)
+{
+    auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
+    if (!rb || !rb->IsCreated) return;
+    JPH::BodyID id = ToBodyID(rb->BodyID);
+    if (!id.IsInvalid()) GetBI().AddForce(id, ToJolt(force));
+}
+
+void PhysicsWorld::AddImpulse(entt::entity entity, Scene& scene, const glm::vec3& impulse)
+{
+    auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
+    if (!rb || !rb->IsCreated) return;
+    JPH::BodyID id = ToBodyID(rb->BodyID);
+    if (!id.IsInvalid()) GetBI().AddImpulse(id, ToJolt(impulse));
+}
+
+RaycastHit PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDist)
+{
+    return PhysicsSystem::Get().Raycast(origin, dir, maxDist);
+}
 
 } // namespace axe

@@ -1,4 +1,8 @@
 #include "editor_ui.hpp"
+#include "axe/project/project_manager.hpp"
+#include "axe/project/project.hpp"
+#include "axe/asset/asset_database.hpp"
+#include "axe/scene/game_mode_asset.hpp"
 #include "file_dialog.hpp"
 #include "editor_app.hpp"
 #include <imgui.h>
@@ -22,6 +26,77 @@ namespace axe
 			ImGui::SetNextWindowSize(ImVec2(320, 180), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Environment", &m_ShowEnvironment))
 				OnDrawEnvironment();
+			ImGui::End();
+		}
+
+		// ── Game Mode Editor ──────────────────────────────────────────────────
+		if (m_ShowGameMode && ProjectManager::Get().HasProject())
+		{
+			const std::string& gmUUID = ProjectManager::Get().GetCurrent().ActiveGameModeUUID;
+
+			ImGui::SetNextWindowSize(ImVec2(400, 260), ImGuiCond_FirstUseEver);
+			if (ImGui::Begin("Game Mode", &m_ShowGameMode))
+			{
+				ImGui::SeparatorText("Game Mode Ativo");
+
+				if (gmUUID.empty())
+				{
+					ImGui::TextDisabled("Nenhum. Duplo clique em um .axegamemode no Asset Browser.");
+				}
+				else
+				{
+					const AssetRecord* gmRec = AssetDatabase::Get().GetByUUID(gmUUID);
+					std::string gmName = gmRec ? gmRec->Name : "(removido)";
+					ImGui::Text("%s", gmName.c_str());
+					ImGui::SameLine();
+					if (ImGui::SmallButton("X##cleargm"))
+					{
+						ProjectManager::Get().GetCurrent().ActiveGameModeUUID = "";
+						ProjectManager::Get().SaveProject();
+					}
+
+					if (gmRec)
+					{
+						auto gmAsset = GameModeAsset::LoadFromFile(gmRec->FilePath);
+						if (gmAsset)
+						{
+							ImGui::Spacing();
+							ImGui::SeparatorText("Pawn Padrão");
+
+							std::string pawnLabel = "Nenhum";
+							if (!gmAsset->DefaultPawnScriptUUID.empty())
+							{
+								const AssetRecord* pr = AssetDatabase::Get().GetByUUID(gmAsset->DefaultPawnScriptUUID);
+								pawnLabel = pr ? (pr->Name + "  [" + pr->ScriptClassType + "]") : "(removido)";
+							}
+							ImGui::LabelText("Script##pawn", "%s", pawnLabel.c_str());
+							ImGui::SameLine();
+							if (ImGui::Button("Escolher##pawn"))
+								ImGui::OpenPopup("##PawnPickGM");
+
+							if (ImGui::BeginPopup("##PawnPickGM"))
+							{
+								ImGui::SeparatorText("Scripts disponíveis");
+								for (auto& [uuid, rec] : AssetDatabase::Get().GetAll())
+								{
+									if (rec.Type != AssetType::Script) continue;
+									std::string lbl = rec.Name;
+									if (!rec.ScriptClassType.empty()) lbl += "  [" + rec.ScriptClassType + "]";
+									if (ImGui::Selectable(lbl.c_str()))
+									{
+										gmAsset->DefaultPawnScriptUUID = uuid;
+										gmAsset->Save(gmRec->FilePath);
+									}
+								}
+								ImGui::EndPopup();
+							}
+
+							ImGui::Spacing();
+							ImGui::TextDisabled("Configure a câmera no SpringArmComponent + CameraComponent do pawn.");
+						}
+					}
+				}
+			}
 			ImGui::End();
 		}
 
@@ -174,6 +249,8 @@ namespace axe
 				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);
 				ImGui::Separator();
 				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);
+				ImGui::Separator();
+				ImGui::MenuItem("Game Mode", nullptr, &m_ShowGameMode);
 				ImGui::EndMenu();
 			}
 

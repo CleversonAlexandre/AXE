@@ -22,6 +22,10 @@ namespace axe
         void AddForce(entt::entity entity, Scene& scene, const glm::vec3& force);
         void AddImpulse(entt::entity entity, Scene& scene, const glm::vec3& impulse);
 
+        // CharacterController
+        void CreateCharacter(entt::entity entity, Scene& scene);
+        void DestroyCharacter(entt::entity entity, Scene& scene);
+
         RaycastHit Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDist = 1000.0f);
     };
 

@@ -39,6 +39,10 @@ namespace axe
 
         bool IsInitialized() const { return m_Initialized; }
         void* GetJoltSystemPtr() { return m_PhysicsSystemPtr; }
+        void* GetTempAllocPtr() { return m_TempAllocPtr; }
+        void* GetBPLayerPtr() { return m_BPLayerInterface; }
+        void* GetObjVsBPPtr() { return m_ObjVsBPFilter; }
+        void* GetObjVsObjPtr() { return m_ObjVsObjFilter; }
 
     private:
         PhysicsSystem() = default;

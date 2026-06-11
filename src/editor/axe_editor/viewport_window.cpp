@@ -105,21 +105,62 @@ namespace axe
 		}
 
 		// Drag and drop do Asset Browser para o viewport
+		// Preview visual durante o drag (tooltip com ícone + nome do asset)
 		if (ImGui::BeginDragDropTarget())
 		{
-			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+			// Peek sem consumir — mostra preview enquanto o mouse está no viewport
+			if (const ImGuiPayload* preview = ImGui::AcceptDragDropPayload(
+				"ASSET_UUID", ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
 			{
-				const char* uuid = (const char*)payload->Data;
-				if (m_AssetDropCallback)
+				const char* uuid = (const char*)preview->Data;
+
+				// Destaca a borda do viewport com cor de drop
+				ImDrawList* dl = ImGui::GetWindowDrawList();
+				dl->AddRect(ImVec2(m_BoundsMin.x, m_BoundsMin.y), ImVec2(m_BoundsMax.x, m_BoundsMax.y),
+					IM_COL32(100, 180, 255, 200), 4.0f, 0, 2.5f);
+
+				// Tooltip com nome do asset
+				if (m_DragPreviewCallback)
 				{
-					ImVec2 mousePos = ImGui::GetMousePos();
-					float localX = mousePos.x - m_BoundsMin.x;
-					float localY = mousePos.y - m_BoundsMin.y;
-					m_AssetDropCallback(std::string(uuid), localX, localY);
+					std::string info = m_DragPreviewCallback(std::string(uuid));
+					if (!info.empty())
+					{
+						ImGui::SetNextWindowBgAlpha(0.80f);
+						ImGui::BeginTooltip();
+						ImGui::TextUnformatted(info.c_str());
+						ImGui::EndTooltip();
+					}
+				}
+
+				// Drop confirmado (mouse solto)
+				if (preview->IsDelivery())
+				{
+					if (m_AssetDropCallback)
+					{
+						ImVec2 mousePos = ImGui::GetMousePos();
+						float localX = mousePos.x - m_BoundsMin.x;
+						float localY = mousePos.y - m_BoundsMin.y;
+						m_AssetDropCallback(std::string(uuid), localX, localY);
+					}
+					// Limpa ghost após o drop
+					if (m_DragEndCallback) m_DragEndCallback();
 				}
 			}
 			ImGui::EndDragDropTarget();
 		}
+
+		// Se não há drag ativo mas havia ghost, limpa
+		if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left) && m_DragEndCallback)
+		{
+			// Verifica se algum drag estava ativo — usa flag interna
+			if (m_WasDragging)
+			{
+				m_DragEndCallback();
+				m_WasDragging = false;
+			}
+		}
+		if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+			m_WasDragging = true;
 
 		ImGui::End();
 		//ImGui::PopStyleColor(1);

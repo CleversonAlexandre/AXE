@@ -26,6 +26,7 @@ namespace axe
 		if (ext == ".wav" || ext == ".mp3")                  return AssetType::Audio;
 		if (ext == ".lua" || ext == ".axescript")           return AssetType::Script;
 		if (ext == ".axemat")                                return AssetType::Material;
+		if (ext == ".axegamemode")                           return AssetType::GameMode;
 		return AssetType::Unknown;
 	}
 
@@ -39,6 +40,7 @@ namespace axe
 		case AssetType::Audio:		return "Audio";
 		case AssetType::Script:		return "Script";
 		case AssetType::Material:	return "Material";
+		case AssetType::GameMode:	return "GameMode";
 
 		default:					return "Unknown";
 		}

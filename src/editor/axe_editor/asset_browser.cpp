@@ -4,6 +4,7 @@
 #include "axe/project/project_manager.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/script/script_asset.hpp"
+#include "axe/scene/game_mode_asset.hpp"
 #include <imgui.h>
 #include <filesystem>
 #include <fstream>
@@ -800,6 +801,16 @@ namespace axe
             {
                 if (m_OnOpenScript) m_OnOpenScript(record.UUID);
             }
+            else if (record.FilePath.extension() == ".axegamemode")
+            {
+                // Define como GameMode ativo do projeto
+                if (ProjectManager::Get().HasProject())
+                {
+                    ProjectManager::Get().GetCurrent().ActiveGameModeUUID = record.UUID;
+                    ProjectManager::Get().SaveProject();
+                    AXE_EDITOR_INFO("GameMode '{}' definido como ativo.", record.Name);
+                }
+            }
             else
             {
                 if (m_AssetOpenCallback) m_AssetOpenCallback(record);
@@ -869,6 +880,26 @@ namespace axe
 
                 if (ProjectManager::Get().HasProject())
                     AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+            }
+
+            if (ImGui::MenuItem("Game Mode"))
+            {
+                if (ProjectManager::Get().HasProject())
+                {
+                    auto dir = ProjectManager::Get().GetCurrent().AssetsPath;
+                    std::filesystem::create_directories(dir);
+                    auto path = dir / "NewGameMode.axegamemode";
+                    int i = 1;
+                    while (std::filesystem::exists(path))
+                        path = dir / ("NewGameMode_" + std::to_string(i++) + ".axegamemode");
+
+                    auto gm = GameModeAsset::Create(path.stem().string());
+                    gm->Save(path);
+                    auto uuid = AssetDatabase::Get().Register(path.string());
+                    auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
+                    if (rec) rec->VirtualFolder = m_SelectedFolder;
+                    AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+                }
             }
 
             ImGui::Separator();
@@ -1116,6 +1147,16 @@ namespace axe
             if (record.FilePath.extension() == ".axescript")
             {
                 if (m_OnOpenScript) m_OnOpenScript(record.UUID);
+            }
+            else if (record.FilePath.extension() == ".axegamemode")
+            {
+                // Define como GameMode ativo do projeto
+                if (ProjectManager::Get().HasProject())
+                {
+                    ProjectManager::Get().GetCurrent().ActiveGameModeUUID = record.UUID;
+                    ProjectManager::Get().SaveProject();
+                    AXE_EDITOR_INFO("GameMode '{}' definido como ativo.", record.Name);
+                }
             }
             else
             {

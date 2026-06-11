@@ -3,43 +3,59 @@
 #include "axe/utils/glm_config.hpp"
 #include "axe/axe_window/window.hpp"
 
-
 namespace axe
 {
+    class AXE_API GameCamera
+    {
+    public:
+        GameCamera() = default;
 
-	class AXE_API GameCamera
-	{
-	public:
-		GameCamera() = default;
+        // ── Modo de câmera ────────────────────────────────────────────────────
+        enum class Mode { FreeFly, ThirdPerson };
 
-		void OnUpdate(float deltaTime, Window* window);
+        void OnUpdate(float deltaTime, Window* window);
 
-		glm::mat4 GetViewMatrix() const;
-		glm::mat4 GetProjectionMatrix(float aspectRatio) const;
-		glm::mat4 GetViewProjectionMatrix(float aspectRatio) const;
+        glm::mat4 GetViewMatrix() const;
+        glm::mat4 GetProjectionMatrix(float aspectRatio) const;
+        glm::mat4 GetViewProjectionMatrix(float aspectRatio) const;
 
-		const glm::vec3& GetPosition() const { return m_Position; }
+        const glm::vec3& GetPosition() const { return m_Position; }
 
-		void Reset(const glm::vec3& position, float yaw, float pitch);
+        void Reset(const glm::vec3& position, float yaw, float pitch);
 
-		float MoveSpeed = 5.0f;
-		float Sensitivity = 0.1f;
-		float Fov = 60.0f;
-		float NearClip = 0.1f;
-		float FarClip = 1000.0f;
+        // ── Third Person ──────────────────────────────────────────────────────
+        void SetTarget(const glm::vec3* targetPosition) { m_TargetPosition = targetPosition; }
+        void ClearTarget() { m_TargetPosition = nullptr; }
+        bool HasTarget() const { return m_TargetPosition != nullptr; }
 
-		bool MouseCaptured = false;
-		bool      m_FirstMouse = true;
-	private:
-		glm::vec3 m_Position{ 0.0f, 1.0f, 5.0f };
-		float     m_Yaw = -90.0f;
-		float     m_Pitch = 0.0f;
-		float     m_LastMousePos_x = 0.0f;
-		float     m_LastMousePos_y = 0.0f;
-		
+        // Configuraçõess
+        float MoveSpeed = 5.0f;
+        float Sensitivity = 0.1f;
+        float Fov = 60.0f;
+        float NearClip = 0.1f;
+        float FarClip = 1000.0f;
 
-		
-		struct { float x = 0.0f; float y = 0.0f; } m_LastMousePos;
-	};
+        float TPDistance = 5.0f;   // distância atrás do player
+        float TPHeight = 2.0f;   // altura acima do player
+        float TPLagSpeed = 8.0f;   // suavização do follow (lerp)
+        bool  TPMouseRotates = true;   // mouse rotaciona a câmera
+
+        Mode  CameraMode = Mode::FreeFly;
+        bool  MouseCaptured = false;
+        bool  m_FirstMouse = true;
+
+    private:
+        void UpdateFreeFly(float deltaTime, Window* window);
+        void UpdateThirdPerson(float deltaTime, Window* window);
+
+        glm::vec3 m_Position{ 0.0f, 1.0f, 5.0f };
+        glm::vec3 m_DesiredPosition{ 0.0f, 1.0f, 5.0f }; // para lerp
+        float     m_Yaw = -90.0f;
+        float     m_Pitch = -10.0f;
+
+        const glm::vec3* m_TargetPosition = nullptr; // ponteiro para o TC do player
+
+        struct { float x = 0.0f; float y = 0.0f; } m_LastMousePos;
+    };
 
 } // namespace axe

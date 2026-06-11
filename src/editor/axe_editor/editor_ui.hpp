@@ -46,9 +46,9 @@ namespace axe
         void BuildDefaultLayout(ImGuiID dockspaceId);
 
         HierarchyWindow m_HierarchyWindow;
-        
+
         ViewportWindow  m_ViewportWindow;
-        
+
         AssetBrowser    m_AssetBowserWindow;
 
         bool m_ShowHierarchy = true;
@@ -56,6 +56,7 @@ namespace axe
         bool m_ShowInspector = true;
         bool m_ShowAssetBrowser = true;
         bool m_ShowEnvironment = false;
+        bool m_ShowGameMode = false;
 
         ViewportRenderer* m_ViewportRenderer = nullptr;
     };

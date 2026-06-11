@@ -43,6 +43,8 @@ namespace axe
 		float GetViewportWidth()  const { return m_ViewportWidth; }
 		float GetViewportHeight() const { return m_ViewportHeight; }
 
+		glm::vec3 GetForwardDirection() const;
+
 	private:
 		
 
@@ -50,7 +52,7 @@ namespace axe
 
 		glm::vec3 GetUpDirection() const;
 		glm::vec3 GetRightDirection() const;
-		glm::vec3 GetForwardDirection() const;
+		
 
 		glm::quat GetOrientation() const;
 

@@ -39,6 +39,7 @@ namespace axe
         const std::string& cppPath,
         const std::string& dllOutput,
         const std::string& engineIncludeDir,
+        const std::string& axeLibPath,
         CompileCallback callback)
     {
         std::string compiler = GetCompilerPath();
@@ -58,12 +59,23 @@ namespace axe
         // /LD        = gera DLL
         // /O2        = otimização
         // /EHsc      = exceções C++
-        // /std:c++17 = padrão C++17
+        // /std:c++20 = padrão C++20 (entt requer concepts)
+        // /utf-8     = encoding UTF-8 (exigido pelo spdlog/fmt)
         // /I         = include do engine
         // /Fe        = arquivo de saída
         // Localiza vcvarsall.bat no mesmo VS que tem o cl.exe
         // e wrapa o comando para configurar o ambiente INCLUDE/LIB
         std::string vcvarsall = FindVcVarsAll(compiler);
+
+        // Monta flags /I para cada path (separados por ;)
+        std::string includeFlags;
+        {
+            std::istringstream includeStream(engineIncludeDir);
+            std::string token;
+            while (std::getline(includeStream, token, ';'))
+                if (!token.empty())
+                    includeFlags += " /I\"" + token + "\"";
+        }
 
         std::ostringstream cmd;
         if (!vcvarsall.empty())
@@ -72,20 +84,20 @@ namespace axe
             cmd << "cmd /C \"\""
                 << vcvarsall << "\" x64 && "
                 << "\"" << compiler << "\""
-                << " /LD /O2 /EHsc /std:c++17"
-                << " /I\"" << engineIncludeDir << "\""
+                << " /LD /O2 /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << includeFlags
                 << " /Fe\"" << dllOutput << "\""
                 << " \"" << cppPath << "\""
-                << " /link /DLL\"";
+                << " /link /DLL \"" << axeLibPath << "\"";
         }
         else
         {
             cmd << "\"" << compiler << "\""
-                << " /LD /O2 /EHsc /std:c++17"
-                << " /I\"" << engineIncludeDir << "\""
+                << " /LD /O2 /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << includeFlags
                 << " /Fe\"" << dllOutput << "\""
                 << " \"" << cppPath << "\""
-                << " /link /DLL";
+                << " /link /DLL \"" << axeLibPath << "\"";
         }
 
         AXE_CORE_INFO("ScriptCompiler: compilando '{}'...", cppPath);

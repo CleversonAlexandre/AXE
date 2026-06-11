@@ -19,6 +19,7 @@ namespace axe
             const std::string& cppPath,
             const std::string& dllOutput,
             const std::string& engineIncludeDir,
+            const std::string& axeLibPath,
             CompileCallback callback = nullptr);
 
         // Retorna o path do compilador em uso

@@ -187,6 +187,11 @@ namespace axe
 			DrawPostProcess(*pp);
 		else if (auto* ec = registry.try_get<EnvironmentComponent>(entity))
 			DrawEnvironment(*ec);
+		else if (auto* sa = registry.try_get<SpringArmComponent>(entity))
+		{
+			if (DrawComponent("Spring Arm", entity, registry, [&]() { registry.remove<SpringArmComponent>(entity); }))
+				DrawSpringArm(*sa);
+		}
 		else if (auto* cam = registry.try_get<CameraComponent>(entity))
 			DrawCamera(*cam);
 		else if (auto* folder = registry.try_get<FolderComponent>(entity))
@@ -368,6 +373,16 @@ namespace axe
 		ImGui::PopID();
 
 		ImGui::End();
+	}
+
+	void InspectorWindow::DrawSpringArm(SpringArmComponent& sa)
+	{
+		ImGui::DragFloat("Comprimento", &sa.Length, 0.1f, 0.5f, 50.0f, "%.1f m");
+		ImGui::DragFloat("Altura", &sa.HeightOffset, 0.1f, 0.0f, 20.0f, "%.1f m");
+		ImGui::DragFloat3("Socket Offset", &sa.SocketOffset.x, 0.05f, -10.f, 10.f, "%.2f");
+		ImGui::DragFloat("Suavização", &sa.LagSpeed, 0.1f, 0.5f, 30.0f, "%.1f");
+		ImGui::Checkbox("Lag de câmera", &sa.EnableCameraLag);
+		ImGui::Checkbox("Mouse rotaciona", &sa.MouseRotates);
 	}
 
 	void InspectorWindow::DrawCamera(CameraComponent& cam)

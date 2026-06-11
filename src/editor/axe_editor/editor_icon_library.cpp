@@ -29,6 +29,11 @@ namespace axe
 		m_IconScene = load("icon_scene.png");
 		m_IconFolder = load("icon_folder.png");
 		m_IconScript = load("icon_script.png");
+		m_IconScriptEntity = load("icon_script_entity.png");
+		m_IconScriptAgent = load("icon_script_agent.png");
+		m_IconScriptCharacter = load("icon_script_character.png");
+		m_IconScriptStatic = load("icon_script_static.png");
+		m_IconScriptTrigger = load("icon_script_trigger.png");
 		m_IconAudio = load("icon_audio.png");
 		m_Material = load("icon_material.png");
 		m_IconSave = load("save.png");
@@ -60,5 +65,14 @@ namespace axe
 		if (type == "PostProcess") return m_IconPostProcess;
 		if (type == "Environment") return m_IconEnvironment;
 		return m_IconMesh;
+	}
+	std::shared_ptr<Texture2D> EditorIconLibrary::GetScriptForClass(const std::string& classType) const
+	{
+		if (classType == "Entity")       return m_IconScriptEntity ? m_IconScriptEntity : m_IconScript;
+		if (classType == "Agent")        return m_IconScriptAgent ? m_IconScriptAgent : m_IconScript;
+		if (classType == "Character")    return m_IconScriptCharacter ? m_IconScriptCharacter : m_IconScript;
+		if (classType == "StaticObject") return m_IconScriptStatic ? m_IconScriptStatic : m_IconScript;
+		if (classType == "Trigger")      return m_IconScriptTrigger ? m_IconScriptTrigger : m_IconScript;
+		return m_IconScript; // fallback genérico
 	}
 }//namespace axe

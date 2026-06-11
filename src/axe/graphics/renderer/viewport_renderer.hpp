@@ -70,6 +70,17 @@ namespace axe
 
 		SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
 		void SetPreviewMode(bool preview) { m_PreviewMode = preview; }
+
+		// ── Drag & Drop ghost preview ─────────────────────────────────────────
+		// Chame SetDragGhost antes de RenderToFramebuffer para mostrar silhueta.
+		// Chame ClearDragGhost quando o drag terminar.
+		void SetDragGhost(std::shared_ptr<Mesh> mesh, const glm::mat4& transform)
+		{
+			m_GhostMesh = mesh;
+			m_GhostTransform = transform;
+			m_HasGhost = true;
+		}
+		void ClearDragGhost() { m_HasGhost = false; m_GhostMesh = nullptr; }
 		/// <summary>
 		/// temp
 		Scene* GetScene() const { return m_Scene; }
@@ -77,6 +88,11 @@ namespace axe
 		/// </summary>
 	private:
 		bool m_PickingEnabled = true;
+
+		// Ghost preview
+		bool                   m_HasGhost = false;
+		std::shared_ptr<Mesh>  m_GhostMesh;
+		glm::mat4              m_GhostTransform{ 1.0f };
 
 		CommandHistory* m_CommandHistory = nullptr;
 		bool            m_GizmoWasUsing = false;

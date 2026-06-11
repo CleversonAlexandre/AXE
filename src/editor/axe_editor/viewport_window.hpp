@@ -44,25 +44,31 @@ namespace axe
 		using GuizmoDrawFunc = std::function<void(const glm::vec2&, const glm::vec2&)>;
 		void SetGuizmoCallback(GuizmoDrawFunc func) { m_GuizmoCallback = func; }
 
+		// Retorna string de preview (ex: "Entity\nCubo + Rigidbody") ou "" para assets sem preview
+		using DragPreviewCallback = std::function<std::string(const std::string& uuid)>;
+
 		// Asset drop — público
 		using AssetDropCallback = std::function<void(const std::string&, float, float)>;
 		void SetAssetDropCallback(AssetDropCallback cb) { m_AssetDropCallback = cb; }
+		void SetDragPreviewCallback(DragPreviewCallback cb) { m_DragPreviewCallback = cb; }
+		void SetDragEndCallback(std::function<void()> cb) { m_DragEndCallback = cb; }
 
 		std::unique_ptr<EditorCamera> m_Camera;
 
 		using PlayStateCallback = std::function<int()>; //retorna 0=Editor, 1=Play, 2=Pause
 		using PlayActionCallback = std::function<void(int)>; //0=Play, 1=Pause, 1=Stop
 
-		void SetPlayStateCallback(PlayStateCallback cb) {m_PlayStateCallback = cb;}
-		void SetPlayActionCallback(PlayActionCallback cb) { m_PlayActionCallback = cb;}
+		void SetPlayStateCallback(PlayStateCallback cb) { m_PlayStateCallback = cb; }
+		void SetPlayActionCallback(PlayActionCallback cb) { m_PlayActionCallback = cb; }
 
 		using AssetDropCallback = std::function<void(const std::string& uuid, float mouseX, float mouseY)>;
+		
 
 		void SetViewportRenderer(ViewportRenderer* renderer) { m_ViewportRenderer = renderer; }
 
 	private:
 		ViewportRenderer* m_ViewportRenderer = nullptr;
-		
+
 
 	private:
 		bool m_Initialized = false;
@@ -81,7 +87,10 @@ namespace axe
 		std::shared_ptr<Framebuffer> m_Framebuffer;
 
 		GuizmoDrawFunc    m_GuizmoCallback;
-		AssetDropCallback m_AssetDropCallback;
+		AssetDropCallback   m_AssetDropCallback;
+		DragPreviewCallback m_DragPreviewCallback;
+		std::function<void()> m_DragEndCallback;
+		bool m_WasDragging = false;
 
 		PlayStateCallback m_PlayStateCallback;
 		PlayActionCallback m_PlayActionCallback;

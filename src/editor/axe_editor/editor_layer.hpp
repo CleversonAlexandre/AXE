@@ -27,6 +27,10 @@
 #include "axe/mesh/primitive_uuid.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/script/script_asset.hpp"
+#include "axe/script/script_world.hpp"
+#include "axe/script/script_component.hpp"
+#include "axe/input/input.hpp"
+#include "axe/scene/game_mode_asset.hpp"
 #include "axe/project/project_manager.hpp"
 #include <filesystem>
 
@@ -74,6 +78,8 @@ namespace axe
 		void OnAttach() override
 		{
 			AXE_EDITOR_INFO("EditorLayer attached");
+
+			axe::Input::Init(&EditorApp::Get().GetWindow());
 
 			// 1. Cria a cena
 			m_Scene = std::make_unique<Scene>();
@@ -651,7 +657,18 @@ namespace axe
 
 			if (m_EditorState == EditorState::Play)
 			{
+				axe::Input::Update();
+
+				// Atualiza câmera third person via SpringArmComponent
+				if (m_PlayerEntity != entt::null && m_Scene)
+				{
+					auto* tc = m_Scene->GetRegistry().try_get<TransformComponent>(m_PlayerEntity);
+					if (tc) m_GameCamera.SetTarget(&tc->Data.Position);
+				}
+
 				m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
+
+				m_ScriptWorld.OnSceneUpdate(*m_Scene, deltaTime);
 
 				// Atualiza física
 				m_PhysicsWorld.OnUpdate(*m_Scene, deltaTime);
@@ -1029,6 +1046,65 @@ namespace axe
 			// Inicia física
 			m_PhysicsWorld.OnSceneStart(*m_Scene);
 
+			m_ScriptWorld.OnSceneStart(*m_Scene);
+
+			// GameMode — carrega asset ativo e encontra o pawn
+			m_PlayerEntity = entt::null;
+			if (ProjectManager::Get().HasProject())
+			{
+				const std::string& gmUUID = ProjectManager::Get().GetCurrent().ActiveGameModeUUID;
+				if (!gmUUID.empty())
+				{
+					const AssetRecord* gmRec = AssetDatabase::Get().GetByUUID(gmUUID);
+					if (gmRec)
+					{
+						auto gmAsset = GameModeAsset::LoadFromFile(gmRec->FilePath);
+						if (gmAsset && gmAsset->HasDefaultPawn())
+						{
+							auto& registry = m_Scene->GetRegistry();
+							registry.view<ScriptComponent>().each([&](entt::entity e, ScriptComponent& sc)
+								{
+									if (m_PlayerEntity != entt::null) return;
+									const AssetRecord* rec = AssetDatabase::Get().GetByPath(sc.ScriptAssetPath);
+									if (rec && rec->UUID == gmAsset->DefaultPawnScriptUUID)
+										m_PlayerEntity = e;
+								});
+
+							if (m_PlayerEntity != entt::null)
+							{
+								auto* sa = registry.try_get<SpringArmComponent>(m_PlayerEntity);
+								auto* tc = registry.try_get<TransformComponent>(m_PlayerEntity);
+
+								if (sa)
+								{
+									m_GameCamera.CameraMode = GameCamera::Mode::ThirdPerson;
+									m_GameCamera.TPDistance = sa->Length;
+									m_GameCamera.TPHeight = sa->HeightOffset;
+									m_GameCamera.TPLagSpeed = sa->LagSpeed;
+									m_GameCamera.TPMouseRotates = sa->MouseRotates;
+								}
+								if (auto* cam = registry.try_get<CameraComponent>(m_PlayerEntity))
+								{
+									m_GameCamera.Fov = cam->Fov;
+									m_GameCamera.NearClip = cam->NearClip;
+									m_GameCamera.FarClip = cam->FarClip;
+									m_GameCamera.Sensitivity = cam->Sensitivity;
+								}
+								if (tc)
+								{
+									glm::vec3 startPos = tc->Data.Position + glm::vec3(0,
+										m_GameCamera.TPHeight, m_GameCamera.TPDistance);
+									m_GameCamera.Reset(startPos, -90.0f, -10.0f);
+									m_GameCamera.SetTarget(&tc->Data.Position);
+								}
+								AXE_EDITOR_INFO("GameMode: pawn encontrado (entity {}), câmera third person.",
+									(uint32_t)m_PlayerEntity);
+							}
+						}
+					}
+				}
+			}
+
 			// Lê CameraComponent da cena se existir
 			if (m_Scene)
 			{
@@ -1103,6 +1179,12 @@ namespace axe
 		{
 			if (m_EditorState == EditorState::Edit) return;
 
+			m_ScriptWorld.OnSceneStop(*m_Scene);
+
+			m_GameCamera.CameraMode = GameCamera::Mode::FreeFly;
+			m_GameCamera.ClearTarget();
+			m_PlayerEntity = entt::null;
+
 			// Para física
 			m_PhysicsWorld.OnSceneStop(*m_Scene);
 
@@ -1159,6 +1241,8 @@ namespace axe
 
 		MaterialThumbnailRenderer m_ThumbnailRenderer;
 		PhysicsWorld m_PhysicsWorld;
+		ScriptWorld  m_ScriptWorld;
+		entt::entity m_PlayerEntity = entt::null;
 
 		float m_DeltaTime = 0.0f;
 		float m_FPS = 0.0f;

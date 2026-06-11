@@ -30,6 +30,14 @@ namespace axe
         // Runtime — ID do body no Jolt (cInvalidBodyID = não criado)
         uint32_t  BodyID = 0xffffffff; // JPH::BodyID::cInvalidBodyID
         bool      IsCreated = false;
+
+        // ── Pending commands do ScriptRigidbodyProxy ──────────────────────────
+        // Consumidos pelo PhysicsWorld::OnUpdate no mesmo frame que são escritos.
+        glm::vec3 PendingForce = {};
+        bool      NeedsForceApply = false;
+
+        glm::vec3 PendingVelocity = {};
+        bool      NeedsVelocitySet = false;
     };
 
     // ==================== Collider ====================

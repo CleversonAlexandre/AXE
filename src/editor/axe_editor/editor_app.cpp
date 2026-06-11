@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <filesystem>
 
+#include "axe/input/input.hpp"
+
 namespace axe
 {
 #define BIND_EVENT_FN(x) std::bind(&EditorApp::x, this, std::placeholders::_1)
@@ -61,6 +63,7 @@ namespace axe
 
 		m_Window->SetEventCallback(BIND_EVENT_FN(OnEvent));
 
+		axe::Input::Init(m_Window.get());
 
 		axe::ProjectManager::Get().LoadPreferences();
 
@@ -141,6 +144,8 @@ namespace axe
 			ExecutePendingCommands();
 
 			m_Window->PollEvents();
+
+			axe::Input::Update();
 
 			for (Layer* layer : m_LayerStack)
 				layer->OnUpdate((float)deltaTime);

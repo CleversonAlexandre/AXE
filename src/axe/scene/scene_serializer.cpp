@@ -597,6 +597,11 @@ namespace axe
 				components["Camera"]["move_speed"] = c->MoveSpeed;
 				components["Camera"]["sensitivity"] = c->Sensitivity;
 				components["Camera"]["is_primary"] = c->IsPrimary;
+				components["Camera"]["camera_mode"] = (int)c->CameraMode;
+				components["Camera"]["arm_length"] = c->ArmLength;
+				components["Camera"]["arm_height"] = c->ArmHeight;
+				components["Camera"]["lag_speed"] = c->LagSpeed;
+				components["Camera"]["mouse_rotates"] = c->MouseRotates;
 			}
 
 			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
@@ -809,6 +814,11 @@ namespace axe
 					cam.MoveSpeed = t.value("move_speed", 5.0f);
 					cam.Sensitivity = t.value("sensitivity", 0.1f);
 					cam.IsPrimary = t.value("is_primary", true);
+					cam.CameraMode = (CameraComponent::Mode)t.value("camera_mode", (int)CameraComponent::Mode::ThirdPerson);
+					cam.ArmLength = t.value("arm_length", 5.0f);
+					cam.ArmHeight = t.value("arm_height", 2.0f);
+					cam.LagSpeed = t.value("lag_speed", 8.0f);
+					cam.MouseRotates = t.value("mouse_rotates", true);
 					registry.emplace<CameraComponent>(entity, cam);
 				}
 

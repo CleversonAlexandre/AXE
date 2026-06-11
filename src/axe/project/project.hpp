@@ -13,9 +13,12 @@ namespace axe
 		std::string EngineVersion = "0.1.0";
 		std::string StartScene = "";
 
-		std::filesystem::path ProjectPath;  // caminho do axe.project
-		std::filesystem::path RootPath;     // pasta raiz do projeto
-		std::filesystem::path AssetsPath;   // pasta Assets/
+		// UUID do .axegamemode ativo — vazio = sem GameMode
+		std::string ActiveGameModeUUID;
+
+		std::filesystem::path ProjectPath;
+		std::filesystem::path RootPath;
+		std::filesystem::path AssetsPath;
 
 		bool IsValid() const { return !Name.empty() && !RootPath.empty(); }
 	};

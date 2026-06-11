@@ -10,7 +10,7 @@
 
 namespace axe
 {
-	
+
 
 	using json = nlohmann::json;
 
@@ -34,7 +34,7 @@ namespace axe
 		// Cria estrutura de pastas
 		CreateProjectStructure(root);
 
-	
+
 
 
 		// Popula o projeto
@@ -45,7 +45,7 @@ namespace axe
 		project->ProjectPath = root / (name + ".axeproject");
 
 		// Novo projeto — faz scan inicial (pasta vazia, mas já pronto)
-		AssetDatabase::Get().Clear();		
+		AssetDatabase::Get().Clear();
 		AssetDatabase::Get().Scan(project->AssetsPath);
 		AssetDatabase::Get().Save(project->RootPath);
 
@@ -101,7 +101,7 @@ namespace axe
 
 		SavePreferences();
 
-		AssetDatabase::Get().Clear();		
+		AssetDatabase::Get().Clear();
 		AssetDatabase::Get().Load(m_CurrentProject->RootPath);
 
 		AXE_CORE_INFO("ProjectManager: projeto '{}' aberto.", m_CurrentProject->Name);
@@ -140,6 +140,7 @@ namespace axe
 		j["engine_version"] = project.EngineVersion;
 		j["start_scene"] = project.StartScene;
 		j["assets_path"] = "Assets";
+		j["active_gamemode_uuid"] = project.ActiveGameModeUUID;
 
 		std::ofstream file(project.ProjectPath);
 		if (!file.is_open())
@@ -162,6 +163,7 @@ namespace axe
 			out.Version = j.value("version", "1.0.0");
 			out.EngineVersion = j.value("engine_version", "0.1.0");
 			out.StartScene = j.value("start_scene", "");
+			out.ActiveGameModeUUID = j.value("active_gamemode_uuid", "");
 		}
 		catch (const json::exception& e)
 		{

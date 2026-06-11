@@ -56,6 +56,7 @@ namespace axe
 			out.UUID = j.value("uuid", "");
 			out.Type = AssetTypeFromString(j.value("type", "Unknown"));
 			out.Name = j.value("name", "");
+			out.ScriptClassType = j.value("script_class_type", "");
 
 			// Caminho absoluto salvo no meta
 			std::string path = j.value("path", "");
@@ -80,6 +81,8 @@ namespace axe
 		j["type"] = AssetTypeToString(record.Type);
 		j["name"] = record.Name;
 		j["path"] = record.FilePath.string();
+		if (!record.ScriptClassType.empty())
+			j["script_class_type"] = record.ScriptClassType;
 
 		std::ofstream file(metaPath);
 		if (file.is_open())
@@ -92,7 +95,25 @@ namespace axe
 		std::string absPath = std::filesystem::absolute(filepath).string();
 		auto it = m_PathIndex.find(absPath);
 		if (it != m_PathIndex.end())
-			return it->second; // já registrado
+		{
+			// Já registrado — mas atualiza ScriptClassType se ainda não foi lido
+			auto& existing = m_Records[it->second];
+			if (existing.Type == AssetType::Script && existing.ScriptClassType.empty())
+			{
+				try {
+					std::ifstream jf(filepath);
+					if (jf.is_open()) {
+						nlohmann::json j = nlohmann::json::parse(jf, nullptr, false);
+						if (!j.is_discarded() && j.contains("class_type"))
+							existing.ScriptClassType = j["class_type"].get<std::string>();
+					}
+				}
+				catch (...) {}
+				if (!existing.ScriptClassType.empty())
+					WriteMeta(existing);
+			}
+			return it->second;
+		}
 
 		// Verifica se tem .axemeta existente
 		AssetRecord record;
@@ -114,6 +135,24 @@ namespace axe
 
 			WriteMeta(record);
 			AXE_CORE_INFO("AssetDatabase: registrado '{}' → {}", record.Name, record.UUID);
+		}
+
+		// Para scripts: lê o class_type do JSON do .axescript
+		// e persiste no .axemeta para não precisar reler na próxima inicialização
+		if (record.Type == AssetType::Script && record.ScriptClassType.empty())
+		{
+			try {
+				std::ifstream jf(filepath);
+				if (jf.is_open()) {
+					nlohmann::json j = nlohmann::json::parse(jf, nullptr, false);
+					if (!j.is_discarded() && j.contains("class_type"))
+						record.ScriptClassType = j["class_type"].get<std::string>();
+				}
+			}
+			catch (...) {}
+			// Atualiza o .axemeta para persistir o class_type
+			if (!record.ScriptClassType.empty())
+				WriteMeta(record);
 		}
 
 		m_Records[record.UUID] = record;
@@ -184,6 +223,8 @@ namespace axe
 			entry["type"] = AssetTypeToString(record.Type);
 			entry["name"] = record.Name;
 			entry["virtual_folder"] = record.VirtualFolder;
+			if (!record.ScriptClassType.empty())
+				entry["script_class_type"] = record.ScriptClassType;
 			j.push_back(entry);
 		}
 
@@ -220,6 +261,23 @@ namespace axe
 				record.Type = AssetTypeFromString(entry.value("type", "Unknown"));
 				record.Name = entry.value("name", "");
 				record.VirtualFolder = entry.value("virtual_folder", "");
+				record.ScriptClassType = entry.value("script_class_type", "");
+
+				// Migração: se é script mas class_type não está no índice,
+				// lê direto do .axescript (só ocorre na primeira run após o update)
+				if (record.Type == AssetType::Script && record.ScriptClassType.empty()
+					&& std::filesystem::exists(record.FilePath))
+				{
+					try {
+						std::ifstream jf(record.FilePath);
+						if (jf.is_open()) {
+							nlohmann::json jscript = nlohmann::json::parse(jf, nullptr, false);
+							if (!jscript.is_discarded() && jscript.contains("class_type"))
+								record.ScriptClassType = jscript["class_type"].get<std::string>();
+						}
+					}
+					catch (...) {}
+				}
 
 				if (!record.UUID.empty() && std::filesystem::exists(record.FilePath))
 				{

@@ -9,18 +9,15 @@ namespace axe
     const ScriptNode* ScriptGraphCompiler::FindNextFlowNode(
         const Context& ctx, const ScriptNode* node, const std::string& outPinName)
     {
-        // Acha o pin de saída de flow com o nome dado
         for (const auto& outPin : node->Outputs)
         {
             if (outPin.Type != ScriptPinType::Flow) continue;
             if (!outPinName.empty() && outPin.Name != outPinName) continue;
 
-            // Segue o link
             for (const auto& link : ctx.graph.GetLinks())
             {
                 if (link.StartPin != outPin.ID) continue;
 
-                // Acha o node destino
                 for (const auto& n : ctx.graph.GetNodes())
                     for (const auto& inPin : n->Inputs)
                         if (inPin.ID == link.EndPin)
@@ -47,7 +44,6 @@ namespace axe
 
     std::string ScriptGraphCompiler::ResolvePin(const Context& ctx, const ScriptPin& pin)
     {
-        // Verifica se há um link conectado a este pin
         auto [srcNode, srcPin] = FindDataSource(ctx, pin);
 
         if (!srcNode)
@@ -68,37 +64,32 @@ namespace axe
             }
         }
 
-        // Gera código baseado no tipo do node fonte
         const std::string& nodeName = srcNode->Name;
+
+        // ── Eventos ──────────────────────────────────────────────────────────
 
         if (nodeName == "On Update" && srcPin->Name == "Delta Time")
             return "deltaTime";
 
+        // ── Input ─────────────────────────────────────────────────────────────
+
         if (nodeName == "Get Key")
         {
-            // Acha o pin de entrada Key do GetKey
-            for (const auto& inp : srcNode->Inputs)
-                if (inp.Name == "Key")
-                {
-                    std::string key = inp.DefaultString.empty() ? "W" : inp.DefaultString;
-                    if (srcPin->Name == "Held")
-                        return "axe::Input::GetKey(axe::Key::" + key + ")";
-                    if (srcPin->Name == "Pressed")
-                        return "axe::Input::GetKeyDown(axe::Key::" + key + ")";
-                    if (srcPin->Name == "Released")
-                        return "axe::Input::GetKeyUp(axe::Key::" + key + ")";
-                }
+            // O editor guarda o valor em node->StringValue (não no pin DefaultString)
+            std::string key = srcNode->StringValue.empty() ? "W" : srcNode->StringValue;
+            if (srcPin->Name == "Held")     return "axe::Input::GetKey(axe::Key::" + key + ")";
+            if (srcPin->Name == "Pressed")  return "axe::Input::GetKeyDown(axe::Key::" + key + ")";
+            if (srcPin->Name == "Released") return "axe::Input::GetKeyUp(axe::Key::" + key + ")";
         }
 
         if (nodeName == "Get Axis")
         {
-            for (const auto& inp : srcNode->Inputs)
-                if (inp.Name == "Axis Name")
-                {
-                    std::string axis = inp.DefaultString.empty() ? "Horizontal" : inp.DefaultString;
-                    return "axe::Input::GetAxis(\"" + axis + "\")";
-                }
+            // O editor guarda o valor em node->StringValue (não no pin DefaultString)
+            std::string axis = srcNode->StringValue.empty() ? "Horizontal" : srcNode->StringValue;
+            return "axe::Input::GetAxis(\"" + axis + "\")";
         }
+
+        // ── Math ──────────────────────────────────────────────────────────────
 
         if (nodeName == "Add")
         {
@@ -147,8 +138,44 @@ namespace axe
             if (srcPin->Name == "A < B")  return "(" + a + " < " + b + ")";
         }
 
+        // ── Lógica ────────────────────────────────────────────────────────────
+
         if (nodeName == "Get Variable")
             return "m_" + (srcNode->StringValue.empty() ? "var" : srcNode->StringValue);
+
+        // ── Componentes — leitura de dados ────────────────────────────────────
+
+        if (nodeName == "Get Transform")
+        {
+            if (srcPin->Name == "Position") return "GetTransform().GetPosition()";
+            if (srcPin->Name == "Rotation") return "GetTransform().GetRotation()";
+            if (srcPin->Name == "Scale")    return "GetTransform().GetScale()";
+        }
+
+        if (nodeName == "Get Position")
+        {
+            if (srcPin->Name == "Position") return "GetTransform().GetPosition()";
+        }
+
+        if (nodeName == "Get Rigidbody")
+        {
+            if (srcPin->Name == "Velocity") return "GetRigidbody().GetVelocity()";
+            if (srcPin->Name == "Mass")     return "GetRigidbody().GetMass()";
+        }
+
+        if (nodeName == "Get Collider")
+        {
+            // Valores estáticos do componente — lidos via contexto em runtime
+            if (srcPin->Name == "Is Trigger")   return "GetContext().ScenePtr->GetRegistry().get<axe::ColliderComponent>(GetContext().Entity).IsTrigger";
+            if (srcPin->Name == "Half Extent")  return "GetContext().ScenePtr->GetRegistry().get<axe::ColliderComponent>(GetContext().Entity).HalfExtent";
+        }
+
+        if (nodeName == "Get Character Ctrl")
+        {
+            if (srcPin->Name == "Is Grounded") return "GetCharacter().IsGrounded()";
+            if (srcPin->Name == "Velocity")    return "GetCharacter().GetVelocity()";
+            if (srcPin->Name == "Max Speed")   return "GetCharacter().GetMaxSpeed()";
+        }
 
         // Fallback
         return "{}";
@@ -159,11 +186,16 @@ namespace axe
     void ScriptGraphCompiler::GenerateNode(Context& ctx,
         const ScriptNode* node, const std::string& deltaTimeVar, int depth)
     {
-        if (!node || depth > 32) return; // evita recursão infinita
+        if (!node || depth > 32) return;
 
         const std::string& name = node->Name;
 
-        // ── Ações ──
+        // deltaTime só existe dentro de OnUpdate — usa "1.0f" como fallback
+        // nos outros eventos para evitar erro de compilação
+        const std::string dt = deltaTimeVar.empty() ? "1.0f" : deltaTimeVar;
+
+        // ── Movimento / Física ────────────────────────────────────────────────
+
         if (name == "Move")
         {
             std::string dir = "glm::vec3(0,0,1)", spd = "5.0f";
@@ -172,7 +204,7 @@ namespace axe
                 if (inp.Name == "Direction") dir = ResolvePin(ctx, inp);
                 if (inp.Name == "Speed")     spd = ResolvePin(ctx, inp);
             }
-            ctx.Line("GetTransform().Translate(" + dir + " * " + spd + " * deltaTime);");
+            ctx.Line("GetTransform().Translate(" + dir + " * " + spd + " * " + dt + ");");
         }
         else if (name == "Rotate")
         {
@@ -182,15 +214,71 @@ namespace axe
                 if (inp.Name == "Axis")    axis = ResolvePin(ctx, inp);
                 if (inp.Name == "Degrees") deg = ResolvePin(ctx, inp);
             }
-            ctx.Line("GetTransform().Rotate(" + axis + ", glm::radians(" + deg + " * deltaTime));");
+            ctx.Line("GetTransform().Rotate(" + axis + ", glm::radians(" + deg + " * " + dt + "));");
         }
         else if (name == "Apply Force")
         {
             std::string force = "glm::vec3(0,0,0)";
             for (const auto& inp : node->Inputs)
                 if (inp.Name == "Force") force = ResolvePin(ctx, inp);
-            ctx.Line("GetPhysics().AddForce(" + force + ");");
+            ctx.Line("GetRigidbody().AddForce(" + force + ");");
         }
+
+        // ── Transform direto ──────────────────────────────────────────────────
+
+        else if (name == "Set Transform")
+        {
+            std::string pos = "glm::vec3(0)", rot = "glm::vec3(0)", scl = "glm::vec3(1)";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Position") pos = ResolvePin(ctx, inp);
+                if (inp.Name == "Rotation") rot = ResolvePin(ctx, inp);
+                if (inp.Name == "Scale")    scl = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetTransform().SetPosition(" + pos + ");");
+            ctx.Line("GetTransform().SetRotation(" + rot + ");");
+            ctx.Line("GetTransform().SetScale(" + scl + ");");
+        }
+        else if (name == "Set Position")
+        {
+            std::string pos = "glm::vec3(0)";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Position") pos = ResolvePin(ctx, inp);
+            ctx.Line("GetTransform().SetPosition(" + pos + ");");
+        }
+
+        // ── Rigidbody ─────────────────────────────────────────────────────────
+
+        else if (name == "Set Velocity")
+        {
+            std::string vel = "glm::vec3(0)";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Velocity") vel = ResolvePin(ctx, inp);
+            ctx.Line("GetRigidbody().SetVelocity(" + vel + ");");
+        }
+
+        // ── CharacterController ───────────────────────────────────────────────
+
+        else if (name == "Character Move")
+        {
+            std::string dir = "glm::vec3(0,0,1)", spd = "5.0f";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Direction") dir = ResolvePin(ctx, inp);
+                if (inp.Name == "Speed")     spd = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetCharacter().Move(" + dir + ", " + spd + ");");
+        }
+        else if (name == "Character Jump")
+        {
+            std::string force = "5.0f";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Force") force = ResolvePin(ctx, inp);
+            ctx.Line("GetCharacter().Jump(" + force + ");");
+        }
+
+        // ── Eventos / IO ──────────────────────────────────────────────────────
+
         else if (name == "Send Event")
         {
             std::string target = "entt::null", evName = "\"\"", val = "0.0f";
@@ -217,7 +305,9 @@ namespace axe
             std::string varName = "m_" + (node->StringValue.empty() ? "var" : node->StringValue);
             ctx.Line(varName + " = " + val + ";");
         }
-        // ── Branch ──
+
+        // ── Branch ────────────────────────────────────────────────────────────
+
         else if (name == "Branch")
         {
             std::string cond = "false";
@@ -242,7 +332,19 @@ namespace axe
                 ctx.indent--;
                 ctx.Line("}");
             }
-            return; // Branch já segue seus próprios flows
+            return; // Branch gerencia seus próprios flows
+        }
+
+        // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
+        // Get Transform / Get Position / Get Rigidbody / Get Collider /
+        // Get Character Ctrl não emitem código de ação — são resolvidos via
+        // ResolvePin quando conectados a um input de dados. Chegamos aqui só se
+        // alguém conectar o Flow Out deles, o que não faz sentido; ignoramos.
+        else if (name == "Get Transform" || name == "Get Position" ||
+            name == "Get Rigidbody" || name == "Get Collider" ||
+            name == "Get Character Ctrl")
+        {
+            // Noop — esses nodes só produzem dados, não ações
         }
 
         // Segue o Flow Out
@@ -269,7 +371,7 @@ namespace axe
     {
         Context ctx{ graph };
 
-        // Coleta variáveis (GetVariable/SetVariable)
+        // Coleta variáveis (GetVariable / SetVariable)
         std::vector<std::string> variables;
         for (const auto& node : graph.GetNodes())
         {
@@ -283,13 +385,14 @@ namespace axe
             }
         }
 
-        // ── Header ──
+        // ── Header ────────────────────────────────────────────────────────────
         ctx.code += "// Gerado automaticamente pelo AXE Script Editor — nao edite manualmente\n";
         ctx.code += "#pragma once\n";
         ctx.code += "#include \"axe/script/script_base.hpp\"\n";
         ctx.code += "#include \"axe/utils/glm_config.hpp\"\n";
         ctx.code += "#include \"axe/input/input.hpp\"\n";
         ctx.code += "#include \"axe/log/log.hpp\"\n";
+        ctx.code += "#include \"axe/physics/physics_components.hpp\"\n";
         ctx.code += "#define AXE_SCRIPT_LOG(msg) AXE_CORE_INFO(msg)\n\n";
 
         ctx.code += "extern \"C\" {\n\n";
@@ -304,12 +407,15 @@ namespace axe
             ctx.code += "\n";
         }
 
-        // ── OnStart ──
-        bool hasOnStart = false;
-        for (const auto& node : graph.GetNodes())
-            if (node->Name == "On Start") { hasOnStart = true; break; }
+        // ── Helpers para detectar presença de evento ──────────────────────────
+        auto hasEvent = [&](const std::string& evName) -> bool {
+            for (const auto& node : graph.GetNodes())
+                if (node->Name == evName) return true;
+            return false;
+            };
 
-        if (hasOnStart)
+        // ── OnStart ───────────────────────────────────────────────────────────
+        if (hasEvent("On Start"))
         {
             ctx.code += "    void OnStart() override\n    {\n";
             ctx.indent = 2;
@@ -319,12 +425,8 @@ namespace axe
             ctx.code += "    }\n\n";
         }
 
-        // ── OnUpdate ──
-        bool hasOnUpdate = false;
-        for (const auto& node : graph.GetNodes())
-            if (node->Name == "On Update") { hasOnUpdate = true; break; }
-
-        if (hasOnUpdate)
+        // ── OnUpdate ──────────────────────────────────────────────────────────
+        if (hasEvent("On Update"))
         {
             ctx.code += "    void OnUpdate(float deltaTime) override\n    {\n";
             ctx.indent = 2;
@@ -334,12 +436,8 @@ namespace axe
             ctx.code += "    }\n\n";
         }
 
-        // ── OnEnd ──
-        bool hasOnEnd = false;
-        for (const auto& node : graph.GetNodes())
-            if (node->Name == "On End") { hasOnEnd = true; break; }
-
-        if (hasOnEnd)
+        // ── OnEnd ─────────────────────────────────────────────────────────────
+        if (hasEvent("On End"))
         {
             ctx.code += "    void OnEnd() override\n    {\n";
             ctx.indent = 2;
@@ -349,12 +447,8 @@ namespace axe
             ctx.code += "    }\n\n";
         }
 
-        // ── OnCollision ──
-        bool hasOnCollision = false;
-        for (const auto& node : graph.GetNodes())
-            if (node->Name == "On Collision") { hasOnCollision = true; break; }
-
-        if (hasOnCollision)
+        // ── OnCollision ───────────────────────────────────────────────────────
+        if (hasEvent("On Collision"))
         {
             ctx.code += "    void OnCollision(entt::entity other) override\n    {\n";
             ctx.indent = 2;
@@ -364,12 +458,8 @@ namespace axe
             ctx.code += "    }\n\n";
         }
 
-        // ── OnEvent ──
-        bool hasOnEvent = false;
-        for (const auto& node : graph.GetNodes())
-            if (node->Name == "On Event") { hasOnEvent = true; break; }
-
-        if (hasOnEvent)
+        // ── OnEvent ───────────────────────────────────────────────────────────
+        if (hasEvent("On Event"))
         {
             ctx.code += "    void OnEvent(const std::string& eventName, float value) override\n    {\n";
             ctx.indent = 2;
@@ -379,7 +469,7 @@ namespace axe
             ctx.code += "    }\n\n";
         }
 
-        // ── Factory function ──
+        // ── Factory function ──────────────────────────────────────────────────
         ctx.code += "};\n\n";
         ctx.code += "__declspec(dllexport) axe::ScriptBase* CreateScript()\n";
         ctx.code += "{\n";

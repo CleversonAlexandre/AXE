@@ -13,6 +13,30 @@
 
 #include "axe/graphics/game_camera.hpp"
 #include "axe/graphics/render_command.hpp"
+#include "axe/graphics/shader.hpp"
+#include "axe/mesh/mesh.hpp"
+#include <glm/gtc/type_ptr.hpp>
+
+namespace {
+	// Shader de silhueta para drag preview — cor sólida + alpha baixo
+	static const char* s_GhostVert = R"(
+	#version 460 core
+	layout(location = 0) in vec3 a_Position;
+	layout(location = 1) in vec3 a_Normal;
+	uniform mat4 u_ViewProjection;
+	uniform mat4 u_Model;
+	void main() {
+		gl_Position = u_ViewProjection * u_Model * vec4(a_Position, 1.0);
+	}
+)";
+	static const char* s_GhostFrag = R"(
+	#version 460 core
+	out vec4 FragColor;
+	uniform vec4 u_Color;
+	void main() { FragColor = u_Color; }
+)";
+	static std::shared_ptr<axe::Shader> s_GhostShader;
+} // namespace
 
 namespace axe
 {
@@ -31,6 +55,7 @@ namespace axe
 
 	void ViewportRenderer::Initialize()
 	{
+		s_GhostShader = axe::Shader::Create(s_GhostVert, s_GhostFrag);
 		m_SceneRenderer = std::make_unique<SceneRenderer>();
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 1000.0f);
 		m_SkyboxRenderer.Initialize();
@@ -242,7 +267,41 @@ namespace axe
 				m_Camera->GetViewMatrix(),
 				m_Camera->GetProjectionMatrix());
 
-		framebuffer.Unbind();
+		// ── Ghost preview de drag & drop ────────────────────────────────────────
+		// Renderizado no framebuffer final com blending, sobre tudo
+		if (m_HasGhost && m_GhostMesh && m_Camera && s_GhostShader)
+		{
+			framebuffer.Bind();
+			RenderCommand::SetViewport(0, 0, width, height);
+
+			// Blending: silhueta azul-ciano semitransparente
+			RenderCommand::SetBlend(true);
+			RenderCommand::SetBlendFunc(0x0302, 0x0303); // GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+			RenderCommand::SetDepthWrite(false); // não escreve depth — fica sempre visível
+			RenderCommand::SetDepthTest(false);
+			RenderCommand::SetCullFace(false);
+
+			glm::mat4 vp = m_Camera->GetViewProjectionMatrix();
+			s_GhostShader->Bind();
+			s_GhostShader->SetMat4("u_ViewProjection", glm::value_ptr(vp));
+			s_GhostShader->SetMat4("u_Model", glm::value_ptr(m_GhostTransform));
+			s_GhostShader->SetFloat4("u_Color", { 0.3f, 0.7f, 1.0f, 0.45f }); // azul-ciano
+
+			m_GhostMesh->GetVertexArray()->Bind();
+			RenderCommand::DrawIndexedCount(m_GhostMesh->GetIndexCount());
+
+			// Restaura estado
+			RenderCommand::SetDepthTest(true);
+			RenderCommand::SetDepthWrite(true);
+			RenderCommand::SetBlend(false);
+			RenderCommand::SetCullFace(true);
+
+			framebuffer.Unbind();
+		}
+		else
+		{
+			framebuffer.Unbind();
+		}
 	}
 	std::uint32_t ViewportRenderer::PickObject(float mouseX, float mouseY)
 	{
