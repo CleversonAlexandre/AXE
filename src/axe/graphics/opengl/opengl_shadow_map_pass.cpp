@@ -50,13 +50,13 @@ namespace axe
         glNamedFramebufferReadBuffer(m_FBO, GL_NONE);
 
         GLenum status = glCheckNamedFramebufferStatus(m_FBO, GL_FRAMEBUFFER);
-        AXE_CORE_INFO("ShadowPass FBO: {}",
-            status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
+        //AXE_CORE_INFO("ShadowPass FBO: {}",
+        //    status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
 
         m_DepthShader = Shader::Create(s_DepthVertSrc, s_DepthFragSrc);
 
         m_Initialized = true;
-        AXE_CORE_INFO("OpenGLShadowMapPass initialized ({}x{})", resolution, resolution);
+        //AXE_CORE_INFO("OpenGLShadowMapPass initialized ({}x{})", resolution, resolution);
     }
 
     void OpenGLShadowMapPass::Begin(const glm::mat4& lightSpaceMatrix)

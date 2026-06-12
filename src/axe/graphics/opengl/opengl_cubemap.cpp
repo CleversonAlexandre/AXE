@@ -339,7 +339,7 @@ namespace axe
 			return false;
 		}
 
-		AXE_CORE_INFO("CubemapTexture: HDRI '{}' carregado ({}x{})", filepath, width, height);
+		//AXE_CORE_INFO("CubemapTexture: HDRI '{}' carregado ({}x{})", filepath, width, height);
 
 		// 2. Cria textura 2D com o HDRI
 		uint32_t hdrTexture;
@@ -460,7 +460,7 @@ namespace axe
 		glUseProgram(0);
 
 		m_Loaded = true;
-		AXE_CORE_INFO("CubemapTexture: cubemap gerado com sucesso.");
+		//AXE_CORE_INFO("CubemapTexture: cubemap gerado com sucesso.");
 		return true;
 	}
 

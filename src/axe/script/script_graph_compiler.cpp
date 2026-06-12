@@ -77,16 +77,16 @@ namespace axe
         {
             // O editor guarda o valor em node->StringValue (não no pin DefaultString)
             std::string key = srcNode->StringValue.empty() ? "W" : srcNode->StringValue;
-            if (srcPin->Name == "Held")     return "axe::Input::GetKey(axe::Key::" + key + ")";
-            if (srcPin->Name == "Pressed")  return "axe::Input::GetKeyDown(axe::Key::" + key + ")";
-            if (srcPin->Name == "Released") return "axe::Input::GetKeyUp(axe::Key::" + key + ")";
+            if (srcPin->Name == "Held")     return "_GetKey((int)axe::Key::" + key + ")";
+            if (srcPin->Name == "Pressed")  return "_GetKeyDown((int)axe::Key::" + key + ")";
+            if (srcPin->Name == "Released") return "_GetKeyUp((int)axe::Key::" + key + ")";
         }
 
         if (nodeName == "Get Axis")
         {
             // O editor guarda o valor em node->StringValue (não no pin DefaultString)
             std::string axis = srcNode->StringValue.empty() ? "Horizontal" : srcNode->StringValue;
-            return "axe::Input::GetAxis(\"" + axis + "\")";
+            return "_GetAxis(\"" + axis + "\")";
         }
 
         // ── Math ──────────────────────────────────────────────────────────────
@@ -202,7 +202,14 @@ namespace axe
             for (const auto& inp : node->Inputs)
             {
                 if (inp.Name == "Direction") dir = ResolvePin(ctx, inp);
-                if (inp.Name == "Speed")     spd = ResolvePin(ctx, inp);
+                if (inp.Name == "Speed")
+                {
+                    std::string v = ResolvePin(ctx, inp);
+                    bool connected = false;
+                    for (const auto& link : ctx.graph.GetLinks())
+                        if (link.EndPin == inp.ID) { connected = true; break; }
+                    spd = (connected || v != "0.000000f") ? v : "5.0f";
+                }
             }
             ctx.Line("GetTransform().Translate(" + dir + " * " + spd + " * " + dt + ");");
         }
@@ -265,7 +272,16 @@ namespace axe
             for (const auto& inp : node->Inputs)
             {
                 if (inp.Name == "Direction") dir = ResolvePin(ctx, inp);
-                if (inp.Name == "Speed")     spd = ResolvePin(ctx, inp);
+                if (inp.Name == "Speed")
+                {
+                    std::string v = ResolvePin(ctx, inp);
+                    // Usa default 5.0f se o pin não está conectado E o valor é zero
+                    // (pins antigos no disco têm DefaultFloat=0 antes do fix de serialização)
+                    bool isConnected = false;
+                    for (const auto& link : ctx.graph.GetLinks())
+                        if (link.EndPin == inp.ID) { isConnected = true; break; }
+                    spd = (isConnected || v != "0.000000f") ? v : "5.0f";
+                }
             }
             ctx.Line("GetCharacter().Move(" + dir + ", " + spd + ");");
         }
@@ -273,7 +289,14 @@ namespace axe
         {
             std::string force = "5.0f";
             for (const auto& inp : node->Inputs)
-                if (inp.Name == "Force") force = ResolvePin(ctx, inp);
+                if (inp.Name == "Force")
+                {
+                    std::string v = ResolvePin(ctx, inp);
+                    bool isConnected = false;
+                    for (const auto& link : ctx.graph.GetLinks())
+                        if (link.EndPin == inp.ID) { isConnected = true; break; }
+                    force = (isConnected || v != "0.000000f") ? v : "5.0f";
+                }
             ctx.Line("GetCharacter().Jump(" + force + ");");
         }
 

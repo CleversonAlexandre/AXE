@@ -34,7 +34,7 @@ namespace axe
 				return;
 			}
 			s_GLFWInitialized = true;
-			AXE_CORE_INFO("GLFW initialized");
+			//AXE_CORE_INFO("GLFW initialized");
 		}
 
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -68,8 +68,8 @@ namespace axe
 		}
 		SetVSync(true);
 
-		AXE_CORE_INFO("Window created: {} ({}x{})", m_Data.Title, props.Width, props.Height);
-		AXE_CORE_INFO("OpenGL loader initialized");
+		//AXE_CORE_INFO("Window created: {} ({}x{})", m_Data.Title, props.Width, props.Height);
+		//AXE_CORE_INFO("OpenGL loader initialized");
 
 
 

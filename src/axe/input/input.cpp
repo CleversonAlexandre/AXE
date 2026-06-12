@@ -31,6 +31,19 @@ namespace axe
         // Key enum usa valores GLFW (0–511)
         for (int i = 0; i < 512; i++)
             s_CurrentKeys[i] = s_Window->IsKeyDown(i);
+
+        // Debug: loga WASD se algum estiver pressionado
+        static bool s_DebugLogged = false;
+        bool w = s_CurrentKeys[(int)Key::W];
+        bool a = s_CurrentKeys[(int)Key::A];
+        bool s = s_CurrentKeys[(int)Key::S];
+        bool d = s_CurrentKeys[(int)Key::D];
+        if ((w || a || s || d) && !s_DebugLogged)
+        {
+            AXE_CORE_INFO("Input::Update: W={} A={} S={} D={}", w, a, s, d);
+            s_DebugLogged = true;
+        }
+        if (!w && !a && !s && !d) s_DebugLogged = false;
     }
 
     bool Input::GetKey(Key key)
@@ -54,6 +67,15 @@ namespace axe
         return !s_CurrentKeys[k] && s_PreviousKeys[k];
     }
 
+    void Input::RefreshCurrent()
+    {
+        if (!s_Window) return;
+        // Só relê o estado atual — NÃO avança s_PreviousKeys
+        // Isso sincroniza o s_CurrentKeys da DLL sem quebrar GetKeyDown
+        for (int i = 0; i < 512; i++)
+            s_CurrentKeys[i] = s_Window->IsKeyDown(i);
+    }
+
     float Input::GetAxis(const std::string& axisName)
     {
         if (axisName == "Horizontal")
@@ -61,6 +83,7 @@ namespace axe
             float v = 0.0f;
             if (GetKey(Key::D)) v += 1.0f;
             if (GetKey(Key::A)) v -= 1.0f;
+            if (v != 0.0f) AXE_CORE_INFO("Input::GetAxis Horizontal={:.1f} D={} A={}", v, GetKey(Key::D), GetKey(Key::A));
             return v;
         }
         if (axisName == "Vertical")
@@ -68,6 +91,7 @@ namespace axe
             float v = 0.0f;
             if (GetKey(Key::W)) v += 1.0f;
             if (GetKey(Key::S)) v -= 1.0f;
+            if (v != 0.0f) AXE_CORE_INFO("Input::GetAxis Vertical={:.1f} W={} S={}", v, GetKey(Key::W), GetKey(Key::S));
             return v;
         }
         return 0.0f;

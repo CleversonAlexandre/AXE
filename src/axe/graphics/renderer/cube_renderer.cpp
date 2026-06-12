@@ -104,7 +104,7 @@ namespace axe
 			m_Pipeline = Pipeline::Create(spec);
 			m_Texture = Texture2D::Create(1, 1);
 
-			AXE_CORE_INFO("CubeRenderer created");
+			//AXE_CORE_INFO("CubeRenderer created");
 	}
 	
 	void CubeRenderer::Begin(const glm::mat4& viewProjection)

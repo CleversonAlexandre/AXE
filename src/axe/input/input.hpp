@@ -21,6 +21,11 @@ namespace axe
         // Chamado uma vez por frame para capturar o estado atual
         // (diferencia Pressed/Released de Held)
         static void Update();
+        // Só relê o estado atual das teclas sem avançar o histórico (previous)
+        // Usado para sincronizar DLLs de script que têm instância estática separada
+        static void RefreshCurrent();
+        static const bool* GetCurrentKeys() { return s_CurrentKeys; }
+        static const bool* GetPreviousKeys() { return s_PreviousKeys; }
 
         // ── API usada pelo código gerado ──────────────────────────────────────
 

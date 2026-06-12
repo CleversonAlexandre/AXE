@@ -87,11 +87,11 @@ namespace axe
 
 		if (scene->mNumMeshes == 0)
 		{
-			AXE_CORE_ERROR("MeshLoader: nenhuma mesh encontrada em '{}'", filepath);
+			//AXE_CORE_ERROR("MeshLoader: nenhuma mesh encontrada em '{}'", filepath);
 			return {};
 		}
 
-		AXE_CORE_INFO("MeshLoader: carregando '{}' ({} mesh(es) encontrada(s))", filepath, scene->mNumMeshes);
+		//AXE_CORE_INFO("MeshLoader: carregando '{}' ({} mesh(es) encontrada(s))", filepath, scene->mNumMeshes);
 
 		if (scene->mNumMeshes == 1)
 			return ProcessMesh(scene->mMeshes[0], scene);
@@ -180,7 +180,7 @@ namespace axe
 				indices.push_back(face.mIndices[j]);
 		}
 
-		AXE_CORE_INFO("MeshLoader: {} vértices, {} índices", vertices.size(), indices.size());
+		//AXE_CORE_INFO("MeshLoader: {} vértices, {} índices", vertices.size(), indices.size());
 
 		LoadedAsset asset;
 		asset.MeshData = std::make_shared<Mesh>(vertices, indices);

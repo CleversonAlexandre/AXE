@@ -122,7 +122,7 @@ namespace axe
         LoadTex("metallic", m_Material->MetallicUUID, m_Material->MetallicMap);
         LoadTex("ao", m_Material->AOUUID, m_Material->AOMap);
 
-        AXE_CORE_INFO("MaterialAsset: carregado '{}'", m_Name);
+        //AXE_CORE_INFO("MaterialAsset: carregado '{}'", m_Name);
         return true;
     }
 

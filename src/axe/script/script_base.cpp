@@ -150,18 +150,38 @@ namespace axe
         return reg.get<CharacterControllerComponent>(Entity).MaxSpeed;
     }
 
+    void ScriptBase::SetInputPointers(const bool* keys, const bool* prevKeys)
+    {
+        m_Context.Input.Keys = keys;
+        m_Context.Input.PrevKeys = prevKeys;
+        static int s_Count = 0;
+        if (s_Count++ < 3)
+            AXE_CORE_INFO("SetInputPointers (axe.dll) keys={} prev={} Keys@={}",
+                (void*)keys, (void*)prevKeys, (void*)&m_Context.Input.Keys);
+    }
+
     void ScriptCharacterProxy::Move(const glm::vec3& direction, float speed)
     {
-        if (!ScenePtr || Entity == entt::null) return;
+        // Log sempre para diagnóstico
+        AXE_CORE_INFO("ScriptCharacterProxy::Move called: ScenePtr={} Entity={} dir=({:.2f},{:.2f},{:.2f}) spd={:.1f}",
+            (void*)ScenePtr, (uint32_t)Entity, direction.x, direction.y, direction.z, speed);
+
+        if (!ScenePtr || Entity == entt::null)
+        {
+            AXE_CORE_WARN("ScriptCharacterProxy::Move: contexto inválido!");
+            return;
+        }
         auto& reg = ScenePtr->GetRegistry();
-        if (!reg.all_of<CharacterControllerComponent>(Entity)) return;
+        bool hasCC = reg.all_of<CharacterControllerComponent>(Entity);
+        AXE_CORE_INFO("  hasCharacterController={}", hasCC);
+        if (!hasCC) return;
+
         auto& cc = reg.get<CharacterControllerComponent>(Entity);
-        // Acumula velocidade desejada — o PhysicsWorld lê e aplica ao JPH Character
         glm::vec3 dir = (glm::length(direction) > 0.0001f)
             ? glm::normalize(direction) : glm::vec3(0);
         cc.Velocity.x = dir.x * speed;
         cc.Velocity.z = dir.z * speed;
-        // Y preservado para gravidade gerenciada pelo Jolt
+        AXE_CORE_INFO("  Velocity set to ({:.2f},{:.2f})", cc.Velocity.x, cc.Velocity.z);
     }
 
     void ScriptCharacterProxy::Jump(float force)

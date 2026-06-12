@@ -40,8 +40,8 @@ namespace axe
 		s_CoreLogger = makeLogger("axe");
 		s_EditorLogger = makeLogger("editor");
 
-		s_CoreLogger->info("Core logger initialized");
-		s_EditorLogger->info("Editor logger initialized");
+		//s_CoreLogger->info("Core logger initialized");
+		//s_EditorLogger->info("Editor logger initialized");
 	}
 
 	std::shared_ptr<spdlog::logger>& InfoLog::GetCoreLogger()

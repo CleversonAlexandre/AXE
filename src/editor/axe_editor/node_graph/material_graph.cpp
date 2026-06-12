@@ -243,13 +243,13 @@ namespace axe
     {
         m_Links.emplace_back(GetNextID(), startPin, endPin);
 
-        AXE_EDITOR_INFO("AddLink: {} -> {} | Total links: {}",
-            startPin.Get(), endPin.Get(), m_Links.size());
+        //AXE_EDITOR_INFO("AddLink: {} -> {} | Total links: {}",
+            //startPin.Get(), endPin.Get(), m_Links.size());
     }
 
     void MaterialGraph::RemoveLink(ed::LinkId id)
     {
-        AXE_EDITOR_INFO("RemoveLink: {} | Total antes: {}", id.Get(), m_Links.size());
+        //AXE_EDITOR_INFO("RemoveLink: {} | Total antes: {}", id.Get(), m_Links.size());
 
         m_Links.erase(
             std::remove_if(m_Links.begin(), m_Links.end(),
@@ -563,8 +563,8 @@ namespace axe
         }
 
         BuildNodes();
-        AXE_CORE_INFO("MaterialGraph: grafo desserializado com {} nodes e {} links",
-            m_Nodes.size(), m_Links.size());
+        //AXE_CORE_INFO("MaterialGraph: grafo desserializado com {} nodes e {} links",
+        //    m_Nodes.size(), m_Links.size());
     }
 
     Pin* MaterialGraph::FindPinByOriginalId(int savedId)

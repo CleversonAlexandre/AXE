@@ -26,19 +26,19 @@ namespace axe
 			return false;
 		}
 
-		AXE_CORE_INFO("GraphicsDevice initialized");
+		//AXE_CORE_INFO("GraphicsDevice initialized");
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glEnable(GL_DEPTH_TEST);
 
 		// Mostrar informações do OpenGL (opcional, só para debug)
-		AXE_CORE_INFO("OpenGL Version: {}", (const char*)glGetString(GL_VERSION));
-		AXE_CORE_INFO("GLSL Version: {}", (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
-		AXE_CORE_INFO("Renderer: {}", (const char*)glGetString(GL_RENDERER));
+		//AXE_CORE_INFO("OpenGL Version: {}", (const char*)glGetString(GL_VERSION));
+		//AXE_CORE_INFO("GLSL Version: {}", (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+		//AXE_CORE_INFO("Renderer: {}", (const char*)glGetString(GL_RENDERER));
 
 		RenderCommand::Init();
 
-		AXE_CORE_INFO("GraphicsDevice Initialized successfully");
+		//AXE_CORE_INFO("GraphicsDevice Initialized successfully");
 		return true;
 	}
 

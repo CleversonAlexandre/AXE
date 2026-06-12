@@ -1,5 +1,6 @@
 #include "scene_serializer.hpp"
 #include "components.hpp"
+#include "axe/script/script_component.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/mesh_loader.hpp"
@@ -485,7 +486,7 @@ namespace axe
 			}
 		}
 
-		AXE_CORE_INFO("SceneSerializer: cena carregada de '{}'", filepath.string());
+		//AXE_CORE_INFO("SceneSerializer: cena carregada de '{}'", filepath.string());
 		return true;
 	}
 
@@ -597,11 +598,6 @@ namespace axe
 				components["Camera"]["move_speed"] = c->MoveSpeed;
 				components["Camera"]["sensitivity"] = c->Sensitivity;
 				components["Camera"]["is_primary"] = c->IsPrimary;
-				components["Camera"]["camera_mode"] = (int)c->CameraMode;
-				components["Camera"]["arm_length"] = c->ArmLength;
-				components["Camera"]["arm_height"] = c->ArmHeight;
-				components["Camera"]["lag_speed"] = c->LagSpeed;
-				components["Camera"]["mouse_rotates"] = c->MouseRotates;
 			}
 
 			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
@@ -637,6 +633,25 @@ namespace axe
 				components["CharacterController"]["step_height"] = c->StepHeight;
 				components["CharacterController"]["max_speed"] = c->MaxSpeed;
 				components["CharacterController"]["jump_force"] = c->JumpForce;
+			}
+
+
+			if (auto* sa = registry.try_get<SpringArmComponent>(entity))
+			{
+				components["SpringArm"]["length"] = sa->Length;
+				components["SpringArm"]["height_offset"] = sa->HeightOffset;
+				components["SpringArm"]["socket_offset"] = { sa->SocketOffset.x, sa->SocketOffset.y, sa->SocketOffset.z };
+				components["SpringArm"]["lag_speed"] = sa->LagSpeed;
+				components["SpringArm"]["enable_lag"] = sa->EnableCameraLag;
+				components["SpringArm"]["mouse_rotates"] = sa->MouseRotates;
+			}
+
+			if (auto* sc = registry.try_get<ScriptComponent>(entity))
+			{
+				components["Script"]["asset_path"] = sc->ScriptAssetPath;
+				components["Script"]["dll_path"] = sc->DllPath;
+				components["Script"]["name"] = sc->ScriptName;
+				components["Script"]["compiled"] = sc->IsCompiled;
 			}
 
 			// RelationshipComponent — essencial para restaurar hierarquia
@@ -814,13 +829,34 @@ namespace axe
 					cam.MoveSpeed = t.value("move_speed", 5.0f);
 					cam.Sensitivity = t.value("sensitivity", 0.1f);
 					cam.IsPrimary = t.value("is_primary", true);
-					cam.CameraMode = (CameraComponent::Mode)t.value("camera_mode", (int)CameraComponent::Mode::ThirdPerson);
-					cam.ArmLength = t.value("arm_length", 5.0f);
-					cam.ArmHeight = t.value("arm_height", 2.0f);
-					cam.LagSpeed = t.value("lag_speed", 8.0f);
-					cam.MouseRotates = t.value("mouse_rotates", true);
 					registry.emplace<CameraComponent>(entity, cam);
 				}
+				if (components.contains("SpringArm"))
+				{
+					auto& t = components["SpringArm"];
+					SpringArmComponent sa;
+					sa.Length = t.value("length", 5.0f);
+					sa.HeightOffset = t.value("height_offset", 0.0f);
+					sa.LagSpeed = t.value("lag_speed", 8.0f);
+					sa.EnableCameraLag = t.value("enable_lag", true);
+					sa.MouseRotates = t.value("mouse_rotates", true);
+					if (t.contains("socket_offset") && t["socket_offset"].size() == 3)
+						sa.SocketOffset = { t["socket_offset"][0], t["socket_offset"][1], t["socket_offset"][2] };
+					registry.emplace<SpringArmComponent>(entity, sa);
+				}
+
+				if (components.contains("Script"))
+				{
+					auto& t = components["Script"];
+					ScriptComponent sc;
+					sc.ScriptAssetPath = t.value("asset_path", "");
+					sc.DllPath = t.value("dll_path", "");
+					sc.ScriptName = t.value("name", "");
+					sc.IsCompiled = t.value("compiled", false);
+					registry.emplace<ScriptComponent>(entity, sc);
+				}
+
+
 
 				if (components.contains("Rigidbody"))
 				{

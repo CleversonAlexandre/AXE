@@ -246,7 +246,7 @@ namespace axe
             m_Shader = Shader::Create(s_QuadVert, s_LightingFrag);
             SetupQuad();
             m_Initialized = true;
-            AXE_CORE_INFO("OpenGLLightingPass initialized");
+            //AXE_CORE_INFO("OpenGLLightingPass initialized");
         }
         catch (const std::exception& e)
         {

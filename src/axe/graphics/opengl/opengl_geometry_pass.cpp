@@ -112,7 +112,7 @@ namespace axe
     {
         m_Shader = Shader::Create(s_GeomVert, s_GeomFrag);
         m_Initialized = true;
-        AXE_CORE_INFO("OpenGLGeometryPass initialized");
+        //AXE_CORE_INFO("OpenGLGeometryPass initialized");
     }
 
     void OpenGLGeometryPass::Begin(GBuffer& gbuffer,

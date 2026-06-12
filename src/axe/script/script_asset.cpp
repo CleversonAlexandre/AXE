@@ -51,6 +51,24 @@ namespace axe
         j["cc_max_speed"] = CCMaxSpeed;
         j["cc_jump_force"] = CCJumpForce;
 
+        // SpringArm
+        j["sa_length"] = SALength;
+        j["sa_height_offset"] = SAHeightOffset;
+        j["sa_socket_off"] = { SASocketOffX, SASocketOffY, SASocketOffZ };
+        j["sa_lag_speed"] = SALagSpeed;
+        j["sa_enable_lag"] = SAEnableLag;
+        j["sa_mouse_rotates"] = SAMouseRotates;
+
+        // Camera
+        j["cam_fov"] = CamFov;
+        j["cam_near"] = CamNearClip;
+        j["cam_far"] = CamFarClip;
+        j["cam_sensitivity"] = CamSensitivity;
+        j["cam_is_primary"] = CamIsPrimary;
+
+        // Hierarquia
+        j["parent_index"] = ParentIndex;
+
         return j;
     }
 
@@ -109,6 +127,29 @@ namespace axe
         CCStepHeight = j.value("cc_step_height", 0.3f);
         CCMaxSpeed = j.value("cc_max_speed", 5.f);
         CCJumpForce = j.value("cc_jump_force", 5.f);
+
+        // SpringArm
+        SALength = j.value("sa_length", 300.0f);
+        SAHeightOffset = j.value("sa_height_offset", 0.0f);
+        SALagSpeed = j.value("sa_lag_speed", 8.0f);
+        SAEnableLag = j.value("sa_enable_lag", true);
+        SAMouseRotates = j.value("sa_mouse_rotates", true);
+        if (j.contains("sa_socket_off") && j["sa_socket_off"].size() == 3)
+        {
+            SASocketOffX = j["sa_socket_off"][0];
+            SASocketOffY = j["sa_socket_off"][1];
+            SASocketOffZ = j["sa_socket_off"][2];
+        }
+
+        // Camera
+        CamFov = j.value("cam_fov", 60.0f);
+        CamNearClip = j.value("cam_near", 0.1f);
+        CamFarClip = j.value("cam_far", 1000.0f);
+        CamSensitivity = j.value("cam_sensitivity", 0.1f);
+        CamIsPrimary = j.value("cam_is_primary", true);
+
+        // Hierarquia
+        ParentIndex = j.value("parent_index", -1);
     }
 
     // ── ScriptAsset ───────────────────────────────────────────────────────────

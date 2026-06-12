@@ -10,10 +10,29 @@ namespace axe
     class Scene;
 
     // Contexto injetado no script — acesso a tudo que o engine oferece
+    // Ponteiros para os arrays de teclas da axe.dll
+    // Evita cópia de 1024 bytes por frame e elimina problema de instâncias estáticas separadas
+    struct AXE_API ScriptInputSnapshot
+    {
+        const bool* Keys = nullptr; // aponta para Input::s_CurrentKeys  da axe.dll
+        const bool* PrevKeys = nullptr; // aponta para Input::s_PreviousKeys da axe.dll
+
+        bool  GetKey(int k)     const { return Keys && k >= 0 && k < 512 ? Keys[k] : false; }
+        bool  GetKeyDown(int k) const { return Keys && k >= 0 && k < 512 ? Keys[k] && !PrevKeys[k] : false; }
+        bool  GetKeyUp(int k)   const { return PrevKeys && k >= 0 && k < 512 ? !Keys[k] && PrevKeys[k] : false; }
+        float GetAxis(const std::string& n) const
+        {
+            if (n == "Horizontal") return (GetKey(68) ? 1.f : 0.f) - (GetKey(65) ? 1.f : 0.f);
+            if (n == "Vertical")   return (GetKey(87) ? 1.f : 0.f) - (GetKey(83) ? 1.f : 0.f);
+            return 0.f;
+        }
+    };
+
     struct ScriptContext
     {
-        entt::entity Entity = entt::null;
+        entt::entity        Entity = entt::null;
         Scene* ScenePtr = nullptr;
+        ScriptInputSnapshot Input;   // ponteiros, não arrays — sem cópia pesada
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -95,6 +114,25 @@ namespace axe
         virtual void OnUpdate(float deltaTime) {}
         virtual void OnEnd() {}
 
+        // PreUpdate: chamado antes de OnUpdate, armazena ponteiros de teclas como membros
+        // Membros m_Keys/m_PrevKeys ficam na DLL do script — sem problema de instância estática
+        void PreUpdate(const bool* keys, const bool* prevKeys)
+        {
+            m_Keys = keys;
+            m_PrevKeys = prevKeys;
+        }
+
+        // Acesso direto via membros — usado pelo código gerado
+        bool  _GetKey(int k)     const { return m_Keys && k >= 0 && k < 512 ? m_Keys[k] : false; }
+        bool  _GetKeyDown(int k) const { return m_Keys && k >= 0 && k < 512 ? m_Keys[k] && !m_PrevKeys[k] : false; }
+        bool  _GetKeyUp(int k)   const { return m_PrevKeys && k >= 0 && k < 512 ? !m_Keys[k] && m_PrevKeys[k] : false; }
+        float _GetAxis(const std::string& n) const
+        {
+            if (n == "Horizontal") return (_GetKey(68) ? 1.f : 0.f) - (_GetKey(65) ? 1.f : 0.f);
+            if (n == "Vertical")   return (_GetKey(87) ? 1.f : 0.f) - (_GetKey(83) ? 1.f : 0.f);
+            return 0.f;
+        }
+
         // ── Eventos de física ─────────────────────────────────────────────────
         virtual void OnCollision(entt::entity other) {}
         virtual void OnTriggerEnter(entt::entity other) {}
@@ -107,6 +145,10 @@ namespace axe
         void SetContext(const ScriptContext& ctx) { m_Context = ctx; }
         const ScriptContext& GetContext() const { return m_Context; }
 
+        // Atualiza ponteiros de input diretamente — sem passar pelo ScriptContext completo
+        // Não inline — implementado em axe.dll para garantir acesso correto ao m_Context
+        void SetInputPointers(const bool* keys, const bool* prevKeys);
+
         // ── Accessors de componente para uso no código gerado ─────────────────
         ScriptTransformProxy  GetTransform() { return { m_Context.Entity, m_Context.ScenePtr }; }
         ScriptRigidbodyProxy  GetRigidbody() { return { m_Context.Entity, m_Context.ScenePtr }; }
@@ -118,7 +160,9 @@ namespace axe
         ScriptRigidbodyProxy  GetPhysics() { return GetRigidbody(); }
 
     protected:
-        ScriptContext m_Context;
+        ScriptContext    m_Context;
+        const bool* m_Keys = nullptr;  // ponteiro para Input::s_CurrentKeys
+        const bool* m_PrevKeys = nullptr;  // ponteiro para Input::s_PreviousKeys        
     };
 
     // Assinatura da função exportada pela DLL

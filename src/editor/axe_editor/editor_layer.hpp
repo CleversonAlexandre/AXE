@@ -340,6 +340,13 @@ namespace axe
 						return;
 					}
 
+					// ── Script Asset ─────────────────────────────────────────────────
+					if (record->Type == AssetType::Script)
+					{
+						InstantiateScriptAsset(record->FilePath, uuid);
+						return;
+					}
+
 					// Mesh de arquivo
 					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
 					if (!asset.MeshData) return;
@@ -416,6 +423,13 @@ namespace axe
 						return;
 					}
 
+					// ── Script Asset ─────────────────────────────────────────────────
+					if (record->Type == AssetType::Script)
+					{
+						InstantiateScriptAsset(record->FilePath, uuid);
+						return;
+					}
+
 					// Mesh de arquivo
 					LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
 
@@ -438,6 +452,44 @@ namespace axe
 					{
 						m_ViewportRenderer->DrawGuizmo(min, max);
 					});
+
+				// Drag preview ghost
+				viewport->SetDragPreviewCallback([this](const std::string& uuid) -> std::string
+					{
+						const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+						if (!record) { m_ViewportRenderer->ClearDragGhost(); return ""; }
+
+						std::shared_ptr<Mesh> ghostMesh;
+						if (MeshFactory::IsPrimitive(uuid))
+							ghostMesh = MeshFactory::CreateByUUID(uuid);
+						else if (record->Type == AssetType::Script)
+						{
+							const std::string& ct = record->ScriptClassType;
+							if (ct == "Trigger")
+								ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Sphere);
+							else if (ct == "Character" || ct == "Agent")
+								ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cylinder);
+							else
+								ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
+						}
+						else if (record->Type == AssetType::Mesh)
+							ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
+
+						if (ghostMesh && m_ViewportRenderer->m_Camera)
+						{
+							glm::vec3 pos = m_ViewportRenderer->m_Camera->GetPosition()
+								+ m_ViewportRenderer->m_Camera->GetForwardDirection() * 5.0f;
+							m_ViewportRenderer->SetDragGhost(ghostMesh,
+								glm::translate(glm::mat4(1.0f), pos));
+						}
+
+						std::string info = record->Name;
+						if (record->Type == AssetType::Script && !record->ScriptClassType.empty())
+							info += " [" + record->ScriptClassType + "]";
+						return info;
+					});
+
+				viewport->SetDragEndCallback([this]() { m_ViewportRenderer->ClearDragGhost(); });
 			}
 			else
 			{
@@ -657,7 +709,13 @@ namespace axe
 
 			if (m_EditorState == EditorState::Play)
 			{
-				axe::Input::Update();
+				// Impede o ImGui de capturar o teclado durante o Play
+				// sem isso, teclas held (WASD) não chegam ao Input::GetKey
+				ImGui::GetIO().WantCaptureKeyboard = false;
+				ImGui::SetNextFrameWantCaptureKeyboard(false);
+
+				// Input::Update() já é chamado pelo loop principal em editor_app.cpp
+				// Não chamar aqui — chamada dupla zeraria GetKeyDown
 
 				// Atualiza câmera third person via SpringArmComponent
 				if (m_PlayerEntity != entt::null && m_Scene)
@@ -1226,6 +1284,104 @@ namespace axe
 
 
 
+
+		void InstantiateScriptAsset(const std::filesystem::path& scriptPath, const std::string& assetUUID)
+		{
+			auto scriptAsset = ScriptAsset::LoadFromFile(scriptPath);
+			if (!scriptAsset) return;
+
+			auto& registry = m_Scene->GetRegistry();
+			auto entity = m_Scene->CreateEntity(scriptAsset->GetName());
+
+			for (const auto& def : scriptAsset->GetComponents())
+			{
+				if (def.Type == "Mesh")
+				{
+					auto& mc = registry.emplace<MeshComponent>(entity);
+					mc.Data = MeshFactory::CreateByUUID(
+						def.AssetUUID.empty() ? axe::PrimitiveUUID::Cube : def.AssetUUID);
+					mc.AssetUUID = def.AssetUUID;
+				}
+				else if (def.Type == "Rigidbody")
+				{
+					RigidbodyComponent rb;
+					rb.Type = def.BodyType == "Static" ? BodyType::Static :
+						def.BodyType == "Kinematic" ? BodyType::Kinematic : BodyType::Dynamic;
+					rb.Mass = def.Mass; rb.Friction = def.Friction;
+					rb.Restitution = def.Restitution;
+					rb.LinearDamping = def.LinearDamping; rb.AngularDamping = def.AngularDamping;
+					rb.UseGravity = def.UseGravity;
+					rb.LockRotX = def.LockRotX; rb.LockRotY = def.LockRotY; rb.LockRotZ = def.LockRotZ;
+					registry.emplace<RigidbodyComponent>(entity, rb);
+				}
+				else if (def.Type == "Collider" || def.Type.find("Collider") != std::string::npos)
+				{
+					ColliderComponent col;
+					if (def.ColliderShape == "Sphere")    col.Shape = ColliderShape::Sphere;
+					else if (def.ColliderShape == "Capsule")   col.Shape = ColliderShape::Capsule;
+					else if (def.ColliderShape == "Mesh")      col.Shape = ColliderShape::Mesh;
+					else                                       col.Shape = ColliderShape::Box;
+					col.HalfExtent = { def.ColliderSizeX, def.ColliderSizeY, def.ColliderSizeZ };
+					col.Radius = def.ColliderRadius; col.Height = def.ColliderHeight;
+					col.CapsuleRadius = def.ColliderCapsuleRadius;
+					col.Offset = { def.ColliderOffsetX, def.ColliderOffsetY, def.ColliderOffsetZ };
+					col.IsTrigger = def.IsTrigger; col.ShowDebug = def.ShowDebug;
+					registry.emplace<ColliderComponent>(entity, col);
+				}
+				else if (def.Type == "CharacterController")
+				{
+					CharacterControllerComponent cc;
+					cc.Height = def.CCHeight; cc.Radius = def.CCRadius;
+					cc.MaxSlopeAngle = def.CCMaxSlope; cc.StepHeight = def.CCStepHeight;
+					cc.MaxSpeed = def.CCMaxSpeed; cc.JumpForce = def.CCJumpForce;
+					registry.emplace<CharacterControllerComponent>(entity, cc);
+				}
+				else if (def.Type == "SpringArm")
+				{
+					SpringArmComponent sa;
+					sa.Length = def.SALength / 100.0f;
+					sa.HeightOffset = def.SAHeightOffset;
+					sa.SocketOffset = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
+					sa.LagSpeed = def.SALagSpeed;
+					sa.EnableCameraLag = def.SAEnableLag;
+					sa.MouseRotates = def.SAMouseRotates;
+					registry.emplace<SpringArmComponent>(entity, sa);
+				}
+				else if (def.Type == "Camera")
+				{
+					CameraComponent cam;
+					cam.Fov = def.CamFov;
+					cam.NearClip = def.CamNearClip;
+					cam.FarClip = def.CamFarClip;
+					cam.Sensitivity = def.CamSensitivity;
+					cam.IsPrimary = def.CamIsPrimary;
+					registry.emplace<CameraComponent>(entity, cam);
+				}
+				else if (def.Type == "Material" && !def.AssetUUID.empty())
+				{
+					const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID);
+					if (r) {
+						auto ma = MaterialAsset::LoadFromFile(r->FilePath);
+						if (ma) {
+							MaterialComponent mc{ ma->GetMaterial() };
+							mc.MaterialAssetUUID = def.AssetUUID;
+							registry.emplace<MaterialComponent>(entity, mc);
+						}
+					}
+				}
+			}
+
+			// ScriptComponent
+			ScriptComponent sc;
+			sc.ScriptAssetPath = scriptPath.string();
+			sc.ScriptName = scriptAsset->GetName();
+			sc.DllPath = scriptAsset->DllPath;
+			sc.IsCompiled = scriptAsset->IsCompiled;
+			registry.emplace<ScriptComponent>(entity, sc);
+
+			m_Context.Select(entity);
+			AXE_EDITOR_INFO("InstantiateScriptAsset: '{}' instanciado.", scriptAsset->GetName());
+		}
 
 	private:
 		std::unique_ptr<Scene> m_Scene;

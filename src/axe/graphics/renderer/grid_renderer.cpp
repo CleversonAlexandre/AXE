@@ -81,7 +81,7 @@ namespace axe
         m_VertexArray->AddVertexBuffer(vb, layout);
 
         m_Initialized = true;
-        AXE_CORE_INFO("GridRenderer: inicializado ({} linhas).", m_VertexCount / 2);
+        //AXE_CORE_INFO("GridRenderer: inicializado ({} linhas).", m_VertexCount / 2);
     }
 
     void GridRenderer::Render(const glm::mat4& view, const glm::mat4& projection)

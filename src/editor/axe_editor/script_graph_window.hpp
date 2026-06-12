@@ -88,6 +88,7 @@ namespace axe
         bool   m_CtxOpen[5] = { true, true, true, true, true };
 
         char   m_CompSearchBuf[128] = {};
+        int    m_SelectedCompIndex = -1; // componente selecionado no Scene Graph
 
         bool m_IsOpen = false;
         bool m_FirstFrame = true;

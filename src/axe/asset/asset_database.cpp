@@ -287,11 +287,11 @@ namespace axe
 				}
 			}
 
-			AXE_CORE_INFO("AssetDatabase: {} assets carregados.", m_Records.size());
+			//AXE_CORE_INFO("AssetDatabase: {} assets carregados.", m_Records.size());
 		}
 		catch (const json::exception& e)
 		{
-			AXE_CORE_WARN("AssetDatabase: erro ao carregar índice: {}", e.what());
+			//AXE_CORE_WARN("AssetDatabase: erro ao carregar índice: {}", e.what());
 			// Fallback — faz scan
 			Scan(projectRoot / "Assets");
 		}
@@ -306,7 +306,7 @@ namespace axe
 				r.Name = name;
 				r.Type = AssetType::Mesh;
 				m_Records[r.UUID] = r;
-				AXE_CORE_INFO("AssetDatabase: primitiva registrada '{}' → {}", name, uuid);
+				//AXE_CORE_INFO("AssetDatabase: primitiva registrada '{}' → {}", name, uuid);
 			};
 
 		reg(PrimitiveUUID::Cube, "Cube");

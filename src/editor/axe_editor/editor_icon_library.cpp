@@ -49,7 +49,7 @@ namespace axe
 		m_IconEnvironment = load("icon_scene.png"); // globo/ambiente
 
 		m_Loaded = true;
-		AXE_CORE_INFO("EditorIconLibrary: ícones carregados.");
+		//AXE_CORE_INFO("EditorIconLibrary: ícones carregados.");
 	}
 
 	std::shared_ptr<Texture2D> EditorIconLibrary::GetForType(const std::string& type) const

@@ -38,7 +38,7 @@ namespace axe
             return false;
         }
 
-        AXE_CORE_INFO("ImGui initialized");
+        //AXE_CORE_INFO("ImGui initialized");
         return true;
     }
 

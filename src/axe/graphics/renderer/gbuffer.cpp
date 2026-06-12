@@ -17,7 +17,7 @@ namespace axe
         };
         m_Framebuffer = Framebuffer::Create(spec);
         m_Initialized = true;
-        AXE_CORE_INFO("GBuffer initialized ({}x{})", width, height);
+        //AXE_CORE_INFO("GBuffer initialized ({}x{})", width, height);
     }
 
     uint32_t GBuffer::GetFramebufferID() const

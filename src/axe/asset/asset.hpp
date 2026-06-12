@@ -14,7 +14,8 @@ namespace axe
 		Scene,      // .axescene
 		Audio,      // .wav, .mp3
 		Script,      // .lua (futuro)
-		Material
+		Material,
+		GameMode     // .axegamemode
 	};
 
 	// Converte extensão para tipo
@@ -54,6 +55,7 @@ namespace axe
 		if (str == "Audio")   return AssetType::Audio;
 		if (str == "Script")  return AssetType::Script;
 		if (str == "Material")  return AssetType::Material;
+		if (str == "GameMode")  return AssetType::GameMode;
 		return AssetType::Unknown;
 	}
 
@@ -65,6 +67,10 @@ namespace axe
 		AssetType             Type = AssetType::Unknown;
 		std::string           Name;
 		std::string           VirtualFolder = ""; // pasta virtual no browser
+
+		// Apenas para Type == Script: subtipo lido do .axescript
+		// Valores: "Entity", "Agent", "Character", "StaticObject", "Trigger"
+		std::string           ScriptClassType;
 
 		bool IsValid() const { return !UUID.empty() && !FilePath.empty(); }
 	};

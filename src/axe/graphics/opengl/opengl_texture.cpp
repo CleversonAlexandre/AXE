@@ -57,8 +57,8 @@ namespace axe
             dataFormat = GL_RED;
         }
 
-        AXE_CORE_INFO("Texture2D: criando textura OpenGL ({}x{}, {} canais)...",
-            m_Width, m_Height, channels);
+        //AXE_CORE_INFO("Texture2D: criando textura OpenGL ({}x{}, {} canais)...",
+        //    m_Width, m_Height, channels);
 
         // Limpa erros GL pendentes de operações anteriores para não
         // confundir erros reais de criação da textura
@@ -100,7 +100,7 @@ namespace axe
         stbi_image_free(data);
         m_Loaded = true;
 
-        AXE_CORE_INFO("Texture2D: '{}' carregada com SUCESSO!", filepath);
+       // AXE_CORE_INFO("Texture2D: '{}' carregada com SUCESSO!", filepath);
     }
 
     OpenGLTexture2D::~OpenGLTexture2D()

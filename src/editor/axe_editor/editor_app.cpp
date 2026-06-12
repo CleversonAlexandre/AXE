@@ -45,7 +45,7 @@ namespace axe
 		AXE_CORE_ASSERT(!s_Instance, "Application already exists!");
 		s_Instance = this;
 
-		AXE_EDITOR_INFO("Creating window...");
+		//AXE_EDITOR_INFO("Creating window...");
 		m_Window = std::unique_ptr<Window>(Window::Create());
 
 		if (!m_Window || !m_Window->GetNativeWindow())
@@ -110,7 +110,7 @@ namespace axe
 
 
 
-		AXE_EDITOR_INFO("EditorApp created successfully");
+		//AXE_EDITOR_INFO("EditorApp created successfully");
 	}
 
 	EditorApp::~EditorApp() = default;
@@ -130,7 +130,7 @@ namespace axe
 	void EditorApp::Run()
 	{
 		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
-		AXE_EDITOR_INFO("Editor started");
+		//AXE_EDITOR_INFO("Editor started");
 
 		float lastFrameTime = m_Window->GetTime();
 

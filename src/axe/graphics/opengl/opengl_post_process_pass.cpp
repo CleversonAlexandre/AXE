@@ -122,7 +122,7 @@ namespace axe
         m_BlurShader = Shader::Create(s_QuadVert, s_BlurFrag);
 
         m_Initialized = true;
-        AXE_CORE_INFO("OpenGLPostProcessPass initialized ({}x{})", width, height);
+        //AXE_CORE_INFO("OpenGLPostProcessPass initialized ({}x{})", width, height);
     }
 
     void OpenGLPostProcessPass::Resize(uint32_t width, uint32_t height)

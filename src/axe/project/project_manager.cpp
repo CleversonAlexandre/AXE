@@ -52,7 +52,7 @@ namespace axe
 		// Escreve o arquivo .axeproject
 		if (!WriteProjectFile(*project))
 		{
-			AXE_CORE_ERROR("ProjectManager: falha ao escrever arquivo do projeto.");
+			//AXE_CORE_ERROR("ProjectManager: falha ao escrever arquivo do projeto.");
 			return false;
 		}
 
@@ -63,7 +63,7 @@ namespace axe
 		m_RecentProjects.insert(m_RecentProjects.begin(), m_LastProjectPath);
 		SavePreferences();
 
-		AXE_CORE_INFO("ProjectManager: projeto '{}' criado em '{}'", name, root.string());
+		//AXE_CORE_INFO("ProjectManager: projeto '{}' criado em '{}'", name, root.string());
 		return true;
 	}
 
@@ -104,7 +104,7 @@ namespace axe
 		AssetDatabase::Get().Clear();
 		AssetDatabase::Get().Load(m_CurrentProject->RootPath);
 
-		AXE_CORE_INFO("ProjectManager: projeto '{}' aberto.", m_CurrentProject->Name);
+		//AXE_CORE_INFO("ProjectManager: projeto '{}' aberto.", m_CurrentProject->Name);
 		return true;
 	}
 

@@ -189,8 +189,10 @@ namespace axe
 			DrawEnvironment(*ec);
 		else if (auto* sa = registry.try_get<SpringArmComponent>(entity))
 		{
-			if (DrawComponent("Spring Arm", entity, registry, [&]() { registry.remove<SpringArmComponent>(entity); }))
-				DrawSpringArm(*sa);
+			bool removeArm = false;
+			bool openArm = DrawComponentHeader("Spring Arm", entity, 4, &removeArm);
+			if (removeArm) { registry.remove<SpringArmComponent>(entity); return; }
+			if (openArm) DrawSpringArm(*sa);
 		}
 		else if (auto* cam = registry.try_get<CameraComponent>(entity))
 			DrawCamera(*cam);

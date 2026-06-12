@@ -55,7 +55,7 @@ namespace axe
         // m_Environment->LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         //m_Renderer->SetEnvironment(m_Environment.get());
 
-        AXE_CORE_INFO("MaterialThumbnailRenderer initialized.");
+        //AXE_CORE_INFO("MaterialThumbnailRenderer initialized.");
     }
 
     void MaterialThumbnailRenderer::Register(const std::string& uuid,

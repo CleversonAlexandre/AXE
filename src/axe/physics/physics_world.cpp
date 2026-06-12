@@ -376,91 +376,94 @@ namespace axe
                 tc.Data.Rotation = FromJoltRot(bi.GetRotation(id));
                 tc.Data.UseWorldMatrix = false;
             });
-    
 
-    // ── CharacterController update ──────────────────────────────────────────
-    registry.view<CharacterControllerComponent, TransformComponent>().each(
-        [&](entt::entity entity, CharacterControllerComponent& cc, TransformComponent& tc)
-        {
-            auto it = s_Characters.find(entity);
-            if (it == s_Characters.end() || !it->second) return;
 
-            auto& ch = *it->second;
-            JPH::PhysicsSystem* ps = GetPS();
-            JPH::TempAllocatorImpl* ta = GetTA();
-            if (!ps || !ta) return;
-
-            // Monta velocidade: XZ vem do script, Y da gravidade
-            JPH::Vec3 curVel = ch.GetLinearVelocity();
-            JPH::Vec3 gravity = ps->GetGravity();
-
-            // Velocidade horizontal do script
-            float vx = cc.Velocity.x;
-            float vz = cc.Velocity.z;
-
-            // Pulo
-            bool grounded = ch.IsSupported();
-            cc.IsGrounded = grounded;
-            float vy = curVel.GetY();
-
-            if (cc.WantsJump && grounded)
+        // ── CharacterController update ──────────────────────────────────────────
+        registry.view<CharacterControllerComponent, TransformComponent>().each(
+            [&](entt::entity entity, CharacterControllerComponent& cc, TransformComponent& tc)
             {
-                vy = cc.JumpForce;
-                cc.WantsJump = false;
-            }
-            else
-            {
-                // Aplica gravidade
-                vy += gravity.GetY() * deltaTime;
-            }
+                auto it = s_Characters.find(entity);
+                if (it == s_Characters.end() || !it->second) return;
 
-            ch.SetLinearVelocity(JPH::Vec3(vx, vy, vz));
+                auto& ch = *it->second;
+                JPH::PhysicsSystem* ps = GetPS();
+                JPH::TempAllocatorImpl* ta = GetTA();
+                if (!ps || !ta) return;
 
-            // ExtendedUpdate — move, sobe degraus, gruda no chão
-            JPH::CharacterVirtual::ExtendedUpdateSettings euSettings;
-            euSettings.mStickToFloorStepDown = JPH::Vec3(0, -cc.StepHeight, 0);
-            euSettings.mWalkStairsStepUp = JPH::Vec3(0, cc.StepHeight, 0);
+                // Monta velocidade: XZ vem do script, Y da gravidade
+                JPH::Vec3 curVel = ch.GetLinearVelocity();
+                JPH::Vec3 gravity = ps->GetGravity();
 
-            ch.ExtendedUpdate(
-                deltaTime,
-                gravity,
-                euSettings,
-                ps->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
-                ps->GetDefaultLayerFilter(Layers::MOVING),
-                {},  // BodyFilter
-                {},  // ShapeFilter
-                *ta);
+                // Velocidade horizontal do script
+                float vx = cc.Velocity.x;
+                float vz = cc.Velocity.z;
 
-            // Sync posição de volta para o TransformComponent
-            JPH::RVec3 newPos = ch.GetPosition();
-            tc.Data.Position = glm::vec3((float)newPos.GetX(), (float)newPos.GetY(), (float)newPos.GetZ());
-            tc.Data.UseWorldMatrix = false;
+                if (std::abs(vx) > 0.001f || std::abs(vz) > 0.001f)
+                    AXE_CORE_INFO("PhysicsWorld CC: entity={} vel=({:.2f},{:.2f})", (uint32_t)entity, vx, vz);
 
-            // Reset velocidade XZ (será reescrita pelo script no próximo frame)
-            cc.Velocity.x = 0;
-            cc.Velocity.z = 0;
-        });
-}
+                // Pulo
+                bool grounded = ch.IsSupported();
+                cc.IsGrounded = grounded;
+                float vy = curVel.GetY();
 
-void PhysicsWorld::AddForce(entt::entity entity, Scene& scene, const glm::vec3& force)
-{
-    auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
-    if (!rb || !rb->IsCreated) return;
-    JPH::BodyID id = ToBodyID(rb->BodyID);
-    if (!id.IsInvalid()) GetBI().AddForce(id, ToJolt(force));
-}
+                if (cc.WantsJump && grounded)
+                {
+                    vy = cc.JumpForce;
+                    cc.WantsJump = false;
+                }
+                else
+                {
+                    // Aplica gravidade
+                    vy += gravity.GetY() * deltaTime;
+                }
 
-void PhysicsWorld::AddImpulse(entt::entity entity, Scene& scene, const glm::vec3& impulse)
-{
-    auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
-    if (!rb || !rb->IsCreated) return;
-    JPH::BodyID id = ToBodyID(rb->BodyID);
-    if (!id.IsInvalid()) GetBI().AddImpulse(id, ToJolt(impulse));
-}
+                ch.SetLinearVelocity(JPH::Vec3(vx, vy, vz));
 
-RaycastHit PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDist)
-{
-    return PhysicsSystem::Get().Raycast(origin, dir, maxDist);
-}
+                // ExtendedUpdate — move, sobe degraus, gruda no chão
+                JPH::CharacterVirtual::ExtendedUpdateSettings euSettings;
+                euSettings.mStickToFloorStepDown = JPH::Vec3(0, -cc.StepHeight, 0);
+                euSettings.mWalkStairsStepUp = JPH::Vec3(0, cc.StepHeight, 0);
+
+                ch.ExtendedUpdate(
+                    deltaTime,
+                    gravity,
+                    euSettings,
+                    ps->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                    ps->GetDefaultLayerFilter(Layers::MOVING),
+                    {},  // BodyFilter
+                    {},  // ShapeFilter
+                    *ta);
+
+                // Sync posição de volta para o TransformComponent
+                JPH::RVec3 newPos = ch.GetPosition();
+                tc.Data.Position = glm::vec3((float)newPos.GetX(), (float)newPos.GetY(), (float)newPos.GetZ());
+                tc.Data.UseWorldMatrix = false;
+
+                // Reset velocidade XZ (será reescrita pelo script no próximo frame)
+                cc.Velocity.x = 0;
+                cc.Velocity.z = 0;
+            });
+    }
+
+    void PhysicsWorld::AddForce(entt::entity entity, Scene& scene, const glm::vec3& force)
+    {
+        auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
+        if (!rb || !rb->IsCreated) return;
+        JPH::BodyID id = ToBodyID(rb->BodyID);
+        if (!id.IsInvalid()) GetBI().AddForce(id, ToJolt(force));
+    }
+
+    void PhysicsWorld::AddImpulse(entt::entity entity, Scene& scene, const glm::vec3& impulse)
+    {
+        auto* rb = scene.GetRegistry().try_get<RigidbodyComponent>(entity);
+        if (!rb || !rb->IsCreated) return;
+        JPH::BodyID id = ToBodyID(rb->BodyID);
+        if (!id.IsInvalid()) GetBI().AddImpulse(id, ToJolt(impulse));
+    }
+
+    RaycastHit PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDist)
+    {
+        return PhysicsSystem::Get().Raycast(origin, dir, maxDist);
+    }
 
 } // namespace axe

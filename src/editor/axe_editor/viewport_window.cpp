@@ -12,25 +12,25 @@ namespace axe
 {
 	ViewportWindow::ViewportWindow()
 	{
-		AXE_CORE_INFO("ViewportWindow created (no GPU resources yet)");
+		//AXE_CORE_INFO("ViewportWindow created (no GPU resources yet)");
 	}
 
 	ViewportWindow::~ViewportWindow()
 	{
-		AXE_CORE_INFO("ViewportWindow destroyed");
+		//AXE_CORE_INFO("ViewportWindow destroyed");
 	}
 
 	void ViewportWindow::Initialize()
 	{
 		if (m_Initialized)
 		{
-			AXE_CORE_WARN("Viewport already initialized");
+			//AXE_CORE_WARN("Viewport already initialized");
 			return;
 		}
 
 		m_Camera = std::make_unique<EditorCamera>(45.0f, 1.0f, 0.1f, 100.0f);
 
-		AXE_CORE_INFO("Initializing ViewportWindow resources...");
+		//AXE_CORE_INFO("Initializing ViewportWindow resources...");
 
 		FramebufferSpecification spec;
 		spec.Width = 1280;
@@ -47,7 +47,7 @@ namespace axe
 
 		m_Initialized = true;
 
-		AXE_CORE_INFO("ViewportWindow initialized successfully");
+		//AXE_CORE_INFO("ViewportWindow initialized successfully");
 	}
 
 

@@ -88,6 +88,29 @@ namespace axe
         float CCMaxSpeed = 5.f;
         float CCJumpForce = 5.f;
 
+        // CharacterController extra
+        bool  CCGravity = true;
+
+        // ── SpringArm ─────────────────────────────────────────────────────────
+        float SALength = 300.0f; // comprimento do braço (unidades)
+        float SAHeightOffset = 0.0f;  // offset vertical relativo ao pawn
+        float SASocketOffX = 0.0f;
+        float SASocketOffY = 0.0f;
+        float SASocketOffZ = 0.0f;
+        float SALagSpeed = 8.0f;
+        bool  SAEnableLag = true;
+        bool  SAMouseRotates = true;
+
+        // ── Camera ────────────────────────────────────────────────────────────
+        float CamFov = 60.0f;
+        float CamNearClip = 0.1f;
+        float CamFarClip = 1000.0f;
+        float CamSensitivity = 0.1f;
+        bool  CamIsPrimary = true;
+
+        // ── Hierarquia — índice do componente pai (-1 = raiz) ─────────────────
+        int   ParentIndex = -1;
+
         // Transform local do componente
         float PosX = 0, PosY = 0, PosZ = 0;
         float RotX = 0, RotY = 0, RotZ = 0;

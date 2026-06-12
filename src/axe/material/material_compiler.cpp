@@ -32,7 +32,7 @@ namespace axe
         if (!outputNode)
         {
             result.ErrorMessage = "Material Output node not found";
-            AXE_CORE_ERROR("MaterialCompiler: {}", result.ErrorMessage);
+            //AXE_CORE_ERROR("MaterialCompiler: {}", result.ErrorMessage);
             return result;
         }
 
@@ -354,7 +354,7 @@ namespace axe
 
         result.FragmentShader = fs.str();
         result.GeometryFragShader = gs.str();
-        AXE_CORE_INFO("GeometryFragShader:\n{}", result.GeometryFragShader.substr(0, 500));
+        //AXE_CORE_INFO("GeometryFragShader:\n{}", result.GeometryFragShader.substr(0, 500));
         // 9. Vertex Shader
         result.VertexShader = R"(
         #version 460 core
@@ -397,10 +397,10 @@ namespace axe
             std::string lines;
             while (std::getline(stream, line) && lineNum < 40)
                 lines += std::to_string(++lineNum) + ": " + line + "\n";
-            AXE_CORE_INFO("Fragment:\n{}", lines);
+            //AXE_CORE_INFO("Fragment:\n{}", lines);
         }
 
-        AXE_CORE_INFO("MaterialCompiler: Compilation successful.");
+        //AXE_CORE_INFO("MaterialCompiler: Compilation successful.");
         return result;
     }
 
@@ -446,7 +446,7 @@ namespace axe
     {
         if (node->Name == "Material Output") return "";
 
-        AXE_CORE_INFO("GenerateNodeCode: '{}'", node->Name);
+        //AXE_CORE_INFO("GenerateNodeCode: '{}'", node->Name);
 
         std::stringstream code;
 
@@ -836,7 +836,7 @@ namespace axe
         auto it = m_PinVariables.find(pinId.Get());
         if (it != m_PinVariables.end())
             return it->second.variable;
-        AXE_CORE_WARN("MaterialCompiler: pin {} not registered, using 0.0", pinId.Get());
+        //AXE_CORE_WARN("MaterialCompiler: pin {} not registered, using 0.0", pinId.Get());
         return "0.0";
     }
 

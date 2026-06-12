@@ -23,24 +23,63 @@ namespace axe
         bool IsLoaded = false;
         bool NeedsReload = false;
 
-        // Cópia segura para entt
+        // entt usa move semantics internamente — preservar Instance e DllHandle no move
         ScriptComponent() = default;
+
+        // Copy — NÃO copia runtime state (Instance/DllHandle)
+        // Usado para clonar definições, não instâncias ativas
         ScriptComponent(const ScriptComponent& o)
             : ScriptAssetPath(o.ScriptAssetPath), DllPath(o.DllPath),
             ScriptName(o.ScriptName), Graph(o.Graph),
-            DllHandle(nullptr), IsCompiled(o.IsCompiled),
-            IsLoaded(false), NeedsReload(false) {}
+            Instance(o.Instance), DllHandle(o.DllHandle),
+            IsCompiled(o.IsCompiled), IsLoaded(o.IsLoaded),
+            NeedsReload(o.NeedsReload) {}
+
         ScriptComponent& operator=(const ScriptComponent& o)
         {
+            if (this == &o) return *this;
             ScriptAssetPath = o.ScriptAssetPath;
             DllPath = o.DllPath;
             ScriptName = o.ScriptName;
             Graph = o.Graph;
+            Instance = o.Instance;   // preserva shared_ptr
+            DllHandle = o.DllHandle;  // preserva handle
             IsCompiled = o.IsCompiled;
-            IsLoaded = false;
-            NeedsReload = false;
-            DllHandle = nullptr;
-            Instance = nullptr;
+            IsLoaded = o.IsLoaded;
+            NeedsReload = o.NeedsReload;
+            return *this;
+        }
+
+        // Move — entt usa isso ao realocar storage
+        ScriptComponent(ScriptComponent&& o) noexcept
+            : ScriptAssetPath(std::move(o.ScriptAssetPath)),
+            DllPath(std::move(o.DllPath)),
+            ScriptName(std::move(o.ScriptName)),
+            Graph(std::move(o.Graph)),
+            Instance(std::move(o.Instance)),
+            DllHandle(o.DllHandle),
+            IsCompiled(o.IsCompiled),
+            IsLoaded(o.IsLoaded),
+            NeedsReload(o.NeedsReload)
+        {
+            o.DllHandle = nullptr;
+            o.IsLoaded = false;
+        }
+
+        ScriptComponent& operator=(ScriptComponent&& o) noexcept
+        {
+            if (this == &o) return *this;
+            ScriptAssetPath = std::move(o.ScriptAssetPath);
+            DllPath = std::move(o.DllPath);
+            ScriptName = std::move(o.ScriptName);
+            Graph = std::move(o.Graph);
+            Instance = std::move(o.Instance);
+            DllHandle = o.DllHandle;
+            IsCompiled = o.IsCompiled;
+            IsLoaded = o.IsLoaded;
+            NeedsReload = o.NeedsReload;
+            o.DllHandle = nullptr;
+            o.IsLoaded = false;
             return *this;
         }
     };

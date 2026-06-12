@@ -609,6 +609,89 @@ namespace axe
             tc->Data.UseWorldMatrix = false;
             tc->Data.WorldMatrix = tc->Data.GetMatrix();
         }
+
+        // ── Spring Arm Gizmo ──────────────────────────────────────────────────
+        // Desenha uma linha do pawn até a posição da câmera e um manipulador
+        // que permite arrastar o endpoint da câmera para reposicionar o SpringArm
+        auto* sa = reg.try_get<SpringArmComponent>(m_PreviewEntity);
+        if (sa && m_ScriptAsset)
+        {
+            // Posição do pawn
+            glm::vec3 pawnPos = tc->Data.Position;
+
+            // Posição da câmera = pawn + offset vertical + trás no eixo Z local
+            // (simplificado — assume câmera atrás no eixo Z)
+            glm::vec3 camOffset = {
+                sa->SocketOffset.x,
+                sa->HeightOffset + sa->SocketOffset.y,
+                sa->Length + sa->SocketOffset.z
+            };
+            glm::vec3 camPos = pawnPos + camOffset;
+
+            // Projeta as duas posições para screen space para desenhar a linha
+            auto worldToScreen = [&](const glm::vec3& world) -> ImVec2 {
+                glm::vec4 clip = proj * view * glm::vec4(world, 1.0f);
+                if (std::abs(clip.w) < 0.001f) return ImVec2(-9999, -9999);
+                glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                float sx = m_PreviewBoundsMin.x + (ndc.x * 0.5f + 0.5f) * w;
+                float sy = m_PreviewBoundsMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * h;
+                return ImVec2(sx, sy);
+                };
+
+            ImVec2 pawnScreen = worldToScreen(pawnPos);
+            ImVec2 camScreen = worldToScreen(camPos);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            // Linha do braço — roxo/lilás
+            dl->AddLine(pawnScreen, camScreen, IM_COL32(180, 130, 255, 200), 1.5f);
+
+            // Ponto do pawn (origem)
+            dl->AddCircleFilled(pawnScreen, 4.f, IM_COL32(200, 150, 255, 230));
+
+            // Ponto da câmera (endpoint arrastável)
+            bool hovered = ImGui::IsMouseHoveringRect(
+                ImVec2(camScreen.x - 8, camScreen.y - 8),
+                ImVec2(camScreen.x + 8, camScreen.y + 8));
+            dl->AddCircleFilled(camScreen, hovered ? 8.f : 6.f,
+                hovered ? IM_COL32(255, 200, 100, 255) : IM_COL32(255, 180, 80, 200));
+            dl->AddCircle(camScreen, hovered ? 8.f : 6.f, IM_COL32(255, 255, 255, 180), 12, 1.f);
+
+            // Label
+            dl->AddText(ImVec2(camScreen.x + 10, camScreen.y - 8),
+                IM_COL32(220, 200, 255, 220), "Camera");
+
+            // Arraste do endpoint da câmera
+            if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+            {
+                ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);
+                ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
+
+                // Converte delta de pixels para unidades de mundo (aproximado)
+                float pixelsPerUnit = h / (2.0f * std::tan(glm::radians(45.0f / 2.0f)) * 5.0f);
+                if (pixelsPerUnit > 0.001f)
+                {
+                    sa->Length -= delta.y / pixelsPerUnit;  // Y do mouse → comprimento
+                    sa->HeightOffset += delta.y / pixelsPerUnit * 0.3f;
+
+                    sa->Length = std::max(sa->Length, 1.0f);
+
+                    // Sincroniza de volta para o def
+                    if (m_ScriptAsset)
+                    {
+                        for (auto& d : m_ScriptAsset->GetComponents())
+                        {
+                            if (d.Type == "SpringArm")
+                            {
+                                d.SALength = sa->Length * 100.0f;
+                                d.SAHeightOffset = sa->HeightOffset;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -675,13 +758,14 @@ namespace axe
 
                 struct CE { const char* name; const char* type; const char* desc; ImVec4 col; };
                 static const CE comps[] = {
-                    {"Mesh",             "Mesh",                "Malha 3D do objeto",      {0.6f,0.9f,1.f,1}},
-                    {"Material",         "Material",            "Material PBR",             {1.f,0.7f,0.4f,1}},
-                    {"Rigidbody",        "Rigidbody",           "Fisica dinamica",          {0.3f,0.7f,1.f,1}},
-                    {"Collider",         "Collider",            "Colisao (Box/Sphere/Capsule/Mesh)", {0.3f,1.f,0.5f,1}},
-                    {"Character Ctrl",   "CharacterController", "Controlador personagem",   {1.f,0.7f,0.2f,1}},
-                    {"Point Light",      "PointLight",          "Luz pontual",              {1.f,0.9f,0.3f,1}},
-                    {"Camera",           "Camera",              "Camera de jogo",           {0.7f,0.5f,1.f,1}},
+                    {"Mesh",             "Mesh",                "Malha 3D do objeto",         {0.6f,0.9f,1.f,1}},
+                    {"Material",         "Material",            "Material PBR",                {1.f,0.7f,0.4f,1}},
+                    {"Rigidbody",        "Rigidbody",           "Fisica dinamica",             {0.3f,0.7f,1.f,1}},
+                    {"Collider",         "Collider",            "Colisao (Box/Sphere/Capsule)", {0.3f,1.f,0.5f,1}},
+                    {"Character Ctrl",   "CharacterController", "Controlador personagem",      {1.f,0.7f,0.2f,1}},
+                    {"Point Light",      "PointLight",          "Luz pontual",                 {1.f,0.9f,0.3f,1}},
+                    {"Spring Arm",       "SpringArm",           "Braco da camera (boom)",      {0.9f,0.6f,1.f,1}},
+                    {"Camera",           "Camera",              "Camera de jogo",              {0.7f,0.5f,1.f,1}},
                 };
                 for (auto& c : comps)
                 {
@@ -730,67 +814,93 @@ namespace axe
                     ImGui::EndDragDropSource();
                 }
 
-                for (int i = 0; i < (int)comps.size(); i++)
-                {
+                // ── Árvore hierárquica de componentes ────────────────────────
+                // Primeiro renderiza os que NÃO têm pai (raiz)
+                // Depois renderiza filhos com indentação
+                auto getColor = [](const std::string& t) -> ImVec4 {
+                    if (t == "Mesh")              return { 0.6f,0.9f,1.f,1 };
+                    if (t == "Material")          return { 1.f,0.7f,0.4f,1 };
+                    if (t == "Rigidbody")         return { 0.3f,0.7f,1.f,1 };
+                    if (t.find("Collider") != std::string::npos) return { 0.3f,1.f,0.5f,1 };
+                    if (t == "CharacterController") return { 1.f,0.7f,0.2f,1 };
+                    if (t == "SpringArm")         return { 0.9f,0.6f,1.f,1 };
+                    if (t == "Camera")            return { 0.7f,0.5f,1.f,1 };
+                    return { 0.85f,0.85f,0.85f,1 };
+                    };
+
+                auto drawComp = [&](int i, float indent) {
                     auto& def = comps[i];
-                    ImVec4 col =
-                        def.Type == "Mesh" ? ImVec4(0.6f, 0.9f, 1.f, 1) :
-                        def.Type == "Material" ? ImVec4(1.f, 0.7f, 0.4f, 1) :
-                        def.Type == "Rigidbody" ? ImVec4(0.3f, 0.7f, 1.f, 1) :
-                        def.Type.find("Collider") != std::string::npos ? ImVec4(0.3f, 1.f, 0.5f, 1) :
-                        def.Type == "CharacterController" ? ImVec4(1.f, 0.7f, 0.2f, 1) :
-                        ImVec4(0.85f, 0.85f, 0.85f, 1);
+                    ImVec4 col = getColor(def.Type);
+                    bool isSelected = (m_SelectedCompIndex == i);
 
                     ImGui::PushID(i);
+                    if (indent > 0) ImGui::Indent(indent);
 
-                    // Botão X
+                    // X button
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
                     if (ImGui::SmallButton("x")) removeIdx = i;
                     ImGui::PopStyleColor(3);
-
                     ImGui::SameLine(0, 4);
 
-                    // Ícone de drag
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 0.7f));
-                    ImGui::TextUnformatted("=");
-                    ImGui::PopStyleColor();
-                    ImGui::SameLine(0, 4);
-
-                    // Nome arrastável
+                    // Selectable com highlight
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    ImGui::Selectable(def.Type.c_str(), false,
+                    if (ImGui::Selectable(def.Type.c_str(), isSelected,
                         ImGuiSelectableFlags_None,
-                        ImVec2(ImGui::GetContentRegionAvail().x, 0));
+                        ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+                        m_SelectedCompIndex = i;
                     ImGui::PopStyleColor();
 
-                    // Drag source — arrasta para o graph canvas
+                    // Drag para graph
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
-                        // Apenas componentes com nodes mapeados são arrastáveis
-                        std::string defaultNode;
-                        if (def.Type == "Rigidbody")                              defaultNode = "GetRigidbody";
-                        else if (def.Type.find("Collider") != std::string::npos)       defaultNode = "GetCollider";
-                        else if (def.Type == "CharacterController")                    defaultNode = "GetCharacterController";
-                        // Mesh e Material não têm nodes — não iniciam drag
-                        if (!defaultNode.empty())
+                        std::string node;
+                        if (def.Type == "Rigidbody")                             node = "GetRigidbody";
+                        else if (def.Type.find("Collider") != std::string::npos) node = "GetCollider";
+                        else if (def.Type == "CharacterController")              node = "GetCharacterController";
+                        if (!node.empty())
                         {
-                            ImGui::SetDragDropPayload("COMP_NODE", defaultNode.c_str(), defaultNode.size() + 1);
+                            ImGui::SetDragDropPayload("COMP_NODE", node.c_str(), node.size() + 1);
                             ImGui::PushStyleColor(ImGuiCol_Text, col);
                             ImGui::Text("Arrastar %s → Graph", def.Type.c_str());
                             ImGui::PopStyleColor();
-                            ImGui::TextDisabled("Solte no canvas do graph");
                         }
-                        else
-                        {
-                            ImGui::TextDisabled("%s sem nodes disponíveis", def.Type.c_str());
-                        }
+                        else ImGui::TextDisabled("%s", def.Type.c_str());
                         ImGui::EndDragDropSource();
                     }
 
+                    // Drop target — permite reparentar arrastando Camera sobre SpringArm
+                    if (def.Type == "SpringArm" && ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_REPARENT"))
+                        {
+                            int childIdx = *(const int*)p->Data;
+                            if (childIdx != i && childIdx < (int)comps.size())
+                                comps[childIdx].ParentIndex = i;
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+
+                    // Camera pode ser arrastada para ser filha de SpringArm
+                    if (def.Type == "Camera" && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                    {
+                        ImGui::SetDragDropPayload("COMP_REPARENT", &i, sizeof(int));
+                        ImGui::TextUnformatted("Arrastar Camera → SpringArm");
+                        ImGui::EndDragDropSource();
+                    }
+
+                    if (indent > 0) ImGui::Unindent(indent);
                     ImGui::PopID();
-                }
+                    };
+
+                // Renderiza raiz primeiro, depois filhos com indent
+                for (int i = 0; i < (int)comps.size(); i++)
+                    if (comps[i].ParentIndex == -1)
+                        drawComp(i, 0.f);
+                for (int i = 0; i < (int)comps.size(); i++)
+                    if (comps[i].ParentIndex >= 0)
+                        drawComp(i, 16.f);
                 if (removeIdx >= 0)
                 {
                     m_ScriptAsset->RemoveComponent(removeIdx);
@@ -1462,6 +1572,59 @@ namespace axe
                                 ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f);
                                 ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f);
                                 ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f);
+                            }
+                            // ── SPRING ARM ────────────────────────────────────
+                            else if (def.Type == "SpringArm")
+                            {
+                                bool armChanged = false;
+                                if (ImGui::DragFloat("Comprimento##sa", &def.SALength, 1.f, 50.f, 1000.f, "%.0f")) armChanged = true;
+                                if (ImGui::DragFloat("Altura##sa", &def.SAHeightOffset, 0.1f, -10.f, 20.f, "%.2f")) armChanged = true;
+                                float off[3] = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
+                                if (ImGui::DragFloat3("Socket Offset##sa", off, 0.05f)) {
+                                    def.SASocketOffX = off[0]; def.SASocketOffY = off[1]; def.SASocketOffZ = off[2];
+                                    armChanged = true;
+                                }
+                                if (ImGui::DragFloat("Suavização##sa", &def.SALagSpeed, 0.1f, 0.5f, 30.f, "%.1f")) armChanged = true;
+                                ImGui::Checkbox("Camera Lag##sa", &def.SAEnableLag);
+                                ImGui::Checkbox("Mouse rotaciona##sa", &def.SAMouseRotates);
+
+                                // Dica visual — mostra gizmo no preview ao selecionar
+                                if (armChanged)
+                                {
+                                    // Atualiza o SpringArmComponent no preview
+                                    auto& pr = m_PreviewScene->GetRegistry();
+                                    auto& sa = pr.get_or_emplace<SpringArmComponent>(m_PreviewEntity);
+                                    sa.Length = def.SALength / 100.0f; // cm → unidades
+                                    sa.HeightOffset = def.SAHeightOffset;
+                                    sa.SocketOffset = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
+                                    sa.LagSpeed = def.SALagSpeed;
+                                    sa.EnableCameraLag = def.SAEnableLag;
+                                    sa.MouseRotates = def.SAMouseRotates;
+                                }
+
+                                ImGui::Spacing();
+                                ImGui::TextDisabled("Pai no índice: %d", def.ParentIndex);
+                            }
+                            // ── CAMERA ───────────────────────────────────────
+                            else if (def.Type == "Camera")
+                            {
+                                ImGui::DragFloat("FOV##cam", &def.CamFov, 0.5f, 10.f, 170.f, "%.1f°");
+                                ImGui::DragFloat("Near Clip##cam", &def.CamNearClip, 0.01f, 0.001f, 10.f);
+                                ImGui::DragFloat("Far Clip##cam", &def.CamFarClip, 1.f, 10.f, 10000.f);
+                                ImGui::DragFloat("Sensibilidade##cam", &def.CamSensitivity, 0.005f, 0.01f, 5.f);
+                                ImGui::Checkbox("Câmera Principal##cam", &def.CamIsPrimary);
+
+                                // Atualiza CameraComponent no preview
+                                auto& pr = m_PreviewScene->GetRegistry();
+                                auto& cam = pr.get_or_emplace<CameraComponent>(m_PreviewEntity);
+                                cam.Fov = def.CamFov;
+                                cam.NearClip = def.CamNearClip;
+                                cam.FarClip = def.CamFarClip;
+                                cam.Sensitivity = def.CamSensitivity;
+                                cam.IsPrimary = def.CamIsPrimary;
+
+                                ImGui::Spacing();
+                                ImGui::TextDisabled("Pai no índice: %d", def.ParentIndex);
                             }
                         }
                         ImGui::PopID();
