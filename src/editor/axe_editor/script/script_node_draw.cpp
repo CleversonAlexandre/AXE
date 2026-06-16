@@ -74,7 +74,11 @@ namespace axe
             case ScriptVarType::Int:    pinType = ScriptPinType::Int;    break;
             case ScriptVarType::Vec3:   pinType = ScriptPinType::Vec3;   break;
             case ScriptVarType::String: pinType = ScriptPinType::String; break;
-            default: break;
+            case ScriptVarType::Vec2:   pinType = ScriptPinType::Vec2;   break;
+            case ScriptVarType::Vec4:   pinType = ScriptPinType::Vec4;   break;
+            case ScriptVarType::Quat:   pinType = ScriptPinType::Quat;   break;
+            case ScriptVarType::Entity: pinType = ScriptPinType::Object; break;
+            default:                    pinType = ScriptPinType::Float;  break;
             }
             for (auto& p : node->Inputs)  if (p.Name == "Value") p.Type = pinType;
             for (auto& p : node->Outputs) if (p.Name == "Value") p.Type = pinType;

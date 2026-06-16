@@ -77,14 +77,25 @@ namespace axe
                     includeFlags += " /I\"" + token + "\"";
         }
 
+        // Detecta se axe.dll foi compilada em Debug — usa mesmo CRT para evitar
+        // incompatibilidade de layout de std::string, std::vector etc. cross-DLL.
+        // axe.dll Debug usa /MDd (_ITERATOR_DEBUG_LEVEL=2), Release usa /MD.
+#if defined(_DEBUG) || defined(AXE_DEBUG)
+        const char* crtFlag = " /MDd";
+        const char* debugDefs = " /D_DEBUG /D_ITERATOR_DEBUG_LEVEL=2";
+#else
+        const char* crtFlag = " /MD";
+        const char* debugDefs = " /DNDEBUG /D_ITERATOR_DEBUG_LEVEL=0";
+#endif
+
         std::ostringstream cmd;
         if (!vcvarsall.empty())
         {
-            // Chama vcvarsall x64 antes do cl.exe no mesmo shell
             cmd << "cmd /C \"\""
                 << vcvarsall << "\" x64 && "
                 << "\"" << compiler << "\""
-                << " /LD /O2 /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << " /LD /Od /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << crtFlag << debugDefs
                 << includeFlags
                 << " /Fe\"" << dllOutput << "\""
                 << " \"" << cppPath << "\""
@@ -93,7 +104,8 @@ namespace axe
         else
         {
             cmd << "\"" << compiler << "\""
-                << " /LD /O2 /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << " /LD /Od /EHsc /std:c++20 /utf-8 /DAXE_PLATFORM_WINDOWS"
+                << crtFlag << debugDefs
                 << includeFlags
                 << " /Fe\"" << dllOutput << "\""
                 << " \"" << cppPath << "\""

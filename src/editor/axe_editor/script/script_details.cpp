@@ -400,6 +400,120 @@ namespace axe
                                         if (ImGui::InputText("##nd_s", sbuf, 256)) foundVar->DefaultString = sbuf;
                                         break;
                                     }
+                                    case ScriptVarType::Entity:
+                                    {
+                                        // ── Entity picker ────────────────────────────────────────────
+                                        // DefaultString guarda o nome da entity referenciada na cena.
+                                        // Exibe botão com o nome atual + dropdown com todas as entities.
+
+                                        const std::string& current = foundVar->DefaultString;
+                                        const char* label = current.empty() ? "[ Nenhuma ]" : current.c_str();
+
+                                        // Verifica se a entity ainda existe na cena ativa
+                                        bool entityExists = false;
+                                        if (m_ActiveScene && !current.empty())
+                                        {
+                                            auto& reg = m_ActiveScene->GetRegistry();
+                                            reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc) {
+                                                if (nc.Name == current) entityExists = true;
+                                                });
+                                        }
+
+                                        // Cor do botão: verde se existe, amarelo se não encontrada, cinza se vazio
+                                        ImVec4 btnCol = current.empty()
+                                            ? ImVec4(0.25f, 0.25f, 0.25f, 1)
+                                            : (entityExists
+                                                ? ImVec4(0.15f, 0.40f, 0.15f, 1)
+                                                : ImVec4(0.45f, 0.35f, 0.05f, 1));
+
+                                        ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                            ImVec4(btnCol.x + 0.1f, btnCol.y + 0.1f, btnCol.z + 0.1f, 1));
+
+                                        float bw = ImGui::GetContentRegionAvail().x - 26.f;
+                                        if (ImGui::Button(label, ImVec2(bw, 0)))
+                                            ImGui::OpenPopup("##entity_picker");
+                                        ImGui::PopStyleColor(2);
+
+                                        // Botão X para limpar
+                                        if (!current.empty())
+                                        {
+                                            ImGui::SameLine(0, 2);
+                                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.7f));
+                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                                            if (ImGui::SmallButton("x##clrent")) foundVar->DefaultString.clear();
+                                            ImGui::PopStyleColor(3);
+                                        }
+
+                                        // Aviso se entity não encontrada na cena
+                                        if (!current.empty() && !entityExists)
+                                        {
+                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.1f, 1));
+                                            ImGui::TextWrapped("'%s' nao encontrada na cena.", current.c_str());
+                                            ImGui::PopStyleColor();
+                                        }
+
+                                        // Drag-and-drop: aceita entidade arrastada do Scene Graph do editor
+                                        if (ImGui::BeginDragDropTarget())
+                                        {
+                                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY_NAME"))
+                                                foundVar->DefaultString = (const char*)p->Data;
+                                            ImGui::EndDragDropTarget();
+                                        }
+
+                                        // Popup com lista de entities da cena ativa
+                                        ImGui::SetNextWindowSize(ImVec2(220, 280), ImGuiCond_Always);
+                                        if (ImGui::BeginPopup("##entity_picker"))
+                                        {
+                                            ImGui::TextDisabled("Selecione uma entity:");
+                                            ImGui::Separator();
+
+                                            // Campo de busca
+                                            static char searchBuf[64] = {};
+                                            if (ImGui::IsWindowAppearing())
+                                            {
+                                                ImGui::SetKeyboardFocusHere();
+                                                searchBuf[0] = '\0';
+                                            }
+                                            ImGui::SetNextItemWidth(-1);
+                                            ImGui::InputTextWithHint("##entSearch", "Buscar...", searchBuf, sizeof(searchBuf));
+                                            ImGui::Separator();
+
+                                            std::string s = searchBuf;
+                                            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+
+                                            if (m_ActiveScene)
+                                            {
+                                                auto& reg = m_ActiveScene->GetRegistry();
+                                                reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc)
+                                                    {
+                                                        // Filtro de busca
+                                                        std::string low = nc.Name;
+                                                        std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+                                                        if (!s.empty() && low.find(s) == std::string::npos) return;
+
+                                                        bool selected = (nc.Name == current);
+                                                        if (selected)
+                                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1));
+
+                                                        if (ImGui::Selectable(nc.Name.c_str(), selected))
+                                                        {
+                                                            foundVar->DefaultString = nc.Name;
+                                                            ImGui::CloseCurrentPopup();
+                                                        }
+
+                                                        if (selected) ImGui::PopStyleColor();
+                                                    });
+                                            }
+                                            else
+                                            {
+                                                ImGui::TextDisabled("Nenhuma cena ativa.");
+                                            }
+                                            ImGui::EndPopup();
+                                        }
+                                        break;
+                                    }
                                     default: break;
                                     }
                                     ImGui::Spacing();

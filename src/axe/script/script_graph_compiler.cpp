@@ -171,6 +171,13 @@ namespace axe
             if (srcPin->Name == "X") return base + ".x";
             if (srcPin->Name == "Y") return base + ".y";
             if (srcPin->Name == "Z") return base + ".z";
+            if (srcPin->Name == "W") return base + ".w";
+
+            // Se o pin de saída é Object (variável do tipo Entity),
+            // resolve como FindByName(m_varName) para obter a entt::entity
+            if (srcPin->Type == ScriptPinType::Object)
+                return "(GetContext().ScenePtr ? GetContext().ScenePtr->FindByName(" + base + ") : entt::null)";
+
             return base;
         }
 
@@ -421,7 +428,7 @@ namespace axe
             std::string msg = "\"\"";
             for (const auto& inp : node->Inputs)
                 if (inp.Name == "Message") msg = ResolvePin(ctx, inp);
-            ctx.Line("AXE_SCRIPT_LOG(" + msg + ");");
+            ctx.Line("{ std::string _msg = (" + msg + "); axe::ScriptBase::PrintOnScreen(_msg.c_str()); }");
         }
         else if (name == "Set Variable")
         {
@@ -502,6 +509,34 @@ namespace axe
             ctx.Line("}");
         }
 
+        // ── Destroy Entity ────────────────────────────────────────────────────
+        else if (name == "Destroy Entity")
+        {
+            std::string target = "entt::null";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+
+            ctx.Line("{ // Destroy Entity");
+            ctx.Line("  auto _destroyTarget = " + target + ";");
+            ctx.Line("  if (_destroyTarget != entt::null)");
+            ctx.Line("  {");
+
+            if (ctx.eventName == "OnCollision")
+            {
+                // Em OnCollision: só destrói se 'other' for a entity alvo
+                // Evita destruir em qualquer colisão (ex: colisão com o chão)
+                ctx.Line("    if (_destroyTarget == other) DestroyEntitySafe(_destroyTarget);");
+            }
+            else
+            {
+                // Em outros eventos (OnStart, OnUpdate, etc.): destrói diretamente
+                ctx.Line("    DestroyEntitySafe(_destroyTarget);");
+            }
+
+            ctx.Line("  }");
+            ctx.Line("}");
+        }
+
         // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
         // Get Transform / Get Position / Get Rigidbody / Get Collider /
         // Get Character Ctrl não emitem código de ação — são resolvidos via
@@ -550,8 +585,7 @@ namespace axe
         ctx.code += "#include \"axe/utils/glm_config.hpp\"\n";
         ctx.code += "#include \"axe/input/input.hpp\"\n";
         ctx.code += "#include \"axe/log/log.hpp\"\n";
-        ctx.code += "#include \"axe/physics/physics_components.hpp\"\n";
-        ctx.code += "#define AXE_SCRIPT_LOG(msg) AXE_CORE_INFO(msg)\n\n";
+        ctx.code += "#include \"axe/scene/scene.hpp\"\n\n";
 
         ctx.code += "extern \"C\" {\n\n";
         ctx.code += "class " + scriptName + " : public axe::ScriptBase\n{\npublic:\n";
@@ -560,26 +594,60 @@ namespace axe
         // As variáveis tipadas são geradas via ScriptGraphWindow antes de chamar Generate().
         // Aqui geramos fallback float para variáveis referenciadas no grafo mas não declaradas.
         {
-            // Se assetVars fornecido, gera membros tipados diretamente (sem fallback)
-            static const char* s_CppTypes[] = { "float", "bool", "int", "glm::vec3", "std::string" };
-            static const char* s_CppDefaults[] = { "0.0f",  "false","0",   "glm::vec3(0,0,0)", "\"\"" };
-
             if (assetVars && !assetVars->empty())
             {
                 ctx.code += "    // Variables\n";
                 for (auto& v : *assetVars)
                 {
-                    int ti = (int)v.Type;
-                    std::string decl = "    " + std::string(s_CppTypes[ti]) + " m_" + v.Name + " = ";
+                    std::string typeName, defaultVal;
                     switch (v.Type)
                     {
-                    case ScriptVarType::Float:  decl += std::to_string(v.DefaultFloat) + "f"; break;
-                    case ScriptVarType::Bool:   decl += (v.DefaultBool ? "true" : "false"); break;
-                    case ScriptVarType::Int:    decl += std::to_string(v.DefaultInt); break;
-                    case ScriptVarType::Vec3:   decl += "glm::vec3(" + std::to_string(v.DefaultVec3[0]) + "f," + std::to_string(v.DefaultVec3[1]) + "f," + std::to_string(v.DefaultVec3[2]) + "f)"; break;
-                    case ScriptVarType::String: decl += "\"" + v.DefaultString + "\""; break;
+                    case ScriptVarType::Float:
+                        typeName = "float";
+                        defaultVal = std::to_string(v.DefaultFloat) + "f";
+                        break;
+                    case ScriptVarType::Bool:
+                        typeName = "bool";
+                        defaultVal = v.DefaultBool ? "true" : "false";
+                        break;
+                    case ScriptVarType::Int:
+                        typeName = "int";
+                        defaultVal = std::to_string(v.DefaultInt);
+                        break;
+                    case ScriptVarType::Vec3:
+                        typeName = "glm::vec3";
+                        defaultVal = "glm::vec3(" +
+                            std::to_string(v.DefaultVec3[0]) + "f," +
+                            std::to_string(v.DefaultVec3[1]) + "f," +
+                            std::to_string(v.DefaultVec3[2]) + "f)";
+                        break;
+                    case ScriptVarType::String:
+                        typeName = "std::string";
+                        defaultVal = "\"" + v.DefaultString + "\"";
+                        break;
+                    case ScriptVarType::Vec2:
+                        typeName = "glm::vec2";
+                        defaultVal = "glm::vec2(0.0f, 0.0f)";
+                        break;
+                    case ScriptVarType::Vec4:
+                        typeName = "glm::vec4";
+                        defaultVal = "glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)";
+                        break;
+                    case ScriptVarType::Quat:
+                        typeName = "glm::quat";
+                        defaultVal = "glm::quat(1.0f, 0.0f, 0.0f, 0.0f)";  // identity (w,x,y,z)
+                        break;
+                    case ScriptVarType::Entity:
+                        // Guarda o nome da entity como string; resolvido em runtime via FindByName
+                        typeName = "std::string";
+                        defaultVal = "\"" + v.DefaultString + "\"";
+                        break;
+                    default:
+                        typeName = "float";
+                        defaultVal = "0.0f";
+                        break;
                     }
-                    ctx.code += decl + ";\n";
+                    ctx.code += "    " + typeName + " m_" + v.Name + " = " + defaultVal + ";\n";
                 }
                 ctx.code += "\n";
             }
@@ -652,9 +720,11 @@ namespace axe
         {
             ctx.code += "    void OnCollision(entt::entity other) override\n    {\n";
             ctx.indent = 2;
+            ctx.eventName = "OnCollision";
             for (const auto& node : graph.GetNodes())
                 if (node->Name == "On Collision")
                     GenerateEventBody(ctx, node.get(), "");
+            ctx.eventName = "";
             ctx.code += "    }\n\n";
         }
 
@@ -663,9 +733,11 @@ namespace axe
         {
             ctx.code += "    void OnEvent(const std::string& eventName, float value) override\n    {\n";
             ctx.indent = 2;
+            ctx.eventName = "OnEvent";
             for (const auto& node : graph.GetNodes())
                 if (node->Name == "On Event")
                     GenerateEventBody(ctx, node.get(), "");
+            ctx.eventName = "";
             ctx.code += "    }\n\n";
         }
 

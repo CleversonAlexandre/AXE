@@ -26,7 +26,7 @@ namespace ed = ax::NodeEditor;
 
 namespace axe
 {
-    
+
 
     // ─────────────────────────────────────────────────────────────────────────
     ScriptGraphWindow::ScriptGraphWindow() = default;
@@ -343,6 +343,9 @@ namespace axe
             vendor / "entt" / "src",
             vendor / "spdlog" / "include",
             vendor / "spdlog",
+            vendor / "imgui",              // components.hpp inclui <imgui.h>
+            vendor / "imgui-node-editor",  // script_graph.hpp inclui imgui_node_editor.h
+            vendor / "nlohmann",           // json.hpp
         };
 
         std::filesystem::path axeLib = (exeDir / ".." / "axe" / "axe.lib").lexically_normal();

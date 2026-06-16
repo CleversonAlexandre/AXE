@@ -22,6 +22,7 @@ namespace axe
             const ScriptGraph& graph;
             std::string        code;
             int                indent = 2;
+            std::string        eventName;  // nome do evento atual (ex: "OnCollision")
 
             void Line(const std::string& s = "")
             {

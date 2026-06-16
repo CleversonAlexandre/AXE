@@ -183,6 +183,9 @@ namespace axe
             jv["b"] = v.DefaultBool;
             jv["i"] = v.DefaultInt;
             jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
+            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
+            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
+            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
             jv["s"] = v.DefaultString;
             jv["exposed"] = v.Exposed;
             vars.push_back(jv);
@@ -228,6 +231,18 @@ namespace axe
                 if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
                 {
                     v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
+                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
+                    {
+                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
+                    }
+                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
+                    {
+                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
+                    }
+                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
+                    {
+                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
+                    }
                 }
                 v.DefaultString = jv.value("s", "");
                 v.Exposed = jv.value("exposed", false);
@@ -268,6 +283,9 @@ namespace axe
             jv["b"] = v.DefaultBool;
             jv["i"] = v.DefaultInt;
             jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
+            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
+            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
+            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
             jv["s"] = v.DefaultString;
             jv["exposed"] = v.Exposed;
             vars.push_back(jv);
@@ -332,6 +350,18 @@ namespace axe
                 if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
                 {
                     v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
+                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
+                    {
+                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
+                    }
+                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
+                    {
+                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
+                    }
+                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
+                    {
+                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
+                    }
                 }
                 v.DefaultString = jv.value("s", "");
                 v.Exposed = jv.value("exposed", false);

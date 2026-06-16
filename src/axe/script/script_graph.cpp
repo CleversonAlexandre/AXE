@@ -343,6 +343,16 @@ namespace axe
             return node;
         }
 
+        // ── Destroy Entity ────────────────────────────────────────────────────
+        if (t == "DestroyEntity")
+        {
+            auto node = makeNode(baseId, "Destroy Entity", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         AXE_CORE_WARN("ScriptGraph: tipo de node desconhecido '{}'", type);
 
         // ── Cast nodes ────────────────────────────────────────────────────────

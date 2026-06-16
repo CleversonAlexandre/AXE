@@ -159,6 +159,9 @@ namespace axe
         bool          DefaultBool = false;
         int           DefaultInt = 0;
         float         DefaultVec3[3] = { 0,0,0 };
+        float         DefaultVec2[2] = { 0,0 };
+        float         DefaultVec4[4] = { 0,0,0,1 };  // w=1 por padrão (quaternion identity)
+        float         DefaultQuat[4] = { 0,0,0,1 };  // x,y,z,w — identity
         std::string   DefaultString;
         bool          Exposed = false;  // visível no Inspector em runtime
     };

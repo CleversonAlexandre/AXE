@@ -79,10 +79,58 @@ public:
     }
 };
 
+// ==================== Contact Listener ====================
+// Recebe eventos de colisão e trigger do Jolt e os repassa via callbacks.
+// BodyID.GetIndexAndSequenceNumber() retorna um uint32 que usamos como
+// identificador de entity (mapeado em physics_world.cpp).
+
+class AXEContactListener : public JPH::ContactListener
+{
+public:
+    std::function<void(uint32_t, uint32_t)> OnCollisionEnter;
+    std::function<void(uint32_t, uint32_t)> OnTriggerEnter;
+    std::function<void(uint32_t, uint32_t)> OnTriggerExit;
+
+    JPH::ValidateResult OnContactValidate(
+        const JPH::Body& inBody1, const JPH::Body& inBody2,
+        JPH::RVec3Arg, const JPH::CollideShapeResult&) override
+    {
+        return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+    }
+
+    void OnContactAdded(
+        const JPH::Body& inBody1, const JPH::Body& inBody2,
+        const JPH::ContactManifold&, JPH::ContactSettings& settings) override
+    {
+        // UserData guarda o entt::entity cast para uint64
+        uint32_t e1 = (uint32_t)inBody1.GetUserData();
+        uint32_t e2 = (uint32_t)inBody2.GetUserData();
+
+        bool t1 = inBody1.IsSensor();
+        bool t2 = inBody2.IsSensor();
+
+        if (t1 || t2)
+        {
+            if (OnTriggerEnter) OnTriggerEnter(e1, e2);
+        }
+        else
+        {
+            if (OnCollisionEnter) OnCollisionEnter(e1, e2);
+        }
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& inSubShapePair) override
+    {
+        // Para triggers, precisaríamos rastrear o par — simplificado por enquanto
+    }
+};
+
 // ==================== namespace axe ====================
 
 namespace axe
 {
+
+    static AXEContactListener* GetCL(void* p) { return static_cast<AXEContactListener*>(p); }
 
     // Casts seguros dos void*
     static JPH::PhysicsSystem* GetPS(void* p) { return static_cast<JPH::PhysicsSystem*>(p); }
@@ -132,6 +180,14 @@ namespace axe
             *GetBP(m_BPLayerInterface), *GetOBP(m_ObjVsBPFilter), *GetOO(m_ObjVsObjFilter));
         ps->SetGravity(JPH::Vec3(0.0f, -9.81f, 0.0f));
 
+        // Registra o ContactListener — recebe todas as colisões e triggers
+        auto* cl = new AXEContactListener();
+        cl->OnCollisionEnter = [this](uint32_t a, uint32_t b) { if (m_OnCollision)   m_OnCollision(a, b); };
+        cl->OnTriggerEnter = [this](uint32_t a, uint32_t b) { if (m_OnTriggerEnter) m_OnTriggerEnter(a, b); };
+        cl->OnTriggerExit = [this](uint32_t a, uint32_t b) { if (m_OnTriggerExit)  m_OnTriggerExit(a, b); };
+        ps->SetContactListener(cl);
+        m_ContactListenerPtr = cl;
+
         m_PhysicsSystemPtr = ps;
         m_Initialized = true;
         AXE_CORE_INFO("PhysicsSystem: inicializado (Jolt Physics).");
@@ -142,6 +198,7 @@ namespace axe
         if (!m_Initialized) return;
 
         delete GetPS(m_PhysicsSystemPtr); m_PhysicsSystemPtr = nullptr;
+        delete GetCL(m_ContactListenerPtr); m_ContactListenerPtr = nullptr;
         delete GetJS(m_JobSystemPtr);     m_JobSystemPtr = nullptr;
         delete GetTA(m_TempAllocPtr);     m_TempAllocPtr = nullptr;
         delete GetBP(m_BPLayerInterface); m_BPLayerInterface = nullptr;
@@ -214,6 +271,19 @@ namespace axe
     {
         m_OnTriggerEnter = onEnter;
         m_OnTriggerExit = onExit;
+        // Atualiza o listener se já foi criado
+        if (m_ContactListenerPtr)
+        {
+            GetCL(m_ContactListenerPtr)->OnTriggerEnter = [this](uint32_t a, uint32_t b) { if (m_OnTriggerEnter) m_OnTriggerEnter(a, b); };
+            GetCL(m_ContactListenerPtr)->OnTriggerExit = [this](uint32_t a, uint32_t b) { if (m_OnTriggerExit)  m_OnTriggerExit(a, b); };
+        }
+    }
+
+    void PhysicsSystem::SetCollisionCallback(CollisionCallback onCollision)
+    {
+        m_OnCollision = onCollision;
+        if (m_ContactListenerPtr)
+            GetCL(m_ContactListenerPtr)->OnCollisionEnter = [this](uint32_t a, uint32_t b) { if (m_OnCollision) m_OnCollision(a, b); };
     }
 
 } // namespace axe

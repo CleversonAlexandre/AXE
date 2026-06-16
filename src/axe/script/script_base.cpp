@@ -3,7 +3,16 @@
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/physics/physics_components.hpp"
+#include "axe/physics/physics_system.hpp"
 #include "axe/log/log.hpp"
+
+// Jolt — necessário para DestroyEntitySafe remover bodies do simulador
+#ifdef JPH_DEBUG_RENDERER
+#undef JPH_DEBUG_RENDERER
+#endif
+#include "axe/physics/jolt_config.hpp"
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyInterface.h>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/rotate_vector.hpp>
@@ -306,6 +315,47 @@ namespace axe
     ScriptRigidbodyProxy ScriptBase::GetPhysics()
     {
         return GetRigidbody();
+    }
+
+    void ScriptBase::DestroyEntitySafe(entt::entity target)
+    {
+        if (!m_Context.ScenePtr || target == entt::null) return;
+        auto& reg = m_Context.ScenePtr->GetRegistry();
+        if (!reg.valid(target)) return;
+
+        // Remove o Rigidbody body do Jolt antes de destruir a entity
+        if (auto* rb = reg.try_get<RigidbodyComponent>(target))
+        {
+            if (rb->IsCreated)
+            {
+                auto* bi = static_cast<JPH::BodyInterface*>(
+                    PhysicsSystem::Get().GetBodyInterfacePtr());
+                if (bi)
+                {
+                    JPH::BodyID id(rb->BodyID);
+                    if (!id.IsInvalid()) { bi->RemoveBody(id); bi->DestroyBody(id); }
+                }
+                rb->IsCreated = false;
+            }
+        }
+
+        // Remove o static body implícito (ColliderComponent sem Rigidbody)
+        if (auto* col = reg.try_get<ColliderComponent>(target))
+        {
+            if (col->IsStaticCreated)
+            {
+                auto* bi = static_cast<JPH::BodyInterface*>(
+                    PhysicsSystem::Get().GetBodyInterfacePtr());
+                if (bi)
+                {
+                    JPH::BodyID id(col->StaticBodyID);
+                    if (!id.IsInvalid()) { bi->RemoveBody(id); bi->DestroyBody(id); }
+                }
+                col->IsStaticCreated = false;
+            }
+        }
+
+        m_Context.ScenePtr->DestroyEntity(target);
     }
 
 } // namespace axe

@@ -23,6 +23,9 @@ namespace axe
 		//Destroi uma entity
 		void DestroyEntity(entt::entity entity);
 
+		// Busca entity pelo nome (primeiro match) — retorna entt::null se nao encontrar
+		entt::entity FindByName(const std::string& name) const;
+
 		//Duplica uma entity
 		entt::entity DuplicateEntity(entt::entity entity);
 

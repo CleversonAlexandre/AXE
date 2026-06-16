@@ -145,12 +145,16 @@ namespace axe
         void SetInputPointers(const bool* keys, const bool* prevKeys);
 
         // ── Accessors de componente para uso no código gerado ─────────────────
-        // Não-inline pelo mesmo motivo: leem m_Context via axe.dll.
         ScriptTransformProxy  GetTransform();
         ScriptRigidbodyProxy  GetRigidbody();
         ScriptCharacterProxy  GetCharacter();
         ScriptEventBusProxy   GetEventBus();
         ScriptRigidbodyProxy  GetPhysics();
+
+        // Destrói uma entity removendo também o body físico do Jolt.
+        // Usar no lugar de ScenePtr->DestroyEntity() para evitar deixar
+        // ghost bodies na simulação.
+        void DestroyEntitySafe(entt::entity target);
 
     protected:
         ScriptContext    m_Context;

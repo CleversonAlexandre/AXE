@@ -1,5 +1,7 @@
 #include "physics_world.hpp"
+#include "physics_system.hpp"
 #include "axe/scene/components.hpp"
+#include <unordered_set>
 #include "axe/mesh/mesh.hpp"
 #include "axe/log/log.hpp"
 
@@ -214,6 +216,9 @@ namespace axe
         JPH::Body* body = bi.CreateBody(settings);
         if (!body) { AXE_CORE_ERROR("PhysicsWorld: falha ao criar body."); return; }
 
+        // Guarda o entt::entity no UserData do body — usado pelo ContactListener para mapear BodyID → entity
+        body->SetUserData((JPH::uint64)entity);
+
         JPH::BodyID id = body->GetID();
         bi.AddBody(id, JPH::EActivation::Activate);
 
@@ -279,7 +284,13 @@ namespace axe
         {
             s_Characters.erase(it);
             auto* cc = scene.GetRegistry().try_get<CharacterControllerComponent>(entity);
-            if (cc) { cc->IsCreated = false; cc->CharacterID = 0; }
+            if (cc)
+            {
+                cc->IsCreated = false;
+                cc->CharacterID = 0;
+                cc->ActiveTriggers.clear();
+                cc->ActiveCollisions.clear();
+            }
             AXE_CORE_INFO("PhysicsWorld: CharacterController destruído (entity {}).", (uint32_t)entity);
         }
     }
@@ -320,10 +331,24 @@ namespace axe
                     JPH::RVec3(tc->Data.Position.x, tc->Data.Position.y, tc->Data.Position.z),
                     ToJoltQuat(tc->Data.Rotation),
                     JPH::EMotionType::Static, Layers::NON_MOVING);
+
+                // Trigger/sensor — não bloqueia movimento, só detecta sobreposição
+                settings.mIsSensor = col.IsTrigger;
+
                 JPH::Body* body = bi.CreateBody(settings);
                 if (!body) return;
+
+                // Guarda entity como UserData para o ContactListener mapear BodyID → entity
+                body->SetUserData((JPH::uint64)entity);
+
                 bi.AddBody(body->GetID(), JPH::EActivation::DontActivate);
-                AXE_CORE_INFO("PhysicsWorld: static body implícito criado (entity {}).", (uint32_t)entity);
+
+                // Guarda o BodyID no ColliderComponent para poder remover depois
+                col.StaticBodyID = body->GetID().GetIndexAndSequenceNumber();
+                col.IsStaticCreated = true;
+
+                AXE_CORE_INFO("PhysicsWorld: static body implícito criado (entity {}, trigger={}).",
+                    (uint32_t)entity, col.IsTrigger);
             });
 
         // Cria CharacterControllers
@@ -433,6 +458,51 @@ namespace axe
                     {},  // BodyFilter
                     {},  // ShapeFilter
                     *ta);
+
+                // ── Detecta contatos do CharacterVirtual ──────────────────────
+                // CharacterVirtual não dispara o ContactListener do Jolt —
+                // precisamos iterar GetActiveContacts() manualmente.
+                // Usa um set por entity para disparar Enter/Exit apenas uma vez.
+                {
+                    auto& bi = ps->GetBodyInterfaceNoLock();
+
+                    // Contatos ativos neste frame
+                    std::unordered_set<uint32_t> currentTriggers;
+                    std::unordered_set<uint32_t> currentCollisions;
+
+                    for (const auto& contact : ch.GetActiveContacts())
+                    {
+                        if (!contact.mHadCollision) continue;
+                        if (contact.mBodyB.IsInvalid()) continue;
+
+                        JPH::uint64 userData = bi.GetUserData(contact.mBodyB);
+                        uint32_t otherEntity = (uint32_t)userData;
+                        if (otherEntity == 0) continue;
+
+                        if (contact.mIsSensorB)
+                            currentTriggers.insert(otherEntity);
+                        else
+                            currentCollisions.insert(otherEntity);
+                    }
+
+                    // Triggers: Enter para novos, Exit para os que saíram
+                    for (uint32_t other : currentTriggers)
+                        if (cc.ActiveTriggers.find(other) == cc.ActiveTriggers.end())
+                            PhysicsSystem::Get().FireTriggerEnter((uint32_t)entity, other);
+
+                    for (uint32_t prev : cc.ActiveTriggers)
+                        if (currentTriggers.find(prev) == currentTriggers.end())
+                            PhysicsSystem::Get().FireTriggerExit((uint32_t)entity, prev);
+
+                    cc.ActiveTriggers = currentTriggers;
+
+                    // Colisões normais: só dispara na entrada (frame em que aparece)
+                    for (uint32_t other : currentCollisions)
+                        if (cc.ActiveCollisions.find(other) == cc.ActiveCollisions.end())
+                            PhysicsSystem::Get().FireCollision((uint32_t)entity, other);
+
+                    cc.ActiveCollisions = currentCollisions;
+                }
 
                 // Sync posição de volta para o TransformComponent
                 JPH::RVec3 newPos = ch.GetPosition();

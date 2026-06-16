@@ -8,6 +8,7 @@ namespace axe
 {
     using TriggerEnterCallback = std::function<void(uint32_t, uint32_t)>;
     using TriggerExitCallback = std::function<void(uint32_t, uint32_t)>;
+    using CollisionCallback = std::function<void(uint32_t, uint32_t)>;
 
     struct RaycastHit
     {
@@ -36,6 +37,22 @@ namespace axe
 
         RaycastHit Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance = 1000.0f);
         void SetTriggerCallbacks(TriggerEnterCallback onEnter, TriggerExitCallback onExit);
+        void SetCollisionCallback(CollisionCallback onCollision);
+
+        // Dispara os callbacks manualmente — usado pelo CharacterVirtual
+        // que não passa pelo ContactListener padrão do Jolt
+        void FireCollision(uint32_t entityA, uint32_t entityB)
+        {
+            if (m_OnCollision) m_OnCollision(entityA, entityB);
+        }
+        void FireTriggerEnter(uint32_t entityA, uint32_t entityB)
+        {
+            if (m_OnTriggerEnter) m_OnTriggerEnter(entityA, entityB);
+        }
+        void FireTriggerExit(uint32_t entityA, uint32_t entityB)
+        {
+            if (m_OnTriggerExit) m_OnTriggerExit(entityA, entityB);
+        }
 
         bool IsInitialized() const { return m_Initialized; }
         void* GetJoltSystemPtr() { return m_PhysicsSystemPtr; }
@@ -58,6 +75,8 @@ namespace axe
 
         TriggerEnterCallback m_OnTriggerEnter;
         TriggerExitCallback  m_OnTriggerExit;
+        CollisionCallback    m_OnCollision;
+        void* m_ContactListenerPtr = nullptr;  // AXEContactListener*
 
         static constexpr uint32_t s_MaxBodies = 65536;
         static constexpr uint32_t s_MaxBodyPairs = 65536;

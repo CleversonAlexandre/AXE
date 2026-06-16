@@ -2,6 +2,8 @@
 #include "axe/material/material_asset.hpp"
 #include "axe/scene/components.hpp"
 #include "editor/axe_editor/editor_app.hpp"
+#include "axe/script/script_base.hpp"
+#include "axe/physics/physics_system.hpp"
 #include <iostream>
 
 namespace axe
@@ -812,6 +814,36 @@ namespace axe
         if (m_EditorState != EditorState::Edit) return;
 
         m_SceneSnapshot = SceneSerializer::SerializeToString(*m_Scene);
+
+        // ── Conecta callbacks do Jolt ao ScriptWorld ──────────────────────────
+        // Feito ANTES de OnSceneStart para que os bodies já criados sejam cobertos.
+        // Os callbacks recebem entt::entity como uint32_t (via UserData do body).
+        PhysicsSystem::Get().SetCollisionCallback(
+            [this](uint32_t a, uint32_t b)
+            {
+                if (!m_Scene) return;
+                m_ScriptWorld.DispatchCollision(*m_Scene,
+                    (entt::entity)a, (entt::entity)b);
+            });
+
+        PhysicsSystem::Get().SetTriggerCallbacks(
+            [this](uint32_t a, uint32_t b)
+            {
+                if (!m_Scene) return;
+                // Para triggers: chama OnCollision em ambas as partes
+                // (comportamento padrão — personagem encosta no trigger)
+                m_ScriptWorld.DispatchCollision(*m_Scene,
+                    (entt::entity)a, (entt::entity)b);
+                m_ScriptWorld.DispatchTriggerEnter(*m_Scene,
+                    (entt::entity)a, (entt::entity)b);
+            },
+            [this](uint32_t a, uint32_t b)
+            {
+                if (!m_Scene) return;
+                m_ScriptWorld.DispatchTriggerExit(*m_Scene,
+                    (entt::entity)a, (entt::entity)b);
+            });
+
         m_PhysicsWorld.OnSceneStart(*m_Scene);
         m_ScriptWorld.OnSceneStart(*m_Scene);
 

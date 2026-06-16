@@ -2,6 +2,7 @@
 #include "axe/utils/glm_config.hpp"
 #include <cstdint>
 #include <functional>
+#include <unordered_set>
 
 namespace axe
 {
@@ -66,8 +67,12 @@ namespace axe
         float         Height = 1.8f;   // altura total
         float         CapsuleRadius = 0.3f;
 
-        bool          IsTrigger = false; // trigger não colide, só detecta
-        bool          ShowDebug = false; // mostra wireframe no viewport
+        bool          IsTrigger = false;       // trigger não colide, só detecta
+        bool          ShowDebug = false;        // mostra wireframe no viewport
+
+        // Runtime — body estático implícito (criado pelo PhysicsWorld para colliders sem Rigidbody)
+        uint32_t      StaticBodyID = 0xffffffff;
+        bool          IsStaticCreated = false;
     };
 
     // ==================== Character Controller ====================
@@ -76,8 +81,8 @@ namespace axe
     {
         float Height = 1.8f;
         float Radius = 0.3f;
-        float MaxSlopeAngle = 45.0f;    // graus
-        float StepHeight = 0.3f;       // altura máxima de degrau
+        float MaxSlopeAngle = 45.0f;
+        float StepHeight = 0.3f;
         float MaxSpeed = 5.0f;
         float JumpForce = 5.0f;
 
@@ -87,6 +92,10 @@ namespace axe
         bool      WantsJump = false;
         uint32_t  CharacterID = 0;
         bool      IsCreated = false;
+
+        // Rastreamento de contatos — evita disparar Enter/Exit todo frame
+        std::unordered_set<uint32_t> ActiveTriggers;
+        std::unordered_set<uint32_t> ActiveCollisions;
     };
 
     // ==================== Trigger Volume ====================

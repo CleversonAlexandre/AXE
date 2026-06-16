@@ -28,22 +28,89 @@ namespace axe
         Wildcard,// Branco — aceita qualquer tipo (para cast nodes)
     };
 
-    // Retorna true se os tipos são compatíveis para conexão (cast implícito)
+    // Retorna true se os tipos são compatíveis para conexão direta (sem cast)
+    inline bool ArePinsExact(ScriptPinType from, ScriptPinType to)
+    {
+        return from == to;
+    }
+
+    // Retorna true se os tipos são compatíveis para conexão (exact ou cast implícito permitido)
+    // Regras:
+    //   - Flow nunca mistura com dados
+    //   - Wildcard: liberado aqui, filtrado por IsWildcardCastCompatible no momento do link
+    //   - Numéricas (Float/Int/Bool): cast implícito entre si (com aviso laranja)
+    //   - Vec3 ↔ Vec4: cast implícito (perde/adiciona w)
+    //   - TUDO MAIS: incompatível — use nodes de cast explícitos
     inline bool ArePinsCompatible(ScriptPinType from, ScriptPinType to)
     {
         if (from == to) return true;
-        if (to == ScriptPinType::Wildcard || from == ScriptPinType::Wildcard) return true;
+
+        // Flow nunca mistura com dados
         if (from == ScriptPinType::Flow || to == ScriptPinType::Flow) return false;
-        // Numeric conversions (explicit cast node needed but connection allowed)
+
+        // Wildcard — o node de cast aceita o tipo; validação fina feita em IsWildcardCastCompatible
+        if (to == ScriptPinType::Wildcard || from == ScriptPinType::Wildcard) return true;
+
+        // Cast numérico implícito (Float ↔ Int ↔ Bool) — aceito com aviso visual
         auto isNumeric = [](ScriptPinType t) {
             return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
             };
         if (isNumeric(from) && isNumeric(to)) return true;
-        // Vec3 ↔ Vec4 (loses/adds w)
+
+        // Vec3 ↔ Vec4 (cast implícito — perde/adiciona componente w)
         if ((from == ScriptPinType::Vec3 && to == ScriptPinType::Vec4) ||
             (from == ScriptPinType::Vec4 && to == ScriptPinType::Vec3)) return true;
-        // Anything → String (ToString)
-        if (to == ScriptPinType::String) return true;
+
+        // Tudo mais é incompatível — user deve usar node de cast explícito
+        return false;
+    }
+
+    // Mensagem de erro descritiva para o tooltip quando pins são incompatíveis
+    inline const char* GetPinIncompatibleReason(ScriptPinType from, ScriptPinType to)
+    {
+        if (from == ScriptPinType::Flow || to == ScriptPinType::Flow)
+            return "Flow nao conecta com dados";
+
+        auto isNumeric = [](ScriptPinType t) {
+            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
+            };
+        auto isVec = [](ScriptPinType t) {
+            return t == ScriptPinType::Vec3 || t == ScriptPinType::Vec4;
+            };
+
+        if (isVec(from) && isNumeric(to))   return "Use Break Vec3 para extrair componentes X/Y/Z";
+        if (isNumeric(from) && isVec(to))   return "Use Make Vec3 ou Float to Vec3";
+        if (from == ScriptPinType::String && isNumeric(to)) return "Use To Float / To Int / To Bool";
+        if (isNumeric(from) && to == ScriptPinType::String) return "Use o node To String";
+        if (isVec(from) && to == ScriptPinType::String)     return "Use o node To String";
+        if (from == ScriptPinType::String && isVec(to))     return "String nao converte para Vec diretamente";
+        if (from == ScriptPinType::Quat || to == ScriptPinType::Quat)
+            return "Quat so conecta com Quat";
+        if (from == ScriptPinType::Object || to == ScriptPinType::Object)
+            return "Object so conecta com Object";
+
+        return "Tipos incompativeis — use um node Cast";
+    }
+
+    // Compatibilidade fina para pins Wildcard (ToFloat, ToInt, ToBool, ToString)
+    // Chamado ao criar um link onde 'to' é Wildcard, para validar se o cast faz sentido.
+    // 'castOutputType' é o tipo de saída do node de cast (ex: Float para ToFloat).
+    inline bool IsWildcardCastCompatible(ScriptPinType from, ScriptPinType castOutputType)
+    {
+        if (from == ScriptPinType::Flow)   return false;
+        if (from == ScriptPinType::Object) return false;
+
+        // ToString aceita qualquer tipo de dado
+        if (castOutputType == ScriptPinType::String) return true;
+
+        // ToFloat / ToInt / ToBool: só aceita numeric e String
+        auto isNumeric = [](ScriptPinType t) {
+            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
+            };
+        if (isNumeric(castOutputType))
+            return isNumeric(from) || from == ScriptPinType::String;
+        // Vec3/Vec4/Quat → Float não faz sentido sem especificar componente
+
         return false;
     }
 

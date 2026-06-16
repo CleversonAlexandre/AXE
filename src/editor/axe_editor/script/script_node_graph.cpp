@@ -20,7 +20,7 @@ namespace axe
     static const NE sEv[] = { {"On Start","OnStart"},{"On Update","OnUpdate"},
         {"On End","OnEnd"},{"On Collision","OnCollision"},{"On Event","OnEvent"} };
     static const NE sAc[] = { {"Move","Move"},{"Rotate","Rotate"},{"Apply Force","ApplyForce"},
-        {"Send Event","SendEvent"},{"Print String","PrintString"} };
+        {"Send Event","SendEvent"},{"Print String","PrintString"},{"Destroy Entity","DestroyEntity"} };
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
         {"Get Variable","GetVariable"},{"Set Variable","SetVariable"} };
     static const NE sMa[] = { {"Add","Add"},{"Multiply","Multiply"},{"Make Vec3","MakeVec3"} };
@@ -34,7 +34,7 @@ namespace axe
     struct CatDef { const char* name; const NE* e; int n; ImVec4 col; };
     static const CatDef s_Cats[] = {
         {"Events",  sEv,   5, {0.85f,0.3f,0.2f, 1}},
-        {"Actions", sAc,   5, {0.2f,0.7f,0.45f, 1}},
+        {"Actions", sAc,   6, {0.2f,0.7f,0.45f, 1}},
         {"Logic",   sLo,   4, {0.8f,0.6f,0.1f,  1}},
         {"Math",    sMa,   3, {0.3f,0.5f,0.9f,  1}},
         {"Input",   sIn,   2, {0.7f,0.2f,0.6f,  1}},

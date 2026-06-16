@@ -37,6 +37,16 @@ namespace axe
 			m_Registry.destroy(entity);
 	}
 
+	entt::entity Scene::FindByName(const std::string& name) const
+	{
+		for (auto e : m_Registry.view<NameComponent>())
+		{
+			const auto& nc = m_Registry.get<NameComponent>(e);
+			if (nc.Name == name) return e;
+		}
+		return entt::null;
+	}
+
 	entt::entity Scene::DuplicateEntity(entt::entity entity)
 	{
 		if (!m_Registry.valid(entity))
