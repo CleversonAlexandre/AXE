@@ -6,7 +6,7 @@
 #include "asset_browser.hpp"
 #include "editor_context.hpp"
 #include "material_editor_window.hpp"
-#include "script_graph_window.hpp"
+#include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
 #include <functional>
 

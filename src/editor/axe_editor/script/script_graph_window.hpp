@@ -8,7 +8,7 @@
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/scene_environment.hpp"
-#include "inspector_window.hpp"
+#include "editor/axe_editor/inspector_window.hpp"
 #include <imgui_node_editor.h>
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -28,6 +28,10 @@ namespace axe
     public:
         ScriptGraphWindow();
         ~ScriptGraphWindow();
+
+        // ── Constantes compartilhadas ─────────────────────────────────────────────
+        const float ICON_SZ = 20.0f;
+        const float PIN_H = 22.0f;
 
         void Initialize();
         void Draw();
