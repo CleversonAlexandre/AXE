@@ -1,3 +1,4 @@
+#include "axe/core/command_history.hpp"
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/script/script_graph.hpp"
@@ -30,6 +31,15 @@ namespace axe
 
         void Initialize();
         void Draw();
+        void SetActiveScene(Scene* scene) { m_ActiveScene = scene; }
+
+        // Undo/Redo — snapshot based
+        void PushUndo(const std::string& actionName);  // call BEFORE making changes
+        void CommitUndo(const std::string& actionName);   // call AFTER making changes
+        void Undo();
+        void Redo();
+        bool CanUndo() const { return m_History.CanUndo(); }
+        bool CanRedo() const { return m_History.CanRedo(); }
         void RenderPreview();
         void Shutdown();
 
@@ -52,6 +62,7 @@ namespace axe
         void HandlePreviewInput();
         void DrawPreviewGizmo();       // gizmo sobreposto na preview
         void DrawScriptDetails();      // conteúdo do painel Details quando objeto selecionado
+        void DrawMyBlueprintWindow();  // painel Variables / Events / Dispatchers
         void CompileScript();
         void InitPreviewScene();
         void SyncMeshFromSource();
@@ -83,9 +94,27 @@ namespace axe
         ImGuizmo::OPERATION                m_GizmoOp = ImGuizmo::TRANSLATE;
 
         // Context menu
-        ImVec2 m_CtxCanvasPos = {};   // posição no canvas onde o clique aconteceu
-        char   m_CtxBuf[128] = {};
-        bool   m_CtxOpen[5] = { true, true, true, true, true };
+        ImVec2      m_CtxCanvasPos = {};
+        ed::PinId   m_CtxPinId;
+        ed::NodeId  m_CtxNodeId;
+        char        m_CtxBuf[128] = {};
+        std::string m_PendingNodeType;         // node a criar no próximo frame (dentro do Begin/End)
+        ImVec2      m_PendingNodePos = {};
+        std::string m_PendingNodeStrValue;
+        // Variable drop Get/Set popup
+        std::string m_VarDropName;
+        ImVec2      m_VarDropPos = {};
+        bool        m_VarDropPending = false;
+        bool        m_InsideNodeEditorFrame = false;
+        bool        m_SpringArmDragging = false;
+        int         m_PendingVarType = 0;
+        bool        m_VarDropIsCanvas = false;
+        // Promote to Variable pending state
+        ed::PinId          m_PendingPromotePinId = {};
+        bool               m_PendingPromoteIsInput = false;
+        int                m_PendingPromoteVarType = 0;
+        ScriptPinType      m_PendingPromotePinType = ScriptPinType::Float;
+        bool   m_CtxOpen[6] = { true, true, true, true, true, false };
 
         char   m_CompSearchBuf[128] = {};
         int    m_SelectedCompIndex = -1; // componente selecionado no Scene Graph
@@ -99,6 +128,27 @@ namespace axe
         float       m_MsgTimer = 0.0f;
 
         std::vector<std::string> m_ConsoleLines;
+
+        // My Blueprint panel state
+        char  m_NewVarName[64] = "NewVar";
+        int   m_NewVarType = 0;  // index into ScriptVarType
+        char  m_NewEvtName[64] = "OnMyEvent";
+        int   m_SelectedVar = -1;
+        int   m_RenamingVar = -1;
+        char  m_RenameBuf[64] = {};
+        bool  m_RenameJustStarted = false;
+        int   m_DeleteVarIndex = -1;
+        std::string m_DeleteVarName;
+        bool  m_DeleteVarAlsoNodes = true;
+        std::vector<ed::NodeId> m_PendingDeleteNodes;
+        bool  m_CompCollapsed[32] = {};
+        ImVec2      m_GraphWindowCenter = {};
+        entt::entity m_CameraPreviewEntity = entt::null;  // mesh de câmera no preview 3D
+        Scene* m_ActiveScene = nullptr;
+        CommandHistory m_History;
+        std::string    m_SnapshotBeforeAction;
+        std::string    m_PendingUndoSnapshot;
+        std::string    m_PendingRedoSnapshot;  // cena ativa do editor (para propagar mudanças em Play)
     };
 
 } // namespace axe

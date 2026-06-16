@@ -261,4 +261,68 @@ namespace axe
 		return std::make_shared<Mesh>(vertices, indices);
 	}
 
+	// ── Camera mesh — corpo retangular + lente cônica frontal ──────────────
+	std::shared_ptr<Mesh> MeshFactory::CreateCamera()
+	{
+		std::vector<Vertex>   verts;
+		std::vector<uint32_t> idx;
+
+		auto addFace = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n)
+			{
+				uint32_t i = (uint32_t)verts.size();
+				verts.push_back({ a, n, {0,0} });
+				verts.push_back({ b, n, {1,0} });
+				verts.push_back({ c, n, {1,1} });
+				verts.push_back({ d, n, {0,1} });
+				idx.insert(idx.end(), { i,i + 1,i + 2, i,i + 2,i + 3 });
+			};
+
+		// Corpo da câmera — caixa 0.4 × 0.28 × 0.22
+		float bx = 0.20f, by = 0.14f, bz = 0.11f;
+		addFace({ -bx,-by,-bz }, { bx,-by,-bz }, { bx,by,-bz }, { -bx,by,-bz }, { 0,0,-1 }); // back
+		addFace({ -bx,-by, bz }, { -bx,by, bz }, { bx,by, bz }, { bx,-by, bz }, { 0,0, 1 }); // front
+		addFace({ -bx,-by,-bz }, { -bx,-by,bz }, { bx,-by,bz }, { bx,-by,-bz }, { 0,-1,0 }); // bottom
+		addFace({ -bx, by,-bz }, { bx, by,-bz }, { bx, by,bz }, { -bx, by,bz }, { 0, 1,0 }); // top
+		addFace({ -bx,-by,-bz }, { -bx,by,-bz }, { -bx,by,bz }, { -bx,-by,bz }, { -1,0,0 }); // left
+		addFace({ bx,-by,-bz }, { bx,-by,bz }, { bx,by,bz }, { bx,by,-bz }, { 1,0,0 }); // right
+
+		// Lente — pirâmide quadrada na frente
+		float lx = 0.09f, ly = 0.09f, lz = 0.14f;
+		glm::vec3 apex = { 0, 0, bz + lz };
+		glm::vec3 ll = { -lx, -ly, bz };
+		glm::vec3 lr = { lx, -ly, bz };
+		glm::vec3 ur = { lx,  ly, bz };
+		glm::vec3 ul = { -lx,  ly, bz };
+
+		auto addTri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c)
+			{
+				glm::vec3 n = glm::normalize(glm::cross(b - a, c - a));
+				uint32_t i = (uint32_t)verts.size();
+				verts.push_back({ a, n, {0.5f,1} });
+				verts.push_back({ b, n, {0,0} });
+				verts.push_back({ c, n, {1,0} });
+				idx.insert(idx.end(), { i, i + 1, i + 2 });
+			};
+
+		addTri(apex, ll, lr); // bottom face
+		addTri(apex, lr, ur); // right face
+		addTri(apex, ur, ul); // top face
+		addTri(apex, ul, ll); // left face
+		addFace(ll, lr, ur, ul, { 0,0,-1 }); // back cap da lente
+
+		// Visor — pequeno cubo no topo traseiro
+		float vx = 0.06f, vy = 0.04f, vz = 0.04f;
+		float vy0 = by, vy1 = by + vy * 2.f;
+		float vz0 = -bz + 0.02f, vz1 = vz0 + vz * 2.f;
+		addFace({ -vx,vy0,vz0 }, { vx,vy0,vz0 }, { vx,vy1,vz0 }, { -vx,vy1,vz0 }, { 0,0,-1 });
+		addFace({ -vx,vy0,vz1 }, { -vx,vy1,vz1 }, { vx,vy1,vz1 }, { vx,vy0,vz1 }, { 0,0, 1 });
+		addFace({ -vx,vy0,vz0 }, { -vx,vy0,vz1 }, { vx,vy0,vz1 }, { vx,vy0,vz0 }, { 0,-1,0 });
+		addFace({ -vx,vy1,vz0 }, { vx,vy1,vz0 }, { vx,vy1,vz1 }, { -vx,vy1,vz1 }, { 0, 1,0 });
+		addFace({ -vx,vy0,vz0 }, { -vx,vy1,vz0 }, { -vx,vy1,vz1 }, { -vx,vy0,vz1 }, { -1,0,0 });
+		addFace({ vx,vy0,vz0 }, { vx,vy0,vz1 }, { vx,vy1,vz1 }, { vx,vy1,vz0 }, { 1,0,0 });
+
+		CalculateTangents(verts, idx);
+		return std::make_shared<Mesh>(verts, idx);
+	}
+
 } // namespace axe

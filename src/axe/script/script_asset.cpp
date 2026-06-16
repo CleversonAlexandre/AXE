@@ -160,6 +160,90 @@ namespace axe
             m_Components.erase(m_Components.begin() + index);
     }
 
+    std::string ScriptAsset::SaveToString()
+    {
+        // Reuse Save logic but write to string instead of file
+        json root;
+        root["name"] = m_Name;
+        root["class_type"] = ScriptClassTypeToString(m_ClassType);
+        root["dll_path"] = DllPath;
+        root["compiled"] = IsCompiled;
+
+        json comps = json::array();
+        for (auto& c : m_Components) comps.push_back(c.Serialize());
+        root["components"] = comps;
+
+        json vars = json::array();
+        for (auto& v : m_Variables)
+        {
+            json jv;
+            jv["name"] = v.Name;
+            jv["type"] = ScriptVarTypeToString(v.Type);
+            jv["f"] = v.DefaultFloat;
+            jv["b"] = v.DefaultBool;
+            jv["i"] = v.DefaultInt;
+            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
+            jv["s"] = v.DefaultString;
+            jv["exposed"] = v.Exposed;
+            vars.push_back(jv);
+        }
+        root["variables"] = vars;
+
+        json evts = json::array();
+        for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
+        root["custom_events"] = evts;
+
+        root["graph"] = m_Graph->Serialize();
+        return root.dump();
+    }
+
+    bool ScriptAsset::LoadFromString(const std::string& jsonStr)
+    {
+        json root;
+        try { root = json::parse(jsonStr); }
+        catch (...) { return false; }
+
+        m_Name = root.value("name", m_Name);
+        m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
+        DllPath = root.value("dll_path", "");
+        IsCompiled = root.value("compiled", false);
+
+        m_Components.clear();
+        if (root.contains("components") && root["components"].is_array())
+            for (auto& jc : root["components"])
+            {
+                ScriptComponentDef def; def.Deserialize(jc); m_Components.push_back(def);
+            }
+
+        m_Variables.clear();
+        if (root.contains("variables") && root["variables"].is_array())
+            for (auto& jv : root["variables"])
+            {
+                ScriptVariable v;
+                v.Name = jv.value("name", "NewVar");
+                v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
+                v.DefaultFloat = jv.value("f", 0.f);
+                v.DefaultBool = jv.value("b", false);
+                v.DefaultInt = jv.value("i", 0);
+                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
+                {
+                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
+                }
+                v.DefaultString = jv.value("s", "");
+                v.Exposed = jv.value("exposed", false);
+                m_Variables.push_back(v);
+            }
+
+        m_CustomEvents.clear();
+        if (root.contains("custom_events") && root["custom_events"].is_array())
+            for (auto& je : root["custom_events"])
+                m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
+
+        m_Graph = std::make_shared<ScriptGraph>();
+        if (root.contains("graph")) m_Graph->Deserialize(root["graph"]);
+        return true;
+    }
+
     bool ScriptAsset::Save(const std::filesystem::path& filepath)
     {
         m_FilePath = filepath;
@@ -172,6 +256,29 @@ namespace axe
         json comps = json::array();
         for (auto& c : m_Components) comps.push_back(c.Serialize());
         root["components"] = comps;
+
+        // Variables
+        json vars = json::array();
+        for (auto& v : m_Variables)
+        {
+            json jv;
+            jv["name"] = v.Name;
+            jv["type"] = ScriptVarTypeToString(v.Type);
+            jv["f"] = v.DefaultFloat;
+            jv["b"] = v.DefaultBool;
+            jv["i"] = v.DefaultInt;
+            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
+            jv["s"] = v.DefaultString;
+            jv["exposed"] = v.Exposed;
+            vars.push_back(jv);
+        }
+        root["variables"] = vars;
+
+        // Custom Events
+        json evts = json::array();
+        for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
+        root["custom_events"] = evts;
+
         root["graph"] = m_Graph->Serialize();
 
         std::ofstream f(filepath);
@@ -210,6 +317,32 @@ namespace axe
             {
                 ScriptComponentDef def; def.Deserialize(jc); m_Components.push_back(def);
             }
+
+        // Variables
+        m_Variables.clear();
+        if (root.contains("variables") && root["variables"].is_array())
+            for (auto& jv : root["variables"])
+            {
+                ScriptVariable v;
+                v.Name = jv.value("name", "NewVar");
+                v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
+                v.DefaultFloat = jv.value("f", 0.f);
+                v.DefaultBool = jv.value("b", false);
+                v.DefaultInt = jv.value("i", 0);
+                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
+                {
+                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
+                }
+                v.DefaultString = jv.value("s", "");
+                v.Exposed = jv.value("exposed", false);
+                m_Variables.push_back(v);
+            }
+
+        // Custom Events
+        m_CustomEvents.clear();
+        if (root.contains("custom_events") && root["custom_events"].is_array())
+            for (auto& je : root["custom_events"])
+                m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
 
         if (root.contains("graph"))
             m_Graph->Deserialize(root["graph"]);

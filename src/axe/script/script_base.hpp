@@ -114,24 +114,20 @@ namespace axe
         virtual void OnUpdate(float deltaTime) {}
         virtual void OnEnd() {}
 
-        // PreUpdate: chamado antes de OnUpdate, armazena ponteiros de teclas como membros
-        // Membros m_Keys/m_PrevKeys ficam na DLL do script — sem problema de instância estática
-        void PreUpdate(const bool* keys, const bool* prevKeys)
-        {
-            m_Keys = keys;
-            m_PrevKeys = prevKeys;
-        }
+        // PreUpdate: chamado antes de OnUpdate pelo ScriptWorld.
+        // Atualiza m_Context.Input — caminho único, sem membros duplicados.
+        // Não-inline: implementado em axe.dll para garantir acesso ao offset
+        // correto de m_Context, independente de quando a DLL do script foi compilada.
+        void PreUpdate(const bool* keys, const bool* prevKeys);
 
-        // Acesso direto via membros — usado pelo código gerado
-        bool  _GetKey(int k)     const { return m_Keys && k >= 0 && k < 512 ? m_Keys[k] : false; }
-        bool  _GetKeyDown(int k) const { return m_Keys && k >= 0 && k < 512 ? m_Keys[k] && !m_PrevKeys[k] : false; }
-        bool  _GetKeyUp(int k)   const { return m_PrevKeys && k >= 0 && k < 512 ? !m_Keys[k] && m_PrevKeys[k] : false; }
-        float _GetAxis(const std::string& n) const
-        {
-            if (n == "Horizontal") return (_GetKey(68) ? 1.f : 0.f) - (_GetKey(65) ? 1.f : 0.f);
-            if (n == "Vertical")   return (_GetKey(87) ? 1.f : 0.f) - (_GetKey(83) ? 1.f : 0.f);
-            return 0.f;
-        }
+        // _GetKey / _GetKeyDown / _GetKeyUp / _GetAxis — usados pelo código gerado.
+        // Não-inline: delegam para m_Context.Input via axe.dll.
+        // Isso garante que a DLL do script nunca acesse offsets de membros diretamente,
+        // eliminando o bug de layout quando axe.dll é recompilada.
+        bool  _GetKey(int k)     const;
+        bool  _GetKeyDown(int k) const;
+        bool  _GetKeyUp(int k)   const;
+        float _GetAxis(int axis) const;  // 0=Horizontal, 1=Vertical
 
         // ── Eventos de física ─────────────────────────────────────────────────
         virtual void OnCollision(entt::entity other) {}
@@ -142,27 +138,28 @@ namespace axe
         virtual void OnEvent(const std::string& eventName, float value) {}
 
         // ── Contexto — injetado pelo ScriptWorld antes de qualquer chamada ────
-        void SetContext(const ScriptContext& ctx) { m_Context = ctx; }
-        const ScriptContext& GetContext() const { return m_Context; }
-
-        // Atualiza ponteiros de input diretamente — sem passar pelo ScriptContext completo
-        // Não inline — implementado em axe.dll para garantir acesso correto ao m_Context
+        // Não-inline: implementados em axe.dll para garantir acesso ao offset
+        // correto de m_Context, independente de quando a DLL do script foi compilada.
+        void SetContext(const ScriptContext& ctx);
+        const ScriptContext& GetContext() const;
         void SetInputPointers(const bool* keys, const bool* prevKeys);
 
         // ── Accessors de componente para uso no código gerado ─────────────────
-        ScriptTransformProxy  GetTransform() { return { m_Context.Entity, m_Context.ScenePtr }; }
-        ScriptRigidbodyProxy  GetRigidbody() { return { m_Context.Entity, m_Context.ScenePtr }; }
-        ScriptCharacterProxy  GetCharacter() { return { m_Context.Entity, m_Context.ScenePtr }; }
-        ScriptEventBusProxy   GetEventBus() { return { m_Context.Entity, m_Context.ScenePtr }; }
-
-        // GetPhysics() — alias de GetRigidbody(), mantém compatibilidade com
-        // código gerado por versões anteriores do ScriptGraphCompiler
-        ScriptRigidbodyProxy  GetPhysics() { return GetRigidbody(); }
+        // Não-inline pelo mesmo motivo: leem m_Context via axe.dll.
+        ScriptTransformProxy  GetTransform();
+        ScriptRigidbodyProxy  GetRigidbody();
+        ScriptCharacterProxy  GetCharacter();
+        ScriptEventBusProxy   GetEventBus();
+        ScriptRigidbodyProxy  GetPhysics();
 
     protected:
         ScriptContext    m_Context;
-        const bool* m_Keys = nullptr;  // ponteiro para Input::s_CurrentKeys
-        const bool* m_PrevKeys = nullptr;  // ponteiro para Input::s_PreviousKeys        
+        // Nota: NÃO há m_Keys / m_PrevKeys aqui.
+        // Todo o input passa por m_Context.Input (ScriptInputSnapshot).
+        // Isso evita o bug de layout entre DLLs: se axe.dll for recompilada
+        // e o tamanho de ScriptContext mudar, a DLL do script não precisa ser
+        // recompilada para que _GetKey/_GetAxis funcionem corretamente,
+        // pois eles são não-inline e resolvidos em axe.dll.
     };
 
     // Assinatura da função exportada pela DLL

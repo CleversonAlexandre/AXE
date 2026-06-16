@@ -1,3 +1,4 @@
+#include "axe/script/script_asset.hpp"
 #include "script_graph_compiler.hpp"
 #include "axe/log/log.hpp"
 #include <sstream>
@@ -75,7 +76,30 @@ namespace axe
 
         if (nodeName == "Get Key")
         {
-            // O editor guarda o valor em node->StringValue (não no pin DefaultString)
+            // Check if the Key input pin is connected to another node
+            std::string keyExpr;
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "Key")
+                {
+                    // If pin is linked, resolve the connected value dynamically
+                    auto [dataNode, dataPin] = FindDataSource(ctx, inp);
+                    if (dataNode)
+                    {
+                        // Connected — resolve as runtime string expression
+                        std::string resolved = ResolvePin(ctx, inp);
+                        // Use runtime key lookup: axe::Input::GetKeyFromName(str)
+                        if (srcPin->Name == "Held")
+                            return "_GetKey((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
+                        if (srcPin->Name == "Pressed")
+                            return "_GetKeyDown((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
+                        if (srcPin->Name == "Released")
+                            return "_GetKeyUp((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
+                    }
+                    break;
+                }
+            }
+            // Not connected — use StringValue as hardcoded key name
             std::string key = srcNode->StringValue.empty() ? "W" : srcNode->StringValue;
             if (srcPin->Name == "Held")     return "_GetKey((int)axe::Key::" + key + ")";
             if (srcPin->Name == "Pressed")  return "_GetKeyDown((int)axe::Key::" + key + ")";
@@ -84,9 +108,10 @@ namespace axe
 
         if (nodeName == "Get Axis")
         {
-            // O editor guarda o valor em node->StringValue (não no pin DefaultString)
+            // 0 = Horizontal, 1 = Vertical — int evita passar std::string cross-DLL
             std::string axis = srcNode->StringValue.empty() ? "Horizontal" : srcNode->StringValue;
-            return "_GetAxis(\"" + axis + "\")";
+            std::string idx = (axis == "Vertical") ? "1" : "0";
+            return "_GetAxis(" + idx + ")";
         }
 
         // ── Math ──────────────────────────────────────────────────────────────
@@ -140,8 +165,72 @@ namespace axe
 
         // ── Lógica ────────────────────────────────────────────────────────────
 
-        if (nodeName == "Get Variable")
-            return "m_" + (srcNode->StringValue.empty() ? "var" : srcNode->StringValue);
+        if (nodeName == "Get Variable" || nodeName == "Set Variable")
+        {
+            std::string base = "m_" + (srcNode->StringValue.empty() ? "var" : srcNode->StringValue);
+            if (srcPin->Name == "X") return base + ".x";
+            if (srcPin->Name == "Y") return base + ".y";
+            if (srcPin->Name == "Z") return base + ".z";
+            return base;
+        }
+
+        // ── Cast nodes ────────────────────────────────────────────────────────
+        if (nodeName == "To Float")
+        {
+            std::string v = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
+            return "(float)(" + v + ")";
+        }
+        if (nodeName == "To Int")
+        {
+            std::string v = "0";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
+            return "(int)(" + v + ")";
+        }
+        if (nodeName == "To Bool")
+        {
+            std::string v = "false";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
+            return "((" + v + ") != 0)";
+        }
+        if (nodeName == "To String")
+        {
+            std::string v = "0";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
+            return "std::to_string(" + v + ")";
+        }
+        if (nodeName == "To Vec3")
+        {
+            std::string x = "0.0f", y = "0.0f", z = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "X") x = ResolvePin(ctx, inp);
+                if (inp.Name == "Y") y = ResolvePin(ctx, inp);
+                if (inp.Name == "Z") z = ResolvePin(ctx, inp);
+            }
+            return "glm::vec3(" + x + ", " + y + ", " + z + ")";
+        }
+        if (nodeName == "Break Vec3")
+        {
+            std::string v = "glm::vec3(0)";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Vec3") { v = ResolvePin(ctx, inp); break; }
+            if (srcPin->Name == "X") return v + ".x";
+            if (srcPin->Name == "Y") return v + ".y";
+            if (srcPin->Name == "Z") return v + ".z";
+            return v + ".x";
+        }
+        if (nodeName == "Float to Vec3")
+        {
+            std::string v = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
+            return "glm::vec3(" + v + ")";
+        }
 
         // ── Componentes — leitura de dados ────────────────────────────────────
 
@@ -175,6 +264,20 @@ namespace axe
             if (srcPin->Name == "Is Grounded") return "GetCharacter().IsGrounded()";
             if (srcPin->Name == "Velocity")    return "GetCharacter().GetVelocity()";
             if (srcPin->Name == "Max Speed")   return "GetCharacter().GetMaxSpeed()";
+        }
+
+        if (nodeName == "Get Spring Arm")
+        {
+            if (srcPin->Name == "Length")        return "GetContext().ScenePtr->GetRegistry().get<axe::SpringArmComponent>(GetContext().Entity).Length";
+            if (srcPin->Name == "Height Offset") return "GetContext().ScenePtr->GetRegistry().get<axe::SpringArmComponent>(GetContext().Entity).HeightOffset";
+            if (srcPin->Name == "Lag Speed")     return "GetContext().ScenePtr->GetRegistry().get<axe::SpringArmComponent>(GetContext().Entity).LagSpeed";
+        }
+
+        if (nodeName == "Get Camera")
+        {
+            if (srcPin->Name == "FOV")       return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).Fov";
+            if (srcPin->Name == "Near Clip") return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).NearClip";
+            if (srcPin->Name == "Far Clip")  return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).FarClip";
         }
 
         // Fallback
@@ -322,11 +425,28 @@ namespace axe
         }
         else if (name == "Set Variable")
         {
-            std::string val = "0.0f";
-            for (const auto& inp : node->Inputs)
-                if (inp.Name == "Value") val = ResolvePin(ctx, inp);
             std::string varName = "m_" + (node->StringValue.empty() ? "var" : node->StringValue);
-            ctx.Line(varName + " = " + val + ";");
+            // Split pin: generate X/Y/Z component assignments
+            if (node->IntValue & 0x100)
+            {
+                std::string x = "0.0f", y = "0.0f", z = "0.0f";
+                for (const auto& inp : node->Inputs)
+                {
+                    if (inp.Name == "X") x = ResolvePin(ctx, inp);
+                    if (inp.Name == "Y") y = ResolvePin(ctx, inp);
+                    if (inp.Name == "Z") z = ResolvePin(ctx, inp);
+                }
+                ctx.Line(varName + ".x = " + x + ";");
+                ctx.Line(varName + ".y = " + y + ";");
+                ctx.Line(varName + ".z = " + z + ";");
+            }
+            else
+            {
+                std::string val = "glm::vec3(0)";
+                for (const auto& inp : node->Inputs)
+                    if (inp.Name == "Value") val = ResolvePin(ctx, inp);
+                ctx.Line(varName + " = " + val + ";");
+            }
         }
 
         // ── Branch ────────────────────────────────────────────────────────────
@@ -356,6 +476,30 @@ namespace axe
                 ctx.Line("}");
             }
             return; // Branch gerencia seus próprios flows
+        }
+
+        else if (name == "Set Spring Arm")
+        {
+            std::string len = "5.0f", hOff = "2.0f";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Length")        len = ResolvePin(ctx, inp);
+                if (inp.Name == "Height Offset") hOff = ResolvePin(ctx, inp);
+            }
+            ctx.Line("if (GetContext().ScenePtr->GetRegistry().all_of<axe::SpringArmComponent>(GetContext().Entity)) {");
+            ctx.Line("  auto& _sa = GetContext().ScenePtr->GetRegistry().get<axe::SpringArmComponent>(GetContext().Entity);");
+            ctx.Line("  _sa.Length = " + len + ";");
+            ctx.Line("  _sa.HeightOffset = " + hOff + ";");
+            ctx.Line("}");
+        }
+        else if (name == "Set Camera FOV")
+        {
+            std::string fov = "60.0f";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "FOV") fov = ResolvePin(ctx, inp);
+            ctx.Line("if (GetContext().ScenePtr->GetRegistry().all_of<axe::CameraComponent>(GetContext().Entity)) {");
+            ctx.Line("  GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).Fov = " + fov + ";");
+            ctx.Line("}");
         }
 
         // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
@@ -390,23 +534,14 @@ namespace axe
     // ─── Geração principal ────────────────────────────────────────────────────
 
     std::string ScriptGraphCompiler::Generate(const ScriptGraph& graph,
-        const std::string& scriptName)
+        const std::string& scriptName,
+        const std::vector<ScriptVariable>* assetVars)
     {
         Context ctx{ graph };
 
-        // Coleta variáveis (GetVariable / SetVariable)
-        std::vector<std::string> variables;
-        for (const auto& node : graph.GetNodes())
-        {
-            if ((node->Name == "Get Variable" || node->Name == "Set Variable")
-                && !node->StringValue.empty())
-            {
-                std::string var = "m_" + node->StringValue;
-                bool found = false;
-                for (auto& v : variables) if (v == var) { found = true; break; }
-                if (!found) variables.push_back(var);
-            }
-        }
+        // Coleta variáveis do ScriptAsset (tipadas) — preferido sobre inferência do grafo
+        // As variáveis do grafo (Get/Set Variable) são geradas como float por fallback
+        std::vector<std::string> variables; // fallback: vars do grafo não no asset
 
         // ── Header ────────────────────────────────────────────────────────────
         ctx.code += "// Gerado automaticamente pelo AXE Script Editor — nao edite manualmente\n";
@@ -421,13 +556,55 @@ namespace axe
         ctx.code += "extern \"C\" {\n\n";
         ctx.code += "class " + scriptName + " : public axe::ScriptBase\n{\npublic:\n";
 
-        // Variáveis membro
-        if (!variables.empty())
+        // Variáveis membro — NOTE: o compiler recebe apenas o grafo, não o asset.
+        // As variáveis tipadas são geradas via ScriptGraphWindow antes de chamar Generate().
+        // Aqui geramos fallback float para variáveis referenciadas no grafo mas não declaradas.
         {
-            ctx.code += "    // Variáveis\n";
-            for (auto& v : variables)
-                ctx.code += "    float " + v + " = 0.0f;\n";
-            ctx.code += "\n";
+            // Se assetVars fornecido, gera membros tipados diretamente (sem fallback)
+            static const char* s_CppTypes[] = { "float", "bool", "int", "glm::vec3", "std::string" };
+            static const char* s_CppDefaults[] = { "0.0f",  "false","0",   "glm::vec3(0,0,0)", "\"\"" };
+
+            if (assetVars && !assetVars->empty())
+            {
+                ctx.code += "    // Variables\n";
+                for (auto& v : *assetVars)
+                {
+                    int ti = (int)v.Type;
+                    std::string decl = "    " + std::string(s_CppTypes[ti]) + " m_" + v.Name + " = ";
+                    switch (v.Type)
+                    {
+                    case ScriptVarType::Float:  decl += std::to_string(v.DefaultFloat) + "f"; break;
+                    case ScriptVarType::Bool:   decl += (v.DefaultBool ? "true" : "false"); break;
+                    case ScriptVarType::Int:    decl += std::to_string(v.DefaultInt); break;
+                    case ScriptVarType::Vec3:   decl += "glm::vec3(" + std::to_string(v.DefaultVec3[0]) + "f," + std::to_string(v.DefaultVec3[1]) + "f," + std::to_string(v.DefaultVec3[2]) + "f)"; break;
+                    case ScriptVarType::String: decl += "\"" + v.DefaultString + "\""; break;
+                    }
+                    ctx.code += decl + ";\n";
+                }
+                ctx.code += "\n";
+            }
+            else
+            {
+                // Fallback: infere float para vars referenciadas no grafo mas não no asset
+                for (const auto& node : graph.GetNodes())
+                {
+                    if ((node->Name == "Get Variable" || node->Name == "Set Variable")
+                        && !node->StringValue.empty())
+                    {
+                        std::string var = "m_" + node->StringValue;
+                        bool found = false;
+                        for (auto& v : variables) if (v == var) { found = true; break; }
+                        if (!found) variables.push_back(var);
+                    }
+                }
+                if (!variables.empty())
+                {
+                    ctx.code += "    // Variables (float fallback)\n";
+                    for (auto& v : variables)
+                        ctx.code += "    float " + v + " = 0.0f;\n";
+                    ctx.code += "\n";
+                }
+            }
         }
 
         // ── Helpers para detectar presença de evento ──────────────────────────

@@ -15,23 +15,48 @@ namespace axe
     // Tipo do pin — Flow controla execução, os demais passam dados
     enum class ScriptPinType
     {
-        Flow,    // Laranja — controle de execução
-        Float,   // Verde
-        Vec3,    // Verde escuro
-        Bool,    // Amarelo
-        Int,     // Azul claro
-        String,  // Roxo
+        Flow,    // Laranja  — controle de execução
+        Float,   // Verde escuro
+        Vec3,    // Amarelo
+        Bool,    // Vermelho
+        Int,     // Verde claro
+        String,  // Rosa
         Object,  // Azul — referência a entity
+        Vec2,    // Ciano
+        Vec4,    // Roxo claro
+        Quat,    // Lavanda
+        Wildcard,// Branco — aceita qualquer tipo (para cast nodes)
     };
+
+    // Retorna true se os tipos são compatíveis para conexão (cast implícito)
+    inline bool ArePinsCompatible(ScriptPinType from, ScriptPinType to)
+    {
+        if (from == to) return true;
+        if (to == ScriptPinType::Wildcard || from == ScriptPinType::Wildcard) return true;
+        if (from == ScriptPinType::Flow || to == ScriptPinType::Flow) return false;
+        // Numeric conversions (explicit cast node needed but connection allowed)
+        auto isNumeric = [](ScriptPinType t) {
+            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
+            };
+        if (isNumeric(from) && isNumeric(to)) return true;
+        // Vec3 ↔ Vec4 (loses/adds w)
+        if ((from == ScriptPinType::Vec3 && to == ScriptPinType::Vec4) ||
+            (from == ScriptPinType::Vec4 && to == ScriptPinType::Vec3)) return true;
+        // Anything → String (ToString)
+        if (to == ScriptPinType::String) return true;
+        return false;
+    }
 
     // Categoria do node — define a cor do header
     enum class ScriptNodeCategory
     {
-        Event,   // Vermelho/Coral  — OnStart, OnUpdate, OnCollision
-        Action,  // Teal/Verde      — Move, ApplyForce, SendEvent
-        Logic,   // Âmbar/Amarelo   — Branch, Compare, GetVar, SetVar
-        Math,    // Azul            — Add, Multiply, Clamp
-        Input,   // Rosa            — GetKey, GetAxis
+        Event,
+        Action,
+        Logic,
+        Math,
+        Input,
+        Variable,  // pink — Get/Set Variable nodes
+        Print,     // rosa — Print String
     };
 
     struct ScriptPin
@@ -83,6 +108,7 @@ namespace axe
 
         std::string       StringValue;
         float             FloatValue = 0.0f;
+        int               IntValue = 0;    // uso geral: tipo da variável para Get/Set Variable
 
         ScriptNode(int id, const char* name, ScriptNodeCategory cat)
             : ID(id), Name(name), Category(cat) {}
@@ -132,6 +158,22 @@ namespace axe
 
     // Retorna a cor ImGui do header para cada categoria
     AXE_API ImColor GetNodeHeaderColor(ScriptNodeCategory cat);
+    // Inline — não depende de recompilação da axe.dll
+    inline ImColor GetVariableNodeColor(int varTypeIndex)
+    {
+        switch (varTypeIndex) {
+        case 0: return ImColor(30, 140, 60);  // Float  - verde escuro
+        case 1: return ImColor(180, 40, 40);  // Bool   - vermelho
+        case 2: return ImColor(80, 200, 80);  // Int    - verde claro
+        case 3: return ImColor(200, 180, 30);  // Vec3   - amarelo
+        case 4: return ImColor(200, 80, 150); // String - rosa
+        case 5: return ImColor(40, 200, 200); // Vec2   - ciano
+        case 6: return ImColor(160, 80, 220); // Vec4   - roxo
+        case 7: return ImColor(180, 140, 220); // Quat   - lavanda
+        case 8: return ImColor(60, 120, 200); // Entity - azul
+        default: return ImColor(180, 60, 140);
+        }
+    }
 
     // Retorna a cor do pin para cada tipo
     AXE_API ImColor GetPinColor(ScriptPinType type);

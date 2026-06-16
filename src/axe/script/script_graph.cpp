@@ -13,7 +13,9 @@ namespace axe
         case ScriptNodeCategory::Action: return ImColor(30, 120, 100);  // teal
         case ScriptNodeCategory::Logic:  return ImColor(160, 110, 20);   // âmbar
         case ScriptNodeCategory::Math:   return ImColor(40, 80, 160);  // azul
-        case ScriptNodeCategory::Input:  return ImColor(140, 40, 120);  // rosa
+        case ScriptNodeCategory::Input:    return ImColor(140, 40, 120);  // rosa
+        case ScriptNodeCategory::Variable: return ImColor(180, 60, 140);  // pink base
+        case ScriptNodeCategory::Print:    return ImColor(180, 60, 130);  // rosa
         default:                         return ImColor(80, 80, 80);
         }
     }
@@ -22,14 +24,18 @@ namespace axe
     {
         switch (type)
         {
-        case ScriptPinType::Flow:   return ImColor(220, 120, 40);   // laranja
-        case ScriptPinType::Float:  return ImColor(60, 180, 100);  // verde
-        case ScriptPinType::Vec3:   return ImColor(40, 140, 80);   // verde escuro
-        case ScriptPinType::Bool:   return ImColor(220, 180, 40);   // amarelo
-        case ScriptPinType::Int:    return ImColor(100, 180, 220);  // azul claro
-        case ScriptPinType::String: return ImColor(140, 80, 200);  // roxo
-        case ScriptPinType::Object: return ImColor(60, 120, 200);  // azul
-        default:                    return ImColor(200, 200, 200);
+        case ScriptPinType::Flow:     return ImColor(220, 120, 40);   // laranja
+        case ScriptPinType::Float:    return ImColor(30, 140, 60);   // verde escuro
+        case ScriptPinType::Vec3:     return ImColor(200, 180, 30);   // amarelo
+        case ScriptPinType::Bool:     return ImColor(180, 40, 40);   // vermelho
+        case ScriptPinType::Int:      return ImColor(80, 200, 80);   // verde claro
+        case ScriptPinType::String:   return ImColor(200, 80, 150);  // rosa
+        case ScriptPinType::Object:   return ImColor(60, 120, 200);  // azul
+        case ScriptPinType::Vec2:     return ImColor(40, 200, 200);  // ciano
+        case ScriptPinType::Vec4:     return ImColor(160, 80, 220);  // roxo
+        case ScriptPinType::Quat:     return ImColor(180, 140, 220);  // lavanda
+        case ScriptPinType::Wildcard: return ImColor(200, 200, 200);  // branco
+        default:                      return ImColor(200, 200, 200);
         }
     }
 
@@ -119,7 +125,7 @@ namespace axe
         }
         if (t == "PrintString")
         {
-            auto node = makeNode(baseId, "Print String", ScriptNodeCategory::Action);
+            auto node = makeNode(baseId, "Print String", ScriptNodeCategory::Print);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Message", ScriptPinType::String, ed::PinKind::Input);
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -148,16 +154,17 @@ namespace axe
         }
         if (t == "GetVariable")
         {
-            auto node = makeNode(baseId, "Get Variable", ScriptNodeCategory::Logic);
+            auto node = makeNode(baseId, "Get Variable", ScriptNodeCategory::Variable);
             node->Outputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Output);
             return node;
         }
         if (t == "SetVariable")
         {
-            auto node = makeNode(baseId, "Set Variable", ScriptNodeCategory::Logic);
+            auto node = makeNode(baseId, "Set Variable", ScriptNodeCategory::Variable);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Input);
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Output);
             return node;
         }
 
@@ -295,7 +302,104 @@ namespace axe
             return node;
         }
 
+        // ── SpringArm ─────────────────────────────────────────────────────────
+        if (t == "GetSpringArm")
+        {
+            auto node = makeNode(baseId, "Get Spring Arm", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Length", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Height Offset", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Lag Speed", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetSpringArm")
+        {
+            auto node = makeNode(baseId, "Set Spring Arm", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Length", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Height Offset", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Camera ────────────────────────────────────────────────────────────
+        if (t == "GetCamera")
+        {
+            auto node = makeNode(baseId, "Get Camera", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "FOV", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Near Clip", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Far Clip", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetCameraFOV")
+        {
+            auto node = makeNode(baseId, "Set Camera FOV", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            {
+                ScriptPin fov(m_NextId++, "FOV", ScriptPinType::Float, ed::PinKind::Input);
+                fov.DefaultFloat = 60.0f;
+                node->Inputs.push_back(fov);
+            }
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         AXE_CORE_WARN("ScriptGraph: tipo de node desconhecido '{}'", type);
+
+        // ── Cast nodes ────────────────────────────────────────────────────────
+        if (t == "ToFloat")
+        {
+            auto node = makeNode(baseId, "To Float", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Float", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ToInt")
+        {
+            auto node = makeNode(baseId, "To Int", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Int", ScriptPinType::Int, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ToBool")
+        {
+            auto node = makeNode(baseId, "To Bool", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Bool", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ToString")
+        {
+            auto node = makeNode(baseId, "To String", ScriptNodeCategory::Print);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "String", ScriptPinType::String, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ToVec3")
+        {
+            auto node = makeNode(baseId, "To Vec3", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "X", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Y", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Z", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Vec3", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "BreakVec3")
+        {
+            auto node = makeNode(baseId, "Break Vec3", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Vec3", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "X", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Y", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Z", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "FloatToVec3")
+        {
+            auto node = makeNode(baseId, "Float to Vec3", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Vec3", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+
         return nullptr;
     }
 
@@ -400,6 +504,7 @@ namespace axe
             jn["pos"] = { node->Position.x, node->Position.y };
             jn["str_val"] = node->StringValue;
             jn["flt_val"] = node->FloatValue;
+            jn["int_val"] = node->IntValue;
 
             for (const auto& pin : node->Inputs)
                 jn["inputs"].push_back({
@@ -446,6 +551,7 @@ namespace axe
             node->Position = { jn["pos"][0], jn["pos"][1] };
             node->StringValue = jn.value("str_val", "");
             node->FloatValue = jn.value("flt_val", 0.0f);
+            node->IntValue = jn.value("int_val", 0);
 
             for (const auto& jp : jn.value("inputs", nlohmann::json::array()))
             {

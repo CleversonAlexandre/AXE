@@ -150,14 +150,59 @@ namespace axe
         return reg.get<CharacterControllerComponent>(Entity).MaxSpeed;
     }
 
-    void ScriptBase::SetInputPointers(const bool* keys, const bool* prevKeys)
+    // ─────────────────────────────────────────────────────────────────────────
+    // ScriptBase — Input
+    // Todas implementadas aqui (axe.dll), nunca inline na DLL do script.
+    // Isso garante que o acesso a m_Context.Input usa sempre o offset correto
+    // de axe.dll, eliminando o bug de layout entre compilações.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void ScriptBase::PreUpdate(const bool* keys, const bool* prevKeys)
     {
         m_Context.Input.Keys = keys;
         m_Context.Input.PrevKeys = prevKeys;
+
         static int s_Count = 0;
         if (s_Count++ < 3)
-            AXE_CORE_INFO("SetInputPointers (axe.dll) keys={} prev={} Keys@={}",
-                (void*)keys, (void*)prevKeys, (void*)&m_Context.Input.Keys);
+            AXE_CORE_INFO("ScriptBase::PreUpdate (axe.dll) keys={} W={} A={} S={} D={}",
+                (void*)keys,
+                keys ? (bool)keys[87] : false,   // W
+                keys ? (bool)keys[65] : false,   // A
+                keys ? (bool)keys[83] : false,   // S
+                keys ? (bool)keys[68] : false);  // D
+    }
+
+    void ScriptBase::SetInputPointers(const bool* keys, const bool* prevKeys)
+    {
+        // Mantido para compatibilidade com código antigo — delega para PreUpdate
+        PreUpdate(keys, prevKeys);
+    }
+
+    bool ScriptBase::_GetKey(int k) const
+    {
+        return m_Context.Input.GetKey(k);
+    }
+
+    bool ScriptBase::_GetKeyDown(int k) const
+    {
+        return m_Context.Input.GetKeyDown(k);
+    }
+
+    bool ScriptBase::_GetKeyUp(int k) const
+    {
+        return m_Context.Input.GetKeyUp(k);
+    }
+
+    float ScriptBase::_GetAxis(int axis) const
+    {
+        // 0 = Horizontal (A/D), 1 = Vertical (W/S)
+        if (axis == 0)
+            return (m_Context.Input.GetKey(68) ? 1.f : 0.f)  // D
+            - (m_Context.Input.GetKey(65) ? 1.f : 0.f); // A
+        if (axis == 1)
+            return (m_Context.Input.GetKey(87) ? 1.f : 0.f)  // W
+            - (m_Context.Input.GetKey(83) ? 1.f : 0.f); // S
+        return 0.f;
     }
 
     void ScriptCharacterProxy::Move(const glm::vec3& direction, float speed)
@@ -221,6 +266,46 @@ namespace axe
                 if (sc.Instance && e != SenderEntity)
                     sc.Instance->OnEvent(eventName, value);
             });
+    }
+
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ScriptBase — Context e Accessors (não-inline)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void ScriptBase::SetContext(const ScriptContext& ctx)
+    {
+        m_Context = ctx;
+    }
+
+    const ScriptContext& ScriptBase::GetContext() const
+    {
+        return m_Context;
+    }
+
+    ScriptTransformProxy ScriptBase::GetTransform()
+    {
+        return { m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptRigidbodyProxy ScriptBase::GetRigidbody()
+    {
+        return { m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptCharacterProxy ScriptBase::GetCharacter()
+    {
+        return { m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptEventBusProxy ScriptBase::GetEventBus()
+    {
+        return { m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptRigidbodyProxy ScriptBase::GetPhysics()
+    {
+        return GetRigidbody();
     }
 
 } // namespace axe

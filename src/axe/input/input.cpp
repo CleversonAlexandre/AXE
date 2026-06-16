@@ -1,3 +1,4 @@
+#include <string>
 #include "axe/input/input.hpp"
 #include "axe/axe_window/window.hpp"
 #include "axe/log/log.hpp"
@@ -32,18 +33,56 @@ namespace axe
         for (int i = 0; i < 512; i++)
             s_CurrentKeys[i] = s_Window->IsKeyDown(i);
 
-        // Debug: loga WASD se algum estiver pressionado
-        static bool s_DebugLogged = false;
+        // Debug: loga WASD toda vez que algum estiver pressionado
         bool w = s_CurrentKeys[(int)Key::W];
         bool a = s_CurrentKeys[(int)Key::A];
         bool s = s_CurrentKeys[(int)Key::S];
         bool d = s_CurrentKeys[(int)Key::D];
-        if ((w || a || s || d) && !s_DebugLogged)
-        {
-            AXE_CORE_INFO("Input::Update: W={} A={} S={} D={}", w, a, s, d);
-            s_DebugLogged = true;
-        }
-        if (!w && !a && !s && !d) s_DebugLogged = false;
+        if (w || a || s || d)
+            AXE_CORE_INFO("Input::Update WASD: W={} A={} S={} D={}", w, a, s, d);
+    }
+
+    int Input::GetKeyCode(const char* name)
+    {
+        if (!name || name[0] == 0) return 0;
+        // Single letter
+        if (name[0] >= 'A' && name[0] <= 'Z' && name[1] == 0) return (int)name[0];
+        if (name[0] >= 'a' && name[0] <= 'z' && name[1] == 0) return (int)(name[0] - 'a' + 'A');
+
+        // Named keys
+        if (strcmp(name, "Space") == 0) return 32;
+        if (strcmp(name, "Enter") == 0) return 257;
+        if (strcmp(name, "Escape") == 0) return 256;
+        if (strcmp(name, "Tab") == 0) return 258;
+        if (strcmp(name, "Backspace") == 0) return 259;
+        if (strcmp(name, "Delete") == 0) return 261;
+        if (strcmp(name, "Insert") == 0) return 260;
+        if (strcmp(name, "Home") == 0) return 268;
+        if (strcmp(name, "End") == 0) return 269;
+        if (strcmp(name, "PageUp") == 0) return 266;
+        if (strcmp(name, "PageDown") == 0) return 267;
+        if (strcmp(name, "Right") == 0) return 262;
+        if (strcmp(name, "Left") == 0) return 263;
+        if (strcmp(name, "Down") == 0) return 264;
+        if (strcmp(name, "Up") == 0) return 265;
+        if (strcmp(name, "LeftShift") == 0) return 340;
+        if (strcmp(name, "RightShift") == 0) return 344;
+        if (strcmp(name, "LeftControl") == 0) return 341;
+        if (strcmp(name, "RightControl") == 0) return 345;
+        if (strcmp(name, "LeftAlt") == 0) return 342;
+        if (strcmp(name, "RightAlt") == 0) return 346;
+        if (strcmp(name, "F1") == 0) return 290; if (name == "F2")  return 291;
+        if (strcmp(name, "F3") == 0) return 292; if (name == "F4")  return 293;
+        if (strcmp(name, "F5") == 0) return 294; if (name == "F6")  return 295;
+        if (strcmp(name, "F7") == 0) return 296; if (name == "F8")  return 297;
+        if (strcmp(name, "F9") == 0) return 298; if (name == "F10") return 299;
+        if (strcmp(name, "F11") == 0) return 300; if (name == "F12") return 301;
+
+        // Fallback — checa se é número puro
+        bool isNum = (name[0] != 0);
+        for (int i = 0; name[i]; i++) if (name[i] < '0' || name[i] > '9') { isNum = false; break; }
+        if (isNum) return std::atoi(name);
+        return 0;
     }
 
     bool Input::GetKey(Key key)

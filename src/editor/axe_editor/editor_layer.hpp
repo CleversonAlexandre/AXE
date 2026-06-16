@@ -839,7 +839,10 @@ namespace axe
 				m_EditorUI->Draw();
 
 				if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
+				{
+					m_EditorUI->m_ScriptGraphWindow.SetActiveScene(m_Scene.get());
 					m_EditorUI->m_ScriptGraphWindow.Draw();
+				}
 
 				// Input de câmera só no modo Edit
 				if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)

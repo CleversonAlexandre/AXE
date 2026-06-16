@@ -120,6 +120,56 @@ namespace axe
         void           Deserialize(const nlohmann::json& j);
     };
 
+    // ── Variable — membro do script acessível no grafo ───────────────────────
+    enum class ScriptVarType { Float, Bool, Int, Vec3, String, Vec2, Vec4, Quat, Entity };
+
+    static std::string ScriptVarTypeToString(ScriptVarType t)
+    {
+        switch (t) {
+        case ScriptVarType::Float:  return "Float";
+        case ScriptVarType::Bool:   return "Bool";
+        case ScriptVarType::Int:    return "Int";
+        case ScriptVarType::Vec3:   return "Vec3";
+        case ScriptVarType::String: return "String";
+        case ScriptVarType::Vec2:   return "Vec2";
+        case ScriptVarType::Vec4:   return "Vec4";
+        case ScriptVarType::Quat:   return "Quat";
+        case ScriptVarType::Entity: return "Entity";
+        default: return "Float";
+        }
+    }
+    static ScriptVarType ScriptVarTypeFromString(const std::string& s)
+    {
+        if (s == "Bool")   return ScriptVarType::Bool;
+        if (s == "Int")    return ScriptVarType::Int;
+        if (s == "Vec2")   return ScriptVarType::Vec2;
+        if (s == "Vec4")   return ScriptVarType::Vec4;
+        if (s == "Quat")   return ScriptVarType::Quat;
+        if (s == "Entity") return ScriptVarType::Entity;
+        if (s == "Vec3")   return ScriptVarType::Vec3;
+        if (s == "String") return ScriptVarType::String;
+        return ScriptVarType::Float;
+    }
+
+    struct ScriptVariable
+    {
+        std::string   Name = "NewVar";
+        ScriptVarType Type = ScriptVarType::Float;
+        float         DefaultFloat = 0.f;
+        bool          DefaultBool = false;
+        int           DefaultInt = 0;
+        float         DefaultVec3[3] = { 0,0,0 };
+        std::string   DefaultString;
+        bool          Exposed = false;  // visível no Inspector em runtime
+    };
+
+    // ── Custom Event (Dispatch) ───────────────────────────────────────────────
+    struct ScriptCustomEvent
+    {
+        std::string Name = "OnMyEvent";
+        // Parâmetros futuros podem ser adicionados aqui
+    };
+
     // ── Script Asset — arquivo .axescript ────────────────────────────────────
     class AXE_API ScriptAsset
     {
@@ -141,6 +191,18 @@ namespace axe
         void AddComponent(const ScriptComponentDef& def) { m_Components.push_back(def); }
         void RemoveComponent(int index);
 
+        // Variables
+        std::vector<ScriptVariable>& GetVariables() { return m_Variables; }
+        const std::vector<ScriptVariable>& GetVariables() const { return m_Variables; }
+        void AddVariable(const ScriptVariable& v) { m_Variables.push_back(v); }
+        void RemoveVariable(int i) { if (i >= 0 && i < (int)m_Variables.size()) m_Variables.erase(m_Variables.begin() + i); }
+
+        // Custom Events (Dispatch)
+        std::vector<ScriptCustomEvent>& GetCustomEvents() { return m_CustomEvents; }
+        const std::vector<ScriptCustomEvent>& GetCustomEvents() const { return m_CustomEvents; }
+        void AddCustomEvent(const ScriptCustomEvent& e) { m_CustomEvents.push_back(e); }
+        void RemoveCustomEvent(int i) { if (i >= 0 && i < (int)m_CustomEvents.size()) m_CustomEvents.erase(m_CustomEvents.begin() + i); }
+
         // Node graph
         std::shared_ptr<ScriptGraph> GetGraph() { return m_Graph; }
 
@@ -151,6 +213,8 @@ namespace axe
         // Serialização
         bool Save(const std::filesystem::path& filepath);
         bool Load(const std::filesystem::path& filepath);
+        std::string SaveToString();           // snapshot para undo/redo
+        bool        LoadFromString(const std::string& json);
 
         static std::shared_ptr<ScriptAsset> Create(const std::string& name,
             ScriptClassType type = ScriptClassType::Entity);
@@ -161,6 +225,8 @@ namespace axe
         ScriptClassType         m_ClassType = ScriptClassType::Entity;
         std::filesystem::path   m_FilePath;
         std::vector<ScriptComponentDef> m_Components;
+        std::vector<ScriptVariable>     m_Variables;
+        std::vector<ScriptCustomEvent>  m_CustomEvents;
         std::shared_ptr<ScriptGraph>    m_Graph = std::make_shared<ScriptGraph>();
     };
 

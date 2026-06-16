@@ -1,3 +1,4 @@
+#include "axe/script/script_asset.hpp"
 #pragma once
 #include "axe/core/types.hpp"
 #include "script_graph.hpp"
@@ -10,8 +11,10 @@ namespace axe
     public:
         // Gera o código C++ completo a partir do grafo
         // scriptName — nome da classe gerada (ex: "SphereScript")
+        // assetVars: variáveis tipadas do asset (evita duplicação com fallback float)
         static std::string Generate(const ScriptGraph& graph,
-            const std::string& scriptName);
+            const std::string& scriptName,
+            const std::vector<ScriptVariable>* assetVars = nullptr);
 
     private:
         struct Context

@@ -31,6 +31,7 @@ namespace axe
 
         // Tecla mantida pressionada este frame
         static bool GetKey(Key key);
+        static int  GetKeyCode(const char* name);  // "Space" -> 32, "W" -> 87
 
         // Tecla foi pressionada NESTE frame (leading edge)
         static bool GetKeyDown(Key key);
