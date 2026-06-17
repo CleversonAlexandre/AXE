@@ -155,6 +155,7 @@ namespace axe
     {
         std::string   Name = "NewVar";
         ScriptVarType Type = ScriptVarType::Float;
+        std::string   Category = "";   // categoria para agrupamento no painel (vazio = sem categoria)
         float         DefaultFloat = 0.f;
         bool          DefaultBool = false;
         int           DefaultInt = 0;

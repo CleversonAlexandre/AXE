@@ -135,7 +135,8 @@ namespace axe
 
         // My Blueprint panel state
         char  m_NewVarName[64] = "NewVar";
-        int   m_NewVarType = 0;  // index into ScriptVarType
+        int   m_NewVarType = 0;
+        char  m_NewVarCategory[64] = "";
         char  m_NewEvtName[64] = "OnMyEvent";
         int   m_SelectedVar = -1;
         int   m_RenamingVar = -1;
@@ -144,6 +145,15 @@ namespace axe
         int   m_DeleteVarIndex = -1;
         std::string m_DeleteVarName;
         bool  m_DeleteVarAlsoNodes = true;
+
+        // Edição de categoria — buffer persistente (evita reset a cada frame)
+        char  m_VarCatEditBuf[64] = {};
+        int   m_VarCatEditIdx = -1;
+
+        // Renomear categoria — duplo clique no header
+        std::string m_RenamingCat;
+        char        m_RenameCatBuf[64] = {};
+        bool        m_RenameCatJustStarted = false;
         std::vector<ed::NodeId> m_PendingDeleteNodes;
         bool  m_CompCollapsed[32] = {};
         ImVec2      m_GraphWindowCenter = {};

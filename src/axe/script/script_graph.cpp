@@ -514,6 +514,9 @@ namespace axe
             jn["pos"] = { node->Position.x, node->Position.y };
             jn["str_val"] = node->StringValue;
             jn["flt_val"] = node->FloatValue;
+            jn["bool_val"] = node->BoolValue;
+            jn["int_local"] = node->IntLocalValue;
+            jn["vec3_val"] = { node->Vec3Value[0], node->Vec3Value[1], node->Vec3Value[2] };
             jn["int_val"] = node->IntValue;
 
             for (const auto& pin : node->Inputs)
@@ -561,6 +564,14 @@ namespace axe
             node->Position = { jn["pos"][0], jn["pos"][1] };
             node->StringValue = jn.value("str_val", "");
             node->FloatValue = jn.value("flt_val", 0.0f);
+            node->BoolValue = jn.value("bool_val", false);
+            node->IntLocalValue = jn.value("int_local", 0);
+            if (jn.contains("vec3_val") && jn["vec3_val"].is_array() && jn["vec3_val"].size() >= 3)
+            {
+                node->Vec3Value[0] = jn["vec3_val"][0];
+                node->Vec3Value[1] = jn["vec3_val"][1];
+                node->Vec3Value[2] = jn["vec3_val"][2];
+            }
             node->IntValue = jn.value("int_val", 0);
 
             for (const auto& jp : jn.value("inputs", nlohmann::json::array()))

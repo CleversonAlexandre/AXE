@@ -177,6 +177,12 @@ namespace axe
         float             FloatValue = 0.0f;
         int               IntValue = 0;    // uso geral: tipo da variável para Get/Set Variable
 
+        // ── Valores locais do Set Variable ────────────────────────────────────
+        // Independentes do DefaultValue da variável — cada node Set tem o seu.
+        bool              BoolValue = false;
+        int               IntLocalValue = 0;
+        float             Vec3Value[3] = { 0,0,0 };
+
         ScriptNode(int id, const char* name, ScriptNodeCategory cat)
             : ID(id), Name(name), Category(cat) {}
 

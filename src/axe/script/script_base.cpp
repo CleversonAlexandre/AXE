@@ -5,6 +5,7 @@
 #include "axe/physics/physics_components.hpp"
 #include "axe/physics/physics_system.hpp"
 #include "axe/log/log.hpp"
+#include <algorithm>
 
 // Jolt — necessário para DestroyEntitySafe remover bodies do simulador
 #ifdef JPH_DEBUG_RENDERER
@@ -356,6 +357,37 @@ namespace axe
         }
 
         m_Context.ScenePtr->DestroyEntity(target);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // On-screen messages — fila estática compartilhada por todos os scripts
+    // ─────────────────────────────────────────────────────────────────────────
+    static std::vector<ScriptScreenMessage> s_ScreenMessages;
+
+    void ScriptBase::PrintOnScreen(const char* msg, float duration)
+    {
+        if (!msg) return;
+        s_ScreenMessages.push_back({ std::string(msg), duration });
+        AXE_CORE_INFO("[Script] {}", msg);
+    }
+
+    const std::vector<ScriptScreenMessage>& ScriptBase::GetScreenMessages()
+    {
+        return s_ScreenMessages;
+    }
+
+    void ScriptBase::TickScreenMessages(float dt)
+    {
+        for (auto& m : s_ScreenMessages) m.TimeLeft -= dt;
+        s_ScreenMessages.erase(
+            std::remove_if(s_ScreenMessages.begin(), s_ScreenMessages.end(),
+                [](const ScriptScreenMessage& m) { return m.TimeLeft <= 0.f; }),
+            s_ScreenMessages.end());
+    }
+
+    void ScriptBase::ClearScreenMessages()
+    {
+        s_ScreenMessages.clear();
     }
 
 } // namespace axe

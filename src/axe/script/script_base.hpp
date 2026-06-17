@@ -102,12 +102,30 @@ namespace axe
     };
 
     // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mensagem on-screen — escrita pelos scripts via PrintOnScreen,
+    // lida pelo editor e renderizada no viewport durante o Play.
+    // ─────────────────────────────────────────────────────────────────────────
+    struct AXE_API ScriptScreenMessage
+    {
+        std::string Text;
+        float       TimeLeft = 3.0f;
+    };
+
     // ScriptBase — classe que todo script gerado herda
     // ─────────────────────────────────────────────────────────────────────────
     class AXE_API ScriptBase
     {
     public:
         virtual ~ScriptBase() = default;
+
+        // ── On-screen print (Print String node) ──────────────────────────────
+        // Usa const char* para evitar incompatibilidade de layout de std::string
+        // cross-DLL quando script DLL e axe.dll usam CRTs diferentes.
+        static void PrintOnScreen(const char* msg, float duration = 3.0f);
+        static const std::vector<ScriptScreenMessage>& GetScreenMessages();
+        static void TickScreenMessages(float dt);
+        static void ClearScreenMessages();
 
         // ── Ciclo de vida ─────────────────────────────────────────────────────
         virtual void OnStart() {}

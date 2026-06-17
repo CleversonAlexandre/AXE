@@ -518,6 +518,36 @@ namespace axe
                                     }
                                     ImGui::Spacing();
                                     ImGui::Checkbox("Exposed (Inspector)##nd_exp", &foundVar->Exposed);
+
+                                    // Categoria da variável — exibe e permite editar
+                                    ImGui::Spacing();
+                                    ImGui::TextDisabled("Categoria:");
+                                    ImGui::SameLine(0, 4);
+                                    if (foundVar->Category.empty())
+                                    {
+                                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+                                        ImGui::TextUnformatted("(nenhuma)");
+                                        ImGui::PopStyleColor();
+                                    }
+                                    else
+                                    {
+                                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.85f, 1.0f, 1));
+                                        ImGui::TextUnformatted(foundVar->Category.c_str());
+                                        ImGui::PopStyleColor();
+                                    }
+                                    // Campo para mudar categoria diretamente na aba Node
+                                    static char s_CatBuf[64] = {};
+                                    static std::string s_LastVarName;
+                                    if (s_LastVarName != foundVar->Name)
+                                    {
+                                        strncpy(s_CatBuf, foundVar->Category.c_str(), 63);
+                                        s_CatBuf[63] = 0;
+                                        s_LastVarName = foundVar->Name;
+                                    }
+                                    ImGui::SetNextItemWidth(-1);
+                                    if (ImGui::InputTextWithHint("##nd_cat", "Definir categoria...", s_CatBuf, 64))
+                                        foundVar->Category = s_CatBuf;
+
                                     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
                                 }
                                 else

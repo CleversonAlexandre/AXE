@@ -425,14 +425,40 @@ namespace axe
         }
         else if (name == "Print String")
         {
-            std::string msg = "\"\"";
-            for (const auto& inp : node->Inputs)
-                if (inp.Name == "Message") msg = ResolvePin(ctx, inp);
+            // Verifica se o pin Message está conectado
+            bool connected = false;
+            for (const auto& link : ctx.graph.GetLinks())
+                for (const auto& inp : node->Inputs)
+                    if (inp.Name == "Message" && link.EndPin == inp.ID)
+                    {
+                        connected = true; break;
+                    }
+
+            std::string msg;
+            if (connected)
+            {
+                // Pin conectado — resolve o valor dinamicamente
+                for (const auto& inp : node->Inputs)
+                    if (inp.Name == "Message") { msg = ResolvePin(ctx, inp); break; }
+            }
+            else
+            {
+                // Sem conexão — usa o texto digitado no Script Details (node->StringValue)
+                msg = "\"" + node->StringValue + "\"";
+            }
+
             ctx.Line("{ std::string _msg = (" + msg + "); axe::ScriptBase::PrintOnScreen(_msg.c_str()); }");
         }
         else if (name == "Set Variable")
         {
             std::string varName = "m_" + (node->StringValue.empty() ? "var" : node->StringValue);
+
+            // Descobre o tipo da variável para gerar o literal correto
+            ScriptVarType varType = ScriptVarType::Float;
+            if (ctx.assetVars)
+                for (auto& v : *ctx.assetVars)
+                    if (v.Name == node->StringValue) { varType = v.Type; break; }
+
             // Split pin: generate X/Y/Z component assignments
             if (node->IntValue & 0x100)
             {
@@ -449,9 +475,47 @@ namespace axe
             }
             else
             {
-                std::string val = "glm::vec3(0)";
-                for (const auto& inp : node->Inputs)
-                    if (inp.Name == "Value") val = ResolvePin(ctx, inp);
+                // Verifica se o pin Value está conectado
+                bool connected = false;
+                for (const auto& link : ctx.graph.GetLinks())
+                    for (const auto& inp : node->Inputs)
+                        if (inp.Name == "Value" && link.EndPin == inp.ID)
+                        {
+                            connected = true; break;
+                        }
+
+                std::string val;
+                if (connected)
+                {
+                    // Pin conectado — resolve normalmente
+                    for (const auto& inp : node->Inputs)
+                        if (inp.Name == "Value") { val = ResolvePin(ctx, inp); break; }
+                }
+                else
+                {
+                    // Sem conexão — usa valor LOCAL do node (não o default da variável)
+                    switch (varType)
+                    {
+                    case ScriptVarType::Bool:
+                        val = node->BoolValue ? "true" : "false";
+                        break;
+                    case ScriptVarType::Int:
+                        val = std::to_string(node->IntLocalValue);
+                        break;
+                    case ScriptVarType::Vec3:
+                        val = "glm::vec3(" +
+                            std::to_string(node->Vec3Value[0]) + "f, " +
+                            std::to_string(node->Vec3Value[1]) + "f, " +
+                            std::to_string(node->Vec3Value[2]) + "f)";
+                        break;
+                    case ScriptVarType::String:
+                        val = "std::string(\"" + node->StringValue + "\")";
+                        break;
+                    default: // Float e outros
+                        val = std::to_string(node->FloatValue) + "f";
+                        break;
+                    }
+                }
                 ctx.Line(varName + " = " + val + ";");
             }
         }
@@ -523,18 +587,27 @@ namespace axe
 
             if (ctx.eventName == "OnCollision")
             {
-                // Em OnCollision: só destrói se 'other' for a entity alvo
-                // Evita destruir em qualquer colisão (ex: colisão com o chão)
-                ctx.Line("    if (_destroyTarget == other) DestroyEntitySafe(_destroyTarget);");
+                ctx.Line("    if (_destroyTarget == other)");
+                ctx.Line("    {");
+                ctx.Line("      DestroyEntitySafe(_destroyTarget);");
+                ctx.indent += 3;
+                auto* next = FindNextFlowNode(ctx, node);
+                GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                ctx.indent -= 3;
+                ctx.Line("    }");
             }
             else
             {
-                // Em outros eventos (OnStart, OnUpdate, etc.): destrói diretamente
                 ctx.Line("    DestroyEntitySafe(_destroyTarget);");
+                ctx.indent++;
+                auto* next = FindNextFlowNode(ctx, node);
+                GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                ctx.indent--;
             }
 
             ctx.Line("  }");
             ctx.Line("}");
+            return;
         }
 
         // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
@@ -573,6 +646,7 @@ namespace axe
         const std::vector<ScriptVariable>* assetVars)
     {
         Context ctx{ graph };
+        ctx.assetVars = assetVars;
 
         // Coleta variáveis do ScriptAsset (tipadas) — preferido sobre inferência do grafo
         // As variáveis do grafo (Get/Set Variable) são geradas como float por fallback

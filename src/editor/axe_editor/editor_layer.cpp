@@ -510,6 +510,7 @@ namespace axe
             m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
             m_ScriptWorld.OnSceneUpdate(*m_Scene, deltaTime);
             m_PhysicsWorld.OnUpdate(*m_Scene, deltaTime);
+            axe::ScriptBase::TickScreenMessages(deltaTime);
 
             bool escNow = EditorApp::Get().GetWindow().IsKeyDown((int)Key::Escape);
             if (escNow && !m_EscWasPressed) EnterPause();
@@ -560,6 +561,42 @@ namespace axe
             {
                 m_EditorUI->m_ScriptGraphWindow.SetActiveScene(m_Scene.get());
                 m_EditorUI->m_ScriptGraphWindow.Draw();
+            }
+
+            // ── On-screen messages (Print String) ────────────────────────────
+            if (m_EditorState != EditorState::Edit)
+            {
+                auto* dl = ImGui::GetForegroundDrawList();
+
+            
+                const auto& msgs = axe::ScriptBase::GetScreenMessages();
+                if (!msgs.empty())
+                {
+                    ViewportWindow* vp = m_EditorUI->GetViewport();
+                    if (vp && vp->IsInitialized())
+                    {
+                        float x = vp->GetBoundsMin().x + 16.f;
+                        float y = vp->GetBoundsMin().y + 50.f;
+
+                        for (const auto& msg : msgs)
+                        {
+                            if (msg.Text.empty()) continue;
+                            float alpha = std::min(1.f, msg.TimeLeft / 0.5f);
+                            float textW = (float)msg.Text.size() * 8.f;
+
+                            dl->AddRectFilled(
+                                ImVec2(x - 8, y - 4), ImVec2(x + textW + 8, y + 20),
+                                IM_COL32(0, 0, 0, (int)(200 * alpha)), 4.f);
+                            dl->AddRect(
+                                ImVec2(x - 8, y - 4), ImVec2(x + textW + 8, y + 20),
+                                IM_COL32(255, 200, 0, (int)(180 * alpha)), 4.f);
+                            dl->AddText(ImVec2(x, y),
+                                IM_COL32(255, 255, 0, (int)(255 * alpha)),
+                                msg.Text.c_str());
+                            y += 28.f;
+                        }
+                    }
+                }
             }
 
             if (m_EditorState == EditorState::Edit || m_EditorState == EditorState::Pause)
@@ -963,6 +1000,7 @@ namespace axe
         m_GameCamera.ClearTarget();
         m_PlayerEntity = entt::null;
         m_PhysicsWorld.OnSceneStop(*m_Scene);
+        axe::ScriptBase::ClearScreenMessages();
 
         GLFWwindow* window = (GLFWwindow*)EditorApp::Get().GetWindow().GetNativeWindow();
         if (window) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);

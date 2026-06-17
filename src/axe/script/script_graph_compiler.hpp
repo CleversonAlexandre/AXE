@@ -23,6 +23,7 @@ namespace axe
             std::string        code;
             int                indent = 2;
             std::string        eventName;  // nome do evento atual (ex: "OnCollision")
+            const std::vector<ScriptVariable>* assetVars = nullptr;  // variáveis tipadas do asset
 
             void Line(const std::string& s = "")
             {

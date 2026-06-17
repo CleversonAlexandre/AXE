@@ -119,31 +119,128 @@ namespace axe
                 {
                     auto* o = pA->Kind == ed::PinKind::Output ? pA : pB;
                     auto* i = pA->Kind == ed::PinKind::Input ? pA : pB;
+
                     if (o->Kind != ed::PinKind::Output || i->Kind != ed::PinKind::Input)
                     {
                         ed::RejectNewItem(ImColor(255, 0, 0), 2);
-                    }
-                    else if (!ArePinsCompatible(o->Type, i->Type))
-                    {
-                        ed::RejectNewItem(ImColor(220, 40, 40), 2);
                         ed::Suspend();
-                        ImGui::SetTooltip("Tipos incompativeis — use um node Cast");
+                        ImGui::SetTooltip("Conecte Output → Input");
                         ed::Resume();
                     }
-                    else if (o->Type != i->Type)
+                    else if (o->Type == i->Type)
                     {
-                        if (ed::AcceptNewItem(ImColor(220, 140, 40), 2.5f))
+                        // Tipos idênticos — aceita direto
+                        if (ed::AcceptNewItem(GetPinColor(o->Type), 2.5f))
                         {
-                            PushUndo("Add Link (cast)");
+                            PushUndo("Add Link");
                             m_Graph->AddLink(o->ID, i->ID);
-                            CommitUndo("Add Link (cast)");
+                            CommitUndo("Add Link");
                         }
                     }
-                    else if (ed::AcceptNewItem(GetPinColor(o->Type), 2.5f))
+                    else
                     {
-                        PushUndo("Add Link");
-                        m_Graph->AddLink(o->ID, i->ID);
-                        CommitUndo("Add Link");
+                        // Tipos diferentes — verifica se há conversão automática disponível
+                        auto isNumeric = [](ScriptPinType t) {
+                            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
+                            };
+                        auto isVec = [](ScriptPinType t) {
+                            return t == ScriptPinType::Vec3 || t == ScriptPinType::Vec4;
+                            };
+
+                        // Determina o node de conversão adequado
+                        const char* convNodeType = nullptr;
+                        const char* convTooltip = nullptr;
+
+                        if (isNumeric(o->Type) && i->Type == ScriptPinType::Float)
+                        {
+                            convNodeType = "ToFloat";  convTooltip = "Inserir To Float";
+                        }
+                        else if (isNumeric(o->Type) && i->Type == ScriptPinType::Int)
+                        {
+                            convNodeType = "ToInt";    convTooltip = "Inserir To Int";
+                        }
+                        else if (isNumeric(o->Type) && i->Type == ScriptPinType::Bool)
+                        {
+                            convNodeType = "ToBool";   convTooltip = "Inserir To Bool";
+                        }
+                        else if ((isNumeric(o->Type) || isVec(o->Type)) && i->Type == ScriptPinType::String)
+                        {
+                            convNodeType = "ToString"; convTooltip = "Inserir To String";
+                        }
+                        else if (isVec(o->Type) && isVec(i->Type))
+                        {
+                            // Vec3 ↔ Vec4 — aceita com aviso
+                            if (ed::AcceptNewItem(ImColor(220, 140, 40), 2.5f))
+                            {
+                                PushUndo("Add Link (cast Vec)");
+                                m_Graph->AddLink(o->ID, i->ID);
+                                CommitUndo("Add Link (cast Vec)");
+                            }
+                            ed::Suspend();
+                            ImGui::SetTooltip("Cast implícito Vec3 ↔ Vec4");
+                            ed::Resume();
+                        }
+
+                        if (convNodeType)
+                        {
+                            // Mostra preview laranja e tooltip
+                            if (ed::AcceptNewItem(ImColor(220, 140, 40), 2.5f))
+                            {
+                                // Insere o node de conversão automaticamente
+                                PushUndo(std::string("Add Conversion: ") + convNodeType);
+
+                                // Posiciona entre os dois pins
+                                ImVec2 posO = ed::GetNodePosition(
+                                    [&]() -> ed::NodeId {
+                                        for (auto& n : m_Graph->GetNodes())
+                                            for (auto& p : n->Outputs)
+                                                if (&p == o) return n->ID;
+                                        return ed::NodeId{};
+                                    }());
+                                ImVec2 posI = ed::GetNodePosition(
+                                    [&]() -> ed::NodeId {
+                                        for (auto& n : m_Graph->GetNodes())
+                                            for (auto& p : n->Inputs)
+                                                if (&p == i) return n->ID;
+                                        return ed::NodeId{};
+                                    }());
+                                ImVec2 midPos = ImVec2(
+                                    (posO.x + posI.x) * 0.5f,
+                                    (posO.y + posI.y) * 0.5f);
+
+                                auto* conv = m_Graph->AddNode(convNodeType);
+                                if (conv)
+                                {
+                                    ed::SetNodePosition(conv->ID, midPos);
+                                    // Conecta: output original → input do conv → output do conv → input destino
+                                    for (auto& p : conv->Inputs)
+                                        if (p.Name == "Value") { m_Graph->AddLink(o->ID, p.ID); break; }
+                                    for (auto& p : conv->Outputs)
+                                        if (p.Name == "Value") { m_Graph->AddLink(p.ID, i->ID); break; }
+                                    m_ConsoleLines.push_back(std::string("[Info] Conversão automática: ") + convNodeType);
+                                }
+                                CommitUndo(std::string("Add Conversion: ") + convNodeType);
+                            }
+                            ed::Suspend();
+                            ImGui::SetTooltip("%s (automático)", convTooltip);
+                            ed::Resume();
+                        }
+                        else if (o->Type != ScriptPinType::Flow && i->Type != ScriptPinType::Flow)
+                        {
+                            // Sem conversão disponível — rejeita com tooltip específico
+                            ed::RejectNewItem(ImColor(220, 40, 40), 2);
+                            ed::Suspend();
+                            ImGui::SetTooltip("%s", GetPinIncompatibleReason(o->Type, i->Type));
+                            ed::Resume();
+                        }
+                        else
+                        {
+                            // Flow misturado com dados
+                            ed::RejectNewItem(ImColor(220, 40, 40), 2);
+                            ed::Suspend();
+                            ImGui::SetTooltip("Flow nao conecta com dados");
+                            ed::Resume();
+                        }
                     }
                 }
             }
@@ -384,6 +481,32 @@ namespace axe
             }
             else if (ctxNode && ctxPin && ctxPin->Type != ScriptPinType::Flow)
             {
+                // ── Show Exec Pins ────────────────────────────────────────────
+                // Adiciona Flow In/Out ao node de dados para encadeá-lo no flow
+                bool hasExec = false;
+                for (auto& p : ctxNode->Inputs)  if (p.Type == ScriptPinType::Flow) { hasExec = true; break; }
+                for (auto& p : ctxNode->Outputs) if (p.Type == ScriptPinType::Flow) { hasExec = true; break; }
+
+                if (!hasExec && ImGui::MenuItem("Show Exec Pins"))
+                {
+                    // Insere Flow In no início dos inputs e Flow Out no início dos outputs
+                    ctxNode->Inputs.emplace(ctxNode->Inputs.begin(),
+                        m_Graph->GetNextId(), "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+                    ctxNode->Outputs.emplace(ctxNode->Outputs.begin(),
+                        m_Graph->GetNextId(), "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+                    m_ConsoleLines.push_back("[Info] Exec pins adicionados: " + ctxNode->Name);
+                }
+                else if (hasExec && ImGui::MenuItem("Hide Exec Pins"))
+                {
+                    ctxNode->Inputs.erase(std::remove_if(ctxNode->Inputs.begin(), ctxNode->Inputs.end(),
+                        [](const ScriptPin& p) { return p.Type == ScriptPinType::Flow; }), ctxNode->Inputs.end());
+                    ctxNode->Outputs.erase(std::remove_if(ctxNode->Outputs.begin(), ctxNode->Outputs.end(),
+                        [](const ScriptPin& p) { return p.Type == ScriptPinType::Flow; }), ctxNode->Outputs.end());
+                    m_ConsoleLines.push_back("[Info] Exec pins removidos: " + ctxNode->Name);
+                }
+
+                ImGui::Separator();
+
                 if (ImGui::MenuItem("Promote to Variable"))
                 {
                     ScriptVariable newVar;

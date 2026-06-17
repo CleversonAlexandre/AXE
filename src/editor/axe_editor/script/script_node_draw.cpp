@@ -38,6 +38,57 @@ namespace axe
     {
         if (!node) return;
 
+        // ── Nodes de conversão — visual compacto estilo Unreal ────────────────
+        static const char* s_ConvNodes[] = {
+            "To Float","To Int","To Bool","To String","To Vec3","Break Vec3","Float to Vec3",nullptr
+        };
+        bool isConvNode = false;
+        for (int ci = 0; s_ConvNodes[ci]; ci++)
+            if (node->Name == s_ConvNodes[ci]) { isConvNode = true; break; }
+
+        if (isConvNode)
+        {
+            // Estilo compacto: sem header, borda arredondada laranja, pins lado a lado
+            ed::PushStyleColor(ed::StyleColor_NodeBg, ImColor(28, 28, 28, 245));
+            ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(180, 120, 30, 220));
+            ed::PushStyleVar(ed::StyleVar_NodeRounding, 12.0f);
+            ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.5f);
+            ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(4, 4, 4, 4));
+            ed::BeginNode(node->ID);
+
+            // Layout: [InputPin] •→• [OutputPin]  tudo numa linha
+            ImGui::BeginGroup();
+            for (auto& pin : node->Inputs)
+            {
+                ed::BeginPin(pin.ID, ed::PinKind::Input);
+                ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
+                    m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                ed::EndPin();
+                ImGui::SameLine(0, 2);
+            }
+
+            // Seta central
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.5f, 0.1f, 1.f));
+            ImGui::TextUnformatted("\xe2\x86\x92");  // →
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 2);
+
+            for (auto& pin : node->Outputs)
+            {
+                ed::BeginPin(pin.ID, ed::PinKind::Output);
+                ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
+                    m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                ed::EndPin();
+                ImGui::SameLine(0, 2);
+            }
+            ImGui::EndGroup();
+
+            ed::EndNode();
+            ed::PopStyleVar(3);
+            ed::PopStyleColor(2);
+            return;
+        }
+
         float inW = 0, outW = 0;
         for (auto& p : node->Inputs)  inW = std::max(inW, ImGui::CalcTextSize(p.Name.c_str()).x);
         for (auto& p : node->Outputs) outW = std::max(outW, ImGui::CalcTextSize(p.Name.c_str()).x);
