@@ -7,6 +7,7 @@
 #include "editor_app.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <filesystem>
 #include "axe/log/log.hpp"
 namespace axe
 {
@@ -19,6 +20,21 @@ namespace axe
 		m_InspectorWindow.Draw();
 		m_ViewportWindow.Draw();
 		m_MaterialEditorWindow.Draw();
+
+		// Input Settings — carrega o InputConfig.json do projeto atual na
+		// primeira vez que detecta o projeto (ou troca de projeto). Evita
+		// recarregar do disco todo frame.
+		if (ProjectManager::Get().HasProject())
+		{
+			static std::filesystem::path s_LastInputProjectRoot;
+			auto curRoot = ProjectManager::Get().GetCurrent().RootPath;
+			if (curRoot != s_LastInputProjectRoot)
+			{
+				s_LastInputProjectRoot = curRoot;
+				m_InputSettingsWindow.SetProjectPath(curRoot);
+			}
+		}
+		m_InputSettingsWindow.Draw();
 
 		// Painel de Environment — flutuante, abrível pelo menu View
 		if (m_ShowEnvironment && OnDrawEnvironment)
@@ -251,6 +267,13 @@ namespace axe
 				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);
 				ImGui::Separator();
 				ImGui::MenuItem("Game Mode", nullptr, &m_ShowGameMode);
+				ImGui::EndMenu();
+			}
+
+			if (ImGui::BeginMenu("Project"))
+			{
+				if (ImGui::MenuItem("Input Settings"))
+					m_InputSettingsWindow.Open();
 				ImGui::EndMenu();
 			}
 

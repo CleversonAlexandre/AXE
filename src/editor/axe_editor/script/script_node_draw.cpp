@@ -6,11 +6,14 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_graph.hpp"
 #include "axe/script/script_asset.hpp"
+#include "axe/input_mapping.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <utilities/widgets.h>
 #include <utilities/drawing.h>
 #include <algorithm>
+#include <vector>
+#include <string>
 
 
 namespace ed = ax::NodeEditor;
@@ -20,7 +23,14 @@ namespace axe
 {
     static IconType PinIcon(ScriptPinType t)
     {
-        return t == ScriptPinType::Flow ? IconType::Flow : IconType::Circle;
+        if (t == ScriptPinType::Flow) return IconType::Flow;
+        // Pins de array usam o ícone de grade 3x3 nativo da lib (mesmo glifo
+        // já usado nas badges do Script Members) em vez do círculo — convenção
+        // visual da Unreal para "isso é uma lista". O parâmetro "filled" do
+        // DrawIcon (passado em cada call site abaixo) já trata sozinho o caso
+        // vazado/preenchido conforme o pin está conectado ou não.
+        if ((int)t >= (int)ScriptPinType::FloatArray) return IconType::Grid;
+        return IconType::Circle;
     }
 
     static ImVec4 PinCol(ScriptPinType t)
@@ -118,19 +128,13 @@ namespace axe
                     break;
                 }
 
-            // Atualiza tipo dos pins Value
-            ScriptPinType pinType = ScriptPinType::Float;
-            switch ((ScriptVarType)varTypeIdx) {
-            case ScriptVarType::Bool:   pinType = ScriptPinType::Bool;   break;
-            case ScriptVarType::Int:    pinType = ScriptPinType::Int;    break;
-            case ScriptVarType::Vec3:   pinType = ScriptPinType::Vec3;   break;
-            case ScriptVarType::String: pinType = ScriptPinType::String; break;
-            case ScriptVarType::Vec2:   pinType = ScriptPinType::Vec2;   break;
-            case ScriptVarType::Vec4:   pinType = ScriptPinType::Vec4;   break;
-            case ScriptVarType::Quat:   pinType = ScriptPinType::Quat;   break;
-            case ScriptVarType::Entity: pinType = ScriptPinType::Object; break;
-            default:                    pinType = ScriptPinType::Float;  break;
-            }
+            // Atualiza tipo dos pins Value — ScriptVarTypeToPinType cobre os
+            // 18 tipos (9 escalares + 9 arrays); o switch manual anterior
+            // só tratava 8 e sobrescrevia arrays de volta para Float aqui
+            // mesmo depois de corrigidos em outro lugar (causa raiz real do
+            // pin de array nunca mudar de cor/ícone — esta era a sincronização
+            // que de fato roda por último a cada frame).
+            ScriptPinType pinType = ScriptVarTypeToPinType((ScriptVarType)varTypeIdx);
             for (auto& p : node->Inputs)  if (p.Name == "Value") p.Type = pinType;
             for (auto& p : node->Outputs) if (p.Name == "Value") p.Type = pinType;
 
@@ -245,6 +249,63 @@ namespace axe
                     default: break;
                     }
                 }
+            }
+            ImGui::Spacing();
+        }
+
+        // ── Combo de seleção para Get Action / Get Axis ───────────────────────
+        // Substitui o antigo pin de string solta (onde a tecla era digitada à
+        // mão) por um dropdown alimentado pelo InputMappingConfig — a Action/
+        // Axis precisa já existir no Input Settings para aparecer aqui.
+        bool isGetAction = (node->Name == "Get Action");
+        bool isGetAxis = (node->Name == "Get Axis");
+        if (isGetAction || isGetAxis)
+        {
+            auto& cfg = InputMappingConfig::Get();
+            std::vector<std::string> names;
+            if (isGetAction)
+                for (auto& a : cfg.GetActions()) names.push_back(a.Name);
+            else
+                for (auto& a : cfg.GetAxes()) names.push_back(a.Name);
+
+            int curIdx = -1;
+            for (int i = 0; i < (int)names.size(); i++)
+                if (names[i] == node->StringValue) { curIdx = i; break; }
+
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+            ImGui::SetNextItemWidth(nodeW - 16.f);
+            const char* comboLabel = (curIdx >= 0) ? names[curIdx].c_str()
+                : (names.empty() ? "(nenhuma configurada)" : "(selecione)");
+            if (ImGui::BeginCombo("##selname", comboLabel))
+            {
+                for (int i = 0; i < (int)names.size(); i++)
+                {
+                    bool sel = (i == curIdx);
+                    if (ImGui::Selectable(names[i].c_str(), sel))
+                    {
+                        node->StringValue = names[i];
+                        if (isGetAxis)
+                        {
+                            auto* axis = cfg.FindAxis(names[i]);
+                            if (axis) m_Graph->RebuildAxisOutputPins(node, (int)axis->ValueType);
+                        }
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                if (names.empty())
+                    ImGui::TextDisabled("Configure em Project > Input Settings");
+                ImGui::EndCombo();
+            }
+
+            // Cobre o caso de um grafo carregado do disco (Deserialize): o
+            // StringValue já está setado, mas os pins podem não refletir o
+            // AxisValueType atual ainda (ex.: o Axis Mapping foi reconfigurado
+            // de 1D para 2D no Input Settings depois que o grafo foi salvo).
+            // RebuildAxisOutputPins é idempotente — seguro de chamar todo frame.
+            if (isGetAxis && curIdx >= 0)
+            {
+                auto* axis = cfg.FindAxis(node->StringValue);
+                if (axis) m_Graph->RebuildAxisOutputPins(node, (int)axis->ValueType);
             }
             ImGui::Spacing();
         }

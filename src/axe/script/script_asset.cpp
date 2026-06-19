@@ -188,6 +188,7 @@ namespace axe
             jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
             jv["s"] = v.DefaultString;
             jv["cat"] = v.Category;
+            jv["desc"] = v.Description;
             jv["exposed"] = v.Exposed;
             vars.push_back(jv);
         }
@@ -247,6 +248,7 @@ namespace axe
                 }
                 v.DefaultString = jv.value("s", "");
                 v.Category = jv.value("cat", "");
+                v.Description = jv.value("desc", "");
                 v.Exposed = jv.value("exposed", false);
                 m_Variables.push_back(v);
             }
@@ -290,6 +292,7 @@ namespace axe
             jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
             jv["s"] = v.DefaultString;
             jv["cat"] = v.Category;
+            jv["desc"] = v.Description;
             jv["exposed"] = v.Exposed;
             vars.push_back(jv);
         }
@@ -368,7 +371,7 @@ namespace axe
                 }
                 v.DefaultString = jv.value("s", "");
                 v.Category = jv.value("cat", "");
-                v.Exposed = jv.value("exposed", false);
+                v.Description = jv.value("desc", "");
                 m_Variables.push_back(v);
             }
 

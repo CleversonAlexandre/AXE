@@ -6,6 +6,7 @@
 #include "asset_browser.hpp"
 #include "editor_context.hpp"
 #include "material_editor_window.hpp"
+#include "editor/axe_editor/input/input_settings_window.hpp"
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
 #include <functional>
@@ -25,6 +26,7 @@ namespace axe
         AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
         MaterialEditorWindow m_MaterialEditorWindow;
         ScriptGraphWindow    m_ScriptGraphWindow;
+        InputSettingsWindow  m_InputSettingsWindow;
 
         // Callbacks conectados pelo EditorLayer
         std::function<void()> OnNewScene;

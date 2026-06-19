@@ -74,44 +74,94 @@ namespace axe
 
         // ── Input ─────────────────────────────────────────────────────────────
 
-        if (nodeName == "Get Key")
+        if (nodeName == "Get Action")
         {
-            // Check if the Key input pin is connected to another node
-            std::string keyExpr;
-            for (const auto& inp : srcNode->Inputs)
-            {
-                if (inp.Name == "Key")
-                {
-                    // If pin is linked, resolve the connected value dynamically
-                    auto [dataNode, dataPin] = FindDataSource(ctx, inp);
-                    if (dataNode)
-                    {
-                        // Connected — resolve as runtime string expression
-                        std::string resolved = ResolvePin(ctx, inp);
-                        // Use runtime key lookup: axe::Input::GetKeyFromName(str)
-                        if (srcPin->Name == "Held")
-                            return "_GetKey((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
-                        if (srcPin->Name == "Pressed")
-                            return "_GetKeyDown((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
-                        if (srcPin->Name == "Released")
-                            return "_GetKeyUp((int)axe::Input::GetKeyCode(" + resolved + ".c_str()))";
-                    }
-                    break;
-                }
-            }
-            // Not connected — use StringValue as hardcoded key name
-            std::string key = srcNode->StringValue.empty() ? "W" : srcNode->StringValue;
-            if (srcPin->Name == "Held")     return "_GetKey((int)axe::Key::" + key + ")";
-            if (srcPin->Name == "Pressed")  return "_GetKeyDown((int)axe::Key::" + key + ")";
-            if (srcPin->Name == "Released") return "_GetKeyUp((int)axe::Key::" + key + ")";
+            std::string actionLit = "\"" + srcNode->StringValue + "\"";
+
+            if (srcPin->Name == "Triggered")
+                return "(axe::Input::GetActionState(" + actionLit + ") == axe::ETriggerState::Triggered)";
+
+            if (srcPin->Name == "Started")
+                return "(axe::Input::GetActionState(" + actionLit + ") == axe::ETriggerState::Started)";
+
+            if (srcPin->Name == "Ongoing")
+                return "(axe::Input::GetActionState(" + actionLit + ") == axe::ETriggerState::Ongoing)";
+
+            if (srcPin->Name == "Completed")
+                return "(axe::Input::GetActionState(" + actionLit + ") == axe::ETriggerState::Completed)";
         }
 
         if (nodeName == "Get Axis")
         {
-            // 0 = Horizontal, 1 = Vertical — int evita passar std::string cross-DLL
-            std::string axis = srcNode->StringValue.empty() ? "Horizontal" : srcNode->StringValue;
-            std::string idx = (axis == "Vertical") ? "1" : "0";
-            return "_GetAxis(" + idx + ")";
+            // srcNode->IntValue espelha o AxisValueType (0=1D,1=2D,2=3D) — já
+            // sincronizado com o número de pins pelo RebuildAxisOutputPins.
+            std::string axisLit = "\"" + srcNode->StringValue + "\"";
+            if (srcNode->IntValue == 0)
+            {
+                if (srcPin->Name == "Value")
+                    return "axe::Input::GetAxisValue1D(" + axisLit + ")";
+            }
+            else if (srcNode->IntValue == 1) // Axis2D — pins "X"/"Y"
+            {
+                // _GetAxisValue2D escreve em ponteiros de saída — o compilador
+                // gera uma chamada auxiliar única por avaliação de X OU Y, então
+                // cada pin dispara sua própria leitura completa (X e Y lidos
+                // juntos, mas só o componente pedido é retornado). Isso evita
+                // precisar de um sistema de "múltiplos retornos" no compilador
+                // atual, ao custo de ler o axis duas vezes se X e Y forem
+                // ambos usados no grafo — aceitável dado o custo baixo da leitura.
+                if (srcPin->Name == "X")
+                    return "([&]{ auto _v = axe::Input::GetAxisValue2D(" + axisLit + "); return _v.x; }())";
+
+                if (srcPin->Name == "Y")
+                    return "([&]{ auto _v = axe::Input::GetAxisValue2D(" + axisLit + "); return _v.y; }())";
+            }
+            else // Axis3D — pins "X"/"Y"/"Z"
+            {
+                if (srcPin->Name == "X")
+                    return "([&]{ auto _v = axe::Input::GetAxisValue3D(" + axisLit + "); return _v.x; }())";
+
+                if (srcPin->Name == "Y")
+                    return "([&]{ auto _v = axe::Input::GetAxisValue3D(" + axisLit + "); return _v.y; }())";
+
+                if (srcPin->Name == "Z")
+                    return "([&]{ auto _v = axe::Input::GetAxisValue3D(" + axisLit + "); return _v.z; }())";
+            }
+        }
+
+        if (nodeName == "Array Get")
+        {
+            // node->IntValue == -1 = pin Array nunca conectado a um array real
+            // ainda — sem tipo conhecido, não há expressão segura a gerar.
+            if (srcNode->IntValue >= 0 && srcPin->Name == "Item")
+            {
+                std::string arrayExpr, indexExpr = "0";
+                for (const auto& inp : srcNode->Inputs)
+                {
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+                    if (inp.Name == "Index") indexExpr = ResolvePin(ctx, inp);
+                }
+                if (!arrayExpr.empty())
+                {
+                    // Bounds-check via lambda imediata: índice fora do range em
+                    // operator[] é UB silencioso; aqui retorna um valor default
+                    // (T{}) em vez de ler memória fora dos limites do vector.
+                    return "([&]{ auto& _arr = " + arrayExpr + "; size_t _idx = (size_t)(" + indexExpr + ");"
+                        + " return (_idx < _arr.size()) ? _arr[_idx] : std::remove_reference_t<decltype(_arr)>::value_type{}; }())";
+                }
+            }
+        }
+
+        if (nodeName == "Array Length")
+        {
+            if (srcNode->IntValue >= 0 && srcPin->Name == "Length")
+            {
+                std::string arrayExpr;
+                for (const auto& inp : srcNode->Inputs)
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+                if (!arrayExpr.empty())
+                    return "(int)" + arrayExpr + ".size()";
+            }
         }
 
         // ── Math ──────────────────────────────────────────────────────────────
@@ -610,6 +660,57 @@ namespace axe
             return;
         }
 
+        else if (name == "Array Add")
+        {
+            // node->IntValue == -1 significa que o pin Array nunca foi conectado
+            // a um array real — sem isso não sabemos o tipo do Item, então não
+            // há nada seguro a gerar (RebuildArrayNodePins garante esse valor
+            // assim que a conexão é feita no editor).
+            if (node->IntValue >= 0)
+            {
+                std::string arrayExpr, itemExpr = "{}";
+                for (const auto& inp : node->Inputs)
+                {
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+                    if (inp.Name == "Item")  itemExpr = ResolvePin(ctx, inp);
+                }
+                if (!arrayExpr.empty())
+                    ctx.Line(arrayExpr + ".push_back(" + itemExpr + ");");
+            }
+        }
+        else if (name == "Array Remove")
+        {
+            if (node->IntValue >= 0)
+            {
+                std::string arrayExpr, indexExpr = "0";
+                for (const auto& inp : node->Inputs)
+                {
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+                    if (inp.Name == "Index") indexExpr = ResolvePin(ctx, inp);
+                }
+                if (!arrayExpr.empty())
+                {
+                    // Bounds-check antes do erase — índice fora do range em
+                    // std::vector::erase é UB (não lança exceção), então a
+                    // checagem aqui evita crash silencioso por um índice ruim
+                    // vindo de um Get Action/cálculo do próprio grafo.
+                    ctx.Line("if ((size_t)(" + indexExpr + ") < " + arrayExpr + ".size())");
+                    ctx.Line("  " + arrayExpr + ".erase(" + arrayExpr + ".begin() + (" + indexExpr + "));");
+                }
+            }
+        }
+        else if (name == "Array Clear")
+        {
+            if (node->IntValue >= 0)
+            {
+                std::string arrayExpr;
+                for (const auto& inp : node->Inputs)
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+                if (!arrayExpr.empty())
+                    ctx.Line(arrayExpr + ".clear();");
+            }
+        }
+
         // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
         // Get Transform / Get Position / Get Rigidbody / Get Collider /
         // Get Character Ctrl não emitem código de ação — são resolvidos via
@@ -659,7 +760,9 @@ namespace axe
         ctx.code += "#include \"axe/utils/glm_config.hpp\"\n";
         ctx.code += "#include \"axe/input/input.hpp\"\n";
         ctx.code += "#include \"axe/log/log.hpp\"\n";
-        ctx.code += "#include \"axe/scene/scene.hpp\"\n\n";
+        ctx.code += "#include \"axe/scene/scene.hpp\"\n";
+        ctx.code += "#include <vector>\n";
+        ctx.code += "#include <type_traits>\n\n";
 
         ctx.code += "extern \"C\" {\n\n";
         ctx.code += "class " + scriptName + " : public axe::ScriptBase\n{\npublic:\n";
@@ -715,6 +818,45 @@ namespace axe
                         // Guarda o nome da entity como string; resolvido em runtime via FindByName
                         typeName = "std::string";
                         defaultVal = "\"" + v.DefaultString + "\"";
+                        break;
+                    case ScriptVarType::FloatArray:
+                        typeName = "std::vector<float>";
+                        defaultVal = "std::vector<float>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::BoolArray:
+                        typeName = "std::vector<bool>";
+                        defaultVal = "std::vector<bool>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::IntArray:
+                        typeName = "std::vector<int>";
+                        defaultVal = "std::vector<int>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::Vec3Array:
+                        typeName = "std::vector<glm::vec3>";
+                        defaultVal = "std::vector<glm::vec3>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::StringArray:
+                        typeName = "std::vector<std::string>";
+                        defaultVal = "std::vector<std::string>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::Vec2Array:
+                        typeName = "std::vector<glm::vec2>";
+                        defaultVal = "std::vector<glm::vec2>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::Vec4Array:
+                        typeName = "std::vector<glm::vec4>";
+                        defaultVal = "std::vector<glm::vec4>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::QuatArray:
+                        typeName = "std::vector<glm::quat>";
+                        defaultVal = "std::vector<glm::quat>(" + std::to_string(v.DefaultArraySize) + ")";
+                        break;
+                    case ScriptVarType::EntityArray:
+                        // Cada elemento é o NOME da entity (resolvido em runtime via
+                        // FindByName), mesmo padrão usado para Entity escalar — evita
+                        // guardar entt::entity crus que ficariam inválidos entre cenas.
+                        typeName = "std::vector<std::string>";
+                        defaultVal = "std::vector<std::string>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     default:
                         typeName = "float";

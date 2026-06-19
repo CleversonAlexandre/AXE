@@ -66,6 +66,13 @@ namespace axe
         void HandlePreviewInput();
         void DrawPreviewGizmo();       // gizmo sobreposto na preview
         void DrawScriptDetails();      // conteúdo do painel Details quando objeto selecionado
+        // Conteúdo de detalhes de UMA variável (Type, Name, Default Value,
+        // Tamanho para arrays, Exposed, Description, Categoria). Extraído de
+        // DrawScriptDetails para ser reutilizável tanto por um node Get/Set
+        // Variable selecionado no canvas quanto pela seleção direta na lista
+        // do painel Script Members (sem precisar de nenhum node existir).
+        void DrawVariableDetailsPanel(ScriptVariable& v);
+        void DrawComponentFields(ScriptComponentDef& def, int i); // campos por tipo de componente — usado por DrawScriptDetails e pelo collapse inline no Scene Graph
         void DrawMyBlueprintWindow();  // painel Variables / Events / Dispatchers
         void CompileScript();
         void InitPreviewScene();
@@ -150,12 +157,19 @@ namespace axe
         char  m_VarCatEditBuf[64] = {};
         int   m_VarCatEditIdx = -1;
 
+        // Drag and drop de variável para categoria — índice armazenado de forma
+        // estável (evita depender do payload binário referenciar a variável de
+        // loop, cujo endereço/valor podia não sobreviver de forma confiável
+        // entre o frame do BeginDragDropSource e o frame do drop no target).
+        int   m_DragVarIndex = -1;
+
         // Renomear categoria — duplo clique no header
         std::string m_RenamingCat;
         char        m_RenameCatBuf[64] = {};
         bool        m_RenameCatJustStarted = false;
         std::vector<ed::NodeId> m_PendingDeleteNodes;
         bool  m_CompCollapsed[32] = {};
+        bool  m_ScaleLocked = false; // cadeado do Scale: true = escala uniforme (todos os eixos juntos)
         ImVec2      m_GraphWindowCenter = {};
         entt::entity m_CameraPreviewEntity = entt::null;  // mesh de câmera no preview 3D
         Scene* m_ActiveScene = nullptr;

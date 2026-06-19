@@ -1,6 +1,7 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/utils/glm_config.hpp"
+#include "axe/script/script_asset.hpp"
 #include <imgui_node_editor.h>
 #include <imgui.h>
 #include <string>
@@ -26,6 +27,14 @@ namespace axe
         Vec4,    // Roxo claro
         Quat,    // Lavanda
         Wildcard,// Branco — aceita qualquer tipo (para cast nodes)
+        // ── Arrays — cada um é um tipo de pin distinto (não um ScriptPinType::
+        // Array genérico com subtipo) para manter cores/identidade visual
+        // próprias no grafo, igual aos escalares. Sem cast implícito entre
+        // tipos de array diferentes — ArePinsCompatible cai no "from==to"
+        // (exact match) por padrão para todos eles, sem precisar de regras
+        // extras abaixo.
+        FloatArray, BoolArray, IntArray, Vec3Array, StringArray,
+        Vec2Array, Vec4Array, QuatArray, EntityArray,
     };
 
     // Retorna true se os tipos são compatíveis para conexão direta (sem cast)
@@ -122,6 +131,7 @@ namespace axe
         Logic,
         Math,
         Input,
+        Array,     // roxo claro — Array Add/Remove/Get/Length/Clear
         Variable,  // pink — Get/Set Variable nodes
         Print,     // rosa — Print String
     };
@@ -211,6 +221,23 @@ namespace axe
         ScriptNode* FindNode(ed::NodeId id);
         bool        IsPinLinked(ed::PinId id) const;
 
+        // Reconstrói os pins de saída de um node "Get Axis" conforme o
+        // AxisValueType do Axis Mapping selecionado (1/2/3 pins Float:
+        // "Value", ou "X"/"Y", ou "X"/"Y"/"Z"). Remove com segurança quaisquer
+        // links que apontavam para pins antigos antes de substituí-los — ver
+        // implementação para detalhes. Não faz nada se o node já tiver
+        // exatamente essa configuração (idempotente, seguro de chamar todo frame).
+        void RebuildAxisOutputPins(ScriptNode* node, int axisValueType);
+
+        // Reconstrói os pins "Item" (ArrayAdd/Get) ou tipo do pin "Array" dos
+        // nodes genéricos de array, refletindo o ScriptVarType real do array
+        // conectado (ex.: conectar uma variável Vec3Array faz os pins Array e
+        // Item virarem Vec3Array/Vec3 respectivamente). arrayElementType é o
+        // ScriptVarType ESCALAR do elemento (ex.: Vec3, não Vec3Array) — use
+        // ScriptVarType::Float como "desconhecido ainda" junto de
+        // node->IntValue == -1 para distinguir de uma conexão real a FloatArray.
+        void RebuildArrayNodePins(ScriptNode* node, ScriptVarType arrayElementType);
+
         // Serialização
         nlohmann::json Serialize() const;
         void           Deserialize(const nlohmann::json& j);
@@ -244,7 +271,47 @@ namespace axe
         case 6: return ImColor(160, 80, 220); // Vec4   - roxo
         case 7: return ImColor(180, 140, 220); // Quat   - lavanda
         case 8: return ImColor(60, 120, 200); // Entity - azul
+            // Arrays (índices 9-17, mesma ordem relativa dos escalares 0-8) —
+            // tons mais escuros/saturados, espelhando GetPinColor para os tipos
+            // *Array.
+        case 9:  return ImColor(15, 90, 40);   // FloatArray
+        case 10: return ImColor(120, 20, 20);  // BoolArray
+        case 11: return ImColor(40, 140, 40);  // IntArray
+        case 12: return ImColor(140, 120, 10); // Vec3Array
+        case 13: return ImColor(140, 40, 100); // StringArray
+        case 14: return ImColor(20, 140, 140); // Vec2Array
+        case 15: return ImColor(110, 40, 160); // Vec4Array
+        case 16: return ImColor(120, 90, 160); // QuatArray
+        case 17: return ImColor(30, 70, 140);  // EntityArray
         default: return ImColor(180, 60, 140);
+        }
+    }
+
+    // Converte o tipo de uma ScriptVariable para o ScriptPinType correspondente
+    // — usado tanto pelos nodes Get/Set Variable quanto pelos nodes genéricos
+    // de array (Array Add/Get/Length/etc.), evitando duplicar este mapeamento
+    // em cada arquivo que precisa dele (script_node_draw.cpp, script_node_graph.cpp).
+    inline ScriptPinType ScriptVarTypeToPinType(ScriptVarType t)
+    {
+        switch (t) {
+        case ScriptVarType::Bool:   return ScriptPinType::Bool;
+        case ScriptVarType::Int:    return ScriptPinType::Int;
+        case ScriptVarType::Vec3:   return ScriptPinType::Vec3;
+        case ScriptVarType::String: return ScriptPinType::String;
+        case ScriptVarType::Vec2:   return ScriptPinType::Vec2;
+        case ScriptVarType::Vec4:   return ScriptPinType::Vec4;
+        case ScriptVarType::Quat:   return ScriptPinType::Quat;
+        case ScriptVarType::Entity: return ScriptPinType::Object;
+        case ScriptVarType::FloatArray:  return ScriptPinType::FloatArray;
+        case ScriptVarType::BoolArray:   return ScriptPinType::BoolArray;
+        case ScriptVarType::IntArray:    return ScriptPinType::IntArray;
+        case ScriptVarType::Vec3Array:   return ScriptPinType::Vec3Array;
+        case ScriptVarType::StringArray: return ScriptPinType::StringArray;
+        case ScriptVarType::Vec2Array:   return ScriptPinType::Vec2Array;
+        case ScriptVarType::Vec4Array:   return ScriptPinType::Vec4Array;
+        case ScriptVarType::QuatArray:   return ScriptPinType::QuatArray;
+        case ScriptVarType::EntityArray: return ScriptPinType::EntityArray;
+        default: return ScriptPinType::Float; // Float e fallback
         }
     }
 

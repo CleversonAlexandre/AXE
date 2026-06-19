@@ -31,10 +31,21 @@ namespace axe
 		std::shared_ptr<Texture2D> GetPostProcess()      const { return m_IconPostProcess; }
 		std::shared_ptr<Texture2D> GetEnvironment()      const { return m_IconEnvironment; }
 
+		// Ícones de componentes (Script Editor / Inspector)
+		std::shared_ptr<Texture2D> GetRigidbody()           const { return m_IconRigidbody; }
+		std::shared_ptr<Texture2D> GetCollider()            const { return m_IconCollider; }
+		std::shared_ptr<Texture2D> GetCharacterController() const { return m_IconCharacterController; }
+		std::shared_ptr<Texture2D> GetSpringArm()           const { return m_IconSpringArm; }
+		std::shared_ptr<Texture2D> GetCamera()              const { return m_IconCamera; }
+
 		std::shared_ptr<Texture2D> GetSave()       const { return m_IconSave; }
 		std::shared_ptr<Texture2D> GetUndo()       const { return m_IconUndo; }
 		std::shared_ptr<Texture2D> GetRedo()       const { return m_IconRedo; }
 		std::shared_ptr<Texture2D> GetCompile()    const { return m_IconCompile; }
+		std::shared_ptr<Texture2D> GetFit()        const { return m_IconFit; }
+		std::shared_ptr<Texture2D> GetAdd()        const { return m_IconAdd; }
+		std::shared_ptr<Texture2D> GetLockClosed() const { return m_IconLockClosed; }
+		std::shared_ptr<Texture2D> GetLockOpen()   const { return m_IconLockOpen; }
 
 
 
@@ -68,10 +79,21 @@ namespace axe
 		std::shared_ptr<Texture2D> m_IconPostProcess;
 		std::shared_ptr<Texture2D> m_IconEnvironment;
 
+		// Ícones de componentes
+		std::shared_ptr<Texture2D> m_IconRigidbody;
+		std::shared_ptr<Texture2D> m_IconCollider;
+		std::shared_ptr<Texture2D> m_IconCharacterController;
+		std::shared_ptr<Texture2D> m_IconSpringArm;
+		std::shared_ptr<Texture2D> m_IconCamera;
+
 		std::shared_ptr<Texture2D> m_IconSave;
 		std::shared_ptr<Texture2D> m_IconUndo;
 		std::shared_ptr<Texture2D> m_IconRedo;
 		std::shared_ptr<Texture2D> m_IconCompile;
+		std::shared_ptr<Texture2D> m_IconFit;
+		std::shared_ptr<Texture2D> m_IconAdd;
+		std::shared_ptr<Texture2D> m_IconLockClosed;
+		std::shared_ptr<Texture2D> m_IconLockOpen;
 
 		bool m_Loaded = true;
 

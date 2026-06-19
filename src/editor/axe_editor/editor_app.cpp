@@ -25,10 +25,10 @@ namespace axe
 
 	EditorApp* EditorApp::s_Instance = nullptr;
 
-	
+
 
 	EditorApp::EditorApp()
-	{		
+	{
 
 		char* pgmptr = nullptr;
 		_get_pgmptr(&pgmptr);
@@ -58,7 +58,7 @@ namespace axe
 		{
 			AXE_CORE_ERROR("Failed to initialize GraphicsDevice");
 			return;
-		}		
+		}
 		m_Graphics->SetClearColor(0.05f, 0.05f, 0.08f, 1.0f);
 
 		m_Window->SetEventCallback(BIND_EVENT_FN(OnEvent));
@@ -122,7 +122,7 @@ namespace axe
 
 		for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); it++)
 		{
-			if(e.Handled) break; //Pra quando alguém consumir o evento
+			if (e.Handled) break; //Pra quando alguém consumir o evento
 			(*it)->OnEvent(e);
 		}
 	}
@@ -145,7 +145,7 @@ namespace axe
 
 			m_Window->PollEvents();
 
-			axe::Input::Update();
+			axe::Input::Update((float)deltaTime);
 
 			for (Layer* layer : m_LayerStack)
 				layer->OnUpdate((float)deltaTime);

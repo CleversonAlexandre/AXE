@@ -24,7 +24,9 @@ namespace axe
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
         {"Get Variable","GetVariable"},{"Set Variable","SetVariable"} };
     static const NE sMa[] = { {"Add","Add"},{"Multiply","Multiply"},{"Make Vec3","MakeVec3"} };
-    static const NE sIn[] = { {"Get Key","GetKey"},{"Get Axis","GetAxis"} };
+    static const NE sIn[] = { {"Get Action","GetAction"},{"Get Axis","GetAxis"} };
+    static const NE sArr[] = { {"Array Add","ArrayAdd"},{"Array Remove","ArrayRemove"},
+        {"Array Get","ArrayGet"},{"Array Length","ArrayLength"},{"Array Clear","ArrayClear"} };
     static const NE sCast[] = {
         {"To Float","ToFloat"},{"To Int","ToInt"},{"To Bool","ToBool"},
         {"To String","ToString"},{"To Vec3","ToVec3"},{"Break Vec3","BreakVec3"},
@@ -38,11 +40,12 @@ namespace axe
         {"Logic",   sLo,   4, {0.8f,0.6f,0.1f,  1}},
         {"Math",    sMa,   3, {0.3f,0.5f,0.9f,  1}},
         {"Input",   sIn,   2, {0.7f,0.2f,0.6f,  1}},
+        {"Array",   sArr,  5, {0.55f,0.45f,0.85f, 1}},
         {"Cast",    sCast, 7, {0.5f,0.8f,0.8f,  1}},
     };
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
-        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.3f,0.75f,1},{0.5f,0.9f,0.9f,1}
+        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.3f,0.75f,1},{0.7f,0.6f,0.95f,1},{0.5f,0.9f,0.9f,1}
     };
 
     struct CompNodeEntry { const char* label; const char* type; };
@@ -135,6 +138,50 @@ namespace axe
                             PushUndo("Add Link");
                             m_Graph->AddLink(o->ID, i->ID);
                             CommitUndo("Add Link");
+                        }
+                    }
+                    else if (o->Type == ScriptPinType::Wildcard && (int)i->Type >= (int)ScriptPinType::FloatArray)
+                    {
+                        // Pin Wildcard de saída de um node genérico de Array (Array
+                        // Get) conectando a um pin de array real de ENTRADA — fixa o
+                        // node Wildcard no tipo concreto. Verificado ANTES do bloco de
+                        // Cast (mais abaixo) para não competir com a lógica de
+                        // conversão entre tipos escalares, que continua tratando
+                        // Wildcard normalmente para os casos não-array (To Float etc.).
+                        if (ed::AcceptNewItem(GetPinColor(i->Type), 2.5f))
+                        {
+                            PushUndo("Add Link (array)");
+                            m_Graph->AddLink(o->ID, i->ID);
+                            ScriptVarType concreteVarType = (ScriptVarType)(
+                                (int)i->Type - (int)ScriptPinType::FloatArray + (int)ScriptVarType::FloatArray);
+                            ScriptVarType elemType = GetElementType(concreteVarType);
+                            for (auto& n : m_Graph->GetNodes())
+                            {
+                                bool owns = false;
+                                for (auto& p : n->Outputs) if (&p == o) owns = true;
+                                if (owns) { m_Graph->RebuildArrayNodePins(n.get(), elemType); break; }
+                            }
+                            CommitUndo("Add Link (array)");
+                        }
+                    }
+                    else if (i->Type == ScriptPinType::Wildcard && (int)o->Type >= (int)ScriptPinType::FloatArray)
+                    {
+                        // Mesmo caso, mas com o pin Wildcard de ENTRADA (Array Add/
+                        // Remove/Get/Length/Clear) recebendo de uma saída de array real.
+                        if (ed::AcceptNewItem(GetPinColor(o->Type), 2.5f))
+                        {
+                            PushUndo("Add Link (array)");
+                            m_Graph->AddLink(o->ID, i->ID);
+                            ScriptVarType concreteVarType = (ScriptVarType)(
+                                (int)o->Type - (int)ScriptPinType::FloatArray + (int)ScriptVarType::FloatArray);
+                            ScriptVarType elemType = GetElementType(concreteVarType);
+                            for (auto& n : m_Graph->GetNodes())
+                            {
+                                bool owns = false;
+                                for (auto& p : n->Inputs) if (&p == i) owns = true;
+                                if (owns) { m_Graph->RebuildArrayNodePins(n.get(), elemType); break; }
+                            }
+                            CommitUndo("Add Link (array)");
                         }
                     }
                     else
@@ -336,14 +383,11 @@ namespace axe
                     && m_PendingVarType >= 0)
                 {
                     node->IntValue = m_PendingVarType;
-                    ScriptPinType pt = ScriptPinType::Float;
-                    switch ((ScriptVarType)m_PendingVarType) {
-                    case ScriptVarType::Bool:   pt = ScriptPinType::Bool;   break;
-                    case ScriptVarType::Int:    pt = ScriptPinType::Int;    break;
-                    case ScriptVarType::Vec3:   pt = ScriptPinType::Vec3;   break;
-                    case ScriptVarType::String: pt = ScriptPinType::String; break;
-                    default: break;
-                    }
+                    // ScriptVarTypeToPinType cobre todos os 18 tipos (9
+                    // escalares + 9 arrays) — o switch manual anterior só
+                    // tratava Bool/Int/Vec3/String, deixando Vec2/Vec4/Quat/
+                    // Entity/qualquer Array cair no default (sempre Float).
+                    ScriptPinType pt = ScriptVarTypeToPinType((ScriptVarType)m_PendingVarType);
                     for (auto& p : node->Inputs)  if (p.Name == "Value") p.Type = pt;
                     for (auto& p : node->Outputs) if (p.Name == "Value") p.Type = pt;
                     m_PendingVarType = 0;
@@ -750,12 +794,21 @@ namespace axe
                 }
             }
 
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("VAR_NODE"))
+            // VAR_RECAT também é usado aqui — mesmo payload da fonte em
+            // script_members.cpp, agora consumido para criar um node "Get"
+            // ao soltar no canvas (em vez do antigo payload separado VAR_NODE,
+            // removido porque SetDragDropPayload só mantém um payload ativo
+            // por sessão de drag — ter dois causava o bug de recategorização
+            // nunca funcionar).
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("VAR_RECAT"))
             {
-                std::string data = (const char*)payload->Data;
-                m_VarDropName = data.substr(data.find(':') + 1);
-                m_VarDropPos = ImGui::GetMousePos();
-                m_VarDropPending = true;
+                int idx = *(int*)payload->Data;
+                if (m_ScriptAsset && idx >= 0 && idx < (int)m_ScriptAsset->GetVariables().size())
+                {
+                    m_VarDropName = m_ScriptAsset->GetVariables()[idx].Name;
+                    m_VarDropPos = ImGui::GetMousePos();
+                    m_VarDropPending = true;
+                }
             }
 
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("EVT_NODE"))

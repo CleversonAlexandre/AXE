@@ -40,6 +40,10 @@ namespace axe
 		m_IconUndo = load("arrow_left.png");
 		m_IconRedo = load("arrow_right.png");
 		m_IconCompile = load("check.png");
+		m_IconFit = load("icon_fit.png");
+		m_IconAdd = load("icon_add.png");
+		m_IconLockClosed = load("icon_lock_closed.png");
+		m_IconLockOpen = load("icon_lock_open.png");
 
 		m_IconDirectionalLight = load("directional_light.png");
 		m_IconPointLight = load("point_light.png");
@@ -47,6 +51,13 @@ namespace axe
 		// até termos arte dedicada
 		m_IconPostProcess = load("camera.png");
 		m_IconEnvironment = load("icon_scene.png"); // globo/ambiente
+
+		// Ícones de componentes (Script Editor / Inspector)
+		m_IconRigidbody = load("icon_rigidbody.png");
+		m_IconCollider = load("icon_collider.png");
+		m_IconCharacterController = load("icon_character_controller.png");
+		m_IconSpringArm = load("icon_spring_arm.png");
+		m_IconCamera = load("camera.png");
 
 		m_Loaded = true;
 		//AXE_CORE_INFO("EditorIconLibrary: ícones carregados.");

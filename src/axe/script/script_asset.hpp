@@ -121,7 +121,41 @@ namespace axe
     };
 
     // ── Variable — membro do script acessível no grafo ───────────────────────
-    enum class ScriptVarType { Float, Bool, Int, Vec3, String, Vec2, Vec4, Quat, Entity };
+    // Os 9 primeiros são escalares; os 9 últimos são as versões "Array" de cada
+    // um (ex.: FloatArray é um array de Float). Mantidos como tipos distintos no
+    // enum (em vez de uma flag IsArray separada) para que o switch/case já
+    // existente em código mais antigo continue exaustivo e force atualização
+    // em tempo de compilação sempre que algo novo for adicionado aqui.
+    enum class ScriptVarType {
+        Float, Bool, Int, Vec3, String, Vec2, Vec4, Quat, Entity,
+        FloatArray, BoolArray, IntArray, Vec3Array, StringArray,
+        Vec2Array, Vec4Array, QuatArray, EntityArray,
+    };
+
+    // true se o tipo for uma das 9 variantes "Array" do enum acima.
+    inline bool IsArrayType(ScriptVarType t)
+    {
+        return (int)t >= (int)ScriptVarType::FloatArray;
+    }
+
+    // Para um tipo Array, retorna o tipo escalar correspondente (ex.:
+    // Vec3Array -> Vec3). Para um tipo já escalar, retorna ele mesmo
+    // (idempotente — seguro de chamar sem checar IsArrayType antes).
+    inline ScriptVarType GetElementType(ScriptVarType t)
+    {
+        if (!IsArrayType(t)) return t;
+        int offset = (int)t - (int)ScriptVarType::FloatArray;
+        return (ScriptVarType)offset; // Float..Entity têm a mesma ordem relativa
+    }
+
+    // Inverso de GetElementType — para um tipo escalar, retorna a versão Array
+    // correspondente (ex.: Vec3 -> Vec3Array). Chamar com um tipo já-Array
+    // retorna ele mesmo sem alterar (idempotente).
+    inline ScriptVarType GetArrayType(ScriptVarType t)
+    {
+        if (IsArrayType(t)) return t;
+        return (ScriptVarType)((int)t + (int)ScriptVarType::FloatArray);
+    }
 
     static std::string ScriptVarTypeToString(ScriptVarType t)
     {
@@ -135,6 +169,15 @@ namespace axe
         case ScriptVarType::Vec4:   return "Vec4";
         case ScriptVarType::Quat:   return "Quat";
         case ScriptVarType::Entity: return "Entity";
+        case ScriptVarType::FloatArray:  return "FloatArray";
+        case ScriptVarType::BoolArray:   return "BoolArray";
+        case ScriptVarType::IntArray:    return "IntArray";
+        case ScriptVarType::Vec3Array:   return "Vec3Array";
+        case ScriptVarType::StringArray: return "StringArray";
+        case ScriptVarType::Vec2Array:   return "Vec2Array";
+        case ScriptVarType::Vec4Array:   return "Vec4Array";
+        case ScriptVarType::QuatArray:   return "QuatArray";
+        case ScriptVarType::EntityArray: return "EntityArray";
         default: return "Float";
         }
     }
@@ -148,6 +191,15 @@ namespace axe
         if (s == "Entity") return ScriptVarType::Entity;
         if (s == "Vec3")   return ScriptVarType::Vec3;
         if (s == "String") return ScriptVarType::String;
+        if (s == "FloatArray")  return ScriptVarType::FloatArray;
+        if (s == "BoolArray")   return ScriptVarType::BoolArray;
+        if (s == "IntArray")    return ScriptVarType::IntArray;
+        if (s == "Vec3Array")   return ScriptVarType::Vec3Array;
+        if (s == "StringArray") return ScriptVarType::StringArray;
+        if (s == "Vec2Array")   return ScriptVarType::Vec2Array;
+        if (s == "Vec4Array")   return ScriptVarType::Vec4Array;
+        if (s == "QuatArray")   return ScriptVarType::QuatArray;
+        if (s == "EntityArray") return ScriptVarType::EntityArray;
         return ScriptVarType::Float;
     }
 
@@ -155,7 +207,8 @@ namespace axe
     {
         std::string   Name = "NewVar";
         ScriptVarType Type = ScriptVarType::Float;
-        std::string   Category = "";   // categoria para agrupamento no painel (vazio = sem categoria)
+        std::string   Category = "";    // categoria para agrupamento no painel (vazio = sem categoria)
+        std::string   Description = ""; // descrição livre, exibida apenas na aba Node do Script Details
         float         DefaultFloat = 0.f;
         bool          DefaultBool = false;
         int           DefaultInt = 0;
@@ -165,6 +218,13 @@ namespace axe
         float         DefaultQuat[4] = { 0,0,0,1 };  // x,y,z,w — identity
         std::string   DefaultString;
         bool          Exposed = false;  // visível no Inspector em runtime
+
+        // Arrays não têm um "default value" único editável campo-a-campo no
+        // painel (different de um Float ter 1 valor) — apenas um tamanho
+        // inicial e, opcionalmente, um valor de preenchimento (reaproveita os
+        // campos Default* acima conforme GetElementType(Type) for usado para
+        // preencher cada elemento inicial; ver script_details.cpp).
+        int           DefaultArraySize = 0;
     };
 
     // ── Custom Event (Dispatch) ───────────────────────────────────────────────

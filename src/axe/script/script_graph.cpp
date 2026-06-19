@@ -14,6 +14,7 @@ namespace axe
         case ScriptNodeCategory::Logic:  return ImColor(160, 110, 20);   // âmbar
         case ScriptNodeCategory::Math:   return ImColor(40, 80, 160);  // azul
         case ScriptNodeCategory::Input:    return ImColor(140, 40, 120);  // rosa
+        case ScriptNodeCategory::Array:    return ImColor(110, 90, 180);  // roxo claro
         case ScriptNodeCategory::Variable: return ImColor(180, 60, 140);  // pink base
         case ScriptNodeCategory::Print:    return ImColor(180, 60, 130);  // rosa
         default:                         return ImColor(80, 80, 80);
@@ -35,6 +36,17 @@ namespace axe
         case ScriptPinType::Vec4:     return ImColor(160, 80, 220);  // roxo
         case ScriptPinType::Quat:     return ImColor(180, 140, 220);  // lavanda
         case ScriptPinType::Wildcard: return ImColor(200, 200, 200);  // branco
+            // Arrays — mesma família de cor do escalar correspondente, mais escura/
+            // saturada (convenção comum em editores de Blueprint para "lista de X").
+        case ScriptPinType::FloatArray:  return ImColor(15, 90, 40);   // verde escuro++
+        case ScriptPinType::BoolArray:   return ImColor(120, 20, 20);  // vermelho++
+        case ScriptPinType::IntArray:    return ImColor(40, 140, 40);  // verde claro++
+        case ScriptPinType::Vec3Array:   return ImColor(140, 120, 10); // amarelo++
+        case ScriptPinType::StringArray: return ImColor(140, 40, 100); // rosa++
+        case ScriptPinType::Vec2Array:   return ImColor(20, 140, 140); // ciano++
+        case ScriptPinType::Vec4Array:   return ImColor(110, 40, 160); // roxo++
+        case ScriptPinType::QuatArray:   return ImColor(120, 90, 160); // lavanda++
+        case ScriptPinType::EntityArray: return ImColor(30, 70, 140);  // azul++
         default:                      return ImColor(200, 200, 200);
         }
     }
@@ -196,20 +208,77 @@ namespace axe
         }
 
         // ── INPUT ──
-        if (t == "GetKey")
+        if (t == "GetAction")
         {
-            auto node = makeNode(baseId, "Get Key", ScriptNodeCategory::Input);
-            node->Inputs.emplace_back(m_NextId++, "Key", ScriptPinType::String, ed::PinKind::Input);
-            node->Outputs.emplace_back(m_NextId++, "Pressed", ScriptPinType::Bool, ed::PinKind::Output);
-            node->Outputs.emplace_back(m_NextId++, "Released", ScriptPinType::Bool, ed::PinKind::Output);
-            node->Outputs.emplace_back(m_NextId++, "Held", ScriptPinType::Bool, ed::PinKind::Output);
+            auto node = makeNode(baseId, "Get Action", ScriptNodeCategory::Input);
+            // Sem pin de input — a Action é escolhida via combo (node->StringValue),
+            // alimentado por InputMappingConfig (ver script_node_draw.cpp).
+            node->Outputs.emplace_back(m_NextId++, "Triggered", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Started", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Ongoing", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Bool, ed::PinKind::Output);
             return node;
         }
         if (t == "GetAxis")
         {
             auto node = makeNode(baseId, "Get Axis", ScriptNodeCategory::Input);
-            node->Inputs.emplace_back(m_NextId++, "Axis Name", ScriptPinType::String, ed::PinKind::Input);
+            // Começa com 1 pin (Axis1D, caso mais comum) — reconstruído
+            // dinamicamente para 2/3 pins quando o usuário escolhe no combo
+            // um Axis configurado como Axis2D/3D (ver RebuildAxisOutputPins,
+            // chamado a cada frame que o node é desenhado em script_node_draw.cpp).
             node->Outputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Output);
+            node->IntValue = 0; // espelha AxisValueType atual dos pins (0=1D,1=2D,2=3D)
+            return node;
+        }
+
+        // ── ARRAY ── (genéricos — pin "Array" começa Wildcard, fixa no tipo
+        // real assim que conectado a uma variável array; ver
+        // RebuildArrayNodePins em script_node_draw.cpp, mesmo padrão usado
+        // para os pins dinâmicos de Get Axis)
+        if (t == "ArrayAdd")
+        {
+            auto node = makeNode(baseId, "Array Add", ScriptNodeCategory::Array);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Item", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = -1; // -1 = tipo de array ainda desconhecido (nenhuma conexão ainda)
+            return node;
+        }
+        if (t == "ArrayRemove")
+        {
+            auto node = makeNode(baseId, "Array Remove", ScriptNodeCategory::Array);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Index", ScriptPinType::Int, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = -1;
+            return node;
+        }
+        if (t == "ArrayGet")
+        {
+            auto node = makeNode(baseId, "Array Get", ScriptNodeCategory::Array);
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Index", ScriptPinType::Int, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Item", ScriptPinType::Wildcard, ed::PinKind::Output);
+            node->IntValue = -1;
+            return node;
+        }
+        if (t == "ArrayLength")
+        {
+            auto node = makeNode(baseId, "Array Length", ScriptNodeCategory::Array);
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Length", ScriptPinType::Int, ed::PinKind::Output);
+            node->IntValue = -1;
+            return node;
+        }
+        if (t == "ArrayClear")
+        {
+            auto node = makeNode(baseId, "Array Clear", ScriptNodeCategory::Array);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = -1;
             return node;
         }
 
@@ -489,6 +558,84 @@ namespace axe
         for (auto& node : m_Nodes)
             if (node->ID == id) return node.get();
         return nullptr;
+    }
+
+    void ScriptGraph::RebuildAxisOutputPins(ScriptNode* node, int axisValueType)
+    {
+        if (!node) return;
+        // Idempotente: já está na configuração certa (mesmo número de pins
+        // esperado para este AxisValueType) — não faz nada. Evita reconstruir
+        // (e perder links válidos) a cada frame só porque a função é chamada
+        // continuamente enquanto o node é desenhado.
+        int expectedCount = (axisValueType == 0) ? 1 : (axisValueType == 1) ? 2 : 3;
+        if (node->IntValue == axisValueType && (int)node->Outputs.size() == expectedCount)
+            return;
+
+        // Remove qualquer link que referenciava os pins antigos ANTES de
+        // destruí-los — um pin removido com link ainda apontando para ele
+        // deixaria o link "pendurado", referenciando um PinId que não existe
+        // mais em nenhum node (FindPin retornaria nullptr para ele depois).
+        for (auto& oldPin : node->Outputs)
+        {
+            m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                [&](const ScriptLink& l) { return l.StartPin == oldPin.ID || l.EndPin == oldPin.ID; }),
+                m_Links.end());
+        }
+
+        node->Outputs.clear();
+        if (axisValueType == 0)
+        {
+            node->Outputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Output);
+        }
+        else if (axisValueType == 1)
+        {
+            node->Outputs.emplace_back(m_NextId++, "X", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Y", ScriptPinType::Float, ed::PinKind::Output);
+        }
+        else // 2 = Axis3D
+        {
+            node->Outputs.emplace_back(m_NextId++, "X", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Y", ScriptPinType::Float, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Z", ScriptPinType::Float, ed::PinKind::Output);
+        }
+        node->IntValue = axisValueType;
+
+        AXE_CORE_INFO("ScriptGraph: Get Axis '{}' reconstruído para AxisValueType={} ({} pins)",
+            node->StringValue, axisValueType, expectedCount);
+    }
+
+    void ScriptGraph::RebuildArrayNodePins(ScriptNode* node, ScriptVarType arrayElementType)
+    {
+        if (!node) return;
+
+        // node->IntValue guarda o ScriptVarType ESCALAR do elemento (não o
+        // *Array) — comparação simples como int evita repetir o cast em cada
+        // chamador. -1 = ainda desconectado.
+        int newTypeIdx = (int)arrayElementType;
+        if (node->IntValue == newTypeIdx) return; // idempotente — já está certo
+
+        ScriptPinType elemPinType = ScriptVarTypeToPinType(arrayElementType);
+        ScriptPinType arrayPinType = ScriptVarTypeToPinType(GetArrayType(arrayElementType));
+
+        // Diferente de RebuildAxisOutputPins, aqui NÃO removemos/recriamos
+        // pins — a contagem é fixa por node (Array/Item/Index/Length sempre
+        // existem), só o TIPO de cada pin muda. Isso preserva qualquer link
+        // já existente automaticamente, desde que o novo tipo continue
+        // compatível (mesma família, então sempre compatível entre si).
+        for (auto& pin : node->Inputs)
+        {
+            if (pin.Name == "Array") pin.Type = arrayPinType;
+            if (pin.Name == "Item")  pin.Type = elemPinType;
+        }
+        for (auto& pin : node->Outputs)
+        {
+            if (pin.Name == "Item")  pin.Type = elemPinType;
+        }
+
+        node->IntValue = newTypeIdx;
+
+        AXE_CORE_INFO("ScriptGraph: node de array '{}' fixado no tipo '{}'",
+            node->Name, ScriptVarTypeToString(arrayElementType));
     }
 
     bool ScriptGraph::IsPinLinked(ed::PinId id) const

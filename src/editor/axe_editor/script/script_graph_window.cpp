@@ -14,6 +14,7 @@
 #include "axe/script/script_graph_compiler.hpp"
 #include "axe/script/script_compiler.hpp"
 #include "axe/log/log.hpp"
+#include "editor/axe_editor/editor_icon_library.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_node_editor.h>
@@ -118,7 +119,7 @@ namespace axe
             if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) Redo();
         }
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 3.f));
         bool vis = ImGui::Begin(title.c_str(), &m_IsOpen,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar);
         ImGui::PopStyleVar();
@@ -127,28 +128,80 @@ namespace axe
         // ── Menu bar ─────────────────────────────────────────────────────────
         if (ImGui::BeginMenuBar())
         {
+            auto& icons = EditorIconLibrary::Get();
+
+            // Helper local: botão com ícone (16x16) + label, mesmo visual em toda a toolbar.
+            // Cai para texto puro se o ícone não estiver carregado (robustez contra
+            // recursos faltando, sem quebrar o layout da barra).
+            auto iconButton = [](std::shared_ptr<Texture2D> icon, const char* label, ImVec2 size = ImVec2(0, 0)) -> bool
+                {
+                    // ID único por chamada: o label entra na chave de ID do ImGui mesmo
+                    // estando "atrás" do "##" (que só oculta o texto visível do botão,
+                    // não participa do ID). Sem isso, todo botão desta toolbar colidiria
+                    // no mesmo ID interno ("##btn"), e cliques/hover ficariam cruzados
+                    // entre Compilar/Save/Undo/Redo/Fit.
+                    std::string id = std::string("##") + label;
+                    if (icon && icon->IsLoaded())
+                    {
+                        ImGui::BeginGroup();
+                        bool pressed = ImGui::Button(id.c_str(), size.x > 0 ? size : ImVec2(ImGui::CalcTextSize(label).x + 38.f, 0));
+                        ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        float iconSz = 15.f;
+                        float cy = (r0.y + r1.y) * 0.5f;
+                        dl->AddImage((ImTextureID)(uintptr_t)icon->GetRendererID(),
+                            ImVec2(r0.x + 8.f, cy - iconSz * 0.5f), ImVec2(r0.x + 8.f + iconSz, cy + iconSz * 0.5f),
+                            ImVec2(0, 1), ImVec2(1, 0));
+                        dl->AddText(ImVec2(r0.x + 8.f + iconSz + 6.f, cy - ImGui::GetFontSize() * 0.5f),
+                            ImGui::GetColorU32(ImGuiCol_Text), label);
+                        ImGui::EndGroup();
+                        return pressed;
+                    }
+                    return ImGui::Button(label, size); // fallback sem ícone
+                };
+
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.45f, 0.13f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.6f, 0.2f, 1));
-            if (ImGui::Button("  Compilar  ")) CompileScript();
-            ImGui::SameLine(0, 8);
+            if (iconButton(icons.GetCompile(), "Compilar")) CompileScript();
+            ImGui::SameLine(0, 6);
+
+            // Save — movido para junto do Compilar, a pedido (antes ficava isolado
+            // no painel Scene Graph, em script_details.cpp).
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.35f, 0.55f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.5f, 0.75f, 1));
+            bool canSave = m_ScriptAsset && !m_ScriptAsset->GetFilePath().empty();
+            ImGui::BeginDisabled(!canSave);
+            if (iconButton(icons.GetSave(), "Save"))
+            {
+                SaveNodePositions();
+                m_ScriptAsset->Save(m_ScriptAsset->GetFilePath());
+                m_ConsoleLines.push_back("[Info] Script salvo: " + m_ScriptAsset->GetFilePath().string());
+            }
+            ImGui::EndDisabled();
+            ImGui::PopStyleColor(2);
+            ImGui::SameLine(0, 10);
 
             ImGui::BeginDisabled(!CanUndo());
-            if (ImGui::Button("  Undo  ")) Undo();
+            bool undoClicked = iconButton(icons.GetUndo(), "Undo");
+            // Tooltip mostra o nome da ação que será desfeita — antes isso era um
+            // texto solto na toolbar, que podia parecer um botão por engano
+            // (ex.: "Add Event" ficando ao lado do Redo).
+            if (CanUndo() && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Desfazer: %s", m_History.GetUndoName().c_str());
+            if (undoClicked) Undo();
             ImGui::EndDisabled();
             ImGui::SameLine(0, 2);
-            ImGui::BeginDisabled(!CanRedo());
-            if (ImGui::Button("  Redo  ")) Redo();
-            ImGui::EndDisabled();
 
-            if (CanUndo())
-            {
-                ImGui::SameLine(0, 8);
-                ImGui::TextDisabled("%s", m_History.GetUndoName().c_str());
-            }
+            ImGui::BeginDisabled(!CanRedo());
+            bool redoClicked = iconButton(icons.GetRedo(), "Redo");
+            if (CanRedo() && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Refazer: %s", m_History.GetRedoName().c_str());
+            if (redoClicked) Redo();
+            ImGui::EndDisabled();
             ImGui::PopStyleColor(2);
 
-            ImGui::SameLine(0, 8);
-            if (ImGui::Button("Fit"))
+            ImGui::SameLine(0, 10);
+            if (iconButton(icons.GetFit(), "Fit"))
             {
                 ed::SetCurrentEditor(m_EdCtx);
                 ed::NavigateToContent();
@@ -170,6 +223,10 @@ namespace axe
             ImGui::EndMenuBar();
         }
 
+        // Respiro visual entre a toolbar e o conteúdo do dock abaixo.
+        const float kToolbarGap = 8.0f;
+        ImGui::Dummy(ImVec2(0, kToolbarGap));
+
         // ── DockSpace ────────────────────────────────────────────────────────
         ImGuiID dsId = ImGui::GetID("ScriptEditorDockSpace");
         ImGuiDockNode* existingNode = ImGui::DockBuilderGetNode(dsId);
@@ -178,7 +235,7 @@ namespace axe
         {
             m_LayoutBuilt = true;
             ImVec2 sz = ImGui::GetWindowSize();
-            sz.y -= ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f;
+            sz.y -= ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f + kToolbarGap;
             if (sz.x < 10.f) sz.x = 1280.f;
             if (sz.y < 10.f) sz.y = 780.f;
 

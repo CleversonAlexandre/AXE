@@ -6,6 +6,7 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/script/script_graph.hpp"
+#include "editor/axe_editor/editor_icon_library.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <algorithm>
@@ -28,7 +29,11 @@ namespace axe
         auto& vars = m_ScriptAsset->GetVariables();
         auto& evts = m_ScriptAsset->GetCustomEvents();
 
-        static const char* s_VarTypes[] = { "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity" };
+        static const char* s_VarTypes[] = {
+            "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity",
+            "Float Array","Bool Array","Int Array","Vec3 Array","String Array",
+            "Vec2 Array","Vec4 Array","Quat Array","Entity Array",
+        };
         static const ImVec4 s_VarCols[] = {
             {0.12f,0.55f,0.24f,1}, // Float
             {0.70f,0.16f,0.16f,1}, // Bool
@@ -39,6 +44,17 @@ namespace axe
             {0.63f,0.31f,0.86f,1}, // Vec4
             {0.71f,0.55f,0.86f,1}, // Quat
             {0.24f,0.47f,0.78f,1}, // Entity
+            // Arrays — mesma cor da família escalar, levemente mais escura
+            // (mesma convenção usada em GetPinColor/GetVariableNodeColor).
+            {0.06f,0.35f,0.16f,1}, // FloatArray
+            {0.47f,0.08f,0.08f,1}, // BoolArray
+            {0.16f,0.55f,0.16f,1}, // IntArray
+            {0.55f,0.47f,0.04f,1}, // Vec3Array
+            {0.55f,0.16f,0.39f,1}, // StringArray
+            {0.08f,0.55f,0.55f,1}, // Vec2Array
+            {0.43f,0.16f,0.63f,1}, // Vec4Array
+            {0.47f,0.35f,0.63f,1}, // QuatArray
+            {0.12f,0.27f,0.55f,1}, // EntityArray
         };
 
         float avail = ImGui::GetContentRegionAvail().x;
@@ -52,25 +68,52 @@ namespace axe
         if (varOpen)
         {
             // ── Criação — só Nome e Tipo ──────────────────────────────────────
-            ImGui::SetNextItemWidth(avail * 0.42f);
+            ImGui::SetNextItemWidth(avail * 0.40f);
             ImGui::InputText("##vname", m_NewVarName, sizeof(m_NewVarName));
             ImGui::SameLine(0, 4);
-            ImGui::SetNextItemWidth(avail * 0.30f);
-            ImGui::Combo("##vtype", &m_NewVarType, s_VarTypes, 9);
+            ImGui::SetNextItemWidth(avail * 0.28f);
+            ImGui::Combo("##vtype", &m_NewVarType, s_VarTypes, 18);
             ImGui::SameLine(0, 4);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1));
-            if (ImGui::SmallButton("+ Var"))
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.18f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.55f, 0.24f, 1));
             {
-                ScriptVariable v;
-                v.Name = (m_NewVarName[0] != 0) ? m_NewVarName : "NewVar";
-                v.Type = (ScriptVarType)m_NewVarType;
-                // Categoria vazia por padrão — definida na aba Node
-                PushUndo("Add Variable");
-                m_ScriptAsset->AddVariable(v);
-                CommitUndo("Add Variable");
-                m_NewVarName[0] = 0;
+                auto addIcon = EditorIconLibrary::Get().GetAdd();
+                bool clicked;
+                if (addIcon && addIcon->IsLoaded())
+                {
+                    float iconSz = 13.f;
+                    const char* lbl = "Var";
+                    float textW = ImGui::CalcTextSize(lbl).x;
+                    ImVec2 btnSz(iconSz + 5.f + textW + 14.f, 0);
+                    clicked = ImGui::Button("##addvarbtn", btnSz);
+                    ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    float cy = (r0.y + r1.y) * 0.5f;
+                    dl->AddImage((ImTextureID)(uintptr_t)addIcon->GetRendererID(),
+                        ImVec2(r0.x + 7.f, cy - iconSz * 0.5f), ImVec2(r0.x + 7.f + iconSz, cy + iconSz * 0.5f),
+                        ImVec2(0, 1), ImVec2(1, 0));
+                    dl->AddText(ImVec2(r0.x + 7.f + iconSz + 5.f, cy - ImGui::GetFontSize() * 0.5f),
+                        ImGui::GetColorU32(ImGuiCol_Text), lbl);
+                }
+                else
+                {
+                    clicked = ImGui::SmallButton("+ Var");
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Adicionar nova variável");
+                if (clicked)
+                {
+                    ScriptVariable v;
+                    v.Name = (m_NewVarName[0] != 0) ? m_NewVarName : "NewVar";
+                    v.Type = (ScriptVarType)m_NewVarType;
+                    // Categoria vazia por padrão — definida na aba Node
+                    PushUndo("Add Variable");
+                    m_ScriptAsset->AddVariable(v);
+                    CommitUndo("Add Variable");
+                    m_NewVarName[0] = 0;
+                }
             }
-            ImGui::PopStyleColor();
+            ImGui::PopStyleColor(2);
             ImGui::Spacing();
 
             // ── Coleta categorias únicas (sem categoria sempre primeiro) ───────
@@ -118,8 +161,9 @@ namespace axe
                         // Drop target para mover vars para esta categoria enquanto renomeia
                         if (ImGui::BeginDragDropTarget())
                         {
-                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("VAR_RECAT"))
-                                vars[*(int*)p->Data].Category = cat;
+                            if (ImGui::AcceptDragDropPayload("VAR_RECAT"))
+                                if (m_DragVarIndex >= 0 && m_DragVarIndex < (int)vars.size())
+                                    vars[m_DragVarIndex].Category = cat;
                             ImGui::EndDragDropTarget();
                         }
                         continue;
@@ -133,6 +177,19 @@ namespace axe
                         ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap,
                         "%s  (%d)", cat.c_str(), catCount);
                     ImGui::PopStyleColor(3);
+
+                    // Drop target no header da categoria — precisa ficar logo após o
+                    // TreeNodeEx (item ao qual deve se vincular). Se ficar depois do
+                    // botão "x" (SameLine), o BeginDragDropTarget se vincula à área
+                    // minúscula do botão em vez da linha inteira do header, e soltar
+                    // sobre o texto da categoria não ativa o drop.
+                    if (ImGui::BeginDragDropTarget())
+                    {
+                        if (ImGui::AcceptDragDropPayload("VAR_RECAT"))
+                            if (m_DragVarIndex >= 0 && m_DragVarIndex < (int)vars.size())
+                                vars[m_DragVarIndex].Category = cat;
+                        ImGui::EndDragDropTarget();
+                    }
 
                     // Duplo clique → renomear
                     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
@@ -152,14 +209,6 @@ namespace axe
                         deleteCat = cat;
                     ImGui::PopStyleColor(3);
 
-                    // Drop target no header da categoria
-                    if (ImGui::BeginDragDropTarget())
-                    {
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("VAR_RECAT"))
-                            vars[*(int*)p->Data].Category = cat;
-                        ImGui::EndDragDropTarget();
-                    }
-
                     if (!catOpen) continue;
                     ImGui::Indent(8.f);
                 }
@@ -169,8 +218,9 @@ namespace axe
                     ImGui::Dummy(ImVec2(avail, 2.f));
                     if (ImGui::BeginDragDropTarget())
                     {
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("VAR_RECAT"))
-                            vars[*(int*)p->Data].Category = "";
+                        if (ImGui::AcceptDragDropPayload("VAR_RECAT"))
+                            if (m_DragVarIndex >= 0 && m_DragVarIndex < (int)vars.size())
+                                vars[m_DragVarIndex].Category = "";
                         ImGui::EndDragDropTarget();
                     }
                 }
@@ -182,23 +232,77 @@ namespace axe
                     if (v.Category != cat) continue;
 
                     ImGui::PushID(i);
-
-                    // Botão X
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x")) removeVar = i;
-                    ImGui::PopStyleColor(3);
-                    ImGui::SameLine(0, 4);
-
-                    // Badge de tipo
-                    ImGui::PushStyleColor(ImGuiCol_Text, s_VarCols[(int)v.Type]);
-                    ImGui::TextUnformatted(s_VarTypes[(int)v.Type]);
-                    ImGui::PopStyleColor();
-                    ImGui::SameLine(0, 6);
-
                     bool sel = (m_SelectedVar == i);
                     bool wantRename = (m_RenamingVar == i);
+                    ImVec4 typeCol = s_VarCols[(int)v.Type];
+
+                    // ── Card estilo UE5: fundo arredondado + respiro vertical ──
+                    // Altura SEMPRE compacta — a expansão de detalhes (Type,
+                    // Default Value, Tamanho, etc.) vive no Script Details →
+                    // Node quando a variável é selecionada, não dentro do card.
+                    float cardWidth = ImGui::GetContentRegionAvail().x;
+                    float headerH = 36.f;
+                    float cardHeight = headerH ;
+                    ImVec2 cardMin = ImGui::GetCursorScreenPos();
+                    ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImU32 cardBg = sel
+                        ? ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x * 0.30f, typeCol.y * 0.30f, typeCol.z * 0.30f, 0.55f))
+                        : ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.04f));
+                    dl->AddRectFilled(cardMin, cardMax, cardBg, 6.0f);
+                    if (sel)
+                        dl->AddRect(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x, typeCol.y, typeCol.z, 0.65f)), 6.0f, 0, 1.5f);
+
+                    ImGui::Dummy(ImVec2(8, headerH)); // respiro esquerdo
+                    ImGui::SameLine(0, 0);
+                    ImGui::BeginGroup();
+                    ImGui::Dummy(ImVec2(0, (headerH - 30.f) * 0.5f)); // centraliza verticalmente
+
+                    // Badge de tipo — "pill" colorida em vez de texto cru.
+                    // Para arrays, mostra só o nome BASE (ex.: "String", não
+                    // "String Array") — o "é um array" é comunicado por um
+                    // pequeno ícone de grade 2x2 ao lado, não pelo texto da
+                    // badge, mantendo o card do mesmo tamanho compacto de
+                    // antes independente do tipo.
+                    bool isArr = IsArrayType(v.Type);
+                    std::string typeLabelStr = s_VarTypes[(int)v.Type];
+                    if (isArr)
+                    {
+                        size_t pos = typeLabelStr.find(" Array");
+                        if (pos != std::string::npos) typeLabelStr = typeLabelStr.substr(0, pos);
+                    }
+                    const char* typeLabel = typeLabelStr.c_str();
+                    ImVec2 badgeStart = ImGui::GetCursorScreenPos();
+                    ImVec2 textSz = ImGui::CalcTextSize(typeLabel);
+                    ImVec2 badgeSz = ImVec2(textSz.x + 14.f, 20.f);
+                    ImU32 badgeBg = ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x, typeCol.y, typeCol.z, 0.22f));
+                    ImU32 badgeBorder = ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x, typeCol.y, typeCol.z, 0.9f));
+                    dl->AddRectFilled(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y), badgeBg, 10.0f);
+                    dl->AddRect(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y), badgeBorder, 10.0f, 0, 1.2f);
+                    dl->AddText(ImVec2(badgeStart.x + 7.f, badgeStart.y + (badgeSz.y - ImGui::GetFontSize()) * 0.5f),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x * 0.5f + 0.5f, typeCol.y * 0.5f + 0.5f, typeCol.z * 0.5f + 0.5f, 1)),
+                        typeLabel);
+                    ImGui::Dummy(badgeSz);
+                    ImGui::SameLine(0, isArr ? 4.f : 8.f);
+
+                    if (isArr)
+                    {
+                        // Ícone "grade 2x2" desenhado diretamente (sem asset
+                        // extra) — convenção visual usada pela Unreal para
+                        // indicar arrays nos painéis de variável.
+                        ImVec2 gp = ImGui::GetCursorScreenPos();
+                        float gs = 5.f, gap = 1.5f;
+                        ImU32 gridCol = ImGui::ColorConvertFloat4ToU32(ImVec4(typeCol.x, typeCol.y, typeCol.z, 0.95f));
+                        for (int gy = 0; gy < 2; gy++)
+                            for (int gx = 0; gx < 2; gx++)
+                            {
+                                ImVec2 cellMin(gp.x + gx * (gs + gap), gp.y + 5.f + gy * (gs + gap));
+                                dl->AddRectFilled(cellMin, ImVec2(cellMin.x + gs, cellMin.y + gs), gridCol, 1.5f);
+                            }
+                        ImGui::Dummy(ImVec2(gs * 2.f + gap, 20.f));
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Array");
+                        ImGui::SameLine(0, 8);
+                    }
 
                     if (wantRename)
                     {
@@ -223,8 +327,10 @@ namespace axe
                     }
                     else
                     {
-                        if (ImGui::Selectable(v.Name.c_str(), sel,
-                            ImGuiSelectableFlags_AllowDoubleClick, ImVec2(avail * 0.45f, 0)))
+                        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f));
+                        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1, 1, 1, 0.06f));
+                        if (ImGui::Selectable(v.Name.c_str(), false,
+                            ImGuiSelectableFlags_AllowDoubleClick, ImVec2(cardWidth - badgeSz.x - 56.f, 20)))
                         {
                             m_SelectedVar = i;
                             // Sincroniza buffer de edição de categoria
@@ -241,6 +347,7 @@ namespace axe
                                 m_RenameBuf[sizeof(m_RenameBuf) - 1] = 0;
                             }
                         }
+                        ImGui::PopStyleColor(2);
                         if (sel && ImGui::IsKeyPressed(ImGuiKey_F2))
                         {
                             m_RenamingVar = i; m_RenameJustStarted = true;
@@ -249,39 +356,48 @@ namespace axe
                         }
                     }
 
-                    // ── Drag and drop para recategorizar ─────────────────────
+                    // ── Drag and drop — payload único (VAR_RECAT) ──────────────────
+                    // IMPORTANTE: ImGui::SetDragDropPayload mantém apenas o ÚLTIMO
+                    // payload definido na sessão como o "active payload" interno do
+                    // ImGui (g.DragDropPayload é um único objeto, não uma lista).
+                    // Definir VAR_RECAT e depois VAR_NODE na mesma sessão fazia o
+                    // VAR_NODE sempre vencer — por isso o header de categoria nunca
+                    // recebia o aceite, mesmo com o target sendo alcançado. Solução:
+                    // um único payload (VAR_RECAT, com o índice), consumido tanto
+                    // pelos headers de categoria quanto pelo canvas do graph (que
+                    // resolve o nome da variável a partir do índice).
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
-                        // Payload duplo: VAR_NODE para criar node, VAR_RECAT para mover de categoria
+                        m_DragVarIndex = i;
                         ImGui::SetDragDropPayload("VAR_RECAT", &i, sizeof(int));
-                        ImGui::PushStyleColor(ImGuiCol_Text, s_VarCols[(int)v.Type]);
-                        ImGui::Text("%s  [arrastar para categoria]", v.Name.c_str());
-                        ImGui::PopStyleColor();
-                        ImGui::EndDragDropSource();
-                    }
-                    // Também suporta drag para o graph (VAR_NODE)
-                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-                    {
-                        std::string pl = "GetVar:" + v.Name;
-                        ImGui::SetDragDropPayload("VAR_NODE", pl.c_str(), pl.size() + 1);
-                        ImGui::PushStyleColor(ImGuiCol_Text, s_VarCols[(int)v.Type]);
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, typeCol);
                         ImGui::Text("Get %s", v.Name.c_str());
                         ImGui::PopStyleColor();
                         ImGui::EndDragDropSource();
                     }
 
-                    // Expansão quando selecionado — só Tipo, categoria fica na aba Node
-                    if (sel)
-                    {
-                        ImGui::Indent(16);
-                        int typeIdx = (int)v.Type;
-                        ImGui::SetNextItemWidth(avail * 0.5f);
-                        if (ImGui::Combo("Type##vtype", &typeIdx, s_VarTypes, 9))
-                            v.Type = (ScriptVarType)typeIdx;
-                        ImGui::TextDisabled("Categoria: %s",
-                            v.Category.empty() ? "(nenhuma)" : v.Category.c_str());
-                        ImGui::Unindent(16);
-                    }
+                    // Sem expansão dentro do card — selecionar a variável mostra
+                    // seus detalhes (Type, Tamanho, etc.) no Script Details → Node,
+                    // igual já funciona para Float/Vec3/etc. O card permanece
+                    // sempre compacto, independente de estar selecionado ou não.
+
+                    ImGui::EndGroup();
+                    ImGui::SameLine();
+
+                    // X — alinhado à direita do card, com margem real para o
+                    // retângulo de hover do botão não tocar/vazar visualmente
+                    // pela borda arredondada do card (cardMax.x é a borda exata,
+                    // sem nenhuma margem — o hover reto "vazava" visualmente
+                    // sobre o canto arredondado do fundo).
+                    ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 30.f, cardMin.y + (headerH - 20.f) * 0.5f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                    if (ImGui::SmallButton("x")) removeVar = i;
+                    ImGui::PopStyleColor(3);
+
+                    ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f)); // espaçamento entre cards
                     ImGui::PopID();
                 }
 
@@ -381,33 +497,59 @@ namespace axe
                 {"On Start","OnStart"},{"On Update","OnUpdate"},{"On End","OnEnd"},
                 {"On Collision","OnCollision"},{"On Event","OnEvent"},
             };
-            for (auto& ov : s_Overrides)
-            {
-                ImGui::PushID(ov.type);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.2f, 1));
-                ImGui::Bullet(); ImGui::PopStyleColor();
-                ImGui::SameLine();
+            const ImVec4 ovrCol = ImVec4(1.f, 0.62f, 0.28f, 1);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
 
-                if (ImGui::Selectable(ov.label, false, ImGuiSelectableFlags_AllowDoubleClick))
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_Graph)
-                    {
-                        ed::SetCurrentEditor(m_EdCtx);
-                        auto* node = m_Graph->AddNode(ov.type);
-                        if (node) ed::SetNodePosition(node->ID, ed::ScreenToCanvas(m_GraphWindowCenter));
-                        ed::SetCurrentEditor(nullptr);
-                        m_ConsoleLines.push_back(std::string("[Info] Added: ") + ov.label);
-                    }
+            for (size_t idx = 0; idx < sizeof(s_Overrides) / sizeof(s_Overrides[0]); idx++)
+            {
+                auto& ov = s_Overrides[idx];
+                ImGui::PushID(ov.type);
+
+                // ── Linha estilizada (lista vertical — escala bem com muitos itens) ──
+                float rowWidth = ImGui::GetContentRegionAvail().x;
+                float rowHeight = 24.f;
+                ImVec2 rowMin = ImGui::GetCursorScreenPos();
+                ImVec2 rowMax = ImVec2(rowMin.x + rowWidth, rowMin.y + rowHeight);
+                bool hovered = ImGui::IsMouseHoveringRect(rowMin, rowMax) && ImGui::IsWindowHovered();
+
+                if (hovered)
+                    dl->AddRectFilled(rowMin, rowMax,
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(ovrCol.x, ovrCol.y, ovrCol.z, 0.14f)), 4.0f);
+
+                // Marcador (diamante) — substitui o bullet cru por algo mais alinhado
+                // ao estilo geral, mas mantém a leitura vertical de lista.
+                float cy = rowMin.y + rowHeight * 0.5f;
+                float mx = rowMin.x + 10.f;
+                float ms = 3.5f;
+                ImU32 markCol = ImGui::ColorConvertFloat4ToU32(ovrCol);
+                dl->AddQuadFilled(
+                    ImVec2(mx, cy - ms), ImVec2(mx + ms, cy),
+                    ImVec2(mx, cy + ms), ImVec2(mx - ms, cy), markCol);
+
+                dl->AddText(ImVec2(rowMin.x + 24.f, rowMin.y + 4.f), markCol, ov.label);
+
+                ImGui::InvisibleButton("##ovrrow", ImVec2(rowWidth, rowHeight));
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_Graph)
+                {
+                    ed::SetCurrentEditor(m_EdCtx);
+                    auto* node = m_Graph->AddNode(ov.type);
+                    if (node) ed::SetNodePosition(node->ID, ed::ScreenToCanvas(m_GraphWindowCenter));
+                    ed::SetCurrentEditor(nullptr);
+                    m_ConsoleLines.push_back(std::string("[Info] Added: ") + ov.label);
+                }
 
                 if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                 {
                     ImGui::SetDragDropPayload("COMP_NODE", ov.type, strlen(ov.type) + 1);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.2f, 1));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ovrCol);
                     ImGui::Text("Add %s", ov.label);
                     ImGui::PopStyleColor();
                     ImGui::EndDragDropSource();
                 }
+
                 ImGui::PopID();
             }
+            ImGui::Spacing();
         }
 
         // ── EVENT DISPATCHERS ─────────────────────────────────────────────────
@@ -418,48 +560,104 @@ namespace axe
 
         if (evtOpen)
         {
-            ImGui::SetNextItemWidth(avail * 0.68f);
+            ImGui::SetNextItemWidth(avail * 0.62f);
             ImGui::InputText("##evtname", m_NewEvtName, sizeof(m_NewEvtName));
             ImGui::SameLine(0, 4);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.15f, 0.25f, 1));
-            if (ImGui::SmallButton("+ Event"))
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.26f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.58f, 0.22f, 0.34f, 1));
             {
-                ScriptCustomEvent e;
-                e.Name = (m_NewEvtName[0] != 0) ? m_NewEvtName : "OnMyEvent";
-                PushUndo("Add Event");
-                m_ScriptAsset->AddCustomEvent(e);
-                CommitUndo("Add Event");
-                m_NewEvtName[0] = 0;
+                auto addIcon = EditorIconLibrary::Get().GetAdd();
+                bool clicked;
+                if (addIcon && addIcon->IsLoaded())
+                {
+                    float iconSz = 13.f;
+                    const char* lbl = "Event";
+                    float textW = ImGui::CalcTextSize(lbl).x;
+                    ImVec2 btnSz(iconSz + 5.f + textW + 14.f, 0);
+                    clicked = ImGui::Button("##addevtbtn", btnSz);
+                    ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    float cy = (r0.y + r1.y) * 0.5f;
+                    dl->AddImage((ImTextureID)(uintptr_t)addIcon->GetRendererID(),
+                        ImVec2(r0.x + 7.f, cy - iconSz * 0.5f), ImVec2(r0.x + 7.f + iconSz, cy + iconSz * 0.5f),
+                        ImVec2(0, 1), ImVec2(1, 0));
+                    dl->AddText(ImVec2(r0.x + 7.f + iconSz + 5.f, cy - ImGui::GetFontSize() * 0.5f),
+                        ImGui::GetColorU32(ImGuiCol_Text), lbl);
+                }
+                else
+                {
+                    clicked = ImGui::SmallButton("+ Event");
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Adicionar novo Event Dispatcher");
+                if (clicked)
+                {
+                    ScriptCustomEvent e;
+                    e.Name = (m_NewEvtName[0] != 0) ? m_NewEvtName : "OnMyEvent";
+                    PushUndo("Add Event");
+                    m_ScriptAsset->AddCustomEvent(e);
+                    CommitUndo("Add Event");
+                    m_NewEvtName[0] = 0;
+                }
             }
-            ImGui::PopStyleColor();
+            ImGui::PopStyleColor(2);
             ImGui::Spacing();
 
             int removeEvt = -1;
+            const ImVec4 evtCol = ImVec4(1.f, 0.5f, 0.6f, 1);
+            ImDrawList* dlEvt = ImGui::GetWindowDrawList();
             for (int i = 0; i < (int)evts.size(); i++)
             {
                 auto& e = evts[i];
                 ImGui::PushID(100 + i);
 
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                if (ImGui::SmallButton("x")) removeEvt = i;
-                ImGui::PopStyleColor(3);
-                ImGui::SameLine(0, 4);
+                float cardWidth = ImGui::GetContentRegionAvail().x;
+                float cardHeight = 28.f;
+                ImVec2 cardMin = ImGui::GetCursorScreenPos();
+                ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
+                dlEvt->AddRectFilled(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.04f)), 6.0f);
 
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.5f, 0.6f, 1));
-                ImGui::TextUnformatted("[D]");
-                ImGui::PopStyleColor();
-                ImGui::SameLine(0, 6);
+                ImGui::Dummy(ImVec2(8, cardHeight));
+                ImGui::SameLine(0, 0);
+                ImGui::BeginGroup();
+                ImGui::Dummy(ImVec2(0, (cardHeight - 18.f) * 0.5f));
+
+                // Badge "D" (Dispatcher) — pill colorida, mesmo padrão das vars
+                ImVec2 badgeStart = ImGui::GetCursorScreenPos();
+                ImVec2 badgeSz = ImVec2(22.f, 18.f);
+                dlEvt->AddRectFilled(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(evtCol.x, evtCol.y, evtCol.z, 0.22f)), 9.0f);
+                dlEvt->AddRect(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(evtCol.x, evtCol.y, evtCol.z, 0.9f)), 9.0f, 0, 1.2f);
+                dlEvt->AddText(ImVec2(badgeStart.x + 6.f, badgeStart.y + 1.f),
+                    ImGui::ColorConvertFloat4ToU32(evtCol), "D");
+                ImGui::Dummy(badgeSz);
+                ImGui::SameLine(0, 8);
+
                 ImGui::TextUnformatted(e.Name.c_str());
 
                 if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                 {
                     std::string pl = "Dispatch:" + e.Name;
                     ImGui::SetDragDropPayload("EVT_NODE", pl.c_str(), pl.size() + 1);
+                    ImGui::PushStyleColor(ImGuiCol_Text, evtCol);
                     ImGui::Text("Dispatch %s", e.Name.c_str());
+                    ImGui::PopStyleColor();
                     ImGui::EndDragDropSource();
                 }
+
+                ImGui::EndGroup();
+                ImGui::SameLine();
+
+                ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                if (ImGui::SmallButton("x")) removeEvt = i;
+                ImGui::PopStyleColor(3);
+
+                ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f));
+
                 ImGui::PopID();
             }
             if (removeEvt >= 0)

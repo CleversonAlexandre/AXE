@@ -6,6 +6,7 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/script/script_graph.hpp"
+#include "axe/input_mapping.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
@@ -15,6 +16,7 @@
 #include "axe/asset/asset_database.hpp"
 #include "editor/axe_editor/asset/asset_picker.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
+#include "editor/axe_editor/editor_icon_library.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <fstream>
@@ -26,6 +28,50 @@ namespace ed = ax::NodeEditor;
 namespace axe
 {
     // ─────────────────────────────────────────────────────────────────────────
+    // Campo vetorial com X/Y/Z identificados — cada eixo tem sua letra desenhada
+    // dentro da própria caixa (overlay via ImDrawList, não altera o DragFloat em
+    // si), com a cor convencional de cada eixo (vermelho/verde/azul), no estilo
+    // Unreal/Unity. Usado para Position, Rotation e Scale.
+    static bool DragVec3Labeled(const char* id, float* v, float speed,
+        float vmin = 0.0f, float vmax = 0.0f, const char* fmt = "%.3f")
+    {
+        static const ImVec4 axisCols[3] = {
+            ImVec4(0.95f, 0.35f, 0.35f, 1), // X — vermelho
+            ImVec4(0.45f, 0.85f, 0.35f, 1), // Y — verde
+            ImVec4(0.35f, 0.55f, 0.95f, 1), // Z — azul
+        };
+        static const char* axisLabels[3] = { "X", "Y", "Z" };
+
+        bool changed = false;
+        float avail = ImGui::GetContentRegionAvail().x;
+        float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+        float fieldW = (avail - spacing * 2.f) / 3.f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImGui::PushID(id);
+        for (int axis = 0; axis < 3; axis++)
+        {
+            ImGui::PushID(axis);
+            ImGui::SetNextItemWidth(fieldW);
+            // Espaço reservado à esquerda do número para a letra do eixo
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(16.f, ImGui::GetStyle().FramePadding.y));
+            if (ImGui::DragFloat("##v", &v[axis], speed, vmin, vmax, fmt))
+                changed = true;
+            ImGui::PopStyleVar();
+
+            ImVec2 r0 = ImGui::GetItemRectMin();
+            ImVec2 r1 = ImGui::GetItemRectMax();
+            dl->AddText(ImVec2(r0.x + 6.f, (r0.y + r1.y) * 0.5f - ImGui::GetFontSize() * 0.5f),
+                ImGui::ColorConvertFloat4ToU32(axisCols[axis]), axisLabels[axis]);
+
+            ImGui::PopID();
+            if (axis < 2) ImGui::SameLine(0, spacing);
+        }
+        ImGui::PopID();
+        return changed;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     void ScriptGraphWindow::DrawDetailsWindow()
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
@@ -33,6 +79,427 @@ namespace axe
             DrawScriptDetails();
         ImGui::End();
         ImGui::PopStyleVar();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Campos de cada tipo de componente — extraído de DrawScriptDetails para ser
+    // reaproveitado também pelo collapse inline na lista do Scene Graph (drawComp).
+    // Requer m_PreviewScene válido (mesma pré-condição de DrawScriptDetails).
+    void ScriptGraphWindow::DrawComponentFields(ScriptComponentDef& def, int i)
+    {
+        if (!m_PreviewScene) return;
+        auto& reg = m_PreviewScene->GetRegistry();
+
+        if (def.Type == "Mesh")
+        {
+            static const char* prims[] = { "Sphere","Cube","Cylinder","Plane" };
+            static const char* primUUIDs[] = {
+                PrimitiveUUID::Sphere, PrimitiveUUID::Cube,
+                PrimitiveUUID::Cylinder, PrimitiveUUID::Plane };
+            int curIdx = 0;
+            for (int p = 0; p < 4; p++)
+                if (def.AssetUUID == primUUIDs[p]) { curIdx = p; break; }
+            if (ImGui::Combo("Primitive", &curIdx, prims, 4))
+            {
+                def.AssetUUID = primUUIDs[curIdx];
+                auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
+                mc.Data = MeshFactory::CreateByUUID(def.AssetUUID);
+            }
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+                {
+                    std::string uuid = (const char*)p->Data;
+                    const auto* rec = AssetDatabase::Get().GetByUUID(uuid);
+                    if (rec && rec->Type == AssetType::Mesh)
+                    {
+                        def.AssetUUID = uuid;
+                        auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
+                        mc.AssetUUID = uuid;
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+        else if (def.Type == "Material")
+        {
+            AssetPicker::Draw("Material", def.AssetUUID, { AssetType::Material },
+                [&](const AssetRecord& record)
+                {
+                    def.AssetUUID = record.UUID;
+                    auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
+                    if (matAsset)
+                    {
+                        auto graphPath = record.FilePath;
+                        graphPath.replace_extension(".axegraph");
+                        if (std::filesystem::exists(graphPath))
+                        {
+                            try {
+                                std::ifstream gf(graphPath);
+                                auto gj = nlohmann::json::parse(gf);
+                                auto matGraph = std::make_unique<MaterialGraph>();
+                                matGraph->Deserialize(gj);
+                                auto result = MaterialCompiler::Compile(matGraph.get());
+                                if (result.Success)
+                                {
+                                    auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+                                    if (shader) matAsset->GetMaterial()->SetShader(shader);
+                                }
+                            }
+                            catch (...) {}
+                        }
+                        auto& mc = reg.get_or_emplace<MaterialComponent>(m_PreviewEntity);
+                        mc.Data = matAsset->GetMaterial();
+                        mc.MaterialAssetUUID = record.UUID;
+                    }
+                });
+
+            if (m_InspectorWindow && !def.AssetUUID.empty())
+                m_InspectorWindow->DrawMaterialGraphParams(def.AssetUUID, reg, m_PreviewEntity);
+            else if (!def.AssetUUID.empty())
+            {
+                auto* mc = reg.try_get<MaterialComponent>(m_PreviewEntity);
+                if (mc && mc->Data)
+                {
+                    ImGui::DragFloat("Metallic", &mc->Data->Metallic, 0.01f, 0.f, 1.f);
+                    ImGui::DragFloat("Roughness", &mc->Data->Roughness, 0.01f, 0.f, 1.f);
+                    ImGui::ColorEdit3("Cor Base", glm::value_ptr(mc->Data->Color));
+                }
+            }
+        }
+        else if (def.Type == "Rigidbody")
+        {
+            static const char* types[] = { "Static","Dynamic","Kinematic" };
+            int typeIdx = (def.BodyType == "Dynamic") ? 1 : (def.BodyType == "Kinematic") ? 2 : 0;
+            if (ImGui::Combo("Tipo", &typeIdx, types, 3)) def.BodyType = types[typeIdx];
+            if (def.BodyType != "Static")
+            {
+                ImGui::DragFloat("Mass", &def.Mass, 0.1f, 0.01f, 1000.f);
+                ImGui::DragFloat("Friction", &def.Friction, 0.01f, 0.f, 1.f);
+                ImGui::DragFloat("Restitution", &def.Restitution, 0.01f, 0.f, 1.f);
+                ImGui::DragFloat("Linear Damp", &def.LinearDamping, 0.01f, 0.f, 1.f);
+                ImGui::DragFloat("Angular Damp", &def.AngularDamping, 0.01f, 0.f, 1.f);
+                ImGui::Checkbox("Gravity", &def.UseGravity);
+                ImGui::TextDisabled("Lock Rotation:");
+                ImGui::SameLine(); ImGui::Checkbox("X##lrx", &def.LockRotX);
+                ImGui::SameLine(); ImGui::Checkbox("Y##lry", &def.LockRotY);
+                ImGui::SameLine(); ImGui::Checkbox("Z##lrz", &def.LockRotZ);
+            }
+        }
+        else if (def.Type.find("Collider") != std::string::npos)
+        {
+            static const char* shapes[] = { "Box","Sphere","Capsule","Mesh (Static)","Convex Hull" };
+            static const char* shapeKeys[] = { "Box","Sphere","Capsule","Mesh","ConvexHull" };
+            int cur = 0;
+            for (int s = 0; s < 5; s++)
+                if (def.ColliderShape == shapeKeys[s]) { cur = s; break; }
+            if (ImGui::Combo("Shape", &cur, shapes, 5)) def.ColliderShape = shapeKeys[cur];
+            ImGui::Checkbox("Is Trigger", &def.IsTrigger);
+            ImGui::Checkbox("Debug Wireframe", &def.ShowDebug);
+            ImGui::DragFloat3("Offset", &def.ColliderOffsetX, 0.01f);
+            if (def.ColliderShape == "Box")     ImGui::DragFloat3("Half Extent", &def.ColliderSizeX, 0.01f, 0.01f, 100.f);
+            else if (def.ColliderShape == "Sphere")  ImGui::DragFloat("Radius", &def.ColliderRadius, 0.01f, 0.01f, 100.f);
+            else if (def.ColliderShape == "Capsule") {
+                ImGui::DragFloat("Height", &def.ColliderHeight, 0.01f, 0.1f, 10.f);
+                ImGui::DragFloat("Capsule Radius", &def.ColliderCapsuleRadius, 0.01f, 0.01f, 5.f);
+            }
+            else if (def.ColliderShape == "Mesh") {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1));
+                ImGui::TextWrapped("Mesh exato. Use apenas com Rigidbody Static.");
+                ImGui::PopStyleColor();
+            }
+        }
+        else if (def.Type == "CharacterController")
+        {
+            ImGui::DragFloat("Height", &def.CCHeight, 0.01f, 0.5f, 5.f);
+            ImGui::DragFloat("Radius", &def.CCRadius, 0.01f, 0.1f, 2.f);
+            ImGui::DragFloat("Max Slope", &def.CCMaxSlope, 0.5f, 0.f, 89.f);
+            ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f);
+            ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f);
+            ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f);
+        }
+        else if (def.Type == "SpringArm")
+        {
+            bool armChanged = false;
+            if (ImGui::DragFloat("Length##sa", &def.SALength, 1.f, 50.f, 1000.f, "%.0f")) armChanged = true;
+            if (ImGui::DragFloat("Height##sa", &def.SAHeightOffset, 0.1f, -10.f, 20.f, "%.2f")) armChanged = true;
+            float off[3] = { def.SASocketOffX,def.SASocketOffY,def.SASocketOffZ };
+            if (ImGui::DragFloat3("Socket Offset##sa", off, 0.05f))
+            {
+                def.SASocketOffX = off[0]; def.SASocketOffY = off[1]; def.SASocketOffZ = off[2]; armChanged = true;
+            }
+            if (ImGui::DragFloat("Smoothing##sa", &def.SALagSpeed, 0.1f, 0.5f, 30.f, "%.1f")) armChanged = true;
+            ImGui::Checkbox("Camera Lag##sa", &def.SAEnableLag);
+            ImGui::Checkbox("Mouse Rotates##sa", &def.SAMouseRotates);
+
+            auto& pr = m_PreviewScene->GetRegistry();
+            auto& sa = pr.get_or_emplace<SpringArmComponent>(m_PreviewEntity);
+            sa.Length = def.SALength / 100.0f;
+            sa.HeightOffset = def.SAHeightOffset;
+            sa.SocketOffset = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
+            sa.LagSpeed = def.SALagSpeed;
+            sa.EnableCameraLag = def.SAEnableLag;
+            sa.MouseRotates = def.SAMouseRotates;
+        }
+        else if (def.Type == "Camera")
+        {
+            ImGui::DragFloat("FOV##cam", &def.CamFov, 0.5f, 10.f, 170.f, "%.1f°");
+            ImGui::DragFloat("Near Clip##cam", &def.CamNearClip, 0.01f, 0.001f, 10.f);
+            ImGui::DragFloat("Far Clip##cam", &def.CamFarClip, 1.f, 10.f, 10000.f);
+            ImGui::DragFloat("Sensibilidade##cam", &def.CamSensitivity, 0.005f, 0.01f, 5.f);
+            ImGui::Checkbox("Primary Camera##cam", &def.CamIsPrimary);
+
+            auto& pr = m_PreviewScene->GetRegistry();
+            auto& cam = pr.get_or_emplace<CameraComponent>(m_PreviewEntity);
+            cam.Fov = def.CamFov;
+            cam.NearClip = def.CamNearClip;
+            cam.FarClip = def.CamFarClip;
+            cam.Sensitivity = def.CamSensitivity;
+            cam.IsPrimary = def.CamIsPrimary;
+            ImGui::TextDisabled("Parent index: %d", def.ParentIndex);
+        }
+    }
+
+    void ScriptGraphWindow::DrawVariableDetailsPanel(ScriptVariable& v)
+    {
+        // Type — combo editável (estava faltando: eu tinha removido o combo
+        // do card no Script Members para mover pra cá, mas só copiei o texto
+        // estático, não o controle editável de fato).
+        static const char* s_TypeNames[] = {
+            "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity",
+            "Float Array","Bool Array","Int Array","Vec3 Array","String Array",
+            "Vec2 Array","Vec4 Array","Quat Array","Entity Array",
+        };
+        int ti = (int)v.Type;
+        ImColor tc = GetVariableNodeColor(ti);
+        ImVec4 typeCol(tc.Value.x, tc.Value.y, tc.Value.z, 1.f);
+        ImGui::TextDisabled("Type:");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::PushStyleColor(ImGuiCol_Text, typeCol);
+        if (ImGui::Combo("##nd_type", &ti, s_TypeNames, 18))
+            v.Type = (ScriptVarType)ti;
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+
+        // Rename
+        ImGui::TextDisabled("Name:");
+        ImGui::SetNextItemWidth(-1);
+        char nbuf[64] = {};
+        strncpy(nbuf, v.Name.c_str(), 63);
+        if (ImGui::InputText("##vname_nd", nbuf, 64, ImGuiInputTextFlags_EnterReturnsTrue))
+            if (nbuf[0])
+            {
+                std::string oldName = v.Name;
+                v.Name = nbuf;
+                if (m_Graph)
+                    for (auto& n : m_Graph->GetNodes())
+                        if ((n->Name == "Get Variable" || n->Name == "Set Variable") && n->StringValue == oldName)
+                            n->StringValue = v.Name;
+            }
+        ImGui::Spacing();
+
+        // Default value — arrays não têm um valor único editável campo-a-campo
+        // (diferente de Float/Vec3/etc.); mostram só o tamanho inicial.
+        if (IsArrayType(v.Type))
+        {
+            ImGui::TextDisabled("Tamanho inicial:");
+            ImGui::SetNextItemWidth(-1);
+            if (v.DefaultArraySize < 0) v.DefaultArraySize = 0;
+            ImGui::DragInt("##nd_arrsize", &v.DefaultArraySize, 1, 0, 256);
+        }
+        else
+        {
+            ImGui::TextDisabled("Default Value:");
+            ImGui::SetNextItemWidth(-1);
+            switch (v.Type)
+            {
+            case ScriptVarType::Float:  ImGui::DragFloat("##nd_f", &v.DefaultFloat, 0.01f); break;
+            case ScriptVarType::Bool:   ImGui::Checkbox("##nd_b", &v.DefaultBool); break;
+            case ScriptVarType::Int:    ImGui::DragInt("##nd_i", &v.DefaultInt); break;
+            case ScriptVarType::Vec3:
+            {
+                float gap = 4.f, w = ImGui::GetContentRegionAvail().x;
+                float lbl = ImGui::CalcTextSize("X").x;
+                float wf = (w - (lbl + 2.f + gap) * 3.f + gap) / 3.f;
+                ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("X"); ImGui::SameLine(0, 2);
+                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_x", &v.DefaultVec3[0], 0.01f, 0, 0, "%.3f");
+                ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Y"); ImGui::SameLine(0, 2);
+                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_y", &v.DefaultVec3[1], 0.01f, 0, 0, "%.3f");
+                ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Z"); ImGui::SameLine(0, 2);
+                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_z", &v.DefaultVec3[2], 0.01f, 0, 0, "%.3f");
+                break;
+            }
+            case ScriptVarType::String:
+            {
+                char sbuf[256] = {}; strncpy(sbuf, v.DefaultString.c_str(), 255);
+                if (ImGui::InputText("##nd_s", sbuf, 256)) v.DefaultString = sbuf;
+                break;
+            }
+            case ScriptVarType::Entity:
+            {
+                // ── Entity picker ────────────────────────────────────────────
+                // DefaultString guarda o nome da entity referenciada na cena.
+                // Exibe botão com o nome atual + dropdown com todas as entities.
+
+                const std::string& current = v.DefaultString;
+                const char* label = current.empty() ? "[ Nenhuma ]" : current.c_str();
+
+                // Verifica se a entity ainda existe na cena ativa
+                bool entityExists = false;
+                if (m_ActiveScene && !current.empty())
+                {
+                    auto& reg = m_ActiveScene->GetRegistry();
+                    reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc) {
+                        if (nc.Name == current) entityExists = true;
+                        });
+                }
+
+                // Cor do botão: verde se existe, amarelo se não encontrada, cinza se vazio
+                ImVec4 btnCol = current.empty()
+                    ? ImVec4(0.25f, 0.25f, 0.25f, 1)
+                    : (entityExists
+                        ? ImVec4(0.15f, 0.40f, 0.15f, 1)
+                        : ImVec4(0.45f, 0.35f, 0.05f, 1));
+
+                ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                    ImVec4(btnCol.x + 0.1f, btnCol.y + 0.1f, btnCol.z + 0.1f, 1));
+
+                float bw = ImGui::GetContentRegionAvail().x - 26.f;
+                if (ImGui::Button(label, ImVec2(bw, 0)))
+                    ImGui::OpenPopup("##entity_picker");
+                ImGui::PopStyleColor(2);
+
+                // Botão X para limpar
+                if (!current.empty())
+                {
+                    ImGui::SameLine(0, 2);
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.7f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                    if (ImGui::SmallButton("x##clrent")) v.DefaultString.clear();
+                    ImGui::PopStyleColor(3);
+                }
+
+                // Aviso se entity não encontrada na cena
+                if (!current.empty() && !entityExists)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.1f, 1));
+                    ImGui::TextWrapped("'%s' nao encontrada na cena.", current.c_str());
+                    ImGui::PopStyleColor();
+                }
+
+                // Drag-and-drop: aceita entidade arrastada do Scene Graph do editor
+                if (ImGui::BeginDragDropTarget())
+                {
+                    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY_NAME"))
+                        v.DefaultString = (const char*)p->Data;
+                    ImGui::EndDragDropTarget();
+                }
+
+                // Popup com lista de entities da cena ativa
+                ImGui::SetNextWindowSize(ImVec2(220, 280), ImGuiCond_Always);
+                if (ImGui::BeginPopup("##entity_picker"))
+                {
+                    ImGui::TextDisabled("Selecione uma entity:");
+                    ImGui::Separator();
+
+                    // Campo de busca
+                    static char searchBuf[64] = {};
+                    if (ImGui::IsWindowAppearing())
+                    {
+                        ImGui::SetKeyboardFocusHere();
+                        searchBuf[0] = '\0';
+                    }
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::InputTextWithHint("##entSearch", "Buscar...", searchBuf, sizeof(searchBuf));
+                    ImGui::Separator();
+
+                    std::string s = searchBuf;
+                    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+
+                    if (m_ActiveScene)
+                    {
+                        auto& reg = m_ActiveScene->GetRegistry();
+                        reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc)
+                            {
+                                // Filtro de busca
+                                std::string low = nc.Name;
+                                std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+                                if (!s.empty() && low.find(s) == std::string::npos) return;
+
+                                bool selected = (nc.Name == current);
+                                if (selected)
+                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1));
+
+                                if (ImGui::Selectable(nc.Name.c_str(), selected))
+                                {
+                                    v.DefaultString = nc.Name;
+                                    ImGui::CloseCurrentPopup();
+                                }
+
+                                if (selected) ImGui::PopStyleColor();
+                            });
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("Nenhuma cena ativa.");
+                    }
+                    ImGui::EndPopup();
+                }
+                break;
+            }
+            default: break;
+            }
+        } // else (não-array)
+        ImGui::Spacing();
+        ImGui::Checkbox("Exposed (Inspector)##nd_exp", &v.Exposed);
+
+        // Descrição da variável — texto livre, exibida apenas aqui (aba Node)
+        ImGui::Spacing();
+        ImGui::TextDisabled("Description:");
+        static char s_DescBuf[256] = {};
+        static std::string s_LastVarNameDesc;
+        if (s_LastVarNameDesc != v.Name)
+        {
+            strncpy(s_DescBuf, v.Description.c_str(), 255);
+            s_DescBuf[255] = 0;
+            s_LastVarNameDesc = v.Name;
+        }
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputTextMultiline("##nd_desc", s_DescBuf, sizeof(s_DescBuf), ImVec2(-1, 60)))
+            v.Description = s_DescBuf;
+
+        // Categoria da variável — exibe e permite editar
+        ImGui::Spacing();
+        ImGui::TextDisabled("Categoria:");
+        ImGui::SameLine(0, 4);
+        if (v.Category.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+            ImGui::TextUnformatted("(nenhuma)");
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.85f, 1.0f, 1));
+            ImGui::TextUnformatted(v.Category.c_str());
+            ImGui::PopStyleColor();
+        }
+        // Campo para mudar categoria diretamente na aba Node
+        static char s_CatBuf[64] = {};
+        static std::string s_LastVarName;
+        if (s_LastVarName != v.Name)
+        {
+            strncpy(s_CatBuf, v.Category.c_str(), 63);
+            s_CatBuf[63] = 0;
+            s_LastVarName = v.Name;
+        }
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputTextWithHint("##nd_cat", "Definir categoria...", s_CatBuf, 64))
+            v.Category = s_CatBuf;
+
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -53,18 +520,72 @@ namespace axe
                 if (tc)
                 {
                     bool changed = false;
-                    if (ImGui::DragFloat3("Position", &tc->Data.Position.x, 0.1f)) changed = true;
+                    ImGui::TextDisabled("Position");
+                    if (DragVec3Labeled("pos", &tc->Data.Position.x, 0.1f)) changed = true;
+
                     glm::vec3 rotDeg = glm::degrees(tc->Data.Rotation);
-                    if (ImGui::DragFloat3("Rotation", glm::value_ptr(rotDeg), 0.5f))
+                    ImGui::TextDisabled("Rotation");
+                    if (DragVec3Labeled("rot", glm::value_ptr(rotDeg), 0.5f))
                     {
                         tc->Data.Rotation = glm::radians(rotDeg); changed = true;
                     }
+
+                    // Scale — com cadeado: fechado = uniforme (qualquer eixo escala
+                    // os 3 juntos, proporcionalmente); aberto = cada eixo livre.
                     glm::vec3 scaleCopy = tc->Data.Scale;
-                    if (ImGui::DragFloat3("Scale", &scaleCopy.x, 0.05f))
+                    ImGui::TextDisabled("Scale");
+                    ImGui::SameLine(ImGui::GetWindowWidth() - 34.f);
                     {
-                        tc->Data.Scale.x = std::max(scaleCopy.x, 0.001f);
-                        tc->Data.Scale.y = std::max(scaleCopy.y, 0.001f);
-                        tc->Data.Scale.z = std::max(scaleCopy.z, 0.001f);
+                        auto& icons = EditorIconLibrary::Get();
+                        auto lockIcon = m_ScaleLocked ? icons.GetLockClosed() : icons.GetLockOpen();
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.08f));
+                        bool lockClicked;
+                        if (lockIcon && lockIcon->IsLoaded())
+                        {
+                            lockClicked = ImGui::Button("##scalelock", ImVec2(20, 18));
+                            ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                            ImGui::GetWindowDrawList()->AddImage(
+                                (ImTextureID)(uintptr_t)lockIcon->GetRendererID(),
+                                ImVec2(r0.x + 3, r0.y + 1), ImVec2(r1.x - 3, r1.y - 1),
+                                ImVec2(0, 1), ImVec2(1, 0));
+                        }
+                        else
+                        {
+                            lockClicked = ImGui::SmallButton(m_ScaleLocked ? "L" : "U");
+                        }
+                        ImGui::PopStyleColor(2);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(m_ScaleLocked
+                                ? "Escala uniforme (clique para liberar por eixo)"
+                                : "Escala livre por eixo (clique para travar uniforme)");
+                        if (lockClicked) m_ScaleLocked = !m_ScaleLocked;
+                    }
+
+                    if (DragVec3Labeled("scale", &scaleCopy.x, 0.05f))
+                    {
+                        if (m_ScaleLocked)
+                        {
+                            // Identifica qual eixo mudou e aplica o mesmo fator aos outros 2
+                            float old[3] = { tc->Data.Scale.x, tc->Data.Scale.y, tc->Data.Scale.z };
+                            float neu[3] = { scaleCopy.x, scaleCopy.y, scaleCopy.z };
+                            int axis = 0; float bestDelta = 0.f;
+                            for (int a = 0; a < 3; a++)
+                            {
+                                float d = std::abs(neu[a] - old[a]);
+                                if (d > bestDelta) { bestDelta = d; axis = a; }
+                            }
+                            float ratio = (old[axis] > 0.0001f) ? (neu[axis] / old[axis]) : 1.0f;
+                            tc->Data.Scale.x = std::max(old[0] * ratio, 0.001f);
+                            tc->Data.Scale.y = std::max(old[1] * ratio, 0.001f);
+                            tc->Data.Scale.z = std::max(old[2] * ratio, 0.001f);
+                        }
+                        else
+                        {
+                            tc->Data.Scale.x = std::max(scaleCopy.x, 0.001f);
+                            tc->Data.Scale.y = std::max(scaleCopy.y, 0.001f);
+                            tc->Data.Scale.z = std::max(scaleCopy.z, 0.001f);
+                        }
                         changed = true;
                     }
                     if (changed) { tc->Data.UseWorldMatrix = false; tc->Data.WorldMatrix = tc->Data.GetMatrix(); }
@@ -105,174 +626,7 @@ namespace axe
 
                         if (open)
                         {
-                            if (def.Type == "Mesh")
-                            {
-                                static const char* prims[] = { "Sphere","Cube","Cylinder","Plane" };
-                                static const char* primUUIDs[] = {
-                                    PrimitiveUUID::Sphere, PrimitiveUUID::Cube,
-                                    PrimitiveUUID::Cylinder, PrimitiveUUID::Plane };
-                                int curIdx = 0;
-                                for (int p = 0; p < 4; p++)
-                                    if (def.AssetUUID == primUUIDs[p]) { curIdx = p; break; }
-                                if (ImGui::Combo("Primitive", &curIdx, prims, 4))
-                                {
-                                    def.AssetUUID = primUUIDs[curIdx];
-                                    auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
-                                    mc.Data = MeshFactory::CreateByUUID(def.AssetUUID);
-                                }
-                                if (ImGui::BeginDragDropTarget())
-                                {
-                                    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_UUID"))
-                                    {
-                                        std::string uuid = (const char*)p->Data;
-                                        const auto* rec = AssetDatabase::Get().GetByUUID(uuid);
-                                        if (rec && rec->Type == AssetType::Mesh)
-                                        {
-                                            def.AssetUUID = uuid;
-                                            auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
-                                            mc.AssetUUID = uuid;
-                                        }
-                                    }
-                                    ImGui::EndDragDropTarget();
-                                }
-                            }
-                            else if (def.Type == "Material")
-                            {
-                                AssetPicker::Draw("Material", def.AssetUUID, { AssetType::Material },
-                                    [&](const AssetRecord& record)
-                                    {
-                                        def.AssetUUID = record.UUID;
-                                        auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
-                                        if (matAsset)
-                                        {
-                                            auto graphPath = record.FilePath;
-                                            graphPath.replace_extension(".axegraph");
-                                            if (std::filesystem::exists(graphPath))
-                                            {
-                                                try {
-                                                    std::ifstream gf(graphPath);
-                                                    auto gj = nlohmann::json::parse(gf);
-                                                    auto matGraph = std::make_unique<MaterialGraph>();
-                                                    matGraph->Deserialize(gj);
-                                                    auto result = MaterialCompiler::Compile(matGraph.get());
-                                                    if (result.Success)
-                                                    {
-                                                        auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
-                                                        if (shader) matAsset->GetMaterial()->SetShader(shader);
-                                                    }
-                                                }
-                                                catch (...) {}
-                                            }
-                                            auto& mc = reg.get_or_emplace<MaterialComponent>(m_PreviewEntity);
-                                            mc.Data = matAsset->GetMaterial();
-                                            mc.MaterialAssetUUID = record.UUID;
-                                        }
-                                    });
-
-                                if (m_InspectorWindow && !def.AssetUUID.empty())
-                                    m_InspectorWindow->DrawMaterialGraphParams(def.AssetUUID, reg, m_PreviewEntity);
-                                else if (!def.AssetUUID.empty())
-                                {
-                                    auto* mc = reg.try_get<MaterialComponent>(m_PreviewEntity);
-                                    if (mc && mc->Data)
-                                    {
-                                        ImGui::DragFloat("Metallic", &mc->Data->Metallic, 0.01f, 0.f, 1.f);
-                                        ImGui::DragFloat("Roughness", &mc->Data->Roughness, 0.01f, 0.f, 1.f);
-                                        ImGui::ColorEdit3("Cor Base", glm::value_ptr(mc->Data->Color));
-                                    }
-                                }
-                            }
-                            else if (def.Type == "Rigidbody")
-                            {
-                                static const char* types[] = { "Static","Dynamic","Kinematic" };
-                                int typeIdx = (def.BodyType == "Dynamic") ? 1 : (def.BodyType == "Kinematic") ? 2 : 0;
-                                if (ImGui::Combo("Tipo", &typeIdx, types, 3)) def.BodyType = types[typeIdx];
-                                if (def.BodyType != "Static")
-                                {
-                                    ImGui::DragFloat("Mass", &def.Mass, 0.1f, 0.01f, 1000.f);
-                                    ImGui::DragFloat("Friction", &def.Friction, 0.01f, 0.f, 1.f);
-                                    ImGui::DragFloat("Restitution", &def.Restitution, 0.01f, 0.f, 1.f);
-                                    ImGui::DragFloat("Linear Damp", &def.LinearDamping, 0.01f, 0.f, 1.f);
-                                    ImGui::DragFloat("Angular Damp", &def.AngularDamping, 0.01f, 0.f, 1.f);
-                                    ImGui::Checkbox("Gravity", &def.UseGravity);
-                                    ImGui::TextDisabled("Lock Rotation:");
-                                    ImGui::SameLine(); ImGui::Checkbox("X##lrx", &def.LockRotX);
-                                    ImGui::SameLine(); ImGui::Checkbox("Y##lry", &def.LockRotY);
-                                    ImGui::SameLine(); ImGui::Checkbox("Z##lrz", &def.LockRotZ);
-                                }
-                            }
-                            else if (def.Type.find("Collider") != std::string::npos)
-                            {
-                                static const char* shapes[] = { "Box","Sphere","Capsule","Mesh (Static)","Convex Hull" };
-                                static const char* shapeKeys[] = { "Box","Sphere","Capsule","Mesh","ConvexHull" };
-                                int cur = 0;
-                                for (int s = 0; s < 5; s++)
-                                    if (def.ColliderShape == shapeKeys[s]) { cur = s; break; }
-                                if (ImGui::Combo("Shape", &cur, shapes, 5)) def.ColliderShape = shapeKeys[cur];
-                                ImGui::Checkbox("Is Trigger", &def.IsTrigger);
-                                ImGui::Checkbox("Debug Wireframe", &def.ShowDebug);
-                                ImGui::DragFloat3("Offset", &def.ColliderOffsetX, 0.01f);
-                                if (def.ColliderShape == "Box")     ImGui::DragFloat3("Half Extent", &def.ColliderSizeX, 0.01f, 0.01f, 100.f);
-                                else if (def.ColliderShape == "Sphere")  ImGui::DragFloat("Radius", &def.ColliderRadius, 0.01f, 0.01f, 100.f);
-                                else if (def.ColliderShape == "Capsule") {
-                                    ImGui::DragFloat("Height", &def.ColliderHeight, 0.01f, 0.1f, 10.f);
-                                    ImGui::DragFloat("Capsule Radius", &def.ColliderCapsuleRadius, 0.01f, 0.01f, 5.f);
-                                }
-                                else if (def.ColliderShape == "Mesh") {
-                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1));
-                                    ImGui::TextWrapped("Mesh exato. Use apenas com Rigidbody Static.");
-                                    ImGui::PopStyleColor();
-                                }
-                            }
-                            else if (def.Type == "CharacterController")
-                            {
-                                ImGui::DragFloat("Height", &def.CCHeight, 0.01f, 0.5f, 5.f);
-                                ImGui::DragFloat("Radius", &def.CCRadius, 0.01f, 0.1f, 2.f);
-                                ImGui::DragFloat("Max Slope", &def.CCMaxSlope, 0.5f, 0.f, 89.f);
-                                ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f);
-                                ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f);
-                                ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f);
-                            }
-                            else if (def.Type == "SpringArm")
-                            {
-                                bool armChanged = false;
-                                if (ImGui::DragFloat("Length##sa", &def.SALength, 1.f, 50.f, 1000.f, "%.0f")) armChanged = true;
-                                if (ImGui::DragFloat("Height##sa", &def.SAHeightOffset, 0.1f, -10.f, 20.f, "%.2f")) armChanged = true;
-                                float off[3] = { def.SASocketOffX,def.SASocketOffY,def.SASocketOffZ };
-                                if (ImGui::DragFloat3("Socket Offset##sa", off, 0.05f))
-                                {
-                                    def.SASocketOffX = off[0]; def.SASocketOffY = off[1]; def.SASocketOffZ = off[2]; armChanged = true;
-                                }
-                                if (ImGui::DragFloat("Smoothing##sa", &def.SALagSpeed, 0.1f, 0.5f, 30.f, "%.1f")) armChanged = true;
-                                ImGui::Checkbox("Camera Lag##sa", &def.SAEnableLag);
-                                ImGui::Checkbox("Mouse Rotates##sa", &def.SAMouseRotates);
-
-                                auto& pr = m_PreviewScene->GetRegistry();
-                                auto& sa = pr.get_or_emplace<SpringArmComponent>(m_PreviewEntity);
-                                sa.Length = def.SALength / 100.0f;
-                                sa.HeightOffset = def.SAHeightOffset;
-                                sa.SocketOffset = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
-                                sa.LagSpeed = def.SALagSpeed;
-                                sa.EnableCameraLag = def.SAEnableLag;
-                                sa.MouseRotates = def.SAMouseRotates;
-                            }
-                            else if (def.Type == "Camera")
-                            {
-                                ImGui::DragFloat("FOV##cam", &def.CamFov, 0.5f, 10.f, 170.f, "%.1f°");
-                                ImGui::DragFloat("Near Clip##cam", &def.CamNearClip, 0.01f, 0.001f, 10.f);
-                                ImGui::DragFloat("Far Clip##cam", &def.CamFarClip, 1.f, 10.f, 10000.f);
-                                ImGui::DragFloat("Sensibilidade##cam", &def.CamSensitivity, 0.005f, 0.01f, 5.f);
-                                ImGui::Checkbox("Primary Camera##cam", &def.CamIsPrimary);
-
-                                auto& pr = m_PreviewScene->GetRegistry();
-                                auto& cam = pr.get_or_emplace<CameraComponent>(m_PreviewEntity);
-                                cam.Fov = def.CamFov;
-                                cam.NearClip = def.CamNearClip;
-                                cam.FarClip = def.CamFarClip;
-                                cam.Sensitivity = def.CamSensitivity;
-                                cam.IsPrimary = def.CamIsPrimary;
-                                ImGui::TextDisabled("Parent index: %d", def.ParentIndex);
-                            }
+                            DrawComponentFields(def, i);
                         }
                         ImGui::PopID();
                     }
@@ -283,7 +637,17 @@ namespace axe
             // ── Tab NODE ──────────────────────────────────────────────────────
             if (ImGui::BeginTabItem("Node"))
             {
-                if (m_EdCtx)
+                // Prioridade: variável selecionada diretamente na lista do
+                // Script Members (m_SelectedVar) é mostrada sem depender de
+                // nenhum node existir no canvas — diferente do fluxo abaixo,
+                // que só funciona se houver um node Get/Set Variable
+                // selecionado no grafo.
+                if (m_SelectedVar >= 0 && m_ScriptAsset &&
+                    m_SelectedVar < (int)m_ScriptAsset->GetVariables().size())
+                {
+                    DrawVariableDetailsPanel(m_ScriptAsset->GetVariables()[m_SelectedVar]);
+                }
+                else if (m_EdCtx)
                 {
                     ed::SetCurrentEditor(m_EdCtx);
                     int sel = ed::GetSelectedObjectCount();
@@ -342,213 +706,7 @@ namespace axe
 
                                 if (foundVar)
                                 {
-                                    static const char* s_TypeNames[] = { "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity" };
-                                    static const ImVec4 s_TypeCols[] = {
-                                        {0.2f,0.7f,0.3f,1},{0.9f,0.2f,0.2f,1},{0.4f,0.9f,0.4f,1},
-                                        {1.f,0.9f,0.2f,1},{0.95f,0.4f,0.7f,1},{0.16f,0.78f,0.78f,1},
-                                        {0.63f,0.31f,0.86f,1},{0.71f,0.55f,0.86f,1},{0.24f,0.47f,0.78f,1}
-                                    };
-                                    int ti = (int)foundVar->Type;
-                                    ImGui::PushStyleColor(ImGuiCol_Text, s_TypeCols[ti]);
-                                    ImGui::TextUnformatted(s_TypeNames[ti]);
-                                    ImGui::PopStyleColor();
-                                    ImGui::SameLine();
-                                    ImGui::TextUnformatted(foundVar->Name.c_str());
-                                    ImGui::Spacing();
-
-                                    // Rename
-                                    ImGui::TextDisabled("Name:");
-                                    ImGui::SetNextItemWidth(-1);
-                                    char nbuf[64] = {};
-                                    strncpy(nbuf, foundVar->Name.c_str(), 63);
-                                    if (ImGui::InputText("##vname_nd", nbuf, 64, ImGuiInputTextFlags_EnterReturnsTrue))
-                                        if (nbuf[0])
-                                        {
-                                            std::string oldName = foundVar->Name;
-                                            foundVar->Name = nbuf;
-                                            if (m_Graph)
-                                                for (auto& n : m_Graph->GetNodes())
-                                                    if ((n->Name == "Get Variable" || n->Name == "Set Variable") && n->StringValue == oldName)
-                                                        n->StringValue = foundVar->Name;
-                                        }
-                                    ImGui::Spacing();
-
-                                    // Default value
-                                    ImGui::TextDisabled("Default Value:");
-                                    ImGui::SetNextItemWidth(-1);
-                                    switch (foundVar->Type)
-                                    {
-                                    case ScriptVarType::Float:  ImGui::DragFloat("##nd_f", &foundVar->DefaultFloat, 0.01f); break;
-                                    case ScriptVarType::Bool:   ImGui::Checkbox("##nd_b", &foundVar->DefaultBool); break;
-                                    case ScriptVarType::Int:    ImGui::DragInt("##nd_i", &foundVar->DefaultInt); break;
-                                    case ScriptVarType::Vec3:
-                                    {
-                                        float gap = 4.f, w = ImGui::GetContentRegionAvail().x;
-                                        float lbl = ImGui::CalcTextSize("X").x;
-                                        float wf = (w - (lbl + 2.f + gap) * 3.f + gap) / 3.f;
-                                        ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("X"); ImGui::SameLine(0, 2);
-                                        ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_x", &foundVar->DefaultVec3[0], 0.01f, 0, 0, "%.3f");
-                                        ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Y"); ImGui::SameLine(0, 2);
-                                        ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_y", &foundVar->DefaultVec3[1], 0.01f, 0, 0, "%.3f");
-                                        ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Z"); ImGui::SameLine(0, 2);
-                                        ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_z", &foundVar->DefaultVec3[2], 0.01f, 0, 0, "%.3f");
-                                        break;
-                                    }
-                                    case ScriptVarType::String:
-                                    {
-                                        char sbuf[256] = {}; strncpy(sbuf, foundVar->DefaultString.c_str(), 255);
-                                        if (ImGui::InputText("##nd_s", sbuf, 256)) foundVar->DefaultString = sbuf;
-                                        break;
-                                    }
-                                    case ScriptVarType::Entity:
-                                    {
-                                        // ── Entity picker ────────────────────────────────────────────
-                                        // DefaultString guarda o nome da entity referenciada na cena.
-                                        // Exibe botão com o nome atual + dropdown com todas as entities.
-
-                                        const std::string& current = foundVar->DefaultString;
-                                        const char* label = current.empty() ? "[ Nenhuma ]" : current.c_str();
-
-                                        // Verifica se a entity ainda existe na cena ativa
-                                        bool entityExists = false;
-                                        if (m_ActiveScene && !current.empty())
-                                        {
-                                            auto& reg = m_ActiveScene->GetRegistry();
-                                            reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc) {
-                                                if (nc.Name == current) entityExists = true;
-                                                });
-                                        }
-
-                                        // Cor do botão: verde se existe, amarelo se não encontrada, cinza se vazio
-                                        ImVec4 btnCol = current.empty()
-                                            ? ImVec4(0.25f, 0.25f, 0.25f, 1)
-                                            : (entityExists
-                                                ? ImVec4(0.15f, 0.40f, 0.15f, 1)
-                                                : ImVec4(0.45f, 0.35f, 0.05f, 1));
-
-                                        ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                            ImVec4(btnCol.x + 0.1f, btnCol.y + 0.1f, btnCol.z + 0.1f, 1));
-
-                                        float bw = ImGui::GetContentRegionAvail().x - 26.f;
-                                        if (ImGui::Button(label, ImVec2(bw, 0)))
-                                            ImGui::OpenPopup("##entity_picker");
-                                        ImGui::PopStyleColor(2);
-
-                                        // Botão X para limpar
-                                        if (!current.empty())
-                                        {
-                                            ImGui::SameLine(0, 2);
-                                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.7f));
-                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                                            if (ImGui::SmallButton("x##clrent")) foundVar->DefaultString.clear();
-                                            ImGui::PopStyleColor(3);
-                                        }
-
-                                        // Aviso se entity não encontrada na cena
-                                        if (!current.empty() && !entityExists)
-                                        {
-                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.1f, 1));
-                                            ImGui::TextWrapped("'%s' nao encontrada na cena.", current.c_str());
-                                            ImGui::PopStyleColor();
-                                        }
-
-                                        // Drag-and-drop: aceita entidade arrastada do Scene Graph do editor
-                                        if (ImGui::BeginDragDropTarget())
-                                        {
-                                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY_NAME"))
-                                                foundVar->DefaultString = (const char*)p->Data;
-                                            ImGui::EndDragDropTarget();
-                                        }
-
-                                        // Popup com lista de entities da cena ativa
-                                        ImGui::SetNextWindowSize(ImVec2(220, 280), ImGuiCond_Always);
-                                        if (ImGui::BeginPopup("##entity_picker"))
-                                        {
-                                            ImGui::TextDisabled("Selecione uma entity:");
-                                            ImGui::Separator();
-
-                                            // Campo de busca
-                                            static char searchBuf[64] = {};
-                                            if (ImGui::IsWindowAppearing())
-                                            {
-                                                ImGui::SetKeyboardFocusHere();
-                                                searchBuf[0] = '\0';
-                                            }
-                                            ImGui::SetNextItemWidth(-1);
-                                            ImGui::InputTextWithHint("##entSearch", "Buscar...", searchBuf, sizeof(searchBuf));
-                                            ImGui::Separator();
-
-                                            std::string s = searchBuf;
-                                            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-
-                                            if (m_ActiveScene)
-                                            {
-                                                auto& reg = m_ActiveScene->GetRegistry();
-                                                reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc)
-                                                    {
-                                                        // Filtro de busca
-                                                        std::string low = nc.Name;
-                                                        std::transform(low.begin(), low.end(), low.begin(), ::tolower);
-                                                        if (!s.empty() && low.find(s) == std::string::npos) return;
-
-                                                        bool selected = (nc.Name == current);
-                                                        if (selected)
-                                                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1));
-
-                                                        if (ImGui::Selectable(nc.Name.c_str(), selected))
-                                                        {
-                                                            foundVar->DefaultString = nc.Name;
-                                                            ImGui::CloseCurrentPopup();
-                                                        }
-
-                                                        if (selected) ImGui::PopStyleColor();
-                                                    });
-                                            }
-                                            else
-                                            {
-                                                ImGui::TextDisabled("Nenhuma cena ativa.");
-                                            }
-                                            ImGui::EndPopup();
-                                        }
-                                        break;
-                                    }
-                                    default: break;
-                                    }
-                                    ImGui::Spacing();
-                                    ImGui::Checkbox("Exposed (Inspector)##nd_exp", &foundVar->Exposed);
-
-                                    // Categoria da variável — exibe e permite editar
-                                    ImGui::Spacing();
-                                    ImGui::TextDisabled("Categoria:");
-                                    ImGui::SameLine(0, 4);
-                                    if (foundVar->Category.empty())
-                                    {
-                                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
-                                        ImGui::TextUnformatted("(nenhuma)");
-                                        ImGui::PopStyleColor();
-                                    }
-                                    else
-                                    {
-                                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.85f, 1.0f, 1));
-                                        ImGui::TextUnformatted(foundVar->Category.c_str());
-                                        ImGui::PopStyleColor();
-                                    }
-                                    // Campo para mudar categoria diretamente na aba Node
-                                    static char s_CatBuf[64] = {};
-                                    static std::string s_LastVarName;
-                                    if (s_LastVarName != foundVar->Name)
-                                    {
-                                        strncpy(s_CatBuf, foundVar->Category.c_str(), 63);
-                                        s_CatBuf[63] = 0;
-                                        s_LastVarName = foundVar->Name;
-                                    }
-                                    ImGui::SetNextItemWidth(-1);
-                                    if (ImGui::InputTextWithHint("##nd_cat", "Definir categoria...", s_CatBuf, 64))
-                                        foundVar->Category = s_CatBuf;
-
-                                    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+                                    DrawVariableDetailsPanel(*foundVar);
                                 }
                                 else
                                 {
@@ -557,32 +715,55 @@ namespace axe
                                     ImGui::Spacing();
                                 }
                             }
-                            else if (node->Name == "Get Key" || node->Name == "Get Axis" || node->Name == "Print String")
+                            else if (node->Name == "Get Action" || node->Name == "Get Axis" || node->Name == "Print String")
                             {
-                                const char* lbl =
-                                    node->Name == "Get Key" ? "Key (e.g. W):" :
-                                    node->Name == "Get Axis" ? "Axis (e.g. Horizontal):" : "Message:";
-
-                                bool keyPinLinked = false;
-                                if (node->Name == "Get Key")
-                                    for (auto& p : node->Inputs)
-                                        if (p.Name == "Key" && m_Graph->IsPinLinked(p.ID))
-                                        {
-                                            keyPinLinked = true; break;
-                                        }
-
-                                ImGui::TextDisabled("%s", lbl);
-                                if (keyPinLinked)
+                                if (node->Name == "Print String")
                                 {
-                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
-                                    ImGui::TextUnformatted("(connected — value comes from node)");
-                                    ImGui::PopStyleColor();
-                                }
-                                else
-                                {
+                                    ImGui::TextDisabled("Message:");
                                     ImGui::SetNextItemWidth(-1);
                                     char buf[128]; strncpy(buf, node->StringValue.c_str(), sizeof(buf)); buf[sizeof(buf) - 1] = '\0';
                                     if (ImGui::InputText("##sv", buf, sizeof(buf))) node->StringValue = buf;
+                                }
+                                else
+                                {
+                                    // Get Action / Get Axis — mesmo combo do canvas
+                                    // (script_node_draw.cpp), alimentado pelo InputMappingConfig.
+                                    bool isGetAction = (node->Name == "Get Action");
+                                    auto& cfg = axe::InputMappingConfig::Get();
+                                    std::vector<std::string> names;
+                                    if (isGetAction)
+                                        for (auto& a : cfg.GetActions()) names.push_back(a.Name);
+                                    else
+                                        for (auto& a : cfg.GetAxes()) names.push_back(a.Name);
+
+                                    int curIdx = -1;
+                                    for (int i = 0; i < (int)names.size(); i++)
+                                        if (names[i] == node->StringValue) { curIdx = i; break; }
+
+                                    ImGui::TextDisabled(isGetAction ? "Action:" : "Axis:");
+                                    ImGui::SetNextItemWidth(-1);
+                                    const char* lbl = (curIdx >= 0) ? names[curIdx].c_str()
+                                        : (names.empty() ? "(nenhuma configurada)" : "(selecione)");
+                                    if (ImGui::BeginCombo("##detailsv", lbl))
+                                    {
+                                        for (int i = 0; i < (int)names.size(); i++)
+                                        {
+                                            bool sel = (i == curIdx);
+                                            if (ImGui::Selectable(names[i].c_str(), sel))
+                                            {
+                                                node->StringValue = names[i];
+                                                if (!isGetAction && m_Graph)
+                                                {
+                                                    auto* axis = cfg.FindAxis(names[i]);
+                                                    if (axis) m_Graph->RebuildAxisOutputPins(node, (int)axis->ValueType);
+                                                }
+                                            }
+                                            if (sel) ImGui::SetItemDefaultFocus();
+                                        }
+                                        if (names.empty())
+                                            ImGui::TextDisabled("Configure em Project > Input Settings");
+                                        ImGui::EndCombo();
+                                    }
                                 }
                                 ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
                             }
@@ -655,12 +836,36 @@ namespace axe
 
             ImGui::Spacing();
 
-            // Botão + Add Component
-            float bw = ImGui::GetContentRegionAvail().x;
+            // Botão Add Component — compacto (ícone + "Add"), tooltip completo no hover
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.35f, 0.15f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.5f, 0.2f, 1));
-            if (ImGui::Button("+ Add Component", ImVec2(bw, 0)))
-                ImGui::OpenPopup("##addcomp");
+            {
+                auto addIcon = EditorIconLibrary::Get().GetAdd();
+                const char* shortLabel = "Add";
+                bool clicked;
+                if (addIcon && addIcon->IsLoaded())
+                {
+                    float iconSz = 14.f;
+                    float textW = ImGui::CalcTextSize(shortLabel).x;
+                    ImVec2 btnSz(iconSz + 6.f + textW + 16.f, 0); // botão compacto, não mais full-width
+                    clicked = ImGui::Button("##addcompbtn", btnSz);
+                    ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    float cy = (r0.y + r1.y) * 0.5f;
+                    dl->AddImage((ImTextureID)(uintptr_t)addIcon->GetRendererID(),
+                        ImVec2(r0.x + 8.f, cy - iconSz * 0.5f), ImVec2(r0.x + 8.f + iconSz, cy + iconSz * 0.5f),
+                        ImVec2(0, 1), ImVec2(1, 0));
+                    dl->AddText(ImVec2(r0.x + 8.f + iconSz + 6.f, cy - ImGui::GetFontSize() * 0.5f),
+                        ImGui::GetColorU32(ImGuiCol_Text), shortLabel);
+                }
+                else
+                {
+                    clicked = ImGui::Button(shortLabel);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Add Component");
+                if (clicked) ImGui::OpenPopup("##addcomp");
+            }
             ImGui::PopStyleColor(2);
 
             ImGui::SetNextWindowSize(ImVec2(215, 295), ImGuiCond_Always);
@@ -736,16 +941,19 @@ namespace axe
                     if (t == "Camera")         return { 0.7f,0.5f,1.f,1 };
                     return { 0.85f,0.85f,0.85f,1 };
                     };
-                auto getIcon = [](const std::string& t) -> const char* {
-                    if (t == "Mesh")           return "[M]";
-                    if (t == "Material")       return "[~]";
-                    if (t == "Rigidbody")      return "[R]";
-                    if (t.find("Collider") != std::string::npos) return "[C]";
-                    if (t == "CharacterController") return "[P]";
-                    if (t == "SpringArm")      return "[A]";
-                    if (t == "Camera")         return "[CAM]";
-                    if (t == "Light")          return "[L]";
-                    return "[?]";
+                // Ícones vetoriais reais (PNG outline, ver EditorIconLibrary) em vez
+                // do antigo texto [M]/[R]/[C]/[P]/[A]/[CAM] — alinhado ao estilo UE5.
+                auto getIconTex = [](const std::string& t) -> std::shared_ptr<Texture2D> {
+                    auto& icons = EditorIconLibrary::Get();
+                    if (t == "Mesh")           return icons.GetMesh();
+                    if (t == "Material")       return icons.GetMaterial();
+                    if (t == "Rigidbody")      return icons.GetRigidbody();
+                    if (t.find("Collider") != std::string::npos) return icons.GetCollider();
+                    if (t == "CharacterController") return icons.GetCharacterController();
+                    if (t == "SpringArm")      return icons.GetSpringArm();
+                    if (t == "Camera")         return icons.GetCamera();
+                    if (t == "Light")          return icons.GetDirectionalLight();
+                    return nullptr; // sem ícone dedicado — cai no fallback de texto "?"
                     };
 
                 auto drawComp = [&](int i, float indent) {
@@ -755,6 +963,25 @@ namespace axe
                     ImGui::PushID(i);
                     if (indent > 0) ImGui::Indent(indent);
 
+                    // ── Card estilo UE5: fundo arredondado + respiro vertical ──
+                    float cardWidth = ImGui::GetContentRegionAvail().x;
+                    float cardHeight = 34.f;
+                    ImVec2 cardMin = ImGui::GetCursorScreenPos();
+                    ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImU32 cardBg = isSelected
+                        ? ImGui::ColorConvertFloat4ToU32(ImVec4(col.x * 0.30f, col.y * 0.30f, col.z * 0.30f, 0.55f))
+                        : ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.04f));
+                    dl->AddRectFilled(cardMin, cardMax, cardBg, 6.0f);
+                    if (isSelected)
+                        dl->AddRect(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(ImVec4(col.x, col.y, col.z, 0.65f)), 6.0f, 0, 1.5f);
+
+                    ImGui::Dummy(ImVec2(8, cardHeight)); // respiro esquerdo dentro do card
+                    ImGui::SameLine(0, 0);
+
+                    ImGui::BeginGroup();
+                    ImGui::Dummy(ImVec2(0, (cardHeight - 20.f) * 0.5f)); // centraliza verticalmente
+
                     // Collapse
                     bool& collapsed = m_CompCollapsed[i < 32 ? i : 0];
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -762,28 +989,34 @@ namespace axe
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1));
                     if (ImGui::SmallButton(collapsed ? ">" : "v")) collapsed = !collapsed;
                     ImGui::PopStyleColor(3);
-                    ImGui::SameLine(0, 2);
+                    ImGui::SameLine(0, 6);
 
-                    // X
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x")) removeIdx = i;
-                    ImGui::PopStyleColor(3);
-                    ImGui::SameLine(0, 4);
+                    // Ícone vetorial real (20x20) com fallback de texto "?"
+                    auto iconTex = getIconTex(def.Type);
+                    if (iconTex && iconTex->IsLoaded())
+                    {
+                        ImGui::Image((ImTextureID)(uintptr_t)iconTex->GetRendererID(),
+                            ImVec2(20, 20), ImVec2(0, 1), ImVec2(1, 0));
+                    }
+                    else
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Text, col);
+                        ImGui::Dummy(ImVec2(20, 20));
+                        ImVec2 p = ImGui::GetItemRectMin();
+                        dl->AddText(ImVec2(p.x + 6, p.y + 2), ImGui::ColorConvertFloat4ToU32(col), "?");
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::SameLine(0, 8);
 
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    ImGui::TextUnformatted(getIcon(def.Type));
-                    ImGui::PopStyleColor();
-                    ImGui::SameLine(0, 4);
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    if (ImGui::Selectable(def.Type.c_str(), isSelected, ImGuiSelectableFlags_None,
-                        ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+                    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f));
+                    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1, 1, 1, 0.06f));
+                    if (ImGui::Selectable(def.Type.c_str(), false, ImGuiSelectableFlags_None,
+                        ImVec2(cardWidth - 84.f, 20)))
                         m_SelectedCompIndex = i;
-                    ImGui::PopStyleColor();
+                    ImGui::PopStyleColor(3);
 
-                    // Drag para graph
+                    // Drag para graph — vinculado ao Selectable acima (nome do componente)
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
                         std::string node;
@@ -803,7 +1036,7 @@ namespace axe
                         ImGui::EndDragDropSource();
                     }
 
-                    // Drop — reparentar Camera → SpringArm
+                    // Drop — reparentar Camera → SpringArm (mesmo item: o Selectable)
                     if (def.Type == "SpringArm" && ImGui::BeginDragDropTarget())
                     {
                         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_REPARENT"))
@@ -822,14 +1055,36 @@ namespace axe
                         ImGui::EndDragDropSource();
                     }
 
+                    ImGui::EndGroup();
+                    ImGui::SameLine();
+
+                    // X — alinhado à direita do card, mesma centralização vertical
+                    ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                    if (ImGui::SmallButton("x")) removeIdx = i;
+                    ImGui::PopStyleColor(3);
+
+                    ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f)); // espaçamento entre cards
+
                     if (indent > 0) ImGui::Unindent(indent);
                     ImGui::PopID();
                     };
 
+                // "v"/">" controla a visibilidade dos FILHOS deste componente (ex.:
+                // Camera dentro de SpringArm), não campos de propriedades — esses
+                // ficam só no Script Details, para não duplicar dado editável em
+                // dois lugares ao mesmo tempo.
                 for (int i = 0; i < (int)comps.size(); i++)
                     if (comps[i].ParentIndex == -1) drawComp(i, 0.f);
                 for (int i = 0; i < (int)comps.size(); i++)
-                    if (comps[i].ParentIndex >= 0)  drawComp(i, 16.f);
+                    if (comps[i].ParentIndex >= 0)
+                    {
+                        int parent = comps[i].ParentIndex;
+                        bool parentCollapsed = (parent >= 0 && parent < 32) ? m_CompCollapsed[parent] : false;
+                        if (!parentCollapsed) drawComp(i, 16.f);
+                    }
 
                 if (removeIdx >= 0)
                 {
@@ -861,21 +1116,8 @@ namespace axe
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             ImGui::TextDisabled("Nodes: %d", m_Graph ? (int)m_Graph->GetNodes().size() : 0);
             ImGui::TextDisabled("Links:  %d", m_Graph ? (int)m_Graph->GetLinks().size() : 0);
-
-            // Botão Save
-            if (m_ScriptAsset)
-            {
-                ImGui::Spacing();
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.35f, 0.55f, 1));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.5f, 0.75f, 1));
-                if (ImGui::Button("Save", ImVec2(bw, 0)) && !m_ScriptAsset->GetFilePath().empty())
-                {
-                    SaveNodePositions();
-                    m_ScriptAsset->Save(m_ScriptAsset->GetFilePath());
-                    m_ConsoleLines.push_back("[Info] Script salvo: " + m_ScriptAsset->GetFilePath().string());
-                }
-                ImGui::PopStyleColor(2);
-            }
+            // Botão Save foi movido para a toolbar (ao lado de "Compilar"), em
+            // script_graph_window.cpp — a pedido, para ficar mais acessível.
         }
         ImGui::End();
         ImGui::PopStyleVar();
