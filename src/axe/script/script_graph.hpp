@@ -132,6 +132,8 @@ namespace axe
         Math,
         Input,
         Array,     // roxo claro — Array Add/Remove/Get/Length/Clear
+        FlowControl, // azul acinzentado — Sequence/For Loop/For Each Loop
+        Function,  // verde-azulado — Function Entry/Return Node/Call <Function>
         Variable,  // pink — Get/Set Variable nodes
         Print,     // rosa — Print String
     };
@@ -192,6 +194,11 @@ namespace axe
         bool              BoolValue = false;
         int               IntLocalValue = 0;
         float             Vec3Value[3] = { 0,0,0 };
+        // Valor local de String do Set Variable — StringValue já é usado
+        // para guardar o NOME da variável (e o texto de Print String, a
+        // Action/Axis selecionada, etc.), então precisa de um campo próprio
+        // para não colidir com isso quando o tipo da variável é String.
+        std::string       StringLocalValue;
 
         ScriptNode(int id, const char* name, ScriptNodeCategory cat)
             : ID(id), Name(name), Category(cat) {}
@@ -237,6 +244,35 @@ namespace axe
         // ScriptVarType::Float como "desconhecido ainda" junto de
         // node->IntValue == -1 para distinguir de uma conexão real a FloatArray.
         void RebuildArrayNodePins(ScriptNode* node, ScriptVarType arrayElementType);
+
+        // Adiciona/remove pins "Then N" do node Sequence, preservando os pins
+        // (e links) já existentes quando pinCount aumenta — só remove do fim
+        // quando pinCount diminui, removendo com segurança qualquer link que
+        // apontava para os pins descartados. Clampa entre 2 e 8 pins.
+        // Idempotente: se node->Outputs.size() já é igual a pinCount, não faz nada.
+        void RebuildSequencePins(ScriptNode* node, int pinCount);
+
+        // Reconstrói os pins de um node do sistema de Functions, a partir da
+        // assinatura ATUAL de uma ScriptFunction — chamar sempre que Inputs/
+        // Outputs da função mudarem (adicionar/remover/renomear/mudar tipo de
+        // parâmetro). Funciona pros 3 papéis que um node de Function pode ter,
+        // decidido pelo node->Name:
+        //   "Function Entry" -> pins de SAÍDA = func.Inputs (+ "Flow Out" fixo)
+        //   "Return Node"    -> pins de ENTRADA = func.Outputs (+ "Flow In" fixo)
+        //   qualquer outro   -> é um node de Call: entrada = func.Inputs (+
+        //                       "Flow In"), saída = func.Outputs (+ "Flow Out")
+        // Tenta preservar links de pins cujo nome+tipo não mudou (mesma
+        // lógica de "não destruir o que ainda é válido" do RebuildSequencePins),
+        // removendo apenas os pins que de fato saíram da assinatura.
+        void RebuildFunctionNodePins(ScriptNode* node, const ScriptFunction& func);
+
+        // Cria um node "Call <func.Name>" com os pins já corretos pra
+        // assinatura atual da função — usado ao arrastar uma Function do
+        // Script Members pro canvas. Diferente dos outros node types, Call
+        // nodes não passam por CreateNodeByType (o nome da função é dinâmico,
+        // definido pelo usuário — não dá pra ter um "if (t == ...)" fixo pra
+        // cada função que ainda nem existe).
+        ScriptNode* AddCallFunctionNode(const ScriptFunction& func);
 
         // Serialização
         nlohmann::json Serialize() const;

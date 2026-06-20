@@ -1,5 +1,5 @@
 #pragma once
-#include "axe/input_mapping.hpp"
+#include "axe/input/input_mapping.hpp"
 #include <imgui.h>
 #include <string>
 

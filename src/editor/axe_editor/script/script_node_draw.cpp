@@ -6,7 +6,7 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_graph.hpp"
 #include "axe/script/script_asset.hpp"
-#include "axe/input_mapping.hpp"
+#include "axe/input/input_mapping.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <utilities/widgets.h>
@@ -38,6 +38,59 @@ namespace axe
         ImColor c = GetPinColor(t); return { c.Value.x,c.Value.y,c.Value.z,c.Value.w };
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Editor do valor LOCAL de um Set Variable — ver comentário da declaração
+    // em script_graph_window.hpp. Chamada tanto pelo canvas (DrawNode, abaixo)
+    // quanto pelo painel Script Details (script_details.cpp).
+    void ScriptGraphWindow::DrawSetVariableLocalValueEditor(ScriptNode* node, ScriptVarType varType, float width)
+    {
+        switch (varType)
+        {
+        case ScriptVarType::Float:
+            ImGui::SetNextItemWidth(width);
+            ImGui::DragFloat("##setlocal", &node->FloatValue, 0.01f);
+            break;
+        case ScriptVarType::Bool:
+            ImGui::Checkbox("##setlocal", &node->BoolValue);
+            break;
+        case ScriptVarType::Int:
+            ImGui::SetNextItemWidth(width);
+            ImGui::DragInt("##setlocal", &node->IntLocalValue);
+            break;
+        case ScriptVarType::Vec3:
+        {
+            float avail = (width > 0.f) ? width : ImGui::GetContentRegionAvail().x;
+            float gap = 4.f;
+            float lbl = ImGui::CalcTextSize("X").x + 2.f;
+            float fw = std::max((avail - lbl * 3.f - gap * 2.f) / 3.f, 38.f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("X"); ImGui::SameLine(0, 2);
+            ImGui::SetNextItemWidth(fw);
+            ImGui::DragFloat("##slx", &node->Vec3Value[0], 0.01f, 0, 0, "%.3f");
+            ImGui::SameLine(0, gap);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("Y"); ImGui::SameLine(0, 2);
+            ImGui::SetNextItemWidth(fw);
+            ImGui::DragFloat("##sly", &node->Vec3Value[1], 0.01f, 0, 0, "%.3f");
+            ImGui::SameLine(0, gap);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("Z"); ImGui::SameLine(0, 2);
+            ImGui::SetNextItemWidth(fw);
+            ImGui::DragFloat("##slz", &node->Vec3Value[2], 0.01f, 0, 0, "%.3f");
+            break;
+        }
+        case ScriptVarType::String:
+        {
+            ImGui::SetNextItemWidth(width);
+            char buf[128] = {};
+            strncpy(buf, node->StringLocalValue.c_str(), 127);
+            if (ImGui::InputText("##setlocal", buf, 128)) node->StringLocalValue = buf;
+            break;
+        }
+        default: break;
+        }
+    }
+
     static ImVec4 HdrCol(ScriptNodeCategory c)
     {
         ImColor x = GetNodeHeaderColor(c); return { x.Value.x,x.Value.y,x.Value.z,x.Value.w };
@@ -47,6 +100,21 @@ namespace axe
     void ScriptGraphWindow::DrawNode(ScriptNode* node)
     {
         if (!node) return;
+
+        // BUGFIX (causa raiz real do "editar um node afeta o outro"):
+        // ed::BeginNode() NÃO empurra um ID do ImGui por node — confirmado
+        // lendo imgui_node_editor.cpp (NodeBuilder::Begin só posiciona o
+        // cursor, não toca na pilha de ID). Sem um PushID aqui, TODO widget
+        // com label fixo desenhado dentro de um node (DragFloat("##setlocal"),
+        // o combo "##selname" de Get Action/Axis, os botões do Sequence, etc.)
+        // compartilha o MESMO ID do ImGui com o widget homônimo de qualquer
+        // OUTRO node — os dados (node->FloatValue de cada node) são de fato
+        // campos separados, mas o ImGui, ao não distinguir os widgets,
+        // confunde o estado de edição/foco entre eles (exatamente o sintoma:
+        // editar um node altera visualmente o outro). PushID(node) escopa
+        // toda a sub-árvore de IDs deste node, eliminando a colisão de uma
+        // vez para qualquer widget de qualquer node, presente ou futuro.
+        ImGui::PushID((int)node->ID.Get());
 
         // ── Nodes de conversão — visual compacto estilo Unreal ────────────────
         static const char* s_ConvNodes[] = {
@@ -96,6 +164,7 @@ namespace axe
             ed::EndNode();
             ed::PopStyleVar(3);
             ed::PopStyleColor(2);
+            ImGui::PopID();
             return;
         }
 
@@ -198,56 +267,30 @@ namespace axe
 
                 if (!hasConnection)
                 {
-                    switch (var->Type)
+                    // BUGFIX: este editor antes lia/escrevia var->DefaultFloat/
+                    // DefaultBool/DefaultInt/DefaultVec3/DefaultString — o
+                    // valor DEFAULT GLOBAL da variável, compartilhado com
+                    // todo Get Variable e com o painel Script Details. Editar
+                    // o valor aqui mudava silenciosamente o default de TODA
+                    // a variável (visível em qualquer Get da mesma variável),
+                    // e o compilador nem lia esse campo — ele já usa os
+                    // campos LOCAIS do node (FloatValue/BoolValue/
+                    // IntLocalValue/Vec3Value/StringLocalValue, ver
+                    // ScriptGraphCompiler::GenerateNode "Set Variable") desde
+                    // sempre. Agora chama o mesmo helper usado pelo painel
+                    // Script Details (DrawSetVariableLocalValueEditor) — uma
+                    // função só, sem duplicar o switch por tipo em dois
+                    // arquivos.
+                    float pad = (var->Type == ScriptVarType::Vec3) ? 4.f : 8.f;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + pad);
+
+                    float width = nodeW - 16.f;
+                    if (var->Type == ScriptVarType::Vec3)
                     {
-                    case ScriptVarType::Float:
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-                        ImGui::SetNextItemWidth(nodeW - 16.f);
-                        ImGui::DragFloat("##nv", &var->DefaultFloat, 0.01f);
-                        break;
-                    case ScriptVarType::Bool:
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-                        ImGui::Checkbox("##nv", &var->DefaultBool);
-                        break;
-                    case ScriptVarType::Int:
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-                        ImGui::SetNextItemWidth(nodeW - 16.f);
-                        ImGui::DragInt("##nv", &var->DefaultInt);
-                        break;
-                    case ScriptVarType::Vec3:
-                    {
-                        float pad = 4.f, gap = 4.f;
-                        float lbl = ImGui::CalcTextSize("X").x + 2.f;
                         float edPd = ed::GetStyle().NodePadding.z;
-                        float fw = std::max((nodeW - pad - (pad + edPd) - lbl * 3.f - gap * 2.f) / 3.f, 38.f);
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + pad);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("X"); ImGui::SameLine(0, 2);
-                        ImGui::SetNextItemWidth(fw);
-                        ImGui::DragFloat("##nvx", &var->DefaultVec3[0], 0.01f, 0, 0, "%.3f");
-                        ImGui::SameLine(0, gap);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("Y"); ImGui::SameLine(0, 2);
-                        ImGui::SetNextItemWidth(fw);
-                        ImGui::DragFloat("##nvy", &var->DefaultVec3[1], 0.01f, 0, 0, "%.3f");
-                        ImGui::SameLine(0, gap);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("Z"); ImGui::SameLine(0, 2);
-                        ImGui::SetNextItemWidth(fw);
-                        ImGui::DragFloat("##nvz", &var->DefaultVec3[2], 0.01f, 0, 0, "%.3f");
-                        break;
+                        width = nodeW - pad - (pad + edPd);
                     }
-                    case ScriptVarType::String:
-                    {
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-                        ImGui::SetNextItemWidth(nodeW - 16.f);
-                        char buf[128] = {};
-                        strncpy(buf, var->DefaultString.c_str(), 127);
-                        if (ImGui::InputText("##nv", buf, 128)) var->DefaultString = buf;
-                        break;
-                    }
-                    default: break;
-                    }
+                    DrawSetVariableLocalValueEditor(node, var->Type, width);
                 }
             }
             ImGui::Spacing();
@@ -310,6 +353,32 @@ namespace axe
             ImGui::Spacing();
         }
 
+        // ── Botões +/- de pins "Then" no node Sequence ────────────────────────
+        // Mesmo padrão visual do Sequence da Unreal: o usuário controla quantos
+        // ramos paralelos existem. RebuildSequencePins preserva pins/links já
+        // existentes ao crescer, e só remove do fim ao encolher.
+        if (node->Name == "Sequence")
+        {
+            int pinCount = (int)node->Outputs.size();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+            if (ImGui::SmallButton("-##seqminus"))
+            {
+                PushUndo("Remove Sequence Pin");
+                m_Graph->RebuildSequencePins(node, pinCount - 1);
+                CommitUndo("Remove Sequence Pin");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d", pinCount);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+##seqplus"))
+            {
+                PushUndo("Add Sequence Pin");
+                m_Graph->RebuildSequencePins(node, pinCount + 1);
+                CommitUndo("Add Sequence Pin");
+            }
+            ImGui::Spacing();
+        }
+
         // ── Pins ─────────────────────────────────────────────────────────────
         int maxP = (int)std::max(node->Inputs.size(), node->Outputs.size());
         for (int i = 0; i < maxP; i++)
@@ -359,6 +428,7 @@ namespace axe
         ed::EndNode();
         ed::PopStyleVar(3);
         ed::PopStyleColor(2);
+        ImGui::PopID();
     }
 
 } // namespace axe

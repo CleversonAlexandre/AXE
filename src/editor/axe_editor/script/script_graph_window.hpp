@@ -52,6 +52,21 @@ namespace axe
         void SetInspectorWindow(InspectorWindow* insp) { m_InspectorWindow = insp; }
         void OpenForAsset(std::shared_ptr<ScriptAsset> asset);
         void Close();
+
+        // ── Functions (estilo Function da Unreal) ─────────────────────────────
+        // Troca qual grafo está sendo editado no canvas — main graph do
+        // ScriptAsset ou o grafo isolado de uma ScriptFunction específica.
+        // Seguro reusar o mesmo m_EdCtx entre eles (ver comentário em
+        // script_node_graph.cpp linha da posição: a posição de cada node é
+        // reaplicada todo frame a partir de node->Position, então IDs que
+        // por acaso colidem entre grafos diferentes não causam problema).
+        void SwitchToMainGraph();
+        void SwitchToFunctionGraph(ScriptFunction* func);
+        // Reconstrói os pins do Function Entry/Return Node (no grafo da
+        // própria função) e de TODO node "Call <func.Name>" em qualquer
+        // grafo do asset (principal + todas as outras funções, recursão
+        // inclusive) — chamar sempre que func.Inputs/Outputs mudar.
+        void RebuildFunctionCallSites(ScriptFunction& func);
         bool IsOpen() const { return m_IsOpen; }
 
     private:
@@ -72,6 +87,16 @@ namespace axe
         // Variable selecionado no canvas quanto pela seleção direta na lista
         // do painel Script Members (sem precisar de nenhum node existir).
         void DrawVariableDetailsPanel(ScriptVariable& v);
+        // Editor do valor LOCAL de um node Set Variable (FloatValue/BoolValue/
+        // IntLocalValue/Vec3Value/StringLocalValue — os mesmos campos lidos
+        // pelo compilador quando o pin Value está desconectado). Função única
+        // reutilizada pela caixinha inline no canvas (script_node_draw.cpp) E
+        // pelo painel Script Details (script_details.cpp), para que o bug de
+        // "editar aqui também muda lá" não possa voltar a existir escondido
+        // em só um dos dois lugares — qualquer fix futuro nesse valor é feito
+        // uma vez só, aqui. width < 0 usa a largura disponível inteira
+        // (ImGui::SetNextItemWidth(-1)); width >= 0 usa esse valor exato.
+        void DrawSetVariableLocalValueEditor(ScriptNode* node, ScriptVarType varType, float width);
         void DrawComponentFields(ScriptComponentDef& def, int i); // campos por tipo de componente — usado por DrawScriptDetails e pelo collapse inline no Scene Graph
         void DrawMyBlueprintWindow();  // painel Variables / Events / Dispatchers
         void CompileScript();
@@ -84,6 +109,13 @@ namespace axe
         // Node editor
         ed::EditorContext* m_EdCtx = nullptr;
         ScriptGraph* m_Graph = nullptr;
+        // Índice (não ponteiro!) da ScriptFunction atualmente aberta no
+        // canvas, ou -1 se for o grafo principal. Índice em vez de ponteiro
+        // pelo mesmo motivo de m_SelectedVar: adicionar/remover qualquer
+        // outra função pode realocar ou deslocar o vector<ScriptFunction>,
+        // o que invalidaria/trocaria silenciosamente o que um ponteiro
+        // estaria apontando.
+        int m_EditingFunctionIndex = -1;
         ScriptComponent* m_Component = nullptr;
         entt::entity       m_Entity = entt::null;
         entt::registry* m_SourceRegistry = nullptr;
@@ -125,7 +157,7 @@ namespace axe
         bool               m_PendingPromoteIsInput = false;
         int                m_PendingPromoteVarType = 0;
         ScriptPinType      m_PendingPromotePinType = ScriptPinType::Float;
-        bool   m_CtxOpen[6] = { true, true, true, true, true, false };
+        bool   m_CtxOpen[7] = { true, true, true, true, true, false, false };
 
         char   m_CompSearchBuf[128] = {};
         int    m_SelectedCompIndex = -1; // componente selecionado no Scene Graph
@@ -145,7 +177,20 @@ namespace axe
         int   m_NewVarType = 0;
         char  m_NewVarCategory[64] = "";
         char  m_NewEvtName[64] = "OnMyEvent";
+        char  m_NewFuncName[64] = "NewFunction";
+        // Nome da função atualmente "expandida" na lista (mostrando o editor
+        // de Inputs/Outputs) — vazio = nenhuma expandida. Só uma por vez,
+        // igual a um accordion, pra não poluir o painel com todas abertas.
+        std::string m_ExpandedFunc;
+        char  m_NewParamName[64] = "Param";
+        int   m_NewParamType = 0;
         int   m_SelectedVar = -1;
+        // Último node selecionado no canvas (frame anterior) — usado para
+        // detectar QUANDO a seleção do canvas muda, e nesse momento limpar
+        // m_SelectedVar. Sem isso, uma variável selecionada na lista do
+        // Script Members nunca era liberada, mesmo clicando em nodes no
+        // grafo (bug: seleção da variável "eterna", aba Node travada nela).
+        ed::NodeId m_LastCanvasSelectedNode = {};
         int   m_RenamingVar = -1;
         char  m_RenameBuf[64] = {};
         bool  m_RenameJustStarted = false;

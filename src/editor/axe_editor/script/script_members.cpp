@@ -242,7 +242,7 @@ namespace axe
                     // Node quando a variável é selecionada, não dentro do card.
                     float cardWidth = ImGui::GetContentRegionAvail().x;
                     float headerH = 36.f;
-                    float cardHeight = headerH ;
+                    float cardHeight = headerH;
                     ImVec2 cardMin = ImGui::GetCursorScreenPos();
                     ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
                     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -665,6 +665,210 @@ namespace axe
                 PushUndo("Remove Event");
                 m_ScriptAsset->RemoveCustomEvent(removeEvt);
                 CommitUndo("Remove Event");
+            }
+            ImGui::Spacing();
+        }
+
+        // ── FUNCTIONS (estilo Function da Unreal) ──────────────────────────────
+        auto& funcs = m_ScriptAsset->GetFunctions();
+        const ImVec4 funcCol = ImVec4(0.35f, 0.78f, 0.71f, 1); // verde-azulado, bate com o header do node no canvas
+
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.16f, 0.42f, 0.4f, 1));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.22f, 0.52f, 0.5f, 1));
+        bool funcOpen = ImGui::CollapsingHeader("Functions", ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::PopStyleColor(2);
+
+        if (funcOpen)
+        {
+            ImGui::SetNextItemWidth(avail * 0.62f);
+            ImGui::InputText("##funcname", m_NewFuncName, sizeof(m_NewFuncName));
+            ImGui::SameLine(0, 4);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.38f, 0.35f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.5f, 0.46f, 1));
+            if (ImGui::SmallButton("+ Func"))
+            {
+                std::string name = (m_NewFuncName[0] != 0) ? m_NewFuncName : "NewFunction";
+                PushUndo("Add Function");
+                m_ScriptAsset->AddFunction(name);
+                CommitUndo("Add Function");
+                m_NewFuncName[0] = 0;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Criar nova Function (estilo Unreal — com Inputs/Outputs próprios)");
+            ImGui::PopStyleColor(2);
+            ImGui::Spacing();
+
+            int removeFunc = -1;
+            ImDrawList* dlFn = ImGui::GetWindowDrawList();
+
+            for (int i = 0; i < (int)funcs.size(); i++)
+            {
+                auto& fn = funcs[i];
+                ImGui::PushID(200 + i);
+
+                bool isExpanded = (m_ExpandedFunc == fn.Name);
+                bool isEditing = (m_EditingFunctionIndex == i);
+
+                // ── Card da função (mesmo padrão visual do Event Dispatcher) ──
+                float cardWidth = ImGui::GetContentRegionAvail().x;
+                float cardHeight = 28.f;
+                ImVec2 cardMin = ImGui::GetCursorScreenPos();
+                ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
+                ImVec4 bgTint = isEditing ? ImVec4(funcCol.x, funcCol.y, funcCol.z, 0.16f) : ImVec4(1, 1, 1, 0.04f);
+                dlFn->AddRectFilled(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(bgTint), 6.0f);
+                if (isEditing)
+                    dlFn->AddRect(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(funcCol), 6.0f, 0, 1.2f);
+
+                ImGui::Dummy(ImVec2(8, cardHeight));
+                ImGui::SameLine(0, 0);
+                ImGui::BeginGroup();
+                ImGui::Dummy(ImVec2(0, (cardHeight - 18.f) * 0.5f));
+
+                // Badge "F" — mesma convenção visual do "D" de Event Dispatcher
+                ImVec2 badgeStart = ImGui::GetCursorScreenPos();
+                ImVec2 badgeSz = ImVec2(22.f, 18.f);
+                dlFn->AddRectFilled(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(funcCol.x, funcCol.y, funcCol.z, 0.22f)), 9.0f);
+                dlFn->AddRect(badgeStart, ImVec2(badgeStart.x + badgeSz.x, badgeStart.y + badgeSz.y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(funcCol.x, funcCol.y, funcCol.z, 0.9f)), 9.0f, 0, 1.2f);
+                dlFn->AddText(ImVec2(badgeStart.x + 6.f, badgeStart.y + 1.f),
+                    ImGui::ColorConvertFloat4ToU32(funcCol), "F");
+                ImGui::Dummy(badgeSz);
+                ImGui::SameLine(0, 8);
+
+                std::string subtitle = "(" + std::to_string(fn.Inputs.size()) + " in, " +
+                    std::to_string(fn.Outputs.size()) + " out)";
+                ImGui::TextUnformatted(fn.Name.c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", subtitle.c_str());
+
+                // Arraste pra canvas -> cria um node "Call <Function>" lá
+                // (sempre Call — diferente de Variable, não tem escolha de
+                // Get/Set, então não precisa de popup no drop).
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                {
+                    ImGui::SetDragDropPayload("FUNC_NODE", fn.Name.c_str(), fn.Name.size() + 1);
+                    ImGui::PushStyleColor(ImGuiCol_Text, funcCol);
+                    ImGui::Text("Call %s", fn.Name.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::EndDragDropSource();
+                }
+
+                ImGui::EndGroup();
+
+                // Clique na linha (fora dos botões) abre o grafo da função
+                // pra edição — duplo clique não é necessário aqui porque não
+                // há outra ação de clique único concorrente na linha.
+                ImGui::SameLine();
+                ImVec2 clickZoneMin = ImGui::GetCursorScreenPos();
+                ImVec2 clickZoneMax = ImVec2(cardMax.x - 56.f, cardMax.y);
+                ImGui::SetCursorScreenPos(clickZoneMin);
+                if (ImGui::InvisibleButton("##fnrow", ImVec2(std::max(clickZoneMax.x - clickZoneMin.x, 1.f), cardHeight)))
+                    SwitchToFunctionGraph(&fn);
+
+                // Botão expandir/recolher editor de parâmetros
+                ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 52.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(funcCol.x, funcCol.y, funcCol.z, 0.3f));
+                if (ImGui::SmallButton(isExpanded ? "v" : ">"))
+                    m_ExpandedFunc = isExpanded ? "" : fn.Name;
+                ImGui::PopStyleColor(2);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Editar parametros (Inputs/Outputs)");
+
+                ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                if (ImGui::SmallButton("x")) removeFunc = i;
+                ImGui::PopStyleColor(3);
+
+                ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f));
+
+                // ── Editor de parâmetros (Inputs/Outputs) — accordion ──────────
+                if (isExpanded)
+                {
+                    ImGui::Indent(20.f);
+                    bool sigChanged = false;
+
+                    auto drawParamList = [&](const char* label, std::vector<ScriptFunctionParam>& params)
+                        {
+                            ImGui::TextDisabled("%s", label);
+                            for (int p = 0; p < (int)params.size(); p++)
+                            {
+                                ImGui::PushID(p);
+                                char nameBuf[64];
+                                strncpy(nameBuf, params[p].Name.c_str(), 63); nameBuf[63] = 0;
+                                ImGui::SetNextItemWidth(avail * 0.32f);
+                                if (ImGui::InputText("##pname", nameBuf, sizeof(nameBuf)))
+                                {
+                                    params[p].Name = nameBuf;
+                                    sigChanged = true;
+                                }
+                                ImGui::SameLine(0, 4);
+                                int curType = (int)params[p].Type;
+                                ImGui::SetNextItemWidth(avail * 0.32f);
+                                if (ImGui::Combo("##ptype", &curType, s_VarTypes, 18))
+                                {
+                                    params[p].Type = (ScriptVarType)curType;
+                                    sigChanged = true;
+                                }
+                                ImGui::SameLine(0, 4);
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
+                                if (ImGui::SmallButton("x"))
+                                {
+                                    params.erase(params.begin() + p);
+                                    sigChanged = true;
+                                    ImGui::PopStyleColor();
+                                    ImGui::PopID();
+                                    break; // índices mudaram — recomeça no próximo frame
+                                }
+                                ImGui::PopStyleColor();
+                                ImGui::PopID();
+                            }
+                            if (ImGui::SmallButton((std::string("+ ") + label).c_str()))
+                            {
+                                params.push_back({ "Param", ScriptVarType::Float });
+                                sigChanged = true;
+                            }
+                        };
+
+                    drawParamList("Inputs", fn.Inputs);
+                    ImGui::Spacing();
+                    drawParamList("Outputs", fn.Outputs);
+
+                    if (sigChanged)
+                    {
+                        PushUndo("Edit Function Signature");
+                        RebuildFunctionCallSites(fn);
+                        CommitUndo("Edit Function Signature");
+                    }
+
+                    ImGui::Unindent(20.f);
+                    ImGui::Spacing();
+                }
+
+                ImGui::PopID();
+            }
+            if (removeFunc >= 0)
+            {
+                // Se a função removida é a que está aberta no canvas, volta
+                // pro grafo principal primeiro — senão m_Graph ficaria
+                // apontando pra um ScriptGraph que está prestes a ser destruído.
+                if (m_EditingFunctionIndex == removeFunc)
+                    SwitchToMainGraph();
+                else if (m_EditingFunctionIndex > removeFunc)
+                    // A função sendo editada está DEPOIS da removida na lista —
+                    // erase desloca todo mundo depois dela um índice pra baixo.
+                    // m_Graph continua válido (é um ponteiro pro ScriptGraph em
+                    // si, que não se move), mas o índice precisa acompanhar o
+                    // deslocamento ou passaria a apontar pra função errada na
+                    // lista (destaque visual errado, mesmo com o canvas certo).
+                    m_EditingFunctionIndex--;
+                if (m_ExpandedFunc == funcs[removeFunc].Name)
+                    m_ExpandedFunc.clear();
+                PushUndo("Remove Function");
+                m_ScriptAsset->RemoveFunction(removeFunc);
+                CommitUndo("Remove Function");
             }
             ImGui::Spacing();
         }

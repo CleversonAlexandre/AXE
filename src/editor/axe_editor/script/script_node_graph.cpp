@@ -27,6 +27,7 @@ namespace axe
     static const NE sIn[] = { {"Get Action","GetAction"},{"Get Axis","GetAxis"} };
     static const NE sArr[] = { {"Array Add","ArrayAdd"},{"Array Remove","ArrayRemove"},
         {"Array Get","ArrayGet"},{"Array Length","ArrayLength"},{"Array Clear","ArrayClear"} };
+    static const NE sFlow[] = { {"Sequence","Sequence"},{"For Loop","ForLoop"},{"For Each Loop","ForEachLoop"} };
     static const NE sCast[] = {
         {"To Float","ToFloat"},{"To Int","ToInt"},{"To Bool","ToBool"},
         {"To String","ToString"},{"To Vec3","ToVec3"},{"Break Vec3","BreakVec3"},
@@ -41,11 +42,13 @@ namespace axe
         {"Math",    sMa,   3, {0.3f,0.5f,0.9f,  1}},
         {"Input",   sIn,   2, {0.7f,0.2f,0.6f,  1}},
         {"Array",   sArr,  5, {0.55f,0.45f,0.85f, 1}},
+        {"Flow Control", sFlow, 3, {0.45f,0.6f,0.75f, 1}},
         {"Cast",    sCast, 7, {0.5f,0.8f,0.8f,  1}},
     };
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
-        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.3f,0.75f,1},{0.7f,0.6f,0.95f,1},{0.5f,0.9f,0.9f,1}
+        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.3f,0.75f,1},{0.7f,0.6f,0.95f,1},
+        {0.55f,0.75f,0.95f,1},{0.5f,0.9f,0.9f,1}
     };
 
     struct CompNodeEntry { const char* label; const char* type; };
@@ -393,6 +396,34 @@ namespace axe
                     m_PendingVarType = 0;
                 }
 
+                // Cópia ÚNICA do default da variável para os campos locais do
+                // node, só na criação — não é um binding contínuo (ver bugfix
+                // em script_node_draw.cpp). Sem isso, um Set Variable recém
+                // criado começaria em 0/false/"" mesmo quando a variável já
+                // tem um default diferente, o que seria uma surpresa
+                // desagradável. Depois de criado, o valor é independente.
+                if (m_PendingNodeType == "SetVariable" && m_ScriptAsset)
+                {
+                    for (auto& v : m_ScriptAsset->GetVariables())
+                    {
+                        if (v.Name != node->StringValue) continue;
+                        switch (v.Type)
+                        {
+                        case ScriptVarType::Float: node->FloatValue = v.DefaultFloat; break;
+                        case ScriptVarType::Bool:  node->BoolValue = v.DefaultBool; break;
+                        case ScriptVarType::Int:   node->IntLocalValue = v.DefaultInt; break;
+                        case ScriptVarType::Vec3:
+                            node->Vec3Value[0] = v.DefaultVec3[0];
+                            node->Vec3Value[1] = v.DefaultVec3[1];
+                            node->Vec3Value[2] = v.DefaultVec3[2];
+                            break;
+                        case ScriptVarType::String: node->StringLocalValue = v.DefaultString; break;
+                        default: break;
+                        }
+                        break;
+                    }
+                }
+
                 if (m_PendingPromotePinId != ed::PinId{})
                 {
                     node->IntValue = m_PendingPromoteVarType;
@@ -661,8 +692,9 @@ namespace axe
                     ImGui::CloseCurrentPopup();
                 };
 
-            // Categorias estáticas
-            for (int ci = 0; ci < 6; ci++)
+            // Categorias estáticas (Cast fica fora — índice 7 — porque é
+            // auto-inserida ao conectar pins incompatíveis, não criada à mão)
+            for (int ci = 0; ci < 7; ci++)
             {
                 auto& cat = s_Cats[ci];
                 ImVec4 col = s_CtxCols[ci];
@@ -768,6 +800,24 @@ namespace axe
         if (m_FirstFrame) { ed::NavigateToContent(); m_FirstFrame = false; }
         m_InsideNodeEditorFrame = false;
         ed::End();
+
+        // ── Libera m_SelectedVar quando a seleção do canvas muda ──────────────
+        // Precisa ser feito AQUI (ainda dentro do contexto m_EdCtx, antes do
+        // SetCurrentEditor(nullptr) abaixo) e por EDGE — só quando o node
+        // selecionado é diferente do frame anterior — para não entrar em
+        // conflito com o clique do usuário numa variável da lista do Script
+        // Members (que define m_SelectedVar diretamente em script_members.cpp
+        // e deve continuar valendo até o canvas mudar de novo).
+        {
+            int selCount = ed::GetSelectedObjectCount();
+            ed::NodeId curSel;
+            int got = (selCount > 0) ? ed::GetSelectedNodes(&curSel, 1) : 0;
+            ed::NodeId newSel = (got > 0) ? curSel : ed::NodeId{};
+            if (newSel != ed::NodeId{} && newSel != m_LastCanvasSelectedNode)
+                m_SelectedVar = -1;
+            m_LastCanvasSelectedNode = newSel;
+        }
+
         ed::SetCurrentEditor(nullptr);
 
         // ── Drop target no canvas ─────────────────────────────────────────────
@@ -817,6 +867,34 @@ namespace axe
                 m_PendingNodeType = "SendEvent";
                 m_PendingNodePos = ImGui::GetMousePos();
                 m_PendingNodeStrValue = data.substr(data.find(':') + 1);
+            }
+
+            // FUNC_NODE — arrastar uma Function do Script Members sempre cria
+            // um node "Call <Function>" direto (sem popup de escolha, diferente
+            // de variável — só existe um tipo de node possível pra uma Function).
+            // Funciona igual independente de qual grafo está aberto no momento
+            // (principal ou de outra função) — inclusive permite uma função
+            // chamar a si mesma (recursão) ou chamar outra função.
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("FUNC_NODE"))
+            {
+                std::string funcName = (const char*)payload->Data;
+                if (m_Graph && m_EdCtx && m_ScriptAsset)
+                {
+                    ScriptFunction* func = m_ScriptAsset->FindFunction(funcName);
+                    if (func)
+                    {
+                        ed::SetCurrentEditor(m_EdCtx);
+                        ImVec2 dropPos = ImGui::GetMousePos();
+                        ImVec2 canvasPos = ed::ScreenToCanvas(dropPos);
+                        auto* node = m_Graph->AddCallFunctionNode(*func);
+                        if (node)
+                        {
+                            ed::SetNodePosition(node->ID, canvasPos);
+                            m_ConsoleLines.push_back("[Info] Node created: Call " + funcName);
+                        }
+                        ed::SetCurrentEditor(nullptr);
+                    }
+                }
             }
 
             ImGui::EndDragDropTarget();

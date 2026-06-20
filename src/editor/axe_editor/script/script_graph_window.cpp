@@ -57,6 +57,7 @@ namespace axe
         m_Entity = entity;
         m_Component = comp;
         m_Graph = comp ? comp->Graph.get() : nullptr;
+        m_EditingFunctionIndex = -1; // abrir um novo alvo sempre começa no grafo principal
         m_SourceRegistry = registry;
         m_IsOpen = true;
         m_FirstFrame = true;
@@ -75,6 +76,7 @@ namespace axe
         if (!asset) return;
         m_ScriptAsset = asset;
         m_Graph = asset->GetGraph().get();
+        m_EditingFunctionIndex = -1; // abrir um novo asset sempre começa no grafo principal
         m_Entity = entt::null;
         m_Component = nullptr;
         m_SourceRegistry = nullptr;
@@ -91,10 +93,75 @@ namespace axe
         SyncComponentsToPreview();
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::SwitchToMainGraph()
+    {
+        if (!m_ScriptAsset || m_EditingFunctionIndex < 0) return; // já é o grafo principal
+        SaveNodePositions(); // salva posições do grafo da função antes de saída
+        m_Graph = m_ScriptAsset->GetGraph().get();
+        m_EditingFunctionIndex = -1;
+        m_SelectedVar = -1;
+        m_LastCanvasSelectedNode = {};
+        m_FirstFrame = true; // recentra a câmera no grafo recém-aberto
+    }
+
+    void ScriptGraphWindow::SwitchToFunctionGraph(ScriptFunction* func)
+    {
+        if (!func || !func->Graph || !m_ScriptAsset) return;
+        // Converte o ponteiro (transiente — válido só neste frame, antes de
+        // qualquer Add/RemoveFunction) pro índice estável que de fato fica
+        // guardado entre frames (ver comentário de m_EditingFunctionIndex
+        // no header — um ponteiro guardado sobreviveria a uma realocação do
+        // vector<ScriptFunction> e apontaria pra lixo).
+        auto& funcs = m_ScriptAsset->GetFunctions();
+        int idx = -1;
+        for (int i = 0; i < (int)funcs.size(); i++) if (&funcs[i] == func) { idx = i; break; }
+        if (idx < 0 || m_EditingFunctionIndex == idx) return;
+
+        SaveNodePositions(); // salva posições do grafo anterior antes de saída
+        m_Graph = func->Graph.get();
+        m_EditingFunctionIndex = idx;
+        m_SelectedVar = -1;
+        m_LastCanvasSelectedNode = {};
+        m_FirstFrame = true;
+    }
+
+    void ScriptGraphWindow::RebuildFunctionCallSites(ScriptFunction& func)
+    {
+        if (!func.Graph) return;
+
+        // 1) Function Entry / Return Node — vivem no PRÓPRIO grafo da função
+        for (auto& n : func.Graph->GetNodes())
+            if (n->Name == "Function Entry" || n->Name == "Return Node")
+                func.Graph->RebuildFunctionNodePins(n.get(), func);
+
+        if (!m_ScriptAsset) return;
+
+        // 2) Qualquer node "Call <func.Name>" no grafo PRINCIPAL
+        auto mainGraph = m_ScriptAsset->GetGraph();
+        if (mainGraph)
+            for (auto& n : mainGraph->GetNodes())
+                if (n->Category == ScriptNodeCategory::Function && n->StringValue == func.Name &&
+                    n->Name != "Function Entry" && n->Name != "Return Node")
+                    mainGraph->RebuildFunctionNodePins(n.get(), func);
+
+        // 3) Idem dentro de QUALQUER OUTRA função (cobre recursão e funções
+        //    chamando outras funções)
+        for (auto& other : m_ScriptAsset->GetFunctions())
+        {
+            if (!other.Graph) continue;
+            for (auto& n : other.Graph->GetNodes())
+                if (n->Category == ScriptNodeCategory::Function && n->StringValue == func.Name &&
+                    n->Name != "Function Entry" && n->Name != "Return Node")
+                    other.Graph->RebuildFunctionNodePins(n.get(), func);
+        }
+    }
+
     void ScriptGraphWindow::Close()
     {
         m_IsOpen = false;
         m_Graph = nullptr;
+        m_EditingFunctionIndex = -1;
         m_Component = nullptr;
         m_Entity = entt::null;
         m_SourceRegistry = nullptr;
@@ -343,6 +410,7 @@ namespace axe
         {
             m_ScriptAsset->LoadFromString(m_PendingUndoSnapshot);
             m_Graph = m_ScriptAsset->GetGraph().get();
+            m_EditingFunctionIndex = -1; // undo sempre volta pro grafo principal
             m_PendingUndoSnapshot.clear();
             SyncComponentsToPreview();
         }
@@ -356,6 +424,7 @@ namespace axe
             m_PendingRedoSnapshot.clear();
             m_ScriptAsset->LoadFromString(snap);
             m_Graph = m_ScriptAsset->GetGraph().get();
+            m_EditingFunctionIndex = -1; // redo sempre volta pro grafo principal
             SyncComponentsToPreview();
         }
     }
@@ -416,7 +485,16 @@ namespace axe
         const std::vector<ScriptVariable>* assetVars =
             (m_ScriptAsset && !m_ScriptAsset->GetVariables().empty())
             ? &m_ScriptAsset->GetVariables() : nullptr;
-        std::string code = ScriptGraphCompiler::Generate(*m_Graph, scriptName, assetVars);
+        const std::vector<ScriptFunction>* functions =
+            (m_ScriptAsset && !m_ScriptAsset->GetFunctions().empty())
+            ? &m_ScriptAsset->GetFunctions() : nullptr;
+        // BUGFIX: usa SEMPRE o grafo principal do asset pra compilar, nunca
+        // m_Graph diretamente — se o usuário estiver no meio da edição de uma
+        // Function (m_Graph apontando pro grafo DELA) e clicar "Compilar",
+        // compilar m_Graph geraria a função como se fosse o script inteiro,
+        // ignorando OnStart/OnUpdate/etc. do grafo principal.
+        const ScriptGraph* mainGraph = m_ScriptAsset ? m_ScriptAsset->GetGraph().get() : m_Graph;
+        std::string code = ScriptGraphCompiler::Generate(*mainGraph, scriptName, assetVars, functions);
 
         std::ofstream f(cpp); f << code; f.close();
         m_ConsoleLines.push_back("[Script Editor] .cpp salvo: " + cpp);

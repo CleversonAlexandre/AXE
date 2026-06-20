@@ -6,7 +6,7 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/script/script_graph.hpp"
-#include "axe/input_mapping.hpp"
+#include "axe/input/input_mapping.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
@@ -704,15 +704,56 @@ namespace axe
                                 for (auto& v : m_ScriptAsset->GetVariables())
                                     if (v.Name == node->StringValue) { foundVar = &v; break; }
 
-                                if (foundVar)
-                                {
-                                    DrawVariableDetailsPanel(*foundVar);
-                                }
-                                else
+                                if (!foundVar)
                                 {
                                     ImGui::TextColored({ 0.9f,0.3f,0.3f,1 }, "Variable '%s' not found.", node->StringValue.c_str());
                                     ImGui::TextDisabled("Declare it in Script Members.");
                                     ImGui::Spacing();
+                                }
+                                else if (node->Name == "Set Variable")
+                                {
+                                    // BUGFIX: este painel chamava DrawVariableDetailsPanel
+                                    // aqui, que edita o DEFAULT GLOBAL da variável (mesmo
+                                    // campo lido por todo Get Variable e por qualquer
+                                    // outro Set da mesma variável) — selecionar ESTE Set e
+                                    // digitar um valor aqui mudava silenciosamente o
+                                    // default de TODA a variável em todo lugar, incluindo
+                                    // nodes Get. Igual ao bug já corrigido na caixinha
+                                    // inline do canvas (e usa o mesmo helper agora —
+                                    // DrawSetVariableLocalValueEditor — para não duplicar
+                                    // o switch por tipo em dois arquivos). O default global
+                                    // só deve ser editado selecionando a VARIÁVEL na lista
+                                    // do Script Members, nunca a partir de um node Get/Set.
+                                    ImGui::TextDisabled("Type:");
+                                    ImGui::TextUnformatted(ScriptVarTypeToString(foundVar->Type).c_str());
+                                    ImGui::Spacing();
+                                    ImGui::TextDisabled("Name:");
+                                    ImGui::TextUnformatted(foundVar->Name.c_str());
+                                    ImGui::Spacing();
+                                    ImGui::TextDisabled("Value (apenas deste node):");
+
+                                    bool hasConnection = false;
+                                    for (auto& link : m_Graph->GetLinks())
+                                        for (auto& p : node->Inputs)
+                                            if (p.Name == "Value" && (link.StartPin == p.ID || link.EndPin == p.ID))
+                                            {
+                                                hasConnection = true; break;
+                                            }
+
+                                    if (hasConnection)
+                                        ImGui::TextDisabled("(pino Value conectado — valor vem do link)");
+                                    else
+                                        DrawSetVariableLocalValueEditor(node, foundVar->Type, -1.f);
+                                    ImGui::Spacing();
+                                }
+                                else // Get Variable — sem valor local próprio (Get só lê em
+                                     // runtime), então aqui mostra/edita o default GLOBAL da
+                                     // variável (mesmo comportamento da Unreal: selecionar um
+                                     // node Get nos Details edita o Default Value, idêntico a
+                                     // selecionar a variável na lista My Blueprint — é o MESMO
+                                     // valor por definição, então não há "vazamento" aqui).
+                                {
+                                    DrawVariableDetailsPanel(*foundVar);
                                 }
                             }
                             else if (node->Name == "Get Action" || node->Name == "Get Axis" || node->Name == "Print String")

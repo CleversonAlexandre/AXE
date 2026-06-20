@@ -152,12 +152,67 @@ namespace axe
         ParentIndex = j.value("parent_index", -1);
     }
 
+    // ── ScriptFunction (serialização) ────────────────────────────────────────
+    // Helpers únicos reutilizados nos 4 pontos de serialização do asset
+    // (Save/Load/SaveToString/LoadFromString) — função tem um grafo aninhado
+    // (mais complexo que os campos simples de ScriptVariable), então duplicar
+    // isso 4x à mão seria bem mais arriscado do que o padrão já duplicado
+    // usado pras variáveis.
+    static json SerializeScriptFunction(const ScriptFunction& f)
+    {
+        json jf;
+        jf["name"] = f.Name;
+        json ins = json::array();
+        for (auto& p : f.Inputs) ins.push_back(json{ {"name", p.Name}, {"type", ScriptVarTypeToString(p.Type)} });
+        jf["inputs"] = ins;
+        json outs = json::array();
+        for (auto& p : f.Outputs) outs.push_back(json{ {"name", p.Name}, {"type", ScriptVarTypeToString(p.Type)} });
+        jf["outputs"] = outs;
+        jf["graph"] = f.Graph->Serialize();
+        return jf;
+    }
+
+    static ScriptFunction DeserializeScriptFunction(const json& jf)
+    {
+        ScriptFunction f;
+        f.Name = jf.value("name", "NewFunction");
+        if (jf.contains("inputs") && jf["inputs"].is_array())
+            for (auto& ji : jf["inputs"])
+                f.Inputs.push_back({ ji.value("name", "Param"), ScriptVarTypeFromString(ji.value("type", "Float")) });
+        if (jf.contains("outputs") && jf["outputs"].is_array())
+            for (auto& jo : jf["outputs"])
+                f.Outputs.push_back({ jo.value("name", "Param"), ScriptVarTypeFromString(jo.value("type", "Float")) });
+        f.Graph = std::make_shared<ScriptGraph>();
+        if (jf.contains("graph")) f.Graph->Deserialize(jf["graph"]);
+        return f;
+    }
+
     // ── ScriptAsset ───────────────────────────────────────────────────────────
 
     void ScriptAsset::RemoveComponent(int index)
     {
         if (index >= 0 && index < (int)m_Components.size())
             m_Components.erase(m_Components.begin() + index);
+    }
+
+    ScriptFunction* ScriptAsset::AddFunction(const std::string& name)
+    {
+        ScriptFunction f;
+        f.Name = name;
+        f.Graph = std::make_shared<ScriptGraph>();
+        // Toda função nasce com exatamente um Entry e um Return — não dá pra
+        // adicionar outro de cada pelo catálogo do editor (são auto-geridos),
+        // mantendo o codegen simples: 1 ponto de entrada, 1 ponto de saída.
+        f.Graph->AddNode("FunctionEntry");
+        f.Graph->AddNode("ReturnNode");
+        m_Functions.push_back(std::move(f));
+        return &m_Functions.back();
+    }
+
+    ScriptFunction* ScriptAsset::FindFunction(const std::string& name)
+    {
+        for (auto& f : m_Functions) if (f.Name == name) return &f;
+        return nullptr;
     }
 
     std::string ScriptAsset::SaveToString()
@@ -197,6 +252,10 @@ namespace axe
         json evts = json::array();
         for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
         root["custom_events"] = evts;
+
+        json funcs = json::array();
+        for (auto& f : m_Functions) funcs.push_back(SerializeScriptFunction(f));
+        root["functions"] = funcs;
 
         root["graph"] = m_Graph->Serialize();
         return root.dump();
@@ -258,6 +317,11 @@ namespace axe
             for (auto& je : root["custom_events"])
                 m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
 
+        m_Functions.clear();
+        if (root.contains("functions") && root["functions"].is_array())
+            for (auto& jf : root["functions"])
+                m_Functions.push_back(DeserializeScriptFunction(jf));
+
         m_Graph = std::make_shared<ScriptGraph>();
         if (root.contains("graph")) m_Graph->Deserialize(root["graph"]);
         return true;
@@ -302,6 +366,10 @@ namespace axe
         json evts = json::array();
         for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
         root["custom_events"] = evts;
+
+        json funcs = json::array();
+        for (auto& fn : m_Functions) funcs.push_back(SerializeScriptFunction(fn));
+        root["functions"] = funcs;
 
         root["graph"] = m_Graph->Serialize();
 
@@ -380,6 +448,12 @@ namespace axe
         if (root.contains("custom_events") && root["custom_events"].is_array())
             for (auto& je : root["custom_events"])
                 m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
+
+        // Functions
+        m_Functions.clear();
+        if (root.contains("functions") && root["functions"].is_array())
+            for (auto& jf : root["functions"])
+                m_Functions.push_back(DeserializeScriptFunction(jf));
 
         if (root.contains("graph"))
             m_Graph->Deserialize(root["graph"]);

@@ -234,6 +234,42 @@ namespace axe
         // Parâmetros futuros podem ser adicionados aqui
     };
 
+    // ── Script Function (estilo Function da Unreal) ──────────────────────────
+    // Um parâmetro de entrada ou saída de uma ScriptFunction — só nome + tipo,
+    // sem valor default (diferente de ScriptVariable; parâmetros de função não
+    // têm "default global", o valor vem sempre do Call ou do Return Node).
+    struct ScriptFunctionParam
+    {
+        std::string   Name = "Param";
+        ScriptVarType Type = ScriptVarType::Float;
+    };
+
+    // Cada ScriptFunction tem seu PRÓPRIO ScriptGraph (igual ao grafo principal
+    // do ScriptAsset, só que menor e isolado) — dentro dele vivem exatamente um
+    // node "Function Entry" (expõe Inputs como pins de saída) e um "Return
+    // Node" (expõe Outputs como pins de entrada), criados automaticamente por
+    // ScriptAsset::AddFunction. shared_ptr pelo mesmo motivo do m_Graph do
+    // ScriptAsset: ScriptGraph não é copiável (unique_ptr<ScriptNode> interno).
+    struct ScriptFunction
+    {
+        std::string Name = "NewFunction";
+        std::vector<ScriptFunctionParam> Inputs;
+        std::vector<ScriptFunctionParam> Outputs;
+        // BUGFIX: sem inicializador padrão de propósito. `= std::make_shared
+        // <ScriptGraph>()` aqui exigiria o tipo COMPLETO de ScriptGraph em
+        // QUALQUER .cpp que default-construa um ScriptFunction (mesmo só de
+        // passagem, ex: std::vector<ScriptFunction>::resize/copy) — e este
+        // header só tem um forward declare de ScriptGraph (de propósito,
+        // evita include circular com imgui_node_editor.h). Isso já causou
+        // erro de link real ("no instance of overloaded function
+        // std::make_shared matches the argument list") em arquivos do editor
+        // que não incluíam script_graph.hpp antes de tocar num ScriptFunction.
+        // AddFunction() e DeserializeScriptFunction() (em script_asset.cpp,
+        // que SEMPRE inclui script_graph.hpp) já atribuem isso explicitamente
+        // logo após construir o objeto — não depende deste inicializador.
+        std::shared_ptr<ScriptGraph> Graph;
+    };
+
     // ── Script Asset — arquivo .axescript ────────────────────────────────────
     class AXE_API ScriptAsset
     {
@@ -267,6 +303,17 @@ namespace axe
         void AddCustomEvent(const ScriptCustomEvent& e) { m_CustomEvents.push_back(e); }
         void RemoveCustomEvent(int i) { if (i >= 0 && i < (int)m_CustomEvents.size()) m_CustomEvents.erase(m_CustomEvents.begin() + i); }
 
+        // Functions — cada uma com seu próprio ScriptGraph (ver ScriptFunction)
+        std::vector<ScriptFunction>& GetFunctions() { return m_Functions; }
+        const std::vector<ScriptFunction>& GetFunctions() const { return m_Functions; }
+        // Cria a função, já populando seu Graph com "Function Entry" + "Return
+        // Node" — retorna ponteiro estável (m_Functions usa reserve implícito
+        // do vector; cuidado ao chamar AddFunction com referências antigas
+        // ainda em uso, igual qualquer vector<T>::push_back).
+        ScriptFunction* AddFunction(const std::string& name);
+        void RemoveFunction(int i) { if (i >= 0 && i < (int)m_Functions.size()) m_Functions.erase(m_Functions.begin() + i); }
+        ScriptFunction* FindFunction(const std::string& name);
+
         // Node graph
         std::shared_ptr<ScriptGraph> GetGraph() { return m_Graph; }
 
@@ -291,6 +338,7 @@ namespace axe
         std::vector<ScriptComponentDef> m_Components;
         std::vector<ScriptVariable>     m_Variables;
         std::vector<ScriptCustomEvent>  m_CustomEvents;
+        std::vector<ScriptFunction>     m_Functions;
         std::shared_ptr<ScriptGraph>    m_Graph = std::make_shared<ScriptGraph>();
     };
 

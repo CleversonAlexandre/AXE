@@ -1,6 +1,6 @@
 #include <string>
 #include "axe/input/input.hpp"
-#include "axe/input_mapping.hpp"
+#include "axe/input/input_mapping.hpp"
 #include "axe/axe_window/window.hpp"
 #include "axe/log/log.hpp"
 #include <cstring>

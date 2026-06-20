@@ -15,11 +15,11 @@ namespace axe
             if (outPin.Type != ScriptPinType::Flow) continue;
             if (!outPinName.empty() && outPin.Name != outPinName) continue;
 
-            for (const auto& link : ctx.graph.GetLinks())
+            for (const auto& link : ctx.graph->GetLinks())
             {
                 if (link.StartPin != outPin.ID) continue;
 
-                for (const auto& n : ctx.graph.GetNodes())
+                for (const auto& n : ctx.graph->GetNodes())
                     for (const auto& inPin : n->Inputs)
                         if (inPin.ID == link.EndPin)
                             return n.get();
@@ -31,11 +31,11 @@ namespace axe
     std::pair<const ScriptNode*, const ScriptPin*>
         ScriptGraphCompiler::FindDataSource(const Context& ctx, const ScriptPin& inputPin)
     {
-        for (const auto& link : ctx.graph.GetLinks())
+        for (const auto& link : ctx.graph->GetLinks())
         {
             if (link.EndPin != inputPin.ID) continue;
 
-            for (const auto& n : ctx.graph.GetNodes())
+            for (const auto& n : ctx.graph->GetNodes())
                 for (const auto& outPin : n->Outputs)
                     if (outPin.ID == link.StartPin)
                         return { n.get(), &outPin };
@@ -164,6 +164,54 @@ namespace axe
             }
         }
 
+        // ── Flow Control ─────────────────────────────────────────────────────
+        // Nomes das variáveis locais geradas são derivados do NodeId (único no
+        // grafo), então loops/array iterations distintos nunca colidem mesmo
+        // se aninhados — ver GenerateNode para onde essas variáveis são
+        // declaradas (precisa usar exatamente o mesmo esquema de nome aqui).
+
+        if (nodeName == "For Loop" && srcPin->Name == "Index")
+            return "_forIdx" + std::to_string((int)srcNode->ID.Get());
+
+        if (nodeName == "For Each Loop" && srcNode->IntValue >= 0)
+        {
+            std::string sid = std::to_string((int)srcNode->ID.Get());
+            if (srcPin->Name == "Item")
+                return "_feArr" + sid + "[_feIdx" + sid + "]";
+            if (srcPin->Name == "Array Index")
+                return "(int)_feIdx" + sid;
+        }
+
+        // ── Functions ────────────────────────────────────────────────────────
+
+        if (nodeName == "Function Entry")
+            // Os parâmetros da função são lidos com o MESMO nome usado na
+            // assinatura do método gerado (ver Generate()) — o pin de saída
+            // do Entry e o parâmetro do método compartilham o nome de
+            // propósito, não precisa de variável intermediária.
+            return srcPin->Name;
+
+        if (srcNode->Category == ScriptNodeCategory::Function && nodeName != "Function Entry")
+        {
+            // Call <Function> — variáveis locais de resultado declaradas no
+            // GenerateNode deste mesmo node (ver lá o esquema de nomes
+            // _callResN / _callResN_0, _callResN_1, ...). Se a função tem só
+            // 1 output, não há índice; com 2+, cada pin de saída lê a sua
+            // variável pela posição na lista de Outputs.
+            const ScriptFunction* func = nullptr;
+            if (ctx.functions)
+                for (auto& f : *ctx.functions) if (f.Name == srcNode->StringValue) { func = &f; break; }
+            if (func)
+            {
+                std::string sid = std::to_string((int)srcNode->ID.Get());
+                if (func->Outputs.size() == 1)
+                    return "_callRes" + sid;
+                for (size_t i = 0; i < func->Outputs.size(); i++)
+                    if (func->Outputs[i].Name == srcPin->Name)
+                        return "_callRes" + sid + "_" + std::to_string((int)i);
+            }
+        }
+
         // ── Math ──────────────────────────────────────────────────────────────
 
         if (nodeName == "Add")
@@ -255,10 +303,46 @@ namespace axe
         }
         if (nodeName == "To String")
         {
+            // BUGFIX: antes gerava sempre "std::to_string(v)", o que só
+            // compila para Float/Int/Bool. IsWildcardCastCompatible() declara
+            // explicitamente "ToString aceita qualquer tipo de dado" — a UI
+            // deixa conectar Vec2/Vec3/Vec4/Quat/String no pin Wildcard, mas
+            // std::to_string não tem overload pra esses tipos, então o código
+            // gerado nem compilava (erro só apareceria ao clicar Compilar,
+            // bem depois de o grafo "parecer" válido no editor). Agora o tipo
+            // do pin de ORIGEM (não o resolvido por valor) decide a conversão.
             std::string v = "0";
+            ScriptPinType srcType = ScriptPinType::Float;
             for (const auto& inp : srcNode->Inputs)
-                if (inp.Name == "Value") { v = ResolvePin(ctx, inp); break; }
-            return "std::to_string(" + v + ")";
+                if (inp.Name == "Value")
+                {
+                    auto [dataSrcNode, dataSrcPin] = FindDataSource(ctx, inp);
+                    if (dataSrcPin) srcType = dataSrcPin->Type;
+                    v = ResolvePin(ctx, inp);
+                    break;
+                }
+
+            switch (srcType)
+            {
+            case ScriptPinType::Float:
+            case ScriptPinType::Int:
+            case ScriptPinType::Bool:
+                return "std::to_string(" + v + ")";
+            case ScriptPinType::String:
+                return v; // já é std::string — nada a converter
+            case ScriptPinType::Vec2:
+                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \")\"; }())";
+            case ScriptPinType::Vec3:
+                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \")\"; }())";
+            case ScriptPinType::Vec4:
+            case ScriptPinType::Quat:
+                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \", \" + std::to_string(_v.w) + \")\"; }())";
+            default:
+                // Object/Entity/qualquer Array — sem representação textual
+                // segura e genérica (precisaria de um loop de join para
+                // arrays); evita gerar código que não compila.
+                return "std::string(\"<sem conversao para string>\")";
+            }
         }
         if (nodeName == "To Vec3")
         {
@@ -366,7 +450,7 @@ namespace axe
                 {
                     std::string v = ResolvePin(ctx, inp);
                     bool connected = false;
-                    for (const auto& link : ctx.graph.GetLinks())
+                    for (const auto& link : ctx.graph->GetLinks())
                         if (link.EndPin == inp.ID) { connected = true; break; }
                     spd = (connected || v != "0.000000f") ? v : "5.0f";
                 }
@@ -438,7 +522,7 @@ namespace axe
                     // Usa default 5.0f se o pin não está conectado E o valor é zero
                     // (pins antigos no disco têm DefaultFloat=0 antes do fix de serialização)
                     bool isConnected = false;
-                    for (const auto& link : ctx.graph.GetLinks())
+                    for (const auto& link : ctx.graph->GetLinks())
                         if (link.EndPin == inp.ID) { isConnected = true; break; }
                     spd = (isConnected || v != "0.000000f") ? v : "5.0f";
                 }
@@ -453,7 +537,7 @@ namespace axe
                 {
                     std::string v = ResolvePin(ctx, inp);
                     bool isConnected = false;
-                    for (const auto& link : ctx.graph.GetLinks())
+                    for (const auto& link : ctx.graph->GetLinks())
                         if (link.EndPin == inp.ID) { isConnected = true; break; }
                     force = (isConnected || v != "0.000000f") ? v : "5.0f";
                 }
@@ -477,7 +561,7 @@ namespace axe
         {
             // Verifica se o pin Message está conectado
             bool connected = false;
-            for (const auto& link : ctx.graph.GetLinks())
+            for (const auto& link : ctx.graph->GetLinks())
                 for (const auto& inp : node->Inputs)
                     if (inp.Name == "Message" && link.EndPin == inp.ID)
                     {
@@ -527,7 +611,7 @@ namespace axe
             {
                 // Verifica se o pin Value está conectado
                 bool connected = false;
-                for (const auto& link : ctx.graph.GetLinks())
+                for (const auto& link : ctx.graph->GetLinks())
                     for (const auto& inp : node->Inputs)
                         if (inp.Name == "Value" && link.EndPin == inp.ID)
                         {
@@ -559,7 +643,13 @@ namespace axe
                             std::to_string(node->Vec3Value[2]) + "f)";
                         break;
                     case ScriptVarType::String:
-                        val = "std::string(\"" + node->StringValue + "\")";
+                        // BUGFIX: antes lia node->StringValue, que é o NOME
+                        // da variável (usado para montar varName acima) — ou
+                        // seja, um Set Variable de String desconectado gerava
+                        // "m_Foo = std::string(\"Foo\");" (a variável recebendo
+                        // o próprio nome). StringLocalValue é o campo dedicado
+                        // ao valor local, nunca compartilhado com o nome.
+                        val = "std::string(\"" + node->StringLocalValue + "\")";
                         break;
                     default: // Float e outros
                         val = std::to_string(node->FloatValue) + "f";
@@ -711,6 +801,186 @@ namespace axe
             }
         }
 
+        // ── Flow Control ─────────────────────────────────────────────────────
+
+        else if (name == "Sequence")
+        {
+            // Sem um "Flow Out" único — executa cada pin "Then N" em ordem,
+            // cada um isolado em seu próprio bloco para não misturar variáveis
+            // locais que cada ramo possa declarar.
+            int pinCount = node->IntValue >= 2 ? node->IntValue : (int)node->Outputs.size();
+            for (int i = 0; i < pinCount; i++)
+            {
+                auto* next = FindNextFlowNode(ctx, node, "Then " + std::to_string(i));
+                if (!next) continue;
+                ctx.Line("{");
+                ctx.indent++;
+                GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                ctx.indent--;
+                ctx.Line("}");
+            }
+            return; // Sequence gerencia seus próprios flows
+        }
+        else if (name == "For Loop")
+        {
+            std::string first = "0", last = "10";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "First Index") first = ResolvePin(ctx, inp);
+                if (inp.Name == "Last Index")  last = ResolvePin(ctx, inp);
+            }
+            // Nome derivado do NodeId — ver comentário em ResolvePin sobre
+            // como o pin "Index" lê essa mesma variável.
+            std::string idxVar = "_forIdx" + std::to_string((int)node->ID.Get());
+
+            ctx.Line("for (int " + idxVar + " = " + first + "; " + idxVar + " <= " + last + "; " + idxVar + "++)");
+            ctx.Line("{");
+            ctx.indent++;
+            auto* body = FindNextFlowNode(ctx, node, "Loop Body");
+            GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("}");
+
+            auto* completed = FindNextFlowNode(ctx, node, "Completed");
+            if (completed) GenerateNode(ctx, completed, deltaTimeVar, depth + 1);
+            return; // sem "Flow Out" genérico — Completed já foi seguido acima
+        }
+        else if (name == "For Each Loop")
+        {
+            // node->IntValue == -1 = pin Array nunca conectado a um array real
+            // ainda — sem tipo conhecido, não há nada seguro a gerar (mesma
+            // convenção dos nodes genéricos de Array).
+            if (node->IntValue >= 0)
+            {
+                std::string arrayExpr;
+                for (const auto& inp : node->Inputs)
+                    if (inp.Name == "Array") arrayExpr = ResolvePin(ctx, inp);
+
+                if (!arrayExpr.empty())
+                {
+                    std::string sid = std::to_string((int)node->ID.Get());
+                    std::string arrVar = "_feArr" + sid;
+                    std::string idxVar = "_feIdx" + sid;
+
+                    ctx.Line("{");
+                    ctx.indent++;
+                    ctx.Line("auto& " + arrVar + " = " + arrayExpr + ";");
+                    ctx.Line("for (size_t " + idxVar + " = 0; " + idxVar + " < " + arrVar + ".size(); " + idxVar + "++)");
+                    ctx.Line("{");
+                    ctx.indent++;
+                    auto* body = FindNextFlowNode(ctx, node, "Loop Body");
+                    GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+                    ctx.indent--;
+                    ctx.Line("}");
+                    ctx.indent--;
+                    ctx.Line("}");
+
+                    auto* completed = FindNextFlowNode(ctx, node, "Completed");
+                    if (completed) GenerateNode(ctx, completed, deltaTimeVar, depth + 1);
+                }
+            }
+            return; // sem "Flow Out" genérico — mesmo padrão do Branch/For Loop
+        }
+
+        // ── Functions ────────────────────────────────────────────────────────
+        else if (name == "Return Node")
+        {
+            // Terminal — sem "Flow Out". ctx.currentFunction é setado por
+            // GenerateFunctionBody antes de iniciar o traversal; sem ele não
+            // dá pra saber os Outputs esperados (não devia acontecer no uso
+            // normal, já que Return Node só existe dentro do grafo de uma
+            // função, mas o guard evita crash em grafo corrompido/editado à mão).
+            if (ctx.currentFunction)
+            {
+                auto& outs = ctx.currentFunction->Outputs;
+                if (outs.size() == 1)
+                {
+                    std::string expr = "{}";
+                    for (auto& inp : node->Inputs)
+                        if (inp.Name == outs[0].Name) { expr = ResolvePin(ctx, inp); break; }
+                    ctx.Line("return " + expr + ";");
+                }
+                else if (outs.size() >= 2)
+                {
+                    for (auto& outParam : outs)
+                    {
+                        std::string expr = "{}";
+                        for (auto& inp : node->Inputs)
+                            if (inp.Name == outParam.Name) { expr = ResolvePin(ctx, inp); break; }
+                        ctx.Line(outParam.Name + " = " + expr + ";");
+                    }
+                    ctx.Line("return;");
+                }
+                else
+                {
+                    ctx.Line("return;");
+                }
+            }
+            return;
+        }
+        else if (node->Category == ScriptNodeCategory::Function && name != "Function Entry")
+        {
+            // Call <Function> — node->StringValue é o NOME da função chamada
+            // (mesma convenção de Get/Set Variable usando StringValue como
+            // chave de lookup). Outputs.size() decide a forma da chamada:
+            //   0 outputs -> statement puro:           Func(args);
+            //   1 output  -> variável local de resultado: T _callResN = Func(args);
+            //   2+ outputs-> out-params por referência:   Func(args, &out0, &out1, ...);
+            // (ver ResolvePin para como os pins de saída leem essas variáveis)
+            const ScriptFunction* func = nullptr;
+            if (ctx.functions)
+                for (auto& f : *ctx.functions) if (f.Name == node->StringValue) { func = &f; break; }
+
+            if (func)
+            {
+                std::string sid = std::to_string((int)node->ID.Get());
+                std::vector<std::string> argExprs;
+                for (auto& param : func->Inputs)
+                {
+                    std::string expr = "{}";
+                    for (auto& inp : node->Inputs)
+                        if (inp.Name == param.Name) { expr = ResolvePin(ctx, inp); break; }
+                    argExprs.push_back(expr);
+                }
+
+                std::string call = func->Name + "(";
+                for (size_t i = 0; i < argExprs.size(); i++)
+                {
+                    if (i > 0) call += ", ";
+                    call += argExprs[i];
+                }
+
+                if (func->Outputs.empty())
+                {
+                    call += ");";
+                    ctx.Line(call);
+                }
+                else if (func->Outputs.size() == 1)
+                {
+                    call += ");";
+                    ctx.Line(CppTypeNameFor(func->Outputs[0].Type) + " _callRes" + sid + " = " + call);
+                }
+                else
+                {
+                    for (size_t i = 0; i < func->Outputs.size(); i++)
+                        ctx.Line(CppTypeNameFor(func->Outputs[i].Type) + " _callRes" + sid + "_" + std::to_string((int)i) + ";");
+                    for (size_t i = 0; i < func->Outputs.size(); i++)
+                    {
+                        if (!argExprs.empty() || i > 0) call += ", ";
+                        call += "_callRes" + sid + "_" + std::to_string((int)i);
+                    }
+                    call += ");";
+                    ctx.Line(call);
+                }
+            }
+            else
+            {
+                ctx.Line("// AVISO: função '" + node->StringValue + "' nao encontrada (removida?)");
+            }
+            // Segue o "Flow Out" normalmente — Call tem o pin padrão, igual
+            // qualquer node de Action (cai no bloco genérico no fim da função).
+        }
+
         // ── Nodes puramente de leitura de dados (sem Flow Out) ────────────────
         // Get Transform / Get Position / Get Rigidbody / Get Collider /
         // Get Character Ctrl não emitem código de ação — são resolvidos via
@@ -740,14 +1010,93 @@ namespace axe
         GenerateNode(ctx, next, deltaTimeVar, 0);
     }
 
+    void ScriptGraphCompiler::GenerateFunctionBody(Context& ctx, const ScriptFunction& func)
+    {
+        if (!func.Graph)
+        {
+            ctx.Line("// ERRO: ScriptFunction '" + func.Name + "' sem Graph valido");
+            if (func.Outputs.size() == 1) ctx.Line("return {};");
+            return;
+        }
+
+        // Cada ScriptFunction tem seu PRÓPRIO ScriptGraph — troca ctx.graph
+        // temporariamente (e restaura no fim, mesmo nos caminhos de erro)
+        // porque qualquer ResolvePin/FindDataSource/FindNextFlowNode chamado
+        // durante a geração deste corpo precisa buscar nodes/links DESTE
+        // grafo, não do grafo principal nem do de outra função.
+        const ScriptGraph* prevGraph = ctx.graph;
+        const ScriptFunction* prevFunction = ctx.currentFunction;
+        ctx.graph = func.Graph.get();
+        ctx.currentFunction = &func;
+
+        const ScriptNode* entry = nullptr;
+        for (auto& n : ctx.graph->GetNodes())
+            if (n->Name == "Function Entry") { entry = n.get(); break; }
+
+        if (!entry)
+        {
+            ctx.Line("// ERRO: 'Function Entry' nao encontrado no grafo desta funcao");
+        }
+        else
+        {
+            auto* next = FindNextFlowNode(ctx, entry);
+            if (next)
+                GenerateNode(ctx, next, "", 0);
+            else
+            {
+                // Corpo vazio — sem isso, uma função com 1 output (tipo de
+                // retorno != void) geraria um método sem nenhum "return",
+                // que nem compila. Não tenta resolver o caso geral de "nem
+                // todo caminho do flow retorna" (precisaria de análise de
+                // fluxo no grafo) — só cobre o caso trivial de nada conectado.
+                ctx.Line("// nenhuma ação conectada");
+                if (func.Outputs.size() == 1)
+                    ctx.Line("return {};");
+            }
+        }
+
+        ctx.graph = prevGraph;
+        ctx.currentFunction = prevFunction;
+    }
+
     // ─── Geração principal ────────────────────────────────────────────────────
+
+    std::string ScriptGraphCompiler::CppTypeNameFor(ScriptVarType t)
+    {
+        switch (t)
+        {
+        case ScriptVarType::Float:      return "float";
+        case ScriptVarType::Bool:       return "bool";
+        case ScriptVarType::Int:        return "int";
+        case ScriptVarType::Vec3:       return "glm::vec3";
+        case ScriptVarType::Vec2:       return "glm::vec2";
+        case ScriptVarType::Vec4:       return "glm::vec4";
+        case ScriptVarType::Quat:       return "glm::quat";
+        case ScriptVarType::String:     return "std::string";
+            // Entity guarda o NOME como string, resolvido em runtime via
+            // FindByName — mesmo padrão usado pra variáveis Entity comuns.
+        case ScriptVarType::Entity:     return "std::string";
+        case ScriptVarType::FloatArray:  return "std::vector<float>";
+        case ScriptVarType::BoolArray:   return "std::vector<bool>";
+        case ScriptVarType::IntArray:    return "std::vector<int>";
+        case ScriptVarType::Vec3Array:   return "std::vector<glm::vec3>";
+        case ScriptVarType::StringArray: return "std::vector<std::string>";
+        case ScriptVarType::Vec2Array:   return "std::vector<glm::vec2>";
+        case ScriptVarType::Vec4Array:   return "std::vector<glm::vec4>";
+        case ScriptVarType::QuatArray:   return "std::vector<glm::quat>";
+        case ScriptVarType::EntityArray: return "std::vector<std::string>";
+        default:                         return "float";
+        }
+    }
 
     std::string ScriptGraphCompiler::Generate(const ScriptGraph& graph,
         const std::string& scriptName,
-        const std::vector<ScriptVariable>* assetVars)
+        const std::vector<ScriptVariable>* assetVars,
+        const std::vector<ScriptFunction>* functions)
     {
-        Context ctx{ graph };
+        Context ctx{ &graph };
         ctx.assetVars = assetVars;
+        ctx.functions = functions;
 
         // Coleta variáveis do ScriptAsset (tipadas) — preferido sobre inferência do grafo
         // As variáveis do grafo (Get/Set Variable) são geradas como float por fallback
@@ -776,90 +1125,72 @@ namespace axe
                 ctx.code += "    // Variables\n";
                 for (auto& v : *assetVars)
                 {
-                    std::string typeName, defaultVal;
+                    std::string typeName = CppTypeNameFor(v.Type);
+                    std::string defaultVal;
                     switch (v.Type)
                     {
                     case ScriptVarType::Float:
-                        typeName = "float";
                         defaultVal = std::to_string(v.DefaultFloat) + "f";
                         break;
                     case ScriptVarType::Bool:
-                        typeName = "bool";
                         defaultVal = v.DefaultBool ? "true" : "false";
                         break;
                     case ScriptVarType::Int:
-                        typeName = "int";
                         defaultVal = std::to_string(v.DefaultInt);
                         break;
                     case ScriptVarType::Vec3:
-                        typeName = "glm::vec3";
                         defaultVal = "glm::vec3(" +
                             std::to_string(v.DefaultVec3[0]) + "f," +
                             std::to_string(v.DefaultVec3[1]) + "f," +
                             std::to_string(v.DefaultVec3[2]) + "f)";
                         break;
                     case ScriptVarType::String:
-                        typeName = "std::string";
                         defaultVal = "\"" + v.DefaultString + "\"";
                         break;
                     case ScriptVarType::Vec2:
-                        typeName = "glm::vec2";
                         defaultVal = "glm::vec2(0.0f, 0.0f)";
                         break;
                     case ScriptVarType::Vec4:
-                        typeName = "glm::vec4";
                         defaultVal = "glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)";
                         break;
                     case ScriptVarType::Quat:
-                        typeName = "glm::quat";
                         defaultVal = "glm::quat(1.0f, 0.0f, 0.0f, 0.0f)";  // identity (w,x,y,z)
                         break;
                     case ScriptVarType::Entity:
                         // Guarda o nome da entity como string; resolvido em runtime via FindByName
-                        typeName = "std::string";
                         defaultVal = "\"" + v.DefaultString + "\"";
                         break;
                     case ScriptVarType::FloatArray:
-                        typeName = "std::vector<float>";
                         defaultVal = "std::vector<float>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::BoolArray:
-                        typeName = "std::vector<bool>";
                         defaultVal = "std::vector<bool>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::IntArray:
-                        typeName = "std::vector<int>";
                         defaultVal = "std::vector<int>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::Vec3Array:
-                        typeName = "std::vector<glm::vec3>";
                         defaultVal = "std::vector<glm::vec3>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::StringArray:
-                        typeName = "std::vector<std::string>";
                         defaultVal = "std::vector<std::string>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::Vec2Array:
-                        typeName = "std::vector<glm::vec2>";
                         defaultVal = "std::vector<glm::vec2>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::Vec4Array:
-                        typeName = "std::vector<glm::vec4>";
                         defaultVal = "std::vector<glm::vec4>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::QuatArray:
-                        typeName = "std::vector<glm::quat>";
                         defaultVal = "std::vector<glm::quat>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     case ScriptVarType::EntityArray:
                         // Cada elemento é o NOME da entity (resolvido em runtime via
                         // FindByName), mesmo padrão usado para Entity escalar — evita
                         // guardar entt::entity crus que ficariam inválidos entre cenas.
-                        typeName = "std::vector<std::string>";
                         defaultVal = "std::vector<std::string>(" + std::to_string(v.DefaultArraySize) + ")";
                         break;
                     default:
-                        typeName = "float";
                         defaultVal = "0.0f";
                         break;
                     }
@@ -955,6 +1286,40 @@ namespace axe
                     GenerateEventBody(ctx, node.get(), "");
             ctx.eventName = "";
             ctx.code += "    }\n\n";
+        }
+
+        // ── Functions (estilo Function da Unreal) ──────────────────────────────
+        // Cada ScriptFunction vira um método de verdade na classe — Call
+        // nodes em QUALQUER grafo (principal ou de outra função, recursão
+        // inclusive) já funcionam sem nenhum cuidado extra de declaração:
+        // métodos de uma mesma classe C++ podem se chamar entre si
+        // independente da ordem textual, então não precisa de forward decl.
+        if (functions && !functions->empty())
+        {
+            ctx.code += "    // Functions\n";
+            for (const auto& func : *functions)
+            {
+                std::string sig;
+                if (func.Outputs.size() == 1) sig = CppTypeNameFor(func.Outputs[0].Type) + " ";
+                else sig = "void "; // 0 outputs, ou 2+ (saem por referência)
+
+                sig += func.Name + "(";
+                std::vector<std::string> params;
+                for (auto& in : func.Inputs) params.push_back(CppTypeNameFor(in.Type) + " " + in.Name);
+                if (func.Outputs.size() >= 2)
+                    for (auto& out : func.Outputs) params.push_back(CppTypeNameFor(out.Type) + "& " + out.Name);
+                for (size_t i = 0; i < params.size(); i++)
+                {
+                    if (i > 0) sig += ", ";
+                    sig += params[i];
+                }
+                sig += ")";
+
+                ctx.code += "    " + sig + "\n    {\n";
+                ctx.indent = 2;
+                GenerateFunctionBody(ctx, func);
+                ctx.code += "    }\n\n";
+            }
         }
 
         // ── Factory function ──────────────────────────────────────────────────

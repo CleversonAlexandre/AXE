@@ -15,6 +15,8 @@ namespace axe
         case ScriptNodeCategory::Math:   return ImColor(40, 80, 160);  // azul
         case ScriptNodeCategory::Input:    return ImColor(140, 40, 120);  // rosa
         case ScriptNodeCategory::Array:    return ImColor(110, 90, 180);  // roxo claro
+        case ScriptNodeCategory::FlowControl: return ImColor(70, 100, 135); // azul acinzentado
+        case ScriptNodeCategory::Function: return ImColor(40, 130, 120);  // verde-azulado
         case ScriptNodeCategory::Variable: return ImColor(180, 60, 140);  // pink base
         case ScriptNodeCategory::Print:    return ImColor(180, 60, 130);  // rosa
         default:                         return ImColor(80, 80, 80);
@@ -282,6 +284,69 @@ namespace axe
             return node;
         }
 
+        // ── FLOW CONTROL ── (Sequence/For Loop/For Each Loop — cada um gerencia
+        // seus próprios pins de Flow nomeados, sem um "Flow Out" genérico;
+        // ver ScriptGraphCompiler::GenerateNode para a geração de código)
+        if (t == "Sequence")
+        {
+            auto node = makeNode(baseId, "Sequence", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            // Começa com 2 pins "Then" — usuário pode adicionar/remover via
+            // botões +/- no node (RebuildSequencePins), igual ao node Sequence
+            // da Unreal.
+            node->Outputs.emplace_back(m_NextId++, "Then 0", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Then 1", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = 2; // espelha o número atual de pins "Then"
+            return node;
+        }
+        if (t == "ForLoop")
+        {
+            auto node = makeNode(baseId, "For Loop", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "First Index", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Last Index", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.back().DefaultInt = 10; // intervalo inicial razoável: 0..10 inclusive
+            node->Outputs.emplace_back(m_NextId++, "Loop Body", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Index", ScriptPinType::Int, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ForEachLoop")
+        {
+            auto node = makeNode(baseId, "For Each Loop", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            // Pin "Array" começa Wildcard e fixa no tipo concreto assim que
+            // conectado — mesmo mecanismo dos nodes genéricos de Array (pin
+            // nomeado "Array"/"Item" reaproveita RebuildArrayNodePins e a
+            // lógica de aceite de link em script_node_graph.cpp sem precisar
+            // de nenhum código adicional lá).
+            node->Inputs.emplace_back(m_NextId++, "Array", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Loop Body", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Item", ScriptPinType::Wildcard, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Array Index", ScriptPinType::Int, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = -1; // -1 = tipo de array ainda desconhecido (nenhuma conexão ainda)
+            return node;
+        }
+
+        // ── FUNCTIONS ── (Function Entry/Return Node nascem sem pins de
+        // parâmetro — RebuildFunctionNodePins os preenche conforme a
+        // assinatura da ScriptFunction. Call nodes não passam por aqui, ver
+        // ScriptGraph::AddCallFunctionNode — o nome da função é dinâmico,
+        // não dá pra ter um "if (t == ...)" fixo por função.)
+        if (t == "FunctionEntry")
+        {
+            auto node = makeNode(baseId, "Function Entry", ScriptNodeCategory::Function);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ReturnNode")
+        {
+            auto node = makeNode(baseId, "Return Node", ScriptNodeCategory::Function);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            return node;
+        }
+
         // ── COMPONENTES — nodes gerados dinamicamente pelo ScriptAsset ──
         if (t == "GetTransform")
         {
@@ -422,8 +487,6 @@ namespace axe
             return node;
         }
 
-        AXE_CORE_WARN("ScriptGraph: tipo de node desconhecido '{}'", type);
-
         // ── Cast nodes ────────────────────────────────────────────────────────
         if (t == "ToFloat")
         {
@@ -479,6 +542,15 @@ namespace axe
             return node;
         }
 
+        // BUGFIX: este warning estava no MEIO da cadeia de ifs (antes da seção
+        // de Cast nodes), disparando uma mensagem falsa de "tipo desconhecido"
+        // para TODO node de Cast (ToFloat/ToInt/ToBool/ToString/ToVec3/
+        // BreakVec3/FloatToVec3) criado — e cast nodes são inseridos
+        // automaticamente o tempo todo, ao conectar pins incompatíveis, então
+        // isso poluía o Script Console com warnings falsos numa operação
+        // normal e frequente. Só dispara aqui agora, quando o tipo de fato
+        // não bateu com NENHUM if acima (logo antes do return nullptr real).
+        AXE_CORE_WARN("ScriptGraph: tipo de node desconhecido '{}'", type);
         return nullptr;
     }
 
@@ -638,6 +710,125 @@ namespace axe
             node->Name, ScriptVarTypeToString(arrayElementType));
     }
 
+    void ScriptGraph::RebuildSequencePins(ScriptNode* node, int pinCount)
+    {
+        if (!node) return;
+        if (pinCount < 2) pinCount = 2;
+        if (pinCount > 8) pinCount = 8;
+
+        int current = (int)node->Outputs.size();
+        if (current == pinCount) { node->IntValue = pinCount; return; } // idempotente
+
+        if (pinCount < current)
+        {
+            // Remove pins "Then" do fim para o início, e qualquer link que
+            // apontava para eles — mesmo cuidado de RebuildAxisOutputPins:
+            // remover o pin sem remover o link primeiro deixaria o link
+            // "pendurado", referenciando um PinId que não existe mais.
+            for (int i = current - 1; i >= pinCount; i--)
+            {
+                auto& pin = node->Outputs[i];
+                m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                    [&](const ScriptLink& l) { return l.StartPin == pin.ID || l.EndPin == pin.ID; }),
+                    m_Links.end());
+            }
+            node->Outputs.erase(node->Outputs.begin() + pinCount, node->Outputs.end());
+        }
+        else
+        {
+            // Adiciona novos pins "Then N" no final — pins (e links) já
+            // existentes ficam intactos, diferente de RebuildAxisOutputPins
+            // que sempre limpa tudo (lá o número de pins está sempre 1:1 com
+            // o AxisValueType, aqui o usuário controla incrementalmente).
+            for (int i = current; i < pinCount; i++)
+            {
+                std::string name = "Then " + std::to_string(i);
+                node->Outputs.emplace_back(m_NextId++, name.c_str(), ScriptPinType::Flow, ed::PinKind::Output);
+            }
+        }
+
+        node->IntValue = pinCount;
+
+        AXE_CORE_INFO("ScriptGraph: Sequence reconstruído para {} pins 'Then'", pinCount);
+    }
+
+    void ScriptGraph::RebuildFunctionNodePins(ScriptNode* node, const ScriptFunction& func)
+    {
+        if (!node) return;
+
+        bool isEntry = (node->Name == "Function Entry");
+        bool isReturn = (node->Name == "Return Node");
+
+        // Sincroniza um vetor de pins (Inputs OU Outputs) com a lista de
+        // parâmetros atual. O índice 0 é sempre o pin fixo de Flow (In ou
+        // Out, conforme o caso) e nunca é tocado aqui. Pins de parâmetro são
+        // casados por NOME — se o nome não mudou, o pin (e qualquer link
+        // nele) é preservado mesmo que o TIPO tenha mudado (só atualiza
+        // Type); renomear um parâmetro é tratado como remover+adicionar
+        // (perde o link antigo — mesma limitação que renomear uma variável).
+        auto syncParams = [&](std::vector<ScriptPin>& pins,
+            const std::vector<ScriptFunctionParam>& params, ed::PinKind kind)
+            {
+                const size_t fixed = 1; // Flow In/Out, sempre no índice 0
+
+                // Remove pins cujo nome saiu da assinatura (e os links deles)
+                for (size_t i = pins.size(); i-- > fixed; )
+                {
+                    bool stillExists = false;
+                    for (auto& p : params) if (p.Name == pins[i].Name) { stillExists = true; break; }
+                    if (!stillExists)
+                    {
+                        auto& pin = pins[i];
+                        m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                            [&](const ScriptLink& l) { return l.StartPin == pin.ID || l.EndPin == pin.ID; }),
+                            m_Links.end());
+                        pins.erase(pins.begin() + i);
+                    }
+                }
+
+                // Reordena/atualiza pra bater com a ordem atual dos parâmetros
+                std::vector<ScriptPin> existing(pins.begin() + fixed, pins.end());
+                pins.erase(pins.begin() + fixed, pins.end());
+                for (auto& param : params)
+                {
+                    ScriptPinType pinType = ScriptVarTypeToPinType(param.Type);
+                    bool found = false;
+                    for (auto& old : existing)
+                        if (old.Name == param.Name) { old.Type = pinType; pins.push_back(old); found = true; break; }
+                    if (!found)
+                        pins.emplace_back(m_NextId++, param.Name.c_str(), pinType, kind);
+                }
+            };
+
+        if (isEntry)
+            syncParams(node->Outputs, func.Inputs, ed::PinKind::Output);
+        else if (isReturn)
+            syncParams(node->Inputs, func.Outputs, ed::PinKind::Input);
+        else // Call <Function> — tem os dois lados
+        {
+            syncParams(node->Inputs, func.Inputs, ed::PinKind::Input);
+            syncParams(node->Outputs, func.Outputs, ed::PinKind::Output);
+        }
+
+        AXE_CORE_INFO("ScriptGraph: pins de '{}' reconstruídos pra assinatura de '{}'",
+            node->Name, func.Name);
+    }
+
+    ScriptNode* ScriptGraph::AddCallFunctionNode(const ScriptFunction& func)
+    {
+        int id = m_NextId++;
+        auto node = std::make_unique<ScriptNode>(id, ("Call " + func.Name).c_str(), ScriptNodeCategory::Function);
+        node->StringValue = func.Name; // chave de lookup — qual ScriptFunction este node chama
+        node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+        node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        RebuildFunctionNodePins(ptr, func);
+        AXE_CORE_INFO("ScriptGraph: node 'Call {}' adicionado (id={})", func.Name, id);
+        return ptr;
+    }
+
     bool ScriptGraph::IsPinLinked(ed::PinId id) const
     {
         for (const auto& link : m_Links)
@@ -665,6 +856,7 @@ namespace axe
             jn["int_local"] = node->IntLocalValue;
             jn["vec3_val"] = { node->Vec3Value[0], node->Vec3Value[1], node->Vec3Value[2] };
             jn["int_val"] = node->IntValue;
+            jn["str_local"] = node->StringLocalValue;
 
             for (const auto& pin : node->Inputs)
                 jn["inputs"].push_back({
@@ -720,6 +912,7 @@ namespace axe
                 node->Vec3Value[2] = jn["vec3_val"][2];
             }
             node->IntValue = jn.value("int_val", 0);
+            node->StringLocalValue = jn.value("str_local", "");
 
             for (const auto& jp : jn.value("inputs", nlohmann::json::array()))
             {
