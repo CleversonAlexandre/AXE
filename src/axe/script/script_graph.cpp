@@ -162,8 +162,45 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
             node->Outputs.emplace_back(m_NextId++, "A == B", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "A != B", ScriptPinType::Bool, ed::PinKind::Output);
             node->Outputs.emplace_back(m_NextId++, "A > B", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "A >= B", ScriptPinType::Bool, ed::PinKind::Output);
             node->Outputs.emplace_back(m_NextId++, "A < B", ScriptPinType::Bool, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "A <= B", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        // ── Logic (combinadores booleanos — faltava completamente) ──────────
+        if (t == "And")
+        {
+            auto node = makeNode(baseId, "AND", ScriptNodeCategory::Logic);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
+            node->IntValue = 2; // espelha o número atual de inputs A/B/C/... (ver RebuildLogicInputs)
+            return node;
+        }
+        if (t == "Or")
+        {
+            auto node = makeNode(baseId, "OR", ScriptNodeCategory::Logic);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
+            node->IntValue = 2;
+            return node;
+        }
+        if (t == "Not")
+        {
+            auto node = makeNode(baseId, "NOT", ScriptNodeCategory::Logic);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Xor")
+        {
+            auto node = makeNode(baseId, "XOR", ScriptNodeCategory::Logic);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
             return node;
         }
         if (t == "GetVariable")
@@ -197,6 +234,149 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        // ── Math (completando o conjunto — só existiam Add/Multiply) ──────────
+        if (t == "Subtract")
+        {
+            auto node = makeNode(baseId, "Subtract", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Divide")
+        {
+            auto node = makeNode(baseId, "Divide", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.back().DefaultFloat = 1.0f; // evita divisão por 0 no caso comum de B desconectado
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Min")
+        {
+            auto node = makeNode(baseId, "Min", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Max")
+        {
+            auto node = makeNode(baseId, "Max", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Abs")
+        {
+            auto node = makeNode(baseId, "Abs", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Negate")
+        {
+            auto node = makeNode(baseId, "Negate", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Clamp")
+        {
+            auto node = makeNode(baseId, "Clamp", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.back().DefaultFloat = 1.0f; // intervalo inicial razoável: 0..1
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Lerp")
+        {
+            auto node = makeNode(baseId, "Lerp", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Alpha", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Random — puramente de dados, sem estado/seed próprio (usa rand()
+        // do <cstdlib>, já incluso no código gerado) ───────────────────────────
+        if (t == "RandomFloat")
+        {
+            auto node = makeNode(baseId, "Random Float", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.back().DefaultFloat = 1.0f; // intervalo inicial razoável: 0..1
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "RandomInt")
+        {
+            auto node = makeNode(baseId, "Random Int", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.back().DefaultInt = 100; // intervalo inicial razoável: 0..100
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Int, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "RandomBool")
+        {
+            auto node = makeNode(baseId, "Random Bool", ScriptNodeCategory::Math);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "RandomRange")
+        {
+            // Diferente do Random Float (que já cobre range de Float): aqui é
+            // um PONTO aleatório dentro de uma caixa Vec3 — cada eixo (X/Y/Z)
+            // sorteado independentemente entre Min e Max. Útil pra posição de
+            // spawn, dispersão de partículas, etc.
+            auto node = makeNode(baseId, "Random Range (Vec3)", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Inputs.back().DefaultVec3 = glm::vec3(1.0f, 1.0f, 1.0f);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── String ops — você já tinha o tipo String, faltavam só os nodes
+        // pra manipular ─────────────────────────────────────────────────────
+        if (t == "Concat")
+        {
+            auto node = makeNode(baseId, "Concat", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::String, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::String, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "StringLength")
+        {
+            auto node = makeNode(baseId, "Length", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Int, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Contains")
+        {
+            auto node = makeNode(baseId, "Contains", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::String, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Substring")
+        {
+            auto node = makeNode(baseId, "Substring", ScriptNodeCategory::Math);
+            node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::String, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Start", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Length", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.back().DefaultInt = 999999; // "até o fim" por padrão — substr clampa sozinho
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::String, ed::PinKind::Output);
             return node;
         }
         if (t == "MakeVec3")
@@ -329,6 +509,85 @@ namespace axe
             return node;
         }
 
+        // ── FlowControl (continuação) — While/Break/Continue/Switch ──────────
+        if (t == "WhileLoop")
+        {
+            auto node = makeNode(baseId, "While Loop", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Condition", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Loop Body", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "Break")
+        {
+            // Terminal — só Flow In, sem Flow Out (igual Return Node). Só
+            // faz sentido dentro do Loop Body de um For/For Each/While Loop;
+            // não validamos isso no grafo (mesma postura do Return Node fora
+            // de uma Function) — usar fora de um loop é erro de C++ na hora
+            // de compilar, não um erro detectado no editor.
+            auto node = makeNode(baseId, "Break", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            return node;
+        }
+        if (t == "Continue")
+        {
+            auto node = makeNode(baseId, "Continue", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            return node;
+        }
+        if (t == "SwitchOnInt")
+        {
+            auto node = makeNode(baseId, "Switch on Int", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Selection", ScriptPinType::Int, ed::PinKind::Input);
+            // Começa com 2 casos (0 e 1) + Default — mesmo espírito do
+            // Sequence, com +/- no node pra ajustar (ver RebuildSwitchPins).
+            // Default fica sempre por último na lista de Outputs.
+            node->Outputs.emplace_back(m_NextId++, "0", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "1", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Default", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = 2; // espelha o número de casos numerados (sem contar Default)
+            return node;
+        }
+        if (t == "SwitchOnString")
+        {
+            // Mesmíssimo mecanismo do Switch on Int (RebuildSwitchPins não
+            // precisou de nenhuma mudança — já preserva nomes de pins
+            // existentes ao crescer/encolher, e pra String o nome do pin
+            // É o próprio valor de comparação, editável inline no node, ver
+            // script_node_draw.cpp). Só o Selection muda de Int pra String,
+            // e o codegen (if/else if em vez de switch — C++ não tem switch
+            // de string nativo).
+            auto node = makeNode(baseId, "Switch on String", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Selection", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Case 0", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Case 1", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Default", ScriptPinType::Flow, ed::PinKind::Output);
+            node->IntValue = 2;
+            return node;
+        }
+        if (t == "Delay")
+        {
+            // Espera Duration segundos SEM travar o frame — usa uma LISTA
+            // de instâncias em voo por node (não um timer único): disparar
+            // o mesmo Delay duas vezes roda duas esperas concorrentes e
+            // independentes, igual ao node "Delay" da Unreal (ver
+            // ScriptGraphCompiler::Generate). V1: só funciona dentro de
+            // Event bodies (OnStart/OnUpdate/OnCollision/OnEvent/OnEnd) —
+            // dentro de Function ou Loop Body o compilador ignora o delay
+            // (segue direto) e avisa no código gerado, porque "pausar no
+            // meio de uma iteração/chamada" precisaria preservar o estado
+            // do próprio loop/função também, isso fica pra depois.
+            auto node = makeNode(baseId, "Delay", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Duration", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.back().DefaultFloat = 1.0f;
+            node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         // ── FUNCTIONS ── (Function Entry/Return Node nascem sem pins de
         // parâmetro — RebuildFunctionNodePins os preenche conforme a
         // assinatura da ScriptFunction. Call nodes não passam por aqui, ver
@@ -344,6 +603,34 @@ namespace axe
         {
             auto node = makeNode(baseId, "Return Node", ScriptNodeCategory::Function);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            return node;
+        }
+
+        // ── Reroute — "knot" puramente visual no fio, sem efeito no código
+        // gerado. Aceita QUALQUER tipo de pin, inclusive Flow (FindNextFlow
+        // Node/FindDataSource no compilador "veem através" dele). Criado
+        // principalmente com duplo clique num fio (ver script_node_graph.cpp);
+        // existe também no catálogo pra quem preferir criar solto.
+        if (t == "Reroute")
+        {
+            auto node = makeNode(baseId, "Reroute", ScriptNodeCategory::Reroute);
+            node->Inputs.emplace_back(m_NextId++, "In", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Out", ScriptPinType::Wildcard, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Comment box — anotação visual pura, sem pins, sem efeito no
+        // código gerado (o compilador nunca a encontra: sem Flow In/Out,
+        // sem links possíveis, simplesmente não participa de nenhum
+        // traversal). Usa o mecanismo nativo de Group do imgui-node-editor
+        // (ed::Group) — arrastar o título move todos os nodes que estiverem
+        // visualmente dentro da caixa, de graça, sem nenhum código nosso
+        // pra rastrear "quais nodes pertencem a este comment".
+        if (t == "Comment")
+        {
+            auto node = makeNode(baseId, "Comment", ScriptNodeCategory::Comment);
+            node->StringValue = "Comment"; // texto do título, editável inline
+            node->CommentSize = ImVec2(320, 240);
             return node;
         }
 
@@ -484,6 +771,19 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── IsValid (Entity) — puramente de dados, sem Flow. Útil depois de
+        // um Destroy Entity, ou ao guardar referência de array (entidade pode
+        // ter sido destruída/recém-reciclada desde então). Checa tanto
+        // "não é entt::null" quanto registry.valid() — uma entt::entity não-
+        // -nula pode ainda assim ter sido destruída e o slot reaproveitado.
+        if (t == "IsValid")
+        {
+            auto node = makeNode(baseId, "Is Valid", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Bool, ed::PinKind::Output);
             return node;
         }
 
@@ -752,6 +1052,82 @@ namespace axe
         AXE_CORE_INFO("ScriptGraph: Sequence reconstruído para {} pins 'Then'", pinCount);
     }
 
+    void ScriptGraph::RebuildSwitchPins(ScriptNode* node, int caseCount)
+    {
+        if (!node) return;
+        if (caseCount < 1) caseCount = 1;
+        if (caseCount > 16) caseCount = 16; // limite de sanidade — não tem motivo prático pra mais
+
+        int current = (int)node->Outputs.size() - 1; // -1 por causa do "Default", sempre presente
+        if (current == caseCount) { node->IntValue = caseCount; return; } // idempotente
+
+        // Tira o "Default" temporariamente — ele é sempre o último elemento
+        // e nunca é tocado, então é mais simples remover, ajustar os case
+        // pins como um vetor "normal" (mesma técnica de RebuildSequencePins),
+        // e devolver no fim.
+        ScriptPin defaultPin = node->Outputs.back();
+        node->Outputs.pop_back();
+
+        if (caseCount < current)
+        {
+            for (int i = current - 1; i >= caseCount; i--)
+            {
+                auto& pin = node->Outputs[i];
+                m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                    [&](const ScriptLink& l) { return l.StartPin == pin.ID || l.EndPin == pin.ID; }),
+                    m_Links.end());
+            }
+            node->Outputs.erase(node->Outputs.begin() + caseCount, node->Outputs.end());
+        }
+        else
+        {
+            for (int i = current; i < caseCount; i++)
+            {
+                std::string name = std::to_string(i);
+                node->Outputs.emplace_back(m_NextId++, name.c_str(), ScriptPinType::Flow, ed::PinKind::Output);
+            }
+        }
+
+        node->Outputs.push_back(defaultPin); // "Default" de volta, sempre no fim
+        node->IntValue = caseCount;
+
+        AXE_CORE_INFO("ScriptGraph: Switch on Int reconstruído para {} casos + Default", caseCount);
+    }
+
+    void ScriptGraph::RebuildLogicInputs(ScriptNode* node, int inputCount)
+    {
+        if (!node) return;
+        if (inputCount < 2) inputCount = 2;
+        if (inputCount > 8) inputCount = 8; // A..H — limite de sanidade
+
+        int current = (int)node->Inputs.size();
+        if (current == inputCount) { node->IntValue = inputCount; return; } // idempotente
+
+        if (inputCount < current)
+        {
+            for (int i = current - 1; i >= inputCount; i--)
+            {
+                auto& pin = node->Inputs[i];
+                m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                    [&](const ScriptLink& l) { return l.StartPin == pin.ID || l.EndPin == pin.ID; }),
+                    m_Links.end());
+            }
+            node->Inputs.erase(node->Inputs.begin() + inputCount, node->Inputs.end());
+        }
+        else
+        {
+            for (int i = current; i < inputCount; i++)
+            {
+                std::string name(1, (char)('A' + i)); // A, B, C, D...
+                node->Inputs.emplace_back(m_NextId++, name.c_str(), ScriptPinType::Bool, ed::PinKind::Input);
+            }
+        }
+
+        node->IntValue = inputCount;
+        AXE_CORE_INFO("ScriptGraph: {} reconstruído para {} inputs (A..{})",
+            node->Name, inputCount, (char)('A' + inputCount - 1));
+    }
+
     void ScriptGraph::RebuildFunctionNodePins(ScriptNode* node, const ScriptFunction& func)
     {
         if (!node) return;
@@ -848,7 +1224,7 @@ namespace axe
             nlohmann::json jn;
             jn["id"] = (int)node->ID.Get();
             jn["name"] = node->Name;
-            jn["category"] = (int)node->Category;
+            jn["category"] = ScriptNodeCategoryToString(node->Category);
             jn["pos"] = { node->Position.x, node->Position.y };
             jn["str_val"] = node->StringValue;
             jn["flt_val"] = node->FloatValue;
@@ -857,11 +1233,14 @@ namespace axe
             jn["vec3_val"] = { node->Vec3Value[0], node->Vec3Value[1], node->Vec3Value[2] };
             jn["int_val"] = node->IntValue;
             jn["str_local"] = node->StringLocalValue;
+            jn["comment_w"] = node->CommentSize.x;
+            jn["comment_h"] = node->CommentSize.y;
+            jn["comment_color"] = { node->CommentColor[0], node->CommentColor[1], node->CommentColor[2] };
 
             for (const auto& pin : node->Inputs)
                 jn["inputs"].push_back({
                     {"id", (int)pin.ID.Get()}, {"name", pin.Name},
-                    {"type", (int)pin.Type}, {"kind", (int)pin.Kind},
+                    {"type", ScriptPinTypeToString(pin.Type)}, {"kind", (int)pin.Kind},
                     {"default_float", pin.DefaultFloat},
                     {"default_bool", pin.DefaultBool},
                     {"default_int", pin.DefaultInt},
@@ -871,7 +1250,7 @@ namespace axe
             for (const auto& pin : node->Outputs)
                 jn["outputs"].push_back({
                     {"id", (int)pin.ID.Get()}, {"name", pin.Name},
-                    {"type", (int)pin.Type}, {"kind", (int)pin.Kind}
+                    {"type", ScriptPinTypeToString(pin.Type)}, {"kind", (int)pin.Kind}
                     });
 
             j["nodes"].push_back(jn);
@@ -897,7 +1276,16 @@ namespace axe
         {
             int id = jn["id"];
             std::string name = jn["name"];
-            auto cat = (ScriptNodeCategory)jn["category"].get<int>();
+            // Aceita os dois formatos: string (novo, robusto contra reordenar
+            // o enum) e int cru (formato antigo — best-effort, arquivos
+            // salvos com esse formato podem já estar com a categoria errada
+            // se foram salvos antes de alguma categoria nova ser inserida;
+            // não tenta "adivinhar"/corrigir isso retroativamente).
+            ScriptNodeCategory cat;
+            if (jn["category"].is_string())
+                cat = ScriptNodeCategoryFromString(jn["category"].get<std::string>());
+            else
+                cat = (ScriptNodeCategory)jn["category"].get<int>();
 
             auto node = std::make_unique<ScriptNode>(id, name.c_str(), cat);
             node->Position = { jn["pos"][0], jn["pos"][1] };
@@ -913,11 +1301,28 @@ namespace axe
             }
             node->IntValue = jn.value("int_val", 0);
             node->StringLocalValue = jn.value("str_local", "");
+            node->CommentSize.x = jn.value("comment_w", 320.0f);
+            node->CommentSize.y = jn.value("comment_h", 240.0f);
+            if (jn.contains("comment_color") && jn["comment_color"].is_array() && jn["comment_color"].size() == 3)
+            {
+                node->CommentColor[0] = jn["comment_color"][0];
+                node->CommentColor[1] = jn["comment_color"][1];
+                node->CommentColor[2] = jn["comment_color"][2];
+            }
+
+            // Aceita os dois formatos pro tipo do pin, mesma razão do
+            // "category" lá em cima: string (novo, robusto contra reordenar
+            // o enum) ou int cru (formato antigo — best-effort).
+            auto parsePinType = [](const nlohmann::json& jp) -> ScriptPinType
+                {
+                    if (jp["type"].is_string()) return ScriptPinTypeFromString(jp["type"].get<std::string>());
+                    return (ScriptPinType)jp["type"].get<int>();
+                };
 
             for (const auto& jp : jn.value("inputs", nlohmann::json::array()))
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
-                    (ScriptPinType)jp["type"].get<int>(), (ed::PinKind)jp["kind"].get<int>());
+                    parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
                 pin.DefaultFloat = jp.value("default_float", 0.0f);
                 pin.DefaultBool = jp.value("default_bool", false);
                 pin.DefaultInt = jp.value("default_int", 0);
@@ -930,7 +1335,7 @@ namespace axe
             for (const auto& jp : jn.value("outputs", nlohmann::json::array()))
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
-                    (ScriptPinType)jp["type"].get<int>(), (ed::PinKind)jp["kind"].get<int>());
+                    parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
                 pin.DefaultFloat = jp.value("default_float", 0.0f);
                 pin.DefaultBool = jp.value("default_bool", false);
                 pin.DefaultInt = jp.value("default_int", 0);

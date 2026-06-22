@@ -10,6 +10,7 @@
 #include <imgui_node_editor.h>
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
 
 namespace ed = ax::NodeEditor;
 
@@ -20,14 +21,23 @@ namespace axe
     static const NE sEv[] = { {"On Start","OnStart"},{"On Update","OnUpdate"},
         {"On End","OnEnd"},{"On Collision","OnCollision"},{"On Event","OnEvent"} };
     static const NE sAc[] = { {"Move","Move"},{"Rotate","Rotate"},{"Apply Force","ApplyForce"},
-        {"Send Event","SendEvent"},{"Print String","PrintString"},{"Destroy Entity","DestroyEntity"} };
+        {"Send Event","SendEvent"},{"Print String","PrintString"},{"Destroy Entity","DestroyEntity"},
+        {"Is Valid","IsValid"} };
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
-        {"Get Variable","GetVariable"},{"Set Variable","SetVariable"} };
-    static const NE sMa[] = { {"Add","Add"},{"Multiply","Multiply"},{"Make Vec3","MakeVec3"} };
+        {"Get Variable","GetVariable"},{"Set Variable","SetVariable"},
+        {"AND","And"},{"OR","Or"},{"NOT","Not"},{"XOR","Xor"} };
+    static const NE sMa[] = { {"Add","Add"},{"Subtract","Subtract"},{"Multiply","Multiply"},
+        {"Divide","Divide"},{"Min","Min"},{"Max","Max"},{"Abs","Abs"},{"Negate","Negate"},
+        {"Clamp","Clamp"},{"Lerp","Lerp"},{"Make Vec3","MakeVec3"},
+        {"Random Float","RandomFloat"},{"Random Int","RandomInt"},{"Random Bool","RandomBool"},
+        {"Random Range (Vec3)","RandomRange"},
+        {"Concat","Concat"},{"String Length","StringLength"},{"Contains","Contains"},{"Substring","Substring"} };
     static const NE sIn[] = { {"Get Action","GetAction"},{"Get Axis","GetAxis"} };
     static const NE sArr[] = { {"Array Add","ArrayAdd"},{"Array Remove","ArrayRemove"},
         {"Array Get","ArrayGet"},{"Array Length","ArrayLength"},{"Array Clear","ArrayClear"} };
-    static const NE sFlow[] = { {"Sequence","Sequence"},{"For Loop","ForLoop"},{"For Each Loop","ForEachLoop"} };
+    static const NE sFlow[] = { {"Sequence","Sequence"},{"For Loop","ForLoop"},{"For Each Loop","ForEachLoop"},
+        {"While Loop","WhileLoop"},{"Break","Break"},{"Continue","Continue"},{"Switch on Int","SwitchOnInt"},
+        {"Switch on String","SwitchOnString"},{"Delay","Delay"} };
     static const NE sCast[] = {
         {"To Float","ToFloat"},{"To Int","ToInt"},{"To Bool","ToBool"},
         {"To String","ToString"},{"To Vec3","ToVec3"},{"Break Vec3","BreakVec3"},
@@ -37,12 +47,12 @@ namespace axe
     struct CatDef { const char* name; const NE* e; int n; ImVec4 col; };
     static const CatDef s_Cats[] = {
         {"Events",  sEv,   5, {0.85f,0.3f,0.2f, 1}},
-        {"Actions", sAc,   6, {0.2f,0.7f,0.45f, 1}},
-        {"Logic",   sLo,   4, {0.8f,0.6f,0.1f,  1}},
-        {"Math",    sMa,   3, {0.3f,0.5f,0.9f,  1}},
+        {"Actions", sAc,   7, {0.2f,0.7f,0.45f, 1}},
+        {"Logic",   sLo,   8, {0.8f,0.6f,0.1f,  1}},
+        {"Math",    sMa,   19, {0.3f,0.5f,0.9f,  1}},
         {"Input",   sIn,   2, {0.7f,0.2f,0.6f,  1}},
         {"Array",   sArr,  5, {0.55f,0.45f,0.85f, 1}},
-        {"Flow Control", sFlow, 3, {0.45f,0.6f,0.75f, 1}},
+        {"Flow Control", sFlow, 9, {0.45f,0.6f,0.75f, 1}},
         {"Cast",    sCast, 7, {0.5f,0.8f,0.8f,  1}},
     };
     static const ImVec4 s_CtxCols[] = {
@@ -89,6 +99,45 @@ namespace axe
         ImGui::PopStyleVar();
     }
 
+    void ScriptGraphWindow::CreateCommentNode(ImVec2 fallbackPos)
+    {
+        if (!m_Graph) return;
+
+        int selCount = ed::GetSelectedObjectCount();
+        std::vector<ed::NodeId> selNodes(selCount > 0 ? selCount : 0);
+        int got = selCount > 0 ? ed::GetSelectedNodes(selNodes.data(), selCount) : 0;
+
+        if (got > 0)
+        {
+            const float kPad = 40.f;       // margem lateral/inferior
+            const float kTitlePad = 70.f;  // espaço extra acima pro título do Comment
+            ImVec2 bmin(FLT_MAX, FLT_MAX), bmax(-FLT_MAX, -FLT_MAX);
+            for (int i = 0; i < got; i++)
+            {
+                ImVec2 p = ed::GetNodePosition(selNodes[i]);
+                ImVec2 sz = ed::GetNodeSize(selNodes[i]);
+                bmin.x = std::min(bmin.x, p.x); bmin.y = std::min(bmin.y, p.y);
+                bmax.x = std::max(bmax.x, p.x + sz.x); bmax.y = std::max(bmax.y, p.y + sz.y);
+            }
+            auto* node = m_Graph->AddNode("Comment");
+            if (node)
+            {
+                node->CommentSize = ImVec2(bmax.x - bmin.x + kPad * 2.f, bmax.y - bmin.y + kPad + kTitlePad);
+                ed::SetNodePosition(node->ID, ImVec2(bmin.x - kPad, bmin.y - kTitlePad));
+                m_ConsoleLines.push_back("[Info] Comment criado envolvendo " + std::to_string(got) + " node(s).");
+            }
+        }
+        else
+        {
+            auto* node = m_Graph->AddNode("Comment");
+            if (node)
+            {
+                ed::SetNodePosition(node->ID, fallbackPos);
+                m_ConsoleLines.push_back("[Info] Node criado: Comment");
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     void ScriptGraphWindow::DrawNodeGraph()
     {
@@ -111,6 +160,66 @@ namespace axe
             auto* p = m_Graph->FindPin(lk.StartPin);
             ImColor c = p ? GetPinColor(p->Type) : ImColor(255, 255, 255);
             ed::Link(lk.ID, lk.StartPin, lk.EndPin, c, 2.0f);
+        }
+
+        // ── Duplo clique num fio insere um Reroute ─────────────────────────────
+        // Mesmo atalho da Unreal: o fio se parte em dois (origem -> Reroute,
+        // Reroute -> destino), com o tipo do Reroute já fixado no tipo do
+        // fio original — sem precisar reconectar nada manualmente depois.
+        // Posição em screen-space puro, sem ed::ScreenToCanvas — igual ao
+        // spawnNode (menu de criar node) logo abaixo, que já funciona: dentro
+        // do contexto ativo do canvas (mesmo Begin/End), ed::SetNodePosition
+        // já espera a posição NESSE espaço. ScreenToCanvas só entra quando a
+        // posição vem de FORA desse contexto (drag do painel Script Members,
+        // ou os handlers que rodam depois do ed::End()) — confundir isso foi
+        // o que fazia o node nascer em (0,0), longe de tudo.
+        {
+            ed::LinkId hoveredLink = ed::GetHoveredLink();
+            if (hoveredLink != ed::LinkId{} && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                ed::PinId startId{}, endId{};
+                bool found = false;
+                for (auto& lk : m_Graph->GetLinks())
+                    if (lk.ID == hoveredLink) { startId = lk.StartPin; endId = lk.EndPin; found = true; break; }
+
+                if (found)
+                {
+                    auto* pStart = m_Graph->FindPin(startId);
+                    auto* pEnd = m_Graph->FindPin(endId);
+                    if (pStart && pEnd)
+                    {
+                        PushUndo("Insert Reroute");
+                        ScriptPinType t = pStart->Type;
+                        auto* reroute = m_Graph->AddNode("Reroute");
+                        if (reroute)
+                        {
+                            reroute->Inputs[0].Type = t;
+                            reroute->Outputs[0].Type = t;
+                            ed::SetNodePosition(reroute->ID, ImGui::GetMousePos());
+                            m_Graph->RemoveLink(hoveredLink);
+                            m_Graph->AddLink(startId, reroute->Inputs[0].ID);
+                            m_Graph->AddLink(reroute->Outputs[0].ID, endId);
+                            m_ConsoleLines.push_back("[Info] Reroute inserido no fio.");
+                        }
+                        CommitUndo("Insert Reroute");
+                    }
+                }
+            }
+        }
+
+        // ── Atalho 'C' cria um Comment ──────────────────────────────────────────
+        // Mesmo atalho da Unreal — envolve a seleção atual, se houver (ver
+        // CreateCommentNode). Só dispara com o canvas em foco/hover e fora
+        // de qualquer campo de texto (renomear variável, busca do menu, etc.)
+        // — senão digitar a letra 'c' em qualquer InputText do editor criaria
+        // um Comment sem querer. Mesma posição crua (sem ScreenToCanvas) do
+        // Reroute acima, pelo mesmo motivo.
+        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_C, false))
+        {
+            PushUndo("Add Comment");
+            CreateCommentNode(ImGui::GetMousePos());
+            CommitUndo("Add Comment");
         }
 
         // ── Criação de links ──────────────────────────────────────────────────
@@ -143,7 +252,7 @@ namespace axe
                             CommitUndo("Add Link");
                         }
                     }
-                    else if (o->Type == ScriptPinType::Wildcard && (int)i->Type >= (int)ScriptPinType::FloatArray)
+                    else if (o->Type == ScriptPinType::Wildcard && IsArrayPinType(i->Type))
                     {
                         // Pin Wildcard de saída de um node genérico de Array (Array
                         // Get) conectando a um pin de array real de ENTRADA — fixa o
@@ -167,7 +276,7 @@ namespace axe
                             CommitUndo("Add Link (array)");
                         }
                     }
-                    else if (i->Type == ScriptPinType::Wildcard && (int)o->Type >= (int)ScriptPinType::FloatArray)
+                    else if (i->Type == ScriptPinType::Wildcard && IsArrayPinType(o->Type))
                     {
                         // Mesmo caso, mas com o pin Wildcard de ENTRADA (Array Add/
                         // Remove/Get/Length/Clear) recebendo de uma saída de array real.
@@ -185,6 +294,65 @@ namespace axe
                                 if (owns) { m_Graph->RebuildArrayNodePins(n.get(), elemType); break; }
                             }
                             CommitUndo("Add Link (array)");
+                        }
+                    }
+                    else if (o->Type == ScriptPinType::Wildcard && i->Type == ScriptPinType::Wildcard &&
+                        [&] { for (auto& n : m_Graph->GetNodes()) if (n->Name == "Reroute") for (auto& p : n->Outputs) if (&p == o) return true; return false; }())
+                    {
+                        // Caso raro: dois Reroutes ainda não fixados sendo
+                        // ligados entre si (nenhum lado tem tipo concreto
+                        // ainda). Aceita sem fixar nada — fica resolvido
+                        // automaticamente assim que QUALQUER um dos dois
+                        // lados da cadeia for conectado a algo concreto,
+                        // já que o bloco abaixo sempre propaga pra ambos os
+                        // pins do Reroute envolvido naquela conexão.
+                        if (ed::AcceptNewItem(GetPinColor(ScriptPinType::Wildcard), 2.5f))
+                        {
+                            PushUndo("Add Link (reroute)");
+                            m_Graph->AddLink(o->ID, i->ID);
+                            CommitUndo("Add Link (reroute)");
+                        }
+                    }
+                    else if ((o->Type == ScriptPinType::Wildcard) != (i->Type == ScriptPinType::Wildcard) &&
+                        [&] {
+                            // Só entra aqui se o lado Wildcard pertencer a um
+                            // node Reroute — outros usos de Wildcard (Array,
+                            // Cast) já têm suas próprias regras nos blocos
+                            // acima/abaixo, não competem com esta aqui.
+                            ScriptPin* w = (o->Type == ScriptPinType::Wildcard) ? o : i;
+                            for (auto& n : m_Graph->GetNodes())
+                            {
+                                if (n->Name != "Reroute") continue;
+                                for (auto& p : n->Inputs)  if (&p == w) return true;
+                                for (auto& p : n->Outputs) if (&p == w) return true;
+                            }
+                            return false;
+                        }())
+                    {
+                        // Reroute aceita QUALQUER tipo, inclusive Flow — fixa
+                        // os DOIS pins do Reroute (In e Out) pro tipo
+                        // concreto do outro lado, então o lado ainda solto já
+                        // sai pronto pra aceitar qualquer link do mesmo tipo,
+                        // sem precisar resolver de novo depois.
+                        ScriptPinType concreteType = (o->Type != ScriptPinType::Wildcard) ? o->Type : i->Type;
+                        if (ed::AcceptNewItem(GetPinColor(concreteType), 2.5f))
+                        {
+                            PushUndo("Add Link (reroute)");
+                            m_Graph->AddLink(o->ID, i->ID);
+                            ScriptPin* w = (o->Type == ScriptPinType::Wildcard) ? o : i;
+                            for (auto& n : m_Graph->GetNodes())
+                            {
+                                bool owns = false;
+                                for (auto& p : n->Inputs)  if (&p == w) owns = true;
+                                for (auto& p : n->Outputs) if (&p == w) owns = true;
+                                if (owns)
+                                {
+                                    for (auto& p : n->Inputs)  p.Type = concreteType;
+                                    for (auto& p : n->Outputs) p.Type = concreteType;
+                                    break;
+                                }
+                            }
+                            CommitUndo("Add Link (reroute)");
                         }
                     }
                     else
@@ -303,6 +471,17 @@ namespace axe
             auto* node = m_Graph->FindNode(pendNid);
             if (node)
             {
+                // BUGFIX/proteção: Function Entry e Return Node são geridos
+                // automaticamente por ScriptAsset::AddFunction — deletar um
+                // dos dois deixaria a função sem entrada ou sem saída,
+                // quebrando RebuildFunctionCallSites/GenerateFunctionBody
+                // (que esperam encontrar exatamente um de cada no grafo).
+                if (node->Name == "Function Entry" || node->Name == "Return Node")
+                {
+                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado — e gerido automaticamente pela Function.");
+                    continue;
+                }
+
                 std::vector<ed::LinkId> linkIds;
                 for (auto& link : m_Graph->GetLinks())
                 {
@@ -337,11 +516,23 @@ namespace axe
                 }
             ed::NodeId nid;
             while (ed::QueryDeletedNode(&nid))
+            {
+                // Mesma proteção do bloco acima, agora pro caminho da tecla
+                // Delete/Backspace e do "Delete" do menu de contexto — os dois
+                // caminhos convergem aqui no imgui-node-editor.
+                auto* node = m_Graph->FindNode(nid);
+                if (node && (node->Name == "Function Entry" || node->Name == "Return Node"))
+                {
+                    ed::RejectDeletedItem();
+                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado — e gerido automaticamente pela Function.");
+                    continue;
+                }
                 if (ed::AcceptDeletedItem())
                 {
                     if (!anyDeleted) { PushUndo("Delete"); anyDeleted = true; }
                     m_Graph->RemoveNode(nid);
                 }
+            }
             if (anyDeleted) CommitUndo("Delete");
         }
         ed::EndDelete();
@@ -455,6 +646,13 @@ namespace axe
         }
 
         // ── Context menu ──────────────────────────────────────────────────────
+        // openPopupPosition fica em screen-space mesmo (sem ed::ScreenToCanvas)
+        // de propósito: dentro do contexto ativo do canvas (mesmo Begin/End),
+        // ed::SetNodePosition já espera a posição NESSE espaço — é só quando
+        // a posição vem de FORA desse contexto (drag do painel Script
+        // Members, ou os handlers que rodam depois do ed::End()) que
+        // ed::ScreenToCanvas entra. Confundir isso foi o que causou os nodes
+        // nascendo em (0,0), longe de tudo.
         ImVec2 openPopupPosition = ImGui::GetMousePos();
         openPopupPosition.y -= 20.0f;
 
@@ -619,11 +817,18 @@ namespace axe
             {
                 ImGui::TextUnformatted(node->Name.c_str());
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete Node"))
+                // Mesma proteção do bloco de QueryDeletedNode acima, agora
+                // desabilitando visualmente a opção em vez de só rejeitar
+                // silenciosamente — mais claro pro usuário entender o porquê
+                // antes mesmo de tentar.
+                bool isProtected = (node->Name == "Function Entry" || node->Name == "Return Node");
+                if (ImGui::MenuItem("Delete Node", nullptr, false, !isProtected))
                 {
                     ed::DeleteNode(ctxMenuNodeId);
                     m_ConsoleLines.push_back("[Info] Node deleted.");
                 }
+                if (isProtected && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Gerido automaticamente pela Function — não pode ser deletado.");
             }
             ImGui::EndPopup();
         }
@@ -691,6 +896,34 @@ namespace axe
                     m_CtxBuf[0] = '\0';
                     ImGui::CloseCurrentPopup();
                 };
+
+            // "Add Comment" fica fora da árvore de categorias, em destaque no
+            // topo — não é um node de lógica, é só anotação visual (mesmo
+            // tratamento de destaque que a Unreal dá pra "Add Comment...").
+            // Se houver nodes selecionados no momento, a caixa nasce já
+            // dimensionada pra envolvê-los (com uma margem), igual ao atalho
+            // C da Unreal — senão nasce em branco, no ponto do clique.
+            if (!filtering || std::string("comment").find(s) != std::string::npos)
+            {
+                if (ImGui::MenuItem("+ Add Comment"))
+                {
+                    CreateCommentNode(openPopupPosition);
+                    m_CtxBuf[0] = '\0';
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            // "Add Reroute" — forma alternativa de criar (a principal é
+            // duplo clique direto no fio, que já fixa o tipo automaticamente
+            // pelo que está conectado; criado solto pelo menu nasce Wildcard
+            // dos dois lados, igual qualquer node Wildcard novo).
+            if (!filtering || std::string("reroute").find(s) != std::string::npos)
+            {
+                if (ImGui::MenuItem("+ Add Reroute"))
+                    spawnNode("Reroute");
+            }
+            if (!filtering || std::string("comment").find(s) != std::string::npos ||
+                std::string("reroute").find(s) != std::string::npos)
+                ImGui::Separator();
 
             // Categorias estáticas (Cast fica fora — índice 7 — porque é
             // auto-inserida ao conectar pins incompatíveis, não criada à mão)
@@ -816,6 +1049,25 @@ namespace axe
             if (newSel != ed::NodeId{} && newSel != m_LastCanvasSelectedNode)
                 m_SelectedVar = -1;
             m_LastCanvasSelectedNode = newSel;
+        }
+
+        // ── Duplo clique num node "Call <Function>" abre o grafo dela ─────────
+        // ed::GetDoubleClickedNode() precisa do contexto ainda ativo (igual
+        // GetSelectedNodes acima) — por isso vem antes do SetCurrentEditor
+        // (nullptr). Igual à Unreal: dar duplo clique numa Function chamada
+        // no grafo principal "entra" nela, não só seleciona.
+        {
+            ed::NodeId dblNode = ed::GetDoubleClickedNode();
+            if (dblNode != ed::NodeId{} && m_Graph && m_ScriptAsset)
+            {
+                auto* node = m_Graph->FindNode(dblNode);
+                if (node && node->Category == ScriptNodeCategory::Function &&
+                    node->Name != "Function Entry" && node->Name != "Return Node")
+                {
+                    auto* func = m_ScriptAsset->FindFunction(node->StringValue);
+                    if (func) SwitchToFunctionGraph(func);
+                }
+            }
         }
 
         ed::SetCurrentEditor(nullptr);

@@ -22,7 +22,15 @@ namespace axe
                 for (const auto& n : ctx.graph->GetNodes())
                     for (const auto& inPin : n->Inputs)
                         if (inPin.ID == link.EndPin)
+                        {
+                            // Reroute é transparente pro fluxo — nunca é o
+                            // destino de verdade, só um ponto de organização
+                            // visual do fio. Segue recursivamente pro próximo
+                            // node real do outro lado dele.
+                            if (n->Name == "Reroute")
+                                return FindNextFlowNode(ctx, n.get(), "");
                             return n.get();
+                        }
             }
         }
         return nullptr;
@@ -38,7 +46,15 @@ namespace axe
             for (const auto& n : ctx.graph->GetNodes())
                 for (const auto& outPin : n->Outputs)
                     if (outPin.ID == link.StartPin)
+                    {
+                        // Mesma transparência do FindNextFlowNode, agora pro
+                        // lado de dados — segue pro pin de entrada do
+                        // próprio Reroute, recursivamente, até achar a fonte
+                        // de dados real.
+                        if (n->Name == "Reroute" && !n->Inputs.empty())
+                            return FindDataSource(ctx, n->Inputs[0]);
                         return { n.get(), &outPin };
+                    }
         }
         return { nullptr, nullptr };
     }
@@ -61,6 +77,13 @@ namespace axe
                     std::to_string(pin.DefaultVec3.x) + "f, " +
                     std::to_string(pin.DefaultVec3.y) + "f, " +
                     std::to_string(pin.DefaultVec3.z) + "f)";
+            case ScriptPinType::Object:
+                // BUGFIX: caía no "default: return \"{}\"" genérico — {} sozinho
+                // não é uma expressão válida em "x != entt::null" (achei isso
+                // testando o IsValid sem Target conectado). entt::null é a
+                // forma correta e já usada em todo o resto do compilador pra
+                // representar "nenhuma entity".
+                return "entt::null";
             default: return "{}";
             }
         }
@@ -236,6 +259,186 @@ namespace axe
             return "(" + a + " * " + b + ")";
         }
 
+        // ── Math (completando o conjunto) ──────────────────────────────────────
+        if (nodeName == "Subtract")
+        {
+            std::string a = "0.0f", b = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            return "(" + a + " - " + b + ")";
+        }
+        if (nodeName == "Divide")
+        {
+            std::string a = "0.0f", b = "1.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            return "(" + a + " / " + b + ")";
+        }
+        if (nodeName == "Min")
+        {
+            std::string a = "0.0f", b = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            // Ternário em vez de std::min — evita depender de <algorithm> no
+            // header gerado (e de qualquer ambiguidade de tipo entre os dois
+            // lados, já que ResolvePin pode devolver expressões, não só literais).
+            return "((" + a + ") < (" + b + ") ? (" + a + ") : (" + b + "))";
+        }
+        if (nodeName == "Max")
+        {
+            std::string a = "0.0f", b = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            return "((" + a + ") > (" + b + ") ? (" + a + ") : (" + b + "))";
+        }
+        if (nodeName == "Abs")
+        {
+            std::string a = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "A") { a = ResolvePin(ctx, inp); break; }
+            return "((" + a + ") < 0.0f ? -(" + a + ") : (" + a + "))";
+        }
+        if (nodeName == "Negate")
+        {
+            std::string a = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "A") { a = ResolvePin(ctx, inp); break; }
+            return "(-(" + a + "))";
+        }
+        if (nodeName == "Clamp")
+        {
+            std::string v = "0.0f", lo = "0.0f", hi = "1.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "Value") v = ResolvePin(ctx, inp);
+                if (inp.Name == "Min")   lo = ResolvePin(ctx, inp);
+                if (inp.Name == "Max")   hi = ResolvePin(ctx, inp);
+            }
+            return "((" + v + ") < (" + lo + ") ? (" + lo + ") : ((" + v + ") > (" + hi + ") ? (" + hi + ") : (" + v + ")))";
+        }
+        if (nodeName == "Lerp")
+        {
+            std::string a = "0.0f", b = "0.0f", t = "0.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A")     a = ResolvePin(ctx, inp);
+                if (inp.Name == "B")     b = ResolvePin(ctx, inp);
+                if (inp.Name == "Alpha") t = ResolvePin(ctx, inp);
+            }
+            return "(" + a + " + ((" + b + ") - (" + a + ")) * (" + t + "))";
+        }
+
+        // ── Random ───────────────────────────────────────────────────────────
+        if (nodeName == "Random Float")
+        {
+            std::string lo = "0.0f", hi = "1.0f";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "Min") lo = ResolvePin(ctx, inp);
+                if (inp.Name == "Max") hi = ResolvePin(ctx, inp);
+            }
+            return "((" + lo + ") + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * ((" + hi + ") - (" + lo + ")))";
+        }
+        if (nodeName == "Random Int")
+        {
+            std::string lo = "0", hi = "100";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "Min") lo = ResolvePin(ctx, inp);
+                if (inp.Name == "Max") hi = ResolvePin(ctx, inp);
+            }
+            // +1 pra ser inclusivo nos dois extremos (Min e Max sorteáveis)
+            return "((" + lo + ") + (rand() % (((" + hi + ") - (" + lo + ")) + 1)))";
+        }
+        if (nodeName == "Random Bool")
+            return "((rand() % 2) == 0)";
+        if (nodeName == "Random Range (Vec3)")
+        {
+            std::string lo = "glm::vec3(0.0f)", hi = "glm::vec3(1.0f)";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "Min") lo = ResolvePin(ctx, inp);
+                if (inp.Name == "Max") hi = ResolvePin(ctx, inp);
+            }
+            // Cada eixo sorteado independentemente — lambda imediata pra não
+            // precisar de uma variável local nomeada só pra isso.
+            return "([&]{ auto _lo = (" + lo + "); auto _hi = (" + hi + "); "
+                "return glm::vec3("
+                "_lo.x + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * (_hi.x - _lo.x), "
+                "_lo.y + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * (_hi.y - _lo.y), "
+                "_lo.z + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * (_hi.z - _lo.z)); }())";
+        }
+
+        // ── String ops ───────────────────────────────────────────────────────
+        if (nodeName == "Concat")
+        {
+            std::string a = "std::string(\"\")", b = "std::string(\"\")";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            return "((" + a + ") + (" + b + "))";
+        }
+        if (nodeName == "Length" && srcNode->Category == ScriptNodeCategory::Math)
+        {
+            // Mesmo nome de node já existe pro Array (Length), mas aquele tem
+            // Category::Array — checagem de categoria evita colisão entre os
+            // dois "Length" homônimos.
+            std::string a = "std::string(\"\")";
+            for (const auto& inp : srcNode->Inputs) if (inp.Name == "A") { a = ResolvePin(ctx, inp); break; }
+            return "(int)(" + a + ").size()";
+        }
+        if (nodeName == "Contains")
+        {
+            std::string a = "std::string(\"\")", b = "std::string(\"\")";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            return "((" + a + ").find(" + b + ") != std::string::npos)";
+        }
+        if (nodeName == "Substring")
+        {
+            std::string a = "std::string(\"\")", start = "0", len = "0";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A")      a = ResolvePin(ctx, inp);
+                if (inp.Name == "Start")  start = ResolvePin(ctx, inp);
+                if (inp.Name == "Length") len = ResolvePin(ctx, inp);
+            }
+            // std::min no Start evita lançar std::out_of_range se Start > tamanho
+            // da string — o parâmetro Length, por outro lado, o próprio
+            // substr() já clampa sozinho até o fim da string, sem precisar
+            // de nenhum cuidado extra aqui.
+            return "(" + a + ").substr(std::min((size_t)(" + start + "), (" + a + ").size()), (size_t)(" + len + "))";
+        }
+
+        // ── IsValid (Entity) ─────────────────────────────────────────────────
+        if (nodeName == "Is Valid")
+        {
+            std::string target = "entt::null";
+            for (const auto& inp : srcNode->Inputs) if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+            // Checa os dois: != entt::null (mesmo padrão do Destroy Entity) E
+            // registry.valid() — uma entt::entity não-nula ainda pode ter
+            // sido destruída e o slot reaproveitado por outra entidade.
+            return "((" + target + ") != entt::null && GetContext().ScenePtr && "
+                "GetContext().ScenePtr->GetRegistry().valid(" + target + "))";
+        }
+
         if (nodeName == "Make Vec3")
         {
             std::string x = "0.0f", y = "0.0f", z = "0.0f";
@@ -257,8 +460,57 @@ namespace axe
                 if (inp.Name == "B") b = ResolvePin(ctx, inp);
             }
             if (srcPin->Name == "A == B") return "(" + a + " == " + b + ")";
+            if (srcPin->Name == "A != B") return "(" + a + " != " + b + ")";
             if (srcPin->Name == "A > B")  return "(" + a + " > " + b + ")";
+            if (srcPin->Name == "A >= B") return "(" + a + " >= " + b + ")";
             if (srcPin->Name == "A < B")  return "(" + a + " < " + b + ")";
+            if (srcPin->Name == "A <= B") return "(" + a + " <= " + b + ")";
+        }
+
+        // ── Logic (combinadores booleanos) ──────────────────────────────────────
+        if (nodeName == "AND")
+        {
+            // N entradas (A, B, C, ...) — combina todas com && em cadeia.
+            // Sem inputs (não devia acontecer, mínimo é 2) cai no "true"
+            // neutro de AND, por segurança.
+            std::string expr;
+            for (const auto& inp : srcNode->Inputs)
+            {
+                std::string v = ResolvePin(ctx, inp);
+                expr += expr.empty() ? v : (" && " + v);
+            }
+            return "(" + (expr.empty() ? "true" : expr) + ")";
+        }
+        if (nodeName == "OR")
+        {
+            // Mesma ideia do AND, com ||. Sem inputs cai no "false" neutro de OR.
+            std::string expr;
+            for (const auto& inp : srcNode->Inputs)
+            {
+                std::string v = ResolvePin(ctx, inp);
+                expr += expr.empty() ? v : (" || " + v);
+            }
+            return "(" + (expr.empty() ? "false" : expr) + ")";
+        }
+        if (nodeName == "NOT")
+        {
+            std::string a = "false";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "A") { a = ResolvePin(ctx, inp); break; }
+            return "(!(" + a + "))";
+        }
+        if (nodeName == "XOR")
+        {
+            std::string a = "false", b = "false";
+            for (const auto& inp : srcNode->Inputs)
+            {
+                if (inp.Name == "A") a = ResolvePin(ctx, inp);
+                if (inp.Name == "B") b = ResolvePin(ctx, inp);
+            }
+            // Para bool, XOR e exatamente "diferente de" — evita depender de
+            // operator^ (que pra bool funciona, mas != deixa a intencao mais
+            // clara no codigo gerado).
+            return "(" + a + " != " + b + ")";
         }
 
         // ── Lógica ────────────────────────────────────────────────────────────
@@ -836,8 +1088,13 @@ namespace axe
             ctx.Line("for (int " + idxVar + " = " + first + "; " + idxVar + " <= " + last + "; " + idxVar + "++)");
             ctx.Line("{");
             ctx.indent++;
-            auto* body = FindNextFlowNode(ctx, node, "Loop Body");
-            GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+            {
+                bool prevFlag = ctx.insideLoopOrFunction;
+                ctx.insideLoopOrFunction = true;
+                auto* body = FindNextFlowNode(ctx, node, "Loop Body");
+                GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+                ctx.insideLoopOrFunction = prevFlag;
+            }
             ctx.indent--;
             ctx.Line("}");
 
@@ -868,8 +1125,13 @@ namespace axe
                     ctx.Line("for (size_t " + idxVar + " = 0; " + idxVar + " < " + arrVar + ".size(); " + idxVar + "++)");
                     ctx.Line("{");
                     ctx.indent++;
-                    auto* body = FindNextFlowNode(ctx, node, "Loop Body");
-                    GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+                    {
+                        bool prevFlag = ctx.insideLoopOrFunction;
+                        ctx.insideLoopOrFunction = true;
+                        auto* body = FindNextFlowNode(ctx, node, "Loop Body");
+                        GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+                        ctx.insideLoopOrFunction = prevFlag;
+                    }
                     ctx.indent--;
                     ctx.Line("}");
                     ctx.indent--;
@@ -880,6 +1142,139 @@ namespace axe
                 }
             }
             return; // sem "Flow Out" genérico — mesmo padrão do Branch/For Loop
+        }
+
+        else if (name == "While Loop")
+        {
+            // SEM limite de iterações automático (de propósito): igual à
+            // Unreal, uma condição que nunca fica falsa trava o jogo de
+            // verdade — o compilador não inventa uma rede de segurança
+            // escondida que mudaria o comportamento do que está no grafo.
+            std::string cond = "false";
+            for (auto& inp : node->Inputs) if (inp.Name == "Condition") { cond = ResolvePin(ctx, inp); break; }
+
+            ctx.Line("while (" + cond + ")");
+            ctx.Line("{");
+            ctx.indent++;
+            {
+                bool prevFlag = ctx.insideLoopOrFunction;
+                ctx.insideLoopOrFunction = true;
+                auto* body = FindNextFlowNode(ctx, node, "Loop Body");
+                if (body) GenerateNode(ctx, body, deltaTimeVar, depth + 1);
+                ctx.insideLoopOrFunction = prevFlag;
+            }
+            ctx.indent--;
+            ctx.Line("}");
+
+            auto* completed = FindNextFlowNode(ctx, node, "Completed");
+            if (completed) GenerateNode(ctx, completed, deltaTimeVar, depth + 1);
+            return;
+        }
+        else if (name == "Delay")
+        {
+            std::string id = std::to_string((int)node->ID.Get());
+
+            if (ctx.insideLoopOrFunction)
+            {
+                // V1: Delay dentro de loop/Function ainda não tem semântica
+                // de "pausar e continuar depois" definida (precisaria
+                // preservar o estado do próprio loop/função também) — segue
+                // direto, sem esperar, e avisa no código gerado.
+                ctx.Line("// AVISO: Delay dentro de um Loop Body ou Function ainda nao e suportado — seguindo sem esperar.");
+                auto* next = FindNextFlowNode(ctx, node, "Completed");
+                if (next) GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                return;
+            }
+
+            std::string dur = "1.0f";
+            for (auto& inp : node->Inputs) if (inp.Name == "Duration") { dur = ResolvePin(ctx, inp); break; }
+
+            // Não continua inline — só ADICIONA uma instância nova de espera
+            // (push_back numa lista, não sobrescreve um timer único). Isso é
+            // o que faz disparar o mesmo Delay duas vezes rodar DUAS esperas
+            // concorrentes e independentes — exatamente o comportamento do
+            // node "Delay" da Unreal (diferente de "Retriggerable Delay",
+            // que reinicia uma única contagem compartilhada). O que vem
+            // depois do Delay é gerado separadamente em __DelayResume_<id>()
+            // (ver Generate()), chamado uma vez pra CADA instância que
+            // zerar — então se 3 chamadas estiverem em voo, completar todas
+            // ao mesmo tempo roda o resume 3 vezes nesse frame, cada uma
+            // independente.
+            ctx.Line("m_delayTimers_" + id + ".push_back(" + dur + ");");
+            return;
+        }
+        else if (name == "Break")
+        {
+            // Terminal — só compila de verdade se estiver dentro do corpo de
+            // um loop (mesma postura do Return Node fora de uma Function:
+            // não validamos isso no grafo, vira erro do C++ na hora de
+            // Compilar, não um aviso do editor).
+            ctx.Line("break;");
+            return;
+        }
+        else if (name == "Continue")
+        {
+            ctx.Line("continue;");
+            return;
+        }
+        else if (name == "Switch on Int")
+        {
+            std::string sel = "0";
+            for (auto& inp : node->Inputs) if (inp.Name == "Selection") { sel = ResolvePin(ctx, inp); break; }
+
+            int caseCount = node->IntValue >= 1 ? node->IntValue : (int)node->Outputs.size() - 1;
+
+            ctx.Line("switch (" + sel + ")");
+            ctx.Line("{");
+            ctx.indent++;
+            for (int i = 0; i < caseCount; i++)
+            {
+                ctx.Line("case " + std::to_string(i) + ":");
+                ctx.indent++;
+                auto* next = FindNextFlowNode(ctx, node, std::to_string(i));
+                if (next) GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                ctx.Line("break;");
+                ctx.indent--;
+            }
+            ctx.Line("default:");
+            ctx.indent++;
+            auto* def = FindNextFlowNode(ctx, node, "Default");
+            if (def) GenerateNode(ctx, def, deltaTimeVar, depth + 1);
+            ctx.Line("break;");
+            ctx.indent--;
+            ctx.indent--;
+            ctx.Line("}");
+            return; // sem "Flow Out" genérico — cada case já segue seu próprio flow
+        }
+        else if (name == "Switch on String")
+        {
+            // C++ não tem switch nativo de string — gera if/else if em
+            // cadeia, comparando contra o NOME de cada pin de Case (o nome
+            // do pin É o valor de comparação, editável inline no node).
+            std::string sel = "\"\"";
+            for (auto& inp : node->Inputs) if (inp.Name == "Selection") { sel = ResolvePin(ctx, inp); break; }
+
+            int caseCount = node->IntValue >= 1 ? node->IntValue : (int)node->Outputs.size() - 1;
+
+            for (int i = 0; i < caseCount; i++)
+            {
+                auto& pin = node->Outputs[i];
+                ctx.Line((i == 0 ? "if (" : "else if (") + sel + " == \"" + pin.Name + "\")");
+                ctx.Line("{");
+                ctx.indent++;
+                auto* next = FindNextFlowNode(ctx, node, pin.Name);
+                if (next) GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+                ctx.indent--;
+                ctx.Line("}");
+            }
+            ctx.Line("else");
+            ctx.Line("{");
+            ctx.indent++;
+            auto* def = FindNextFlowNode(ctx, node, "Default");
+            if (def) GenerateNode(ctx, def, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("}");
+            return; // sem "Flow Out" genérico — cada case já segue seu próprio flow
         }
 
         // ── Functions ────────────────────────────────────────────────────────
@@ -1026,8 +1421,10 @@ namespace axe
         // grafo, não do grafo principal nem do de outra função.
         const ScriptGraph* prevGraph = ctx.graph;
         const ScriptFunction* prevFunction = ctx.currentFunction;
+        bool prevLoopOrFuncFlag = ctx.insideLoopOrFunction;
         ctx.graph = func.Graph.get();
         ctx.currentFunction = &func;
+        ctx.insideLoopOrFunction = true;
 
         const ScriptNode* entry = nullptr;
         for (auto& n : ctx.graph->GetNodes())
@@ -1057,6 +1454,7 @@ namespace axe
 
         ctx.graph = prevGraph;
         ctx.currentFunction = prevFunction;
+        ctx.insideLoopOrFunction = prevLoopOrFuncFlag;
     }
 
     // ─── Geração principal ────────────────────────────────────────────────────
@@ -1111,7 +1509,9 @@ namespace axe
         ctx.code += "#include \"axe/log/log.hpp\"\n";
         ctx.code += "#include \"axe/scene/scene.hpp\"\n";
         ctx.code += "#include <vector>\n";
-        ctx.code += "#include <type_traits>\n\n";
+        ctx.code += "#include <type_traits>\n";
+        ctx.code += "#include <algorithm>\n"; // std::min (Substring) — clamp seguro de Start
+        ctx.code += "#include <cstdlib>\n\n";  // rand()/RAND_MAX (nodes Random)
 
         ctx.code += "extern \"C\" {\n\n";
         ctx.code += "class " + scriptName + " : public axe::ScriptBase\n{\npublic:\n";
@@ -1222,6 +1622,24 @@ namespace axe
             }
         }
 
+        // ── Timers do node Delay ──────────────────────────────────────────────
+        // Um float por instância de node Delay no grafo — negativo = inativo.
+        // Coletado aqui (e reutilizado mais abaixo, na sintetização do
+        // OnUpdate e dos métodos __DelayResume_<id>) pra não precisar
+        // percorrer o grafo de novo em cada lugar que precisa dessa lista.
+        std::vector<const ScriptNode*> delayNodes;
+        for (const auto& node : graph.GetNodes())
+            if (node->Name == "Delay") delayNodes.push_back(node.get());
+
+        if (!delayNodes.empty())
+        {
+            ctx.code += "    // Delay — uma lista por node (cada disparo empilha uma instância\n";
+            ctx.code += "    // nova e independente, igual ao node \"Delay\" da Unreal)\n";
+            for (auto* dn : delayNodes)
+                ctx.code += "    std::vector<float> m_delayTimers_" + std::to_string((int)dn->ID.Get()) + ";\n";
+            ctx.code += "\n";
+        }
+
         // ── Helpers para detectar presença de evento ──────────────────────────
         auto hasEvent = [&](const std::string& evName) -> bool {
             for (const auto& node : graph.GetNodes())
@@ -1241,10 +1659,40 @@ namespace axe
         }
 
         // ── OnUpdate ──────────────────────────────────────────────────────────
-        if (hasEvent("On Update"))
+        // Sintetizado mesmo sem o evento "On Update" estar conectado a nada,
+        // se existir QUALQUER node Delay no grafo — o prólogo que checa os
+        // timers precisa rodar todo frame independente do que o usuário
+        // conectou (ou não) ao evento de verdade.
+        if (hasEvent("On Update") || !delayNodes.empty())
         {
             ctx.code += "    void OnUpdate(float deltaTime) override\n    {\n";
             ctx.indent = 2;
+
+            if (!delayNodes.empty())
+            {
+                ctx.Line("// Prólogo do Delay — cada node tem uma LISTA de instâncias em voo");
+                ctx.Line("// (uma por chamada, igual à Unreal). 'n' é fixado ANTES de chamar");
+                ctx.Line("// qualquer resume — se o resume disparar este MESMO Delay de novo,");
+                ctx.Line("// o push_back só entra na próxima passada, nunca invalida os índices");
+                ctx.Line("// 0..n-1 que já estamos percorrendo aqui (reentrância segura).");
+                for (auto* dn : delayNodes)
+                {
+                    std::string id = std::to_string((int)dn->ID.Get());
+                    std::string vec = "m_delayTimers_" + id;
+                    ctx.Line("if (!" + vec + ".empty())");
+                    ctx.Line("{");
+                    ctx.indent++;
+                    ctx.Line("size_t _n = " + vec + ".size();");
+                    ctx.Line("for (size_t _i = 0; _i < _n; _i++) " + vec + "[_i] -= deltaTime;");
+                    ctx.Line("for (size_t _i = 0; _i < _n; _i++)");
+                    ctx.Line("    if (" + vec + "[_i] <= 0.0f) __DelayResume_" + id + "(deltaTime);");
+                    ctx.Line(vec + ".erase(std::remove_if(" + vec + ".begin(), " + vec + ".end(),");
+                    ctx.Line("    [](float t){ return t <= 0.0f; }), " + vec + ".end());");
+                    ctx.indent--;
+                    ctx.Line("}");
+                }
+            }
+
             for (const auto& node : graph.GetNodes())
                 if (node->Name == "On Update")
                     GenerateEventBody(ctx, node.get(), "deltaTime");
@@ -1318,6 +1766,33 @@ namespace axe
                 ctx.code += "    " + sig + "\n    {\n";
                 ctx.indent = 2;
                 GenerateFunctionBody(ctx, func);
+                ctx.code += "    }\n\n";
+            }
+        }
+
+        // ── Métodos de retomada do Delay ─────────────────────────────────────
+        // Um método privado por node Delay, contendo o que vem depois dele
+        // no grafo (a partir do pin "Completed") — chamado pelo prólogo do
+        // OnUpdate uma vez pra CADA instância (chamada) que zerar, não uma
+        // vez por node. Gerado via o mesmo GenerateNode normal, só que
+        // isolado num método próprio em vez de inline, porque o ponto do
+        // Delay em si já retornou (ver GenerateNode "Delay") sem seguir o flow.
+        if (!delayNodes.empty())
+        {
+            ctx.code += "private:\n";
+            ctx.code += "    // Delay — retomada\n";
+            for (auto* dn : delayNodes)
+            {
+                std::string id = std::to_string((int)dn->ID.Get());
+                // Recebe deltaTime como parâmetro (não tem acesso direto —
+                // é um método próprio, separado de OnUpdate) pro caso de o
+                // que vem depois do Delay precisar dele (ex: um Move/Rotate
+                // continuando a se mover). Quem chama (prólogo do OnUpdate)
+                // já tem deltaTime em escopo, só repassa.
+                ctx.code += "    void __DelayResume_" + id + "(float deltaTime)\n    {\n";
+                ctx.indent = 2;
+                auto* next = FindNextFlowNode(ctx, dn, "Completed");
+                if (next) GenerateNode(ctx, next, "deltaTime", 0);
                 ctx.code += "    }\n\n";
             }
         }

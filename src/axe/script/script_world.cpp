@@ -93,9 +93,9 @@ namespace axe
             {
                 static int s_Frame = 0;
                 s_Frame++;
-                if (s_Frame <= 3)
-                    AXE_CORE_INFO("ScriptWorld::OnSceneUpdate frame={} entity={} Instance={}",
-                        s_Frame, (uint32_t)entity, (void*)sc.Instance.get());
+                //if (s_Frame <= 3)
+                //    AXE_CORE_INFO("ScriptWorld::OnSceneUpdate frame={} entity={} Instance={}",
+                //        s_Frame, (uint32_t)entity, (void*)sc.Instance.get());
 
                 if (!sc.Instance)
                 {
@@ -114,21 +114,21 @@ namespace axe
                 sc.Instance->PreUpdate(cur, prev);
 
                 // Log quando WASD pressionado — confirma que input chegou ao PreUpdate
-                if (cur && (cur[87] || cur[65] || cur[83] || cur[68]))
-                    AXE_CORE_INFO("ScriptWorld: WASD antes OnUpdate — W={} A={} S={} D={}",
-                        (bool)cur[87], (bool)cur[65], (bool)cur[83], (bool)cur[68]);
+                //if (cur && (cur[87] || cur[65] || cur[83] || cur[68]))
+                //    AXE_CORE_INFO("ScriptWorld: WASD antes OnUpdate — W={} A={} S={} D={}",
+                //        (bool)cur[87], (bool)cur[65], (bool)cur[83], (bool)cur[68]);
 
                 sc.Instance->OnUpdate(deltaTime);
 
                 // Log Velocity do CC após OnUpdate — confirma se Move() foi chamado
                 auto* cc = scene.GetRegistry().try_get<CharacterControllerComponent>(entity);
-                if (cc && (std::abs(cc->Velocity.x) > 0.001f || std::abs(cc->Velocity.z) > 0.001f))
-                    AXE_CORE_INFO("ScriptWorld: CC Velocity após OnUpdate = ({:.2f},{:.2f})",
-                        cc->Velocity.x, cc->Velocity.z);
+                //if (cc && (std::abs(cc->Velocity.x) > 0.001f || std::abs(cc->Velocity.z) > 0.001f))
+                //    AXE_CORE_INFO("ScriptWorld: CC Velocity após OnUpdate = ({:.2f},{:.2f})",
+                //        cc->Velocity.x, cc->Velocity.z);
             });
 
-        if (updated == 0)
-            AXE_CORE_WARN("ScriptWorld::OnSceneUpdate — 0 scripts rodando!");
+        //if (updated == 0)
+        //    AXE_CORE_WARN("ScriptWorld::OnSceneUpdate — 0 scripts rodando!");
 
         registry.view<RigidbodyComponent>().each([&](entt::entity entity, RigidbodyComponent& rb)
             {

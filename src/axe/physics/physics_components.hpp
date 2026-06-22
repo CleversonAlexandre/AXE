@@ -39,6 +39,12 @@ namespace axe
 
         glm::vec3 PendingVelocity = {};
         bool      NeedsVelocitySet = false;
+
+        // Velocidade atual, sincronizada do Jolt todo frame por PhysicsWorld::
+        // OnUpdate — mesmo padrão de cache usado em CharacterControllerComponent
+        // ::Velocity. Existe pra ScriptRigidbodyProxy::GetVelocity() poder ler
+        // sem precisar de acesso direto ao Jolt (que o proxy não tem).
+        glm::vec3 CurrentVelocity = {};
     };
 
     // ==================== Collider ====================

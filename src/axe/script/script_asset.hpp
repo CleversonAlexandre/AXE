@@ -132,10 +132,31 @@ namespace axe
         Vec2Array, Vec4Array, QuatArray, EntityArray,
     };
 
-    // true se o tipo for uma das 9 variantes "Array" do enum acima.
+    // BUGFIX: as 3 funções abaixo faziam ARITMÉTICA com os valores do enum
+    // (offset = (int)t - (int)FloatArray), assumindo que os 9 tipos
+    // escalares (Float..Entity) e os 9 tipos array (FloatArray..EntityArray)
+    // ficam na MESMA ORDEM RELATIVA dentro de cada grupo. Funciona hoje
+    // porque essa ordem paralela está certa, mas é uma armadilha silenciosa:
+    // inserir um tipo escalar novo sem inserir o array correspondente na
+    // posição relativa certa (ou vice-versa) quebraria isso sem nenhum erro
+    // de compilação. Reescrito como switch explícito — sem depender de
+    // posição nenhuma, e exaustivo o suficiente pra avisar (via -Wswitch)
+    // se um tipo novo for adicionado ao enum e esquecido aqui.
+
     inline bool IsArrayType(ScriptVarType t)
     {
-        return (int)t >= (int)ScriptVarType::FloatArray;
+        switch (t)
+        {
+        case ScriptVarType::Float: case ScriptVarType::Bool: case ScriptVarType::Int:
+        case ScriptVarType::Vec3:  case ScriptVarType::String: case ScriptVarType::Vec2:
+        case ScriptVarType::Vec4:  case ScriptVarType::Quat:  case ScriptVarType::Entity:
+            return false;
+        case ScriptVarType::FloatArray: case ScriptVarType::BoolArray: case ScriptVarType::IntArray:
+        case ScriptVarType::Vec3Array:  case ScriptVarType::StringArray: case ScriptVarType::Vec2Array:
+        case ScriptVarType::Vec4Array:  case ScriptVarType::QuatArray: case ScriptVarType::EntityArray:
+            return true;
+        }
+        return false;
     }
 
     // Para um tipo Array, retorna o tipo escalar correspondente (ex.:
@@ -143,9 +164,24 @@ namespace axe
     // (idempotente — seguro de chamar sem checar IsArrayType antes).
     inline ScriptVarType GetElementType(ScriptVarType t)
     {
-        if (!IsArrayType(t)) return t;
-        int offset = (int)t - (int)ScriptVarType::FloatArray;
-        return (ScriptVarType)offset; // Float..Entity têm a mesma ordem relativa
+        switch (t)
+        {
+        case ScriptVarType::FloatArray:  return ScriptVarType::Float;
+        case ScriptVarType::BoolArray:   return ScriptVarType::Bool;
+        case ScriptVarType::IntArray:    return ScriptVarType::Int;
+        case ScriptVarType::Vec3Array:   return ScriptVarType::Vec3;
+        case ScriptVarType::StringArray: return ScriptVarType::String;
+        case ScriptVarType::Vec2Array:   return ScriptVarType::Vec2;
+        case ScriptVarType::Vec4Array:   return ScriptVarType::Vec4;
+        case ScriptVarType::QuatArray:   return ScriptVarType::Quat;
+        case ScriptVarType::EntityArray: return ScriptVarType::Entity;
+            // Já escalar — idempotente, retorna ele mesmo
+        case ScriptVarType::Float: case ScriptVarType::Bool: case ScriptVarType::Int:
+        case ScriptVarType::Vec3:  case ScriptVarType::String: case ScriptVarType::Vec2:
+        case ScriptVarType::Vec4:  case ScriptVarType::Quat:  case ScriptVarType::Entity:
+            return t;
+        }
+        return t;
     }
 
     // Inverso de GetElementType — para um tipo escalar, retorna a versão Array
@@ -153,8 +189,24 @@ namespace axe
     // retorna ele mesmo sem alterar (idempotente).
     inline ScriptVarType GetArrayType(ScriptVarType t)
     {
-        if (IsArrayType(t)) return t;
-        return (ScriptVarType)((int)t + (int)ScriptVarType::FloatArray);
+        switch (t)
+        {
+        case ScriptVarType::Float:  return ScriptVarType::FloatArray;
+        case ScriptVarType::Bool:   return ScriptVarType::BoolArray;
+        case ScriptVarType::Int:    return ScriptVarType::IntArray;
+        case ScriptVarType::Vec3:   return ScriptVarType::Vec3Array;
+        case ScriptVarType::String: return ScriptVarType::StringArray;
+        case ScriptVarType::Vec2:   return ScriptVarType::Vec2Array;
+        case ScriptVarType::Vec4:   return ScriptVarType::Vec4Array;
+        case ScriptVarType::Quat:   return ScriptVarType::QuatArray;
+        case ScriptVarType::Entity: return ScriptVarType::EntityArray;
+            // Já é array — idempotente, retorna ele mesmo
+        case ScriptVarType::FloatArray: case ScriptVarType::BoolArray: case ScriptVarType::IntArray:
+        case ScriptVarType::Vec3Array:  case ScriptVarType::StringArray: case ScriptVarType::Vec2Array:
+        case ScriptVarType::Vec4Array:  case ScriptVarType::QuatArray: case ScriptVarType::EntityArray:
+            return t;
+        }
+        return t;
     }
 
     static std::string ScriptVarTypeToString(ScriptVarType t)

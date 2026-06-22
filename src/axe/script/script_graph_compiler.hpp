@@ -41,6 +41,14 @@ namespace axe
             // do corpo de um evento) — usado pelo Return Node pra saber pra
             // qual ScriptFunction emitir o(s) "return"/atribuição dos Outputs.
             const ScriptFunction* currentFunction = nullptr;
+            // true enquanto gerando o corpo de um Loop Body (For/While/For
+            // Each) ou de uma Function — usado pelo node Delay pra saber se
+            // está num contexto onde "pausar e continuar depois" não tem
+            // semântica bem definida ainda (precisaria preservar o estado do
+            // próprio loop/função também). Fora desses dois casos (direto
+            // num Event body, ou dentro de Branch/Sequence/Switch — que não
+            // repetem, só desviam uma vez), fica false.
+            bool insideLoopOrFunction = false;
 
             void Line(const std::string& s = "")
             {

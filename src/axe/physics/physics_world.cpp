@@ -384,10 +384,35 @@ namespace axe
     {
         if (!PhysicsSystem::Get().IsInitialized()) return;
 
-        PhysicsSystem::Get().Step(deltaTime);
-
         auto& registry = scene.GetRegistry();
         auto& bi = GetBI();
+
+        // ── Consome comandos pendentes do ScriptRigidbodyProxy ANTES do Step,
+        // pra fazerem efeito já nesta simulação (e não só na próxima) — os
+        // campos existiam desde antes, mas nunca eram lidos em lugar nenhum
+        // (ScriptRigidbodyProxy::AddForce/SetVelocity setavam e nada consumia).
+        registry.view<RigidbodyComponent>().each(
+            [&](entt::entity, RigidbodyComponent& rb)
+            {
+                if (!rb.IsCreated) return;
+                JPH::BodyID id = ToBodyID(rb.BodyID);
+                if (id.IsInvalid() || !bi.IsAdded(id)) return;
+
+                if (rb.NeedsForceApply)
+                {
+                    bi.AddForce(id, ToJolt(rb.PendingForce));
+                    rb.NeedsForceApply = false;
+                    rb.PendingForce = {};
+                }
+                if (rb.NeedsVelocitySet)
+                {
+                    bi.SetLinearVelocity(id, ToJolt(rb.PendingVelocity));
+                    rb.NeedsVelocitySet = false;
+                    rb.PendingVelocity = {};
+                }
+            });
+
+        PhysicsSystem::Get().Step(deltaTime);
 
         registry.view<RigidbodyComponent, TransformComponent>().each(
             [&](entt::entity entity, RigidbodyComponent& rb, TransformComponent& tc)
@@ -400,6 +425,9 @@ namespace axe
                 tc.Data.Position = FromJolt(bi.GetPosition(id));
                 tc.Data.Rotation = FromJoltRot(bi.GetRotation(id));
                 tc.Data.UseWorldMatrix = false;
+                // Cache de leitura pra ScriptRigidbodyProxy::GetVelocity() —
+                // o proxy não tem acesso direto ao Jolt, só ao componente.
+                rb.CurrentVelocity = FromJolt(bi.GetLinearVelocity(id));
             });
 
 

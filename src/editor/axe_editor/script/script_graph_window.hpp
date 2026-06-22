@@ -67,6 +67,12 @@ namespace axe
         // grafo do asset (principal + todas as outras funções, recursão
         // inclusive) — chamar sempre que func.Inputs/Outputs mudar.
         void RebuildFunctionCallSites(ScriptFunction& func);
+        // Cria um Comment — se houver nodes selecionados no canvas, a caixa
+        // nasce dimensionada pra envolvê-los; senão nasce em branco na
+        // posição indicada. Usada tanto pelo menu "+ Add Comment" quanto
+        // pelo atalho de teclado 'C' (mesmo comportamento da Unreal nos
+        // dois casos — um só lugar implementando isso, sem duplicar).
+        void CreateCommentNode(ImVec2 fallbackPos);
         bool IsOpen() const { return m_IsOpen; }
 
     private:
@@ -212,6 +218,11 @@ namespace axe
         std::string m_RenamingCat;
         char        m_RenameCatBuf[64] = {};
         bool        m_RenameCatJustStarted = false;
+
+        // Rename inline do título do Comment box (duplo clique) — guarda o
+        // ID do node em edição, igual ao padrão de m_RenamingCat acima.
+        int  m_RenamingComment = -1;
+        bool m_RenameCommentJustStarted = false;
         std::vector<ed::NodeId> m_PendingDeleteNodes;
         bool  m_CompCollapsed[32] = {};
         bool  m_ScaleLocked = false; // cadeado do Scale: true = escala uniforme (todos os eixos juntos)

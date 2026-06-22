@@ -29,7 +29,7 @@ namespace axe
         // visual da Unreal para "isso é uma lista". O parâmetro "filled" do
         // DrawIcon (passado em cada call site abaixo) já trata sozinho o caso
         // vazado/preenchido conforme o pin está conectado ou não.
-        if ((int)t >= (int)ScriptPinType::FloatArray) return IconType::Grid;
+        if (IsArrayPinType(t)) return IconType::Grid;
         return IconType::Circle;
     }
 
@@ -116,6 +116,134 @@ namespace axe
         // vez para qualquer widget de qualquer node, presente ou futuro.
         ImGui::PushID((int)node->ID.Get());
 
+        // ── Comment box — caminho totalmente separado, igual o de conversão
+        // abaixo: usa ed::Group (suporte nativo da lib — arrastar o título
+        // move junto todo node visualmente dentro da caixa, de graça) em vez
+        // do header+pins normal, já que Comment não tem nenhum pin.
+        if (node->Name == "Comment")
+        {
+            const float commentAlpha = 0.75f;
+            ImColor bg(node->CommentColor[0], node->CommentColor[1], node->CommentColor[2], 60.f / 255.f);
+            ImColor border(node->CommentColor[0], node->CommentColor[1], node->CommentColor[2], 200.f / 255.f);
+
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, commentAlpha);
+            ed::PushStyleColor(ed::StyleColor_NodeBg, bg);
+            ed::PushStyleColor(ed::StyleColor_NodeBorder, border);
+            ed::BeginNode(node->ID);
+
+            bool isRenaming = (m_RenamingComment == (int)node->ID.Get());
+            if (isRenaming)
+            {
+                if (m_RenameCommentJustStarted) { ImGui::SetKeyboardFocusHere(); m_RenameCommentJustStarted = false; }
+                char buf[128];
+                strncpy(buf, node->StringValue.c_str(), 127); buf[127] = 0;
+                ImGui::SetNextItemWidth(std::max(node->CommentSize.x - 16.f, 80.f));
+                if (ImGui::InputText("##commenttitle", buf, sizeof(buf),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+                {
+                    node->StringValue = buf;
+                    m_RenamingComment = -1;
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) m_RenamingComment = -1;
+            }
+            else
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                ImGui::TextUnformatted(node->StringValue.empty() ? "Comment" : node->StringValue.c_str());
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                {
+                    m_RenamingComment = (int)node->ID.Get();
+                    m_RenameCommentJustStarted = true;
+                }
+                // Botão direito no título — paleta rápida de cor (presets,
+                // igual ao "Comment Color" da Unreal, sem picker completo
+                // pra não pesar a interação de algo tão simples).
+                if (ImGui::BeginPopupContextItem("##commentcolor"))
+                {
+                    static const float s_Presets[][3] = {
+                        {0.10f,0.35f,0.45f}, {0.85f,0.85f,0.85f}, {0.75f,0.35f,0.10f},
+                        {0.55f,0.15f,0.55f}, {0.70f,0.12f,0.12f}, {0.15f,0.55f,0.20f},
+                    };
+                    ImGui::TextDisabled("Cor do Comment:");
+                    for (int s = 0; s < 6; s++)
+                    {
+                        ImGui::SameLine();
+                        ImGui::PushID(s);
+                        ImVec4 sc(s_Presets[s][0], s_Presets[s][1], s_Presets[s][2], 1);
+                        ImGui::PushStyleColor(ImGuiCol_Button, sc);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, sc);
+                        if (ImGui::Button("##swatch", ImVec2(18, 18)))
+                        {
+                            PushUndo("Change Comment Color");
+                            node->CommentColor[0] = s_Presets[s][0];
+                            node->CommentColor[1] = s_Presets[s][1];
+                            node->CommentColor[2] = s_Presets[s][2];
+                            CommitUndo("Change Comment Color");
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::PopStyleColor(2);
+                        ImGui::PopID();
+                    }
+                    ImGui::EndPopup();
+                }
+            }
+
+            ed::Group(node->CommentSize);
+            ed::EndNode();
+            ed::PopStyleColor(2);
+            ImGui::PopStyleVar();
+
+            // Lê de volta o tamanho atual — o usuário pode ter redimensionado
+            // arrastando a borda (resize é tratado internamente pela lib);
+            // sem isso, o tamanho não sobreviveria ao próximo frame/save.
+            node->CommentSize = ed::GetNodeSize(node->ID);
+
+            ImGui::PopID();
+            return;
+        }
+
+        // ── Reroute — "knot" minúsculo, ainda mais compacto que os nodes de
+        // conversão abaixo: sem seta central, sem header, os dois pins quase
+        // colados (dão a impressão visual de um único pontinho no fio,
+        // mesmo sendo dois ed::PinId separados por trás).
+        if (node->Name == "Reroute")
+        {
+            ed::PushStyleColor(ed::StyleColor_NodeBg, ImColor(255, 255, 255, 30));
+            ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(255, 255, 255, 90));
+            ed::PushStyleVar(ed::StyleVar_NodeRounding, 20.0f);
+            ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
+            ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(2, 2, 2, 2));
+            ed::BeginNode(node->ID);
+
+            float dotSz = ICON_SZ * 0.45f;
+            ImGui::BeginGroup();
+            if (!node->Inputs.empty())
+            {
+                auto& pin = node->Inputs[0];
+                ed::BeginPin(pin.ID, ed::PinKind::Input);
+                ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
+                    m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
+                ed::EndPin();
+            }
+            ImGui::SameLine(0, 0);
+            if (!node->Outputs.empty())
+            {
+                auto& pin = node->Outputs[0];
+                ed::BeginPin(pin.ID, ed::PinKind::Output);
+                ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
+                    m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
+                ed::EndPin();
+            }
+            ImGui::EndGroup();
+
+            ed::EndNode();
+            ed::PopStyleVar(3);
+            ed::PopStyleColor(2);
+            ImGui::PopID();
+            return;
+        }
+
         // ── Nodes de conversão — visual compacto estilo Unreal ────────────────
         static const char* s_ConvNodes[] = {
             "To Float","To Int","To Bool","To String","To Vec3","Break Vec3","Float to Vec3",nullptr
@@ -171,6 +299,10 @@ namespace axe
         float inW = 0, outW = 0;
         for (auto& p : node->Inputs)  inW = std::max(inW, ImGui::CalcTextSize(p.Name.c_str()).x);
         for (auto& p : node->Outputs) outW = std::max(outW, ImGui::CalcTextSize(p.Name.c_str()).x);
+        // Switch on String usa campo editável de largura fixa (90px) pros
+        // pins de case, em vez de texto — garante espaço mesmo que o nome
+        // atual seja curto (senão o campo poderia "vazar" pra fora do node).
+        if (node->Name == "Switch on String") outW = std::max(outW, 90.0f);
         float titleW = ImGui::CalcTextSize(node->Name.c_str()).x + 16.0f;
         float nodeW = std::max(titleW, inW + outW + ICON_SZ * 2 + 24.0f);
         nodeW = std::max(nodeW, 160.0f);
@@ -379,6 +511,58 @@ namespace axe
             ImGui::Spacing();
         }
 
+        // ── Botões +/- de casos no node Switch on Int/String ──────────────────
+        // node->IntValue espelha o número de casos NUMERADOS (sem contar o
+        // "Default", que é fixo e nunca aparece nesse contador). Mesmo
+        // RebuildSwitchPins serve pros dois — só o tipo do pin Selection e
+        // o codegen (switch vs if/else if) mudam entre Int e String.
+        if (node->Name == "Switch on Int" || node->Name == "Switch on String")
+        {
+            int caseCount = node->IntValue >= 1 ? node->IntValue : (int)node->Outputs.size() - 1;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+            if (ImGui::SmallButton("-##swminus"))
+            {
+                PushUndo("Remove Switch Case");
+                m_Graph->RebuildSwitchPins(node, caseCount - 1);
+                CommitUndo("Remove Switch Case");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d casos", caseCount);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+##swplus"))
+            {
+                PushUndo("Add Switch Case");
+                m_Graph->RebuildSwitchPins(node, caseCount + 1);
+                CommitUndo("Add Switch Case");
+            }
+            ImGui::Spacing();
+        }
+
+        // ── Botões +/- de entradas no AND/OR ───────────────────────────────────
+        // Combina A, B, C... com && ou || em cadeia (ver ResolvePin) — antes
+        // só aceitava A/B fixos.
+        if (node->Name == "AND" || node->Name == "OR")
+        {
+            int inputCount = node->IntValue >= 2 ? node->IntValue : (int)node->Inputs.size();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+            if (ImGui::SmallButton("-##logicminus"))
+            {
+                PushUndo("Remove Logic Input");
+                m_Graph->RebuildLogicInputs(node, inputCount - 1);
+                CommitUndo("Remove Logic Input");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d entradas", inputCount);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+##logicplus"))
+            {
+                PushUndo("Add Logic Input");
+                m_Graph->RebuildLogicInputs(node, inputCount + 1);
+                CommitUndo("Add Logic Input");
+            }
+            ImGui::Spacing();
+        }
+
         // ── Pins ─────────────────────────────────────────────────────────────
         int maxP = (int)std::max(node->Inputs.size(), node->Outputs.size());
         for (int i = 0; i < maxP; i++)
@@ -405,19 +589,51 @@ namespace axe
             if (hasOut)
             {
                 auto& pin = node->Outputs[i];
-                float textW = ImGui::CalcTextSize(pin.Name.c_str()).x;
-                float totW = textW + 3.f + ICON_SZ;
-                ImGui::SameLine(nodeW - totW - 2.f);
-                ImGui::SetCursorPosY(rowY + (ICON_SZ - ImGui::GetTextLineHeight()) * .5f);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.88f, 0.88f, 1));
-                ImGui::TextUnformatted(pin.Name.c_str());
-                ImGui::PopStyleColor();
-                ImGui::SameLine(0, 3);
-                ImGui::SetCursorPosY(rowY);
-                ed::BeginPin(pin.ID, ed::PinKind::Output);
-                ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
-                    m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
-                ed::EndPin();
+                // Switch on String: o NOME do pin é o valor comparado no
+                // codegen (ver GenerateNode) — vira um campo editável em vez
+                // de texto estático. "Default" fica sempre fixo, sem editor.
+                bool editableCase = (node->Name == "Switch on String" && pin.Name != "Default");
+
+                if (editableCase)
+                {
+                    float boxW = 90.f;
+                    ImGui::SameLine(nodeW - boxW - 3.f - ICON_SZ - 4.f);
+                    ImGui::SetCursorPosY(rowY);
+                    char buf[64];
+                    strncpy(buf, pin.Name.c_str(), 63); buf[63] = 0;
+                    ImGui::SetNextItemWidth(boxW);
+                    ImGui::PushID((int)pin.ID.Get());
+                    if (ImGui::InputText("##caseval", buf, sizeof(buf),
+                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+                    {
+                        PushUndo("Rename Switch Case");
+                        pin.Name = buf;
+                        CommitUndo("Rename Switch Case");
+                    }
+                    ImGui::PopID();
+                    ImGui::SameLine(0, 3);
+                    ImGui::SetCursorPosY(rowY);
+                    ed::BeginPin(pin.ID, ed::PinKind::Output);
+                    ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
+                        m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                    ed::EndPin();
+                }
+                else
+                {
+                    float textW = ImGui::CalcTextSize(pin.Name.c_str()).x;
+                    float totW = textW + 3.f + ICON_SZ;
+                    ImGui::SameLine(nodeW - totW - 2.f);
+                    ImGui::SetCursorPosY(rowY + (ICON_SZ - ImGui::GetTextLineHeight()) * .5f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.88f, 0.88f, 1));
+                    ImGui::TextUnformatted(pin.Name.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine(0, 3);
+                    ImGui::SetCursorPosY(rowY);
+                    ed::BeginPin(pin.ID, ed::PinKind::Output);
+                    ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
+                        m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                    ed::EndPin();
+                }
             }
 
             ImGui::SetCursorPosY(rowY + PIN_H);

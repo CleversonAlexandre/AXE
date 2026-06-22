@@ -37,6 +37,87 @@ namespace axe
         Vec2Array, Vec4Array, QuatArray, EntityArray,
     };
 
+    // BUGFIX (mesma causa do bug de Category): pin.Type era serializado como
+    // inteiro cru ((int)pin.Type) — qualquer inserção futura no MEIO do enum
+    // acima corromperia o tipo (e portanto a cor/comportamento) de todo pin
+    // salvo antes. Serializar pelo NOME resolve isso de vez.
+    inline std::string ScriptPinTypeToString(ScriptPinType t)
+    {
+        switch (t)
+        {
+        case ScriptPinType::Flow:        return "Flow";
+        case ScriptPinType::Float:       return "Float";
+        case ScriptPinType::Vec3:        return "Vec3";
+        case ScriptPinType::Bool:        return "Bool";
+        case ScriptPinType::Int:         return "Int";
+        case ScriptPinType::String:      return "String";
+        case ScriptPinType::Object:      return "Object";
+        case ScriptPinType::Vec2:        return "Vec2";
+        case ScriptPinType::Vec4:        return "Vec4";
+        case ScriptPinType::Quat:        return "Quat";
+        case ScriptPinType::Wildcard:    return "Wildcard";
+        case ScriptPinType::FloatArray:  return "FloatArray";
+        case ScriptPinType::BoolArray:   return "BoolArray";
+        case ScriptPinType::IntArray:    return "IntArray";
+        case ScriptPinType::Vec3Array:   return "Vec3Array";
+        case ScriptPinType::StringArray: return "StringArray";
+        case ScriptPinType::Vec2Array:   return "Vec2Array";
+        case ScriptPinType::Vec4Array:   return "Vec4Array";
+        case ScriptPinType::QuatArray:   return "QuatArray";
+        case ScriptPinType::EntityArray: return "EntityArray";
+        default:                         return "Float";
+        }
+    }
+    inline ScriptPinType ScriptPinTypeFromString(const std::string& s)
+    {
+        if (s == "Flow")        return ScriptPinType::Flow;
+        if (s == "Float")       return ScriptPinType::Float;
+        if (s == "Vec3")        return ScriptPinType::Vec3;
+        if (s == "Bool")        return ScriptPinType::Bool;
+        if (s == "Int")         return ScriptPinType::Int;
+        if (s == "String")      return ScriptPinType::String;
+        if (s == "Object")      return ScriptPinType::Object;
+        if (s == "Vec2")        return ScriptPinType::Vec2;
+        if (s == "Vec4")        return ScriptPinType::Vec4;
+        if (s == "Quat")        return ScriptPinType::Quat;
+        if (s == "Wildcard")    return ScriptPinType::Wildcard;
+        if (s == "FloatArray")  return ScriptPinType::FloatArray;
+        if (s == "BoolArray")   return ScriptPinType::BoolArray;
+        if (s == "IntArray")    return ScriptPinType::IntArray;
+        if (s == "Vec3Array")   return ScriptPinType::Vec3Array;
+        if (s == "StringArray") return ScriptPinType::StringArray;
+        if (s == "Vec2Array")   return ScriptPinType::Vec2Array;
+        if (s == "Vec4Array")   return ScriptPinType::Vec4Array;
+        if (s == "QuatArray")   return ScriptPinType::QuatArray;
+        if (s == "EntityArray") return ScriptPinType::EntityArray;
+        return ScriptPinType::Float;
+    }
+
+    // BUGFIX relacionado: em vários lugares do editor, "é um tipo de array?"
+    // era checado via (int)tipo >= (int)ScriptPinType::FloatArray — ou seja,
+    // a ORDEM do enum também sustentava lógica de runtime, não só
+    // serialização. Inserir um tipo novo no meio quebraria isso silenciosamente
+    // também. Esta função substitui essa comparação ordinal por uma lista
+    // explícita — sem depender de onde cada valor fica no enum.
+    inline bool IsArrayPinType(ScriptPinType t)
+    {
+        switch (t)
+        {
+        case ScriptPinType::FloatArray:
+        case ScriptPinType::BoolArray:
+        case ScriptPinType::IntArray:
+        case ScriptPinType::Vec3Array:
+        case ScriptPinType::StringArray:
+        case ScriptPinType::Vec2Array:
+        case ScriptPinType::Vec4Array:
+        case ScriptPinType::QuatArray:
+        case ScriptPinType::EntityArray:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     // Retorna true se os tipos são compatíveis para conexão direta (sem cast)
     inline bool ArePinsExact(ScriptPinType from, ScriptPinType to)
     {
@@ -134,9 +215,62 @@ namespace axe
         Array,     // roxo claro — Array Add/Remove/Get/Length/Clear
         FlowControl, // azul acinzentado — Sequence/For Loop/For Each Loop
         Function,  // verde-azulado — Function Entry/Return Node/Call <Function>
+        // Comment não usa cor de header (DrawNode trata ele num caminho
+        // totalmente separado, como ed::Group em vez de node normal) — só
+        // existe a categoria pra manter o campo Category sempre preenchido.
+        Comment,
+        // Reroute também não usa cor de header próprio — desenhado num
+        // caminho compacto separado, sem header, só os dois pins (igual aos
+        // nodes de Cast). Categoria existe só pra manter Category preenchido.
+        Reroute,
         Variable,  // pink — Get/Set Variable nodes
         Print,     // rosa — Print String
     };
+
+    // BUGFIX: Category era serializada como inteiro cru ((int)node->Category).
+    // Toda vez que uma categoria nova é inserida no MEIO do enum acima (já
+    // aconteceu 3x: FlowControl, Function, Comment), os valores numéricos de
+    // TODA categoria depois dela mudam de posição — corrompendo a categoria
+    // (e portanto a cor do header) de qualquer node salvo ANTES da inserção.
+    // Sintoma exato: nodes trocando de cor sozinhos a cada reabertura do
+    // projeto, depois de qualquer sessão que adicione uma categoria nova.
+    // Serializar pelo NOME em vez do índice numérico resolve isso de vez —
+    // mesma lição já aplicada em ScriptVarTypeToString/FromString.
+    inline std::string ScriptNodeCategoryToString(ScriptNodeCategory c)
+    {
+        switch (c)
+        {
+        case ScriptNodeCategory::Event:       return "Event";
+        case ScriptNodeCategory::Action:      return "Action";
+        case ScriptNodeCategory::Logic:       return "Logic";
+        case ScriptNodeCategory::Math:        return "Math";
+        case ScriptNodeCategory::Input:       return "Input";
+        case ScriptNodeCategory::Array:       return "Array";
+        case ScriptNodeCategory::FlowControl: return "FlowControl";
+        case ScriptNodeCategory::Function:    return "Function";
+        case ScriptNodeCategory::Comment:     return "Comment";
+        case ScriptNodeCategory::Reroute:     return "Reroute";
+        case ScriptNodeCategory::Variable:    return "Variable";
+        case ScriptNodeCategory::Print:       return "Print";
+        default:                              return "Action";
+        }
+    }
+    inline ScriptNodeCategory ScriptNodeCategoryFromString(const std::string& s)
+    {
+        if (s == "Event")       return ScriptNodeCategory::Event;
+        if (s == "Action")      return ScriptNodeCategory::Action;
+        if (s == "Logic")       return ScriptNodeCategory::Logic;
+        if (s == "Math")        return ScriptNodeCategory::Math;
+        if (s == "Input")       return ScriptNodeCategory::Input;
+        if (s == "Array")       return ScriptNodeCategory::Array;
+        if (s == "FlowControl") return ScriptNodeCategory::FlowControl;
+        if (s == "Function")    return ScriptNodeCategory::Function;
+        if (s == "Comment")     return ScriptNodeCategory::Comment;
+        if (s == "Reroute")     return ScriptNodeCategory::Reroute;
+        if (s == "Variable")    return ScriptNodeCategory::Variable;
+        if (s == "Print")       return ScriptNodeCategory::Print;
+        return ScriptNodeCategory::Action;
+    }
 
     struct ScriptPin
     {
@@ -200,6 +334,14 @@ namespace axe
         // para não colidir com isso quando o tipo da variável é String.
         std::string       StringLocalValue;
 
+        // ── Comment box ──────────────────────────────────────────────────────
+        // Só usado quando Name == "Comment" — StringValue é reaproveitado
+        // como o TEXTO do título (mesma convenção de reuso já usada pra
+        // nome de variável/Action/etc.). Size e Color são exclusivos do
+        // Comment, sem equivalente em nenhum outro tipo de node.
+        ImVec2            CommentSize = ImVec2(320, 240);
+        float             CommentColor[3] = { 0.10f, 0.35f, 0.45f };
+
         ScriptNode(int id, const char* name, ScriptNodeCategory cat)
             : ID(id), Name(name), Category(cat) {}
 
@@ -251,6 +393,18 @@ namespace axe
         // apontava para os pins descartados. Clampa entre 2 e 8 pins.
         // Idempotente: se node->Outputs.size() já é igual a pinCount, não faz nada.
         void RebuildSequencePins(ScriptNode* node, int pinCount);
+
+        // Mesma ideia do RebuildSequencePins, mas pro Switch on Int — o pin
+        // "Default" fica sempre fixo no FIM da lista de Outputs (nunca é
+        // tocado), e os pins numerados "0".."caseCount-1" são os únicos
+        // adicionados/removidos. Clampa entre 1 e 16 casos.
+        void RebuildSwitchPins(ScriptNode* node, int caseCount);
+
+        // Mesma ideia, pro AND/OR com N entradas (A, B, C, D...) — hoje só
+        // aceitavam A/B fixos. Clampa entre 2 e 8 inputs. NOT (1 input fixo)
+        // e XOR (2 inputs fixos — semântica de N-ário é ambígua) continuam
+        // de aridade fixa, não passam por aqui.
+        void RebuildLogicInputs(ScriptNode* node, int inputCount);
 
         // Reconstrói os pins de um node do sistema de Functions, a partir da
         // assinatura ATUAL de uma ScriptFunction — chamar sempre que Inputs/

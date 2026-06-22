@@ -1,513 +1,360 @@
-#include "axe/script/script_asset.hpp"
-#include "axe/script/script_graph.hpp"
-#include "axe/log/log.hpp"
-#include <fstream>
-#include <nlohmann/json.hpp>
+// script_base.cpp
+// Implementação real de ScriptBase — antes deste fix, este arquivo continha
+// (por engano, provavelmente copiado de script_asset.cpp em algum momento)
+// uma cópia exata do conteúdo de script_asset.cpp. Isso causava DOIS
+// problemas simultâneos:
+//   1) "already defined in script_asset.obj" para toda função de ScriptAsset/
+//      ScriptComponentDef — porque este .obj definia os MESMOS símbolos.
+//   2) "unresolved external symbol" para ScriptBase::SetContext/PreUpdate (e
+//      silenciosamente para os outros métodos não-inline da classe) — porque
+//      a implementação de verdade nunca existiu em lugar nenhum do projeto.
+//
+// Os proxies (ScriptTransformProxy::GetPosition, ScriptRigidbodyProxy::
+// AddForce, etc.) já estão implementados abaixo, incluindo
+// ScriptEventBusProxy::Send/Broadcast — usa ScriptWorld::DispatchEvent, que
+// é stateless (nenhum membro de instância em ScriptWorld), então um
+// ScriptWorld{} temporário construído aqui mesmo já resolve, sem singleton.
+
+#include "axe/script/script_base.hpp"
+#include "axe/script/script_world.hpp"
+#include "axe/script/script_component.hpp"
+#include "axe/scene/scene.hpp"
+#include "axe/scene/components.hpp"
+#include "axe/physics/physics_components.hpp"
+#include "axe/physics/physics_system.hpp"
+#include <vector>
+#include <algorithm>
+
+// Jolt — necessário para DestroyEntitySafe remover bodies do simulador
+#ifdef JPH_DEBUG_RENDERER
+#undef JPH_DEBUG_RENDERER
+#endif
+#include "axe/physics/jolt_config.hpp"
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyInterface.h>
 
 namespace axe
 {
-    using json = nlohmann::json;
+    // ── Mensagens on-screen (Print String) ──────────────────────────────────
+    // Estado estático compartilhado por TODAS as instâncias de ScriptBase
+    // (e por todas as DLLs de script, já que isso vive em axe.dll) — é
+    // exatamente a razão de PrintOnScreen/GetScreenMessages/etc. serem
+    // static: o editor lê essa lista pra desenhar os textos no viewport,
+    // sem precisar conhecer qual script específico chamou.
+    static std::vector<ScriptScreenMessage> s_ScreenMessages;
 
-    // ── ScriptComponentDef ────────────────────────────────────────────────────
-
-    json ScriptComponentDef::Serialize() const
+    void ScriptBase::PrintOnScreen(const char* msg, float duration)
     {
-        json j;
-        j["type"] = Type;
-        j["asset_uuid"] = AssetUUID;
-
-        // Transform local
-        j["pos"] = { PosX, PosY, PosZ };
-        j["rot"] = { RotX, RotY, RotZ };
-        j["scale"] = { ScaleX, ScaleY, ScaleZ };
-
-        // Rigidbody
-        j["body_type"] = BodyType;
-        j["mass"] = Mass;
-        j["friction"] = Friction;
-        j["restitution"] = Restitution;
-        j["linear_damping"] = LinearDamping;
-        j["angular_damping"] = AngularDamping;
-        j["use_gravity"] = UseGravity;
-        j["lock_rot_x"] = LockRotX;
-        j["lock_rot_y"] = LockRotY;
-        j["lock_rot_z"] = LockRotZ;
-
-        // Collider
-        j["collider_shape"] = ColliderShape;
-        j["collider_size"] = { ColliderSizeX, ColliderSizeY, ColliderSizeZ };
-        j["collider_radius"] = ColliderRadius;
-        j["collider_height"] = ColliderHeight;
-        j["collider_capsule_radius"] = ColliderCapsuleRadius;
-        j["collider_offset"] = { ColliderOffsetX, ColliderOffsetY, ColliderOffsetZ };
-        j["is_trigger"] = IsTrigger;
-        j["show_debug"] = ShowDebug;
-
-        // CharacterController
-        j["cc_height"] = CCHeight;
-        j["cc_radius"] = CCRadius;
-        j["cc_max_slope"] = CCMaxSlope;
-        j["cc_step_height"] = CCStepHeight;
-        j["cc_max_speed"] = CCMaxSpeed;
-        j["cc_jump_force"] = CCJumpForce;
-
-        // SpringArm
-        j["sa_length"] = SALength;
-        j["sa_height_offset"] = SAHeightOffset;
-        j["sa_socket_off"] = { SASocketOffX, SASocketOffY, SASocketOffZ };
-        j["sa_lag_speed"] = SALagSpeed;
-        j["sa_enable_lag"] = SAEnableLag;
-        j["sa_mouse_rotates"] = SAMouseRotates;
-
-        // Camera
-        j["cam_fov"] = CamFov;
-        j["cam_near"] = CamNearClip;
-        j["cam_far"] = CamFarClip;
-        j["cam_sensitivity"] = CamSensitivity;
-        j["cam_is_primary"] = CamIsPrimary;
-
-        // Hierarquia
-        j["parent_index"] = ParentIndex;
-
-        return j;
+        if (!msg) return;
+        ScriptScreenMessage m;
+        m.Text = msg;
+        m.TimeLeft = duration;
+        s_ScreenMessages.push_back(std::move(m));
     }
 
-    void ScriptComponentDef::Deserialize(const json& j)
+    const std::vector<ScriptScreenMessage>& ScriptBase::GetScreenMessages()
     {
-        Type = j.value("type", "Mesh");
-        AssetUUID = j.value("asset_uuid", "");
+        return s_ScreenMessages;
+    }
 
-        // Transform local
-        if (j.contains("pos") && j["pos"].size() == 3)
+    void ScriptBase::TickScreenMessages(float dt)
+    {
+        for (auto& m : s_ScreenMessages)
+            m.TimeLeft -= dt;
+
+        s_ScreenMessages.erase(
+            std::remove_if(s_ScreenMessages.begin(), s_ScreenMessages.end(),
+                [](const ScriptScreenMessage& m) { return m.TimeLeft <= 0.0f; }),
+            s_ScreenMessages.end());
+    }
+
+    void ScriptBase::ClearScreenMessages()
+    {
+        s_ScreenMessages.clear();
+    }
+
+    // ── Input ────────────────────────────────────────────────────────────────
+    // Não-inline de propósito (ver comentário no header): garante que o
+    // offset de m_Context seja sempre resolvido pela axe.dll, nunca pela DLL
+    // do script — evita o bug clássico de layout cross-DLL se ScriptContext
+    // mudar de tamanho entre recompilações.
+
+    void ScriptBase::PreUpdate(const bool* keys, const bool* prevKeys)
+    {
+        m_Context.Input.Keys = keys;
+        m_Context.Input.PrevKeys = prevKeys;
+    }
+
+    void ScriptBase::SetInputPointers(const bool* keys, const bool* prevKeys)
+    {
+        m_Context.Input.Keys = keys;
+        m_Context.Input.PrevKeys = prevKeys;
+    }
+
+    bool ScriptBase::_GetKey(int k) const
+    {
+        return m_Context.Input.GetKey(k);
+    }
+
+    bool ScriptBase::_GetKeyDown(int k) const
+    {
+        return m_Context.Input.GetKeyDown(k);
+    }
+
+    bool ScriptBase::_GetKeyUp(int k) const
+    {
+        return m_Context.Input.GetKeyUp(k);
+    }
+
+    float ScriptBase::_GetAxis(int axis) const
+    {
+        // 0 = Horizontal, 1 = Vertical (ver comentário na declaração, header)
+        return m_Context.Input.GetAxis(axis == 0 ? "Horizontal" : "Vertical");
+    }
+
+    // ── Contexto ──────────────────────────────────────────────────────────────
+
+    void ScriptBase::SetContext(const ScriptContext& ctx)
+    {
+        m_Context = ctx;
+    }
+
+    const ScriptContext& ScriptBase::GetContext() const
+    {
+        return m_Context;
+    }
+
+    // ── Accessors de componente (constroem o proxy; a lógica de cada
+    //    operação vive nos métodos do próprio proxy — ainda não
+    //    implementados, ver nota no topo do arquivo) ──────────────────────────
+
+    ScriptTransformProxy ScriptBase::GetTransform()
+    {
+        return ScriptTransformProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptRigidbodyProxy ScriptBase::GetRigidbody()
+    {
+        return ScriptRigidbodyProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptCharacterProxy ScriptBase::GetCharacter()
+    {
+        return ScriptCharacterProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptEventBusProxy ScriptBase::GetEventBus()
+    {
+        return ScriptEventBusProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptRigidbodyProxy ScriptBase::GetPhysics()
+    {
+        return ScriptRigidbodyProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    // ── ScriptTransformProxy ──────────────────────────────────────────────────
+    // Rotation é exposta em GRAUS (ver header), mas Transform::Rotation
+    // internamente guarda RADIANOS (usado direto em glm::quat(Rotation), que
+    // trata o vec3 como euler em radianos) — por isso a conversão aqui.
+
+    glm::vec3 ScriptTransformProxy::GetPosition() const
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        return tc ? tc->Data.Position : glm::vec3(0.0f);
+    }
+
+    glm::vec3 ScriptTransformProxy::GetRotation() const
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        return tc ? glm::degrees(tc->Data.Rotation) : glm::vec3(0.0f);
+    }
+
+    glm::vec3 ScriptTransformProxy::GetScale() const
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        return tc ? tc->Data.Scale : glm::vec3(1.0f);
+    }
+
+    void ScriptTransformProxy::SetPosition(const glm::vec3& pos)
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        if (tc) tc->Data.Position = pos;
+    }
+
+    void ScriptTransformProxy::SetRotation(const glm::vec3& euler)
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        if (tc) tc->Data.Rotation = glm::radians(euler);
+    }
+
+    void ScriptTransformProxy::SetScale(const glm::vec3& scale)
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        if (tc) tc->Data.Scale = scale;
+    }
+
+    void ScriptTransformProxy::Translate(const glm::vec3& delta)
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        if (tc) tc->Data.Position += delta;
+    }
+
+    void ScriptTransformProxy::Rotate(const glm::vec3& axis, float radians)
+    {
+        auto* tc = ScenePtr ? ScenePtr->GetRegistry().try_get<TransformComponent>(Entity) : nullptr;
+        if (!tc) return;
+        // Combina a rotação atual (euler, radianos) com a rotação adicional
+        // via quaternion, pra não acumular erro de gimbal lock — mesmo
+        // cuidado já tomado em Transform::GetMatrix().
+        glm::quat cur = glm::quat(tc->Data.Rotation);
+        glm::quat delta = glm::angleAxis(radians, glm::normalize(axis));
+        tc->Data.Rotation = glm::eulerAngles(delta * cur);
+    }
+
+    // ── ScriptRigidbodyProxy ──────────────────────────────────────────────────
+    // AddForce/SetVelocity NÃO tocam o Jolt direto (o proxy não tem acesso a
+    // ele) — só marcam PendingForce/PendingVelocity + a flag Needs*, que
+    // PhysicsWorld::OnUpdate consome no início do frame seguinte, antes do
+    // Step (ver physics_world.cpp). GetVelocity lê CurrentVelocity, que esse
+    // mesmo OnUpdate mantém sincronizado com o Jolt todo frame.
+
+    glm::vec3 ScriptRigidbodyProxy::GetVelocity() const
+    {
+        auto* rb = ScenePtr ? ScenePtr->GetRegistry().try_get<RigidbodyComponent>(Entity) : nullptr;
+        return rb ? rb->CurrentVelocity : glm::vec3(0.0f);
+    }
+
+    float ScriptRigidbodyProxy::GetMass() const
+    {
+        auto* rb = ScenePtr ? ScenePtr->GetRegistry().try_get<RigidbodyComponent>(Entity) : nullptr;
+        return rb ? rb->Mass : 0.0f;
+    }
+
+    void ScriptRigidbodyProxy::SetVelocity(const glm::vec3& vel)
+    {
+        auto* rb = ScenePtr ? ScenePtr->GetRegistry().try_get<RigidbodyComponent>(Entity) : nullptr;
+        if (!rb) return;
+        rb->PendingVelocity = vel;
+        rb->NeedsVelocitySet = true;
+    }
+
+    void ScriptRigidbodyProxy::AddForce(const glm::vec3& force)
+    {
+        auto* rb = ScenePtr ? ScenePtr->GetRegistry().try_get<RigidbodyComponent>(Entity) : nullptr;
+        if (!rb) return;
+        rb->PendingForce = force;
+        rb->NeedsForceApply = true;
+    }
+
+    // ── ScriptCharacterProxy ──────────────────────────────────────────────────
+    // Move só seta cc.Velocity.x/z — PhysicsWorld::OnUpdate lê isso, aplica no
+    // CharacterVirtual do Jolt e zera de novo no fim do frame (ver
+    // physics_world.cpp), então precisa ser chamado a cada frame que o
+    // personagem deva continuar se movendo (mesmo padrão de "input contínuo"
+    // que qualquer character controller usa). Jump usa cc.JumpForce como o
+    // valor de impulso vertical — aqui sobrescrevemos com o "force" recebido
+    // antes de marcar WantsJump, já que não existe um campo "PendingJumpForce"
+    // separado no componente.
+
+    bool ScriptCharacterProxy::IsGrounded() const
+    {
+        auto* cc = ScenePtr ? ScenePtr->GetRegistry().try_get<CharacterControllerComponent>(Entity) : nullptr;
+        return cc ? cc->IsGrounded : false;
+    }
+
+    glm::vec3 ScriptCharacterProxy::GetVelocity() const
+    {
+        auto* cc = ScenePtr ? ScenePtr->GetRegistry().try_get<CharacterControllerComponent>(Entity) : nullptr;
+        return cc ? cc->Velocity : glm::vec3(0.0f);
+    }
+
+    float ScriptCharacterProxy::GetMaxSpeed() const
+    {
+        auto* cc = ScenePtr ? ScenePtr->GetRegistry().try_get<CharacterControllerComponent>(Entity) : nullptr;
+        return cc ? cc->MaxSpeed : 0.0f;
+    }
+
+    void ScriptCharacterProxy::Move(const glm::vec3& direction, float speed)
+    {
+        auto* cc = ScenePtr ? ScenePtr->GetRegistry().try_get<CharacterControllerComponent>(Entity) : nullptr;
+        if (!cc) return;
+        cc->Velocity.x = direction.x * speed;
+        cc->Velocity.z = direction.z * speed;
+    }
+
+    void ScriptCharacterProxy::Jump(float force)
+    {
+        auto* cc = ScenePtr ? ScenePtr->GetRegistry().try_get<CharacterControllerComponent>(Entity) : nullptr;
+        if (!cc) return;
+        cc->JumpForce = force;
+        cc->WantsJump = true;
+    }
+
+    // ── ScriptEventBusProxy ───────────────────────────────────────────────────
+    // ScriptWorld::DispatchEvent já existe e faz exatamente o que precisamos
+    // (acha o ScriptComponent da entity alvo, chama Instance->OnEvent) — e é
+    // stateless de verdade: nenhum método de ScriptWorld lê/escreve nenhum
+    // membro de instância (não tem nenhum `m_` na classe inteira). Por isso
+    // dá pra construir um ScriptWorld{} temporário aqui mesmo, sem precisar
+    // de singleton nem de um ponteiro guardado na Scene — qualquer instância
+    // de ScriptWorld é equivalente a qualquer outra.
+    void ScriptEventBusProxy::Send(entt::entity target, const std::string& eventName, float value)
+    {
+        if (!ScenePtr || target == entt::null) return;
+        ScriptWorld{}.DispatchEvent(*ScenePtr, target, eventName, value);
+    }
+
+    void ScriptEventBusProxy::Broadcast(const std::string& eventName, float value)
+    {
+        if (!ScenePtr) return;
+        // Pra TODA entity com ScriptComponent na cena — inclui o próprio
+        // remetente de propósito (broadcast é "todo mundo escutando",
+        // sem exceção implícita pra quem disparou; se o script quiser se
+        // auto-excluir, ele mesmo decide isso checando o evento recebido).
+        auto& reg = ScenePtr->GetRegistry();
+        ScriptWorld world;
+        for (auto entity : reg.view<ScriptComponent>())
+            world.DispatchEvent(*ScenePtr, entity, eventName, value);
+    }
+
+    // ── Destruição segura ─────────────────────────────────────────────────────
+    // Remove o body do Jolt ANTES de destruir a entity — sem isso, o
+    // simulador físico fica com um "ghost body" referenciando uma entity que
+    // não existe mais (Scene::DestroyEntity só faz m_Registry.destroy, não
+    // sabe nada sobre Jolt). Cobre os dois casos: Rigidbody (corpo dinâmico)
+    // e o static body implícito criado pra um Collider sem Rigidbody.
+    // PhysicsSystem::Get() é um singleton global — não precisa de nenhum
+    // acessor novo na Scene pra chegar nele.
+    void ScriptBase::DestroyEntitySafe(entt::entity target)
+    {
+        if (!m_Context.ScenePtr || target == entt::null) return;
+        auto& reg = m_Context.ScenePtr->GetRegistry();
+        if (!reg.valid(target)) return;
+
+        auto* bi = static_cast<JPH::BodyInterface*>(PhysicsSystem::Get().GetBodyInterfacePtr());
+
+        if (auto* rb = reg.try_get<RigidbodyComponent>(target))
         {
-            PosX = j["pos"][0]; PosY = j["pos"][1]; PosZ = j["pos"][2];
-        }
-        if (j.contains("rot") && j["rot"].size() == 3)
-        {
-            RotX = j["rot"][0]; RotY = j["rot"][1]; RotZ = j["rot"][2];
-        }
-        if (j.contains("scale") && j["scale"].size() == 3)
-        {
-            ScaleX = j["scale"][0]; ScaleY = j["scale"][1]; ScaleZ = j["scale"][2];
-        }
-
-        // Rigidbody
-        BodyType = j.value("body_type", "Dynamic");
-        Mass = j.value("mass", 1.f);
-        Friction = j.value("friction", 0.5f);
-        Restitution = j.value("restitution", 0.f);
-        LinearDamping = j.value("linear_damping", 0.05f);
-        AngularDamping = j.value("angular_damping", 0.05f);
-        UseGravity = j.value("use_gravity", true);
-        LockRotX = j.value("lock_rot_x", false);
-        LockRotY = j.value("lock_rot_y", false);
-        LockRotZ = j.value("lock_rot_z", false);
-
-        // Collider
-        ColliderShape = j.value("collider_shape", "Box");
-        ColliderRadius = j.value("collider_radius", 1.f);
-        ColliderHeight = j.value("collider_height", 1.8f);
-        ColliderCapsuleRadius = j.value("collider_capsule_radius", 0.3f);
-        IsTrigger = j.value("is_trigger", false);
-        ShowDebug = j.value("show_debug", true);
-
-        if (j.contains("collider_size") && j["collider_size"].size() == 3)
-        {
-            ColliderSizeX = j["collider_size"][0]; ColliderSizeY = j["collider_size"][1]; ColliderSizeZ = j["collider_size"][2];
-        }
-        if (j.contains("collider_offset") && j["collider_offset"].size() == 3)
-        {
-            ColliderOffsetX = j["collider_offset"][0]; ColliderOffsetY = j["collider_offset"][1]; ColliderOffsetZ = j["collider_offset"][2];
-        }
-
-        // CharacterController
-        CCHeight = j.value("cc_height", 1.8f);
-        CCRadius = j.value("cc_radius", 0.3f);
-        CCMaxSlope = j.value("cc_max_slope", 45.f);
-        CCStepHeight = j.value("cc_step_height", 0.3f);
-        CCMaxSpeed = j.value("cc_max_speed", 5.f);
-        CCJumpForce = j.value("cc_jump_force", 5.f);
-
-        // SpringArm
-        SALength = j.value("sa_length", 300.0f);
-        SAHeightOffset = j.value("sa_height_offset", 0.0f);
-        SALagSpeed = j.value("sa_lag_speed", 8.0f);
-        SAEnableLag = j.value("sa_enable_lag", true);
-        SAMouseRotates = j.value("sa_mouse_rotates", true);
-        if (j.contains("sa_socket_off") && j["sa_socket_off"].size() == 3)
-        {
-            SASocketOffX = j["sa_socket_off"][0];
-            SASocketOffY = j["sa_socket_off"][1];
-            SASocketOffZ = j["sa_socket_off"][2];
-        }
-
-        // Camera
-        CamFov = j.value("cam_fov", 60.0f);
-        CamNearClip = j.value("cam_near", 0.1f);
-        CamFarClip = j.value("cam_far", 1000.0f);
-        CamSensitivity = j.value("cam_sensitivity", 0.1f);
-        CamIsPrimary = j.value("cam_is_primary", true);
-
-        // Hierarquia
-        ParentIndex = j.value("parent_index", -1);
-    }
-
-    // ── ScriptFunction (serialização) ────────────────────────────────────────
-    // Helpers únicos reutilizados nos 4 pontos de serialização do asset
-    // (Save/Load/SaveToString/LoadFromString) — função tem um grafo aninhado
-    // (mais complexo que os campos simples de ScriptVariable), então duplicar
-    // isso 4x à mão seria bem mais arriscado do que o padrão já duplicado
-    // usado pras variáveis.
-    static json SerializeScriptFunction(const ScriptFunction& f)
-    {
-        json jf;
-        jf["name"] = f.Name;
-        json ins = json::array();
-        for (auto& p : f.Inputs) ins.push_back(json{ {"name", p.Name}, {"type", ScriptVarTypeToString(p.Type)} });
-        jf["inputs"] = ins;
-        json outs = json::array();
-        for (auto& p : f.Outputs) outs.push_back(json{ {"name", p.Name}, {"type", ScriptVarTypeToString(p.Type)} });
-        jf["outputs"] = outs;
-        jf["graph"] = f.Graph->Serialize();
-        return jf;
-    }
-
-    static ScriptFunction DeserializeScriptFunction(const json& jf)
-    {
-        ScriptFunction f;
-        f.Name = jf.value("name", "NewFunction");
-        if (jf.contains("inputs") && jf["inputs"].is_array())
-            for (auto& ji : jf["inputs"])
-                f.Inputs.push_back({ ji.value("name", "Param"), ScriptVarTypeFromString(ji.value("type", "Float")) });
-        if (jf.contains("outputs") && jf["outputs"].is_array())
-            for (auto& jo : jf["outputs"])
-                f.Outputs.push_back({ jo.value("name", "Param"), ScriptVarTypeFromString(jo.value("type", "Float")) });
-        f.Graph = std::make_shared<ScriptGraph>();
-        if (jf.contains("graph")) f.Graph->Deserialize(jf["graph"]);
-        return f;
-    }
-
-    // ── ScriptAsset ───────────────────────────────────────────────────────────
-
-    void ScriptAsset::RemoveComponent(int index)
-    {
-        if (index >= 0 && index < (int)m_Components.size())
-            m_Components.erase(m_Components.begin() + index);
-    }
-
-    ScriptFunction* ScriptAsset::AddFunction(const std::string& name)
-    {
-        ScriptFunction f;
-        f.Name = name;
-        f.Graph = std::make_shared<ScriptGraph>();
-        // Toda função nasce com exatamente um Entry e um Return — não dá pra
-        // adicionar outro de cada pelo catálogo do editor (são auto-geridos),
-        // mantendo o codegen simples: 1 ponto de entrada, 1 ponto de saída.
-        f.Graph->AddNode("FunctionEntry");
-        f.Graph->AddNode("ReturnNode");
-        m_Functions.push_back(std::move(f));
-        return &m_Functions.back();
-    }
-
-    ScriptFunction* ScriptAsset::FindFunction(const std::string& name)
-    {
-        for (auto& f : m_Functions) if (f.Name == name) return &f;
-        return nullptr;
-    }
-
-    std::string ScriptAsset::SaveToString()
-    {
-        // Reuse Save logic but write to string instead of file
-        json root;
-        root["name"] = m_Name;
-        root["class_type"] = ScriptClassTypeToString(m_ClassType);
-        root["dll_path"] = DllPath;
-        root["compiled"] = IsCompiled;
-
-        json comps = json::array();
-        for (auto& c : m_Components) comps.push_back(c.Serialize());
-        root["components"] = comps;
-
-        json vars = json::array();
-        for (auto& v : m_Variables)
-        {
-            json jv;
-            jv["name"] = v.Name;
-            jv["type"] = ScriptVarTypeToString(v.Type);
-            jv["f"] = v.DefaultFloat;
-            jv["b"] = v.DefaultBool;
-            jv["i"] = v.DefaultInt;
-            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
-            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
-            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
-            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
-            jv["s"] = v.DefaultString;
-            jv["cat"] = v.Category;
-            jv["desc"] = v.Description;
-            jv["exposed"] = v.Exposed;
-            vars.push_back(jv);
-        }
-        root["variables"] = vars;
-
-        json evts = json::array();
-        for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
-        root["custom_events"] = evts;
-
-        json funcs = json::array();
-        for (auto& f : m_Functions) funcs.push_back(SerializeScriptFunction(f));
-        root["functions"] = funcs;
-
-        root["graph"] = m_Graph->Serialize();
-        return root.dump();
-    }
-
-    bool ScriptAsset::LoadFromString(const std::string& jsonStr)
-    {
-        json root;
-        try { root = json::parse(jsonStr); }
-        catch (...) { return false; }
-
-        m_Name = root.value("name", m_Name);
-        m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
-        DllPath = root.value("dll_path", "");
-        IsCompiled = root.value("compiled", false);
-
-        m_Components.clear();
-        if (root.contains("components") && root["components"].is_array())
-            for (auto& jc : root["components"])
+            if (rb->IsCreated && bi)
             {
-                ScriptComponentDef def; def.Deserialize(jc); m_Components.push_back(def);
+                JPH::BodyID id(rb->BodyID);
+                if (!id.IsInvalid()) { bi->RemoveBody(id); bi->DestroyBody(id); }
+                rb->IsCreated = false;
             }
+        }
 
-        m_Variables.clear();
-        if (root.contains("variables") && root["variables"].is_array())
-            for (auto& jv : root["variables"])
+        if (auto* col = reg.try_get<ColliderComponent>(target))
+        {
+            if (col->IsStaticCreated && bi)
             {
-                ScriptVariable v;
-                v.Name = jv.value("name", "NewVar");
-                v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
-                v.DefaultFloat = jv.value("f", 0.f);
-                v.DefaultBool = jv.value("b", false);
-                v.DefaultInt = jv.value("i", 0);
-                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
-                {
-                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
-                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
-                    {
-                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
-                    }
-                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
-                    {
-                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
-                    }
-                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
-                    {
-                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
-                    }
-                }
-                v.DefaultString = jv.value("s", "");
-                v.Category = jv.value("cat", "");
-                v.Description = jv.value("desc", "");
-                v.Exposed = jv.value("exposed", false);
-                m_Variables.push_back(v);
+                JPH::BodyID id(col->StaticBodyID);
+                if (!id.IsInvalid()) { bi->RemoveBody(id); bi->DestroyBody(id); }
+                col->IsStaticCreated = false;
             }
-
-        m_CustomEvents.clear();
-        if (root.contains("custom_events") && root["custom_events"].is_array())
-            for (auto& je : root["custom_events"])
-                m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
-
-        m_Functions.clear();
-        if (root.contains("functions") && root["functions"].is_array())
-            for (auto& jf : root["functions"])
-                m_Functions.push_back(DeserializeScriptFunction(jf));
-
-        m_Graph = std::make_shared<ScriptGraph>();
-        if (root.contains("graph")) m_Graph->Deserialize(root["graph"]);
-        return true;
-    }
-
-    bool ScriptAsset::Save(const std::filesystem::path& filepath)
-    {
-        m_FilePath = filepath;
-        json root;
-        root["name"] = m_Name;
-        root["class_type"] = ScriptClassTypeToString(m_ClassType);
-        root["dll_path"] = DllPath;
-        root["compiled"] = IsCompiled;
-
-        json comps = json::array();
-        for (auto& c : m_Components) comps.push_back(c.Serialize());
-        root["components"] = comps;
-
-        // Variables
-        json vars = json::array();
-        for (auto& v : m_Variables)
-        {
-            json jv;
-            jv["name"] = v.Name;
-            jv["type"] = ScriptVarTypeToString(v.Type);
-            jv["f"] = v.DefaultFloat;
-            jv["b"] = v.DefaultBool;
-            jv["i"] = v.DefaultInt;
-            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
-            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
-            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
-            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
-            jv["s"] = v.DefaultString;
-            jv["cat"] = v.Category;
-            jv["desc"] = v.Description;
-            jv["exposed"] = v.Exposed;
-            vars.push_back(jv);
-        }
-        root["variables"] = vars;
-
-        // Custom Events
-        json evts = json::array();
-        for (auto& e : m_CustomEvents) evts.push_back(json{ {"name", e.Name} });
-        root["custom_events"] = evts;
-
-        json funcs = json::array();
-        for (auto& fn : m_Functions) funcs.push_back(SerializeScriptFunction(fn));
-        root["functions"] = funcs;
-
-        root["graph"] = m_Graph->Serialize();
-
-        std::ofstream f(filepath);
-        if (!f.is_open())
-        {
-            AXE_CORE_ERROR("ScriptAsset: falha ao salvar {}", filepath.string()); return false;
-        }
-        f << root.dump(4);
-        return true;
-    }
-
-    bool ScriptAsset::Load(const std::filesystem::path& filepath)
-    {
-        m_FilePath = filepath;
-        std::ifstream f(filepath);
-        if (!f.is_open())
-        {
-            AXE_CORE_ERROR("ScriptAsset: arquivo nao encontrado {}", filepath.string()); return false;
         }
 
-        json root;
-        try { root = json::parse(f); }
-        catch (const json::exception& e)
-        {
-            AXE_CORE_ERROR("ScriptAsset: JSON invalido: {}", e.what()); return false;
-        }
-
-        m_Name = root.value("name", filepath.stem().string());
-        m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
-        DllPath = root.value("dll_path", "");
-        IsCompiled = root.value("compiled", false);
-
-        m_Components.clear();
-        if (root.contains("components") && root["components"].is_array())
-            for (auto& jc : root["components"])
-            {
-                ScriptComponentDef def; def.Deserialize(jc); m_Components.push_back(def);
-            }
-
-        // Variables
-        m_Variables.clear();
-        if (root.contains("variables") && root["variables"].is_array())
-            for (auto& jv : root["variables"])
-            {
-                ScriptVariable v;
-                v.Name = jv.value("name", "NewVar");
-                v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
-                v.DefaultFloat = jv.value("f", 0.f);
-                v.DefaultBool = jv.value("b", false);
-                v.DefaultInt = jv.value("i", 0);
-                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
-                {
-                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
-                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
-                    {
-                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
-                    }
-                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
-                    {
-                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
-                    }
-                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
-                    {
-                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
-                    }
-                }
-                v.DefaultString = jv.value("s", "");
-                v.Category = jv.value("cat", "");
-                v.Description = jv.value("desc", "");
-                m_Variables.push_back(v);
-            }
-
-        // Custom Events
-        m_CustomEvents.clear();
-        if (root.contains("custom_events") && root["custom_events"].is_array())
-            for (auto& je : root["custom_events"])
-                m_CustomEvents.push_back({ je.value("name", "OnMyEvent") });
-
-        // Functions
-        m_Functions.clear();
-        if (root.contains("functions") && root["functions"].is_array())
-            for (auto& jf : root["functions"])
-                m_Functions.push_back(DeserializeScriptFunction(jf));
-
-        if (root.contains("graph"))
-            m_Graph->Deserialize(root["graph"]);
-
-        return true;
-    }
-
-    std::shared_ptr<ScriptAsset> ScriptAsset::Create(const std::string& name, ScriptClassType type)
-    {
-        auto asset = std::make_shared<ScriptAsset>();
-        asset->m_Name = name;
-        asset->m_ClassType = type;
-
-        switch (type)
-        {
-        case ScriptClassType::Entity:
-        case ScriptClassType::Agent:
-        {
-            ScriptComponentDef mesh; mesh.Type = "Mesh";
-            asset->m_Components.push_back(mesh);
-            break;
-        }
-        case ScriptClassType::Character:
-        {
-            ScriptComponentDef mesh; mesh.Type = "Mesh";
-            asset->m_Components.push_back(mesh);
-            ScriptComponentDef cc;   cc.Type = "CharacterController";
-            asset->m_Components.push_back(cc);
-            break;
-        }
-        case ScriptClassType::StaticObject:
-        {
-            ScriptComponentDef mesh; mesh.Type = "Mesh";
-            asset->m_Components.push_back(mesh);
-            ScriptComponentDef col;  col.Type = "Collider"; col.ColliderShape = "Box";
-            asset->m_Components.push_back(col);
-            break;
-        }
-        case ScriptClassType::Trigger:
-        {
-            ScriptComponentDef col; col.Type = "Collider"; col.ColliderShape = "Box";
-            col.IsTrigger = true;
-            asset->m_Components.push_back(col);
-            break;
-        }
-        }
-        return asset;
-    }
-
-    std::shared_ptr<ScriptAsset> ScriptAsset::LoadFromFile(const std::filesystem::path& path)
-    {
-        auto asset = std::make_shared<ScriptAsset>();
-        if (!asset->Load(path)) return nullptr;
-        return asset;
+        m_Context.ScenePtr->DestroyEntity(target);
     }
 
 } // namespace axe

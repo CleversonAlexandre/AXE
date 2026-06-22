@@ -242,7 +242,7 @@ namespace axe
                     // Node quando a variável é selecionada, não dentro do card.
                     float cardWidth = ImGui::GetContentRegionAvail().x;
                     float headerH = 36.f;
-                    float cardHeight = headerH;
+                    float cardHeight = headerH ;
                     ImVec2 cardMin = ImGui::GetCursorScreenPos();
                     ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
                     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -719,6 +719,38 @@ namespace axe
                 if (isEditing)
                     dlFn->AddRect(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(funcCol), 6.0f, 0, 1.2f);
 
+                // BUGFIX: antes, o drag-source ficava amarrado só ao texto
+                // pequeno do subtítulo "(N in, M out)" (último item antes do
+                // BeginDragDropSource) — uma área minúscula. Depois, um botão
+                // invisível separado (desenhado por cima, cobrindo o resto da
+                // linha) capturava o clique pra abrir o grafo, mas também
+                // "tampava" boa parte da área de arrastar. Resultado: dava pra
+                // arrastar só de um pontinho específico, quase impossível de
+                // acertar — por isso "não consigo arrastar".
+                // Agora: UM botão invisível cobre a linha inteira, é a base
+                // tanto do clique (abre o grafo) quanto do drag (cria o node
+                // Call no canvas) — desenhado primeiro, com o conteúdo visual
+                // (badge/nome/subtítulo) sobreposto depois (Dummy/Text não
+                // competem por input, então não tampam o botão).
+                float interactiveWidth = std::max(cardWidth - 56.f, 1.f);
+                bool rowClicked = ImGui::InvisibleButton("##fnrow", ImVec2(interactiveWidth, cardHeight));
+                bool rowDragged = false;
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                {
+                    rowDragged = true;
+                    ImGui::SetDragDropPayload("FUNC_NODE", fn.Name.c_str(), fn.Name.size() + 1);
+                    ImGui::PushStyleColor(ImGuiCol_Text, funcCol);
+                    ImGui::Text("Call %s", fn.Name.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::EndDragDropSource();
+                }
+                if (rowClicked && !rowDragged)
+                    SwitchToFunctionGraph(&fn);
+                if (!rowDragged && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Clique para editar — arraste para o canvas para criar um node Call");
+
+                // ── Conteúdo visual, desenhado por cima do botão invisível ─────
+                ImGui::SetCursorScreenPos(cardMin);
                 ImGui::Dummy(ImVec2(8, cardHeight));
                 ImGui::SameLine(0, 0);
                 ImGui::BeginGroup();
@@ -741,30 +773,9 @@ namespace axe
                 ImGui::TextUnformatted(fn.Name.c_str());
                 ImGui::SameLine();
                 ImGui::TextDisabled("%s", subtitle.c_str());
-
-                // Arraste pra canvas -> cria um node "Call <Function>" lá
-                // (sempre Call — diferente de Variable, não tem escolha de
-                // Get/Set, então não precisa de popup no drop).
-                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-                {
-                    ImGui::SetDragDropPayload("FUNC_NODE", fn.Name.c_str(), fn.Name.size() + 1);
-                    ImGui::PushStyleColor(ImGuiCol_Text, funcCol);
-                    ImGui::Text("Call %s", fn.Name.c_str());
-                    ImGui::PopStyleColor();
-                    ImGui::EndDragDropSource();
-                }
-
                 ImGui::EndGroup();
 
-                // Clique na linha (fora dos botões) abre o grafo da função
-                // pra edição — duplo clique não é necessário aqui porque não
-                // há outra ação de clique único concorrente na linha.
-                ImGui::SameLine();
-                ImVec2 clickZoneMin = ImGui::GetCursorScreenPos();
-                ImVec2 clickZoneMax = ImVec2(cardMax.x - 56.f, cardMax.y);
-                ImGui::SetCursorScreenPos(clickZoneMin);
-                if (ImGui::InvisibleButton("##fnrow", ImVec2(std::max(clickZoneMax.x - clickZoneMin.x, 1.f), cardHeight)))
-                    SwitchToFunctionGraph(&fn);
+                ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y));
 
                 // Botão expandir/recolher editor de parâmetros
                 ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 52.f, cardMin.y + (cardHeight - 20.f) * 0.5f));

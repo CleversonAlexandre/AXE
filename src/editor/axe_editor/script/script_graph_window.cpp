@@ -278,6 +278,30 @@ namespace axe
             ImGui::SameLine(0, 8);
             ImGui::TextDisabled("%s", m_Component ? m_Component->ScriptName.c_str() : "—");
 
+            // ── Breadcrumb de Function ───────────────────────────────────────────
+            // Sem isso, trocar de grafo ao clicar numa Function no Script Members
+            // acontecia silenciosamente — nada na tela avisava que o canvas agora
+            // mostra o grafo DELA, não o grafo principal do script. Visível só
+            // quando m_EditingFunctionIndex >= 0 (ver SwitchToFunctionGraph).
+            if (m_EditingFunctionIndex >= 0 && m_ScriptAsset)
+            {
+                auto& funcs = m_ScriptAsset->GetFunctions();
+                if (m_EditingFunctionIndex < (int)funcs.size())
+                {
+                    ImGui::SameLine(0, 14);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.85f, 0.78f, 1));
+                    ImGui::Text("\xe2\x9a\x99 Function: %s", funcs[m_EditingFunctionIndex].Name.c_str());
+                    ImGui::PopStyleColor();
+
+                    ImGui::SameLine(0, 8);
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.28f, 0.3f, 1));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.38f, 0.38f, 0.4f, 1));
+                    if (ImGui::SmallButton("< Voltar ao grafo principal"))
+                        SwitchToMainGraph();
+                    ImGui::PopStyleColor(2);
+                }
+            }
+
             if (m_MsgTimer > 0)
             {
                 m_MsgTimer -= ImGui::GetIO().DeltaTime;
