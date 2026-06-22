@@ -251,6 +251,23 @@ namespace axe
 
 				ImGui::Separator();
 
+				if (ImGui::MenuItem("Salvar Projeto", nullptr, false, !playing))
+				{
+					if (OnSaveProject) OnSaveProject();
+				}
+
+				if (ImGui::MenuItem("Abrir Projeto...", nullptr, false, !playing))
+				{
+					auto path = FileDialog::Open(
+						"AXE Project\0*.axeproject\0All Files\0*.*\0",
+						"Abrir Projeto",
+						"axeproject");
+					if (!path.empty() && OnOpenProject)
+						OnOpenProject(path.string());
+				}
+
+				ImGui::Separator();
+
 				if (ImGui::MenuItem("Sair", "Alt+F4"))
 					EditorApp::Get().Close();
 

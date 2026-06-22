@@ -61,9 +61,6 @@ namespace axe
 		void SetPlayStateCallback(PlayStateCallback cb) { m_PlayStateCallback = cb; }
 		void SetPlayActionCallback(PlayActionCallback cb) { m_PlayActionCallback = cb; }
 
-		using AssetDropCallback = std::function<void(const std::string& uuid, float mouseX, float mouseY)>;
-		
-
 		void SetViewportRenderer(ViewportRenderer* renderer) { m_ViewportRenderer = renderer; }
 
 	private:

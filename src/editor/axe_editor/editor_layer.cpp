@@ -65,8 +65,23 @@ namespace axe
                 std::string savePath = path.empty() ? m_CurrentScenePath : path;
                 if (savePath.empty())
                 {
-                    m_EditorUI->OnSaveScene(
-                        FileDialog::Save("AXE Scene\0*.axescene\0", "Salvar Cena", "axescene").string());
+                    // BUGFIX: isso chamava m_EditorUI->OnSaveScene("") de novo,
+                    // recursivamente — se o usuário CANCELASSE o diálogo,
+                    // FileDialog::Save devolve path vazio, e a chamada
+                    // recursiva caía direto nesse MESMO "if (savePath.empty())"
+                    // de novo, abrindo o diálogo outra vez, pra sempre (só
+                    // saía digitando um nome de verdade ou fechando o motor).
+                    // Agora trata o resultado do diálogo aqui mesmo, sem
+                    // recursão: cancelar só sai da função, sem salvar nada.
+                    auto chosen = FileDialog::Save("AXE Scene\0*.axescene\0", "Salvar Cena", "axescene");
+                    if (chosen.empty())
+                    {
+                        AXE_EDITOR_INFO("Salvar cena cancelado.");
+                        return;
+                    }
+                    SceneSerializer::Serialize(*m_Scene, chosen.string(), &m_Environment);
+                    m_CurrentScenePath = chosen.string();
+                    AXE_EDITOR_INFO("Cena salva em: {}", m_CurrentScenePath);
                     return;
                 }
                 SceneSerializer::Serialize(*m_Scene, savePath, &m_Environment);
@@ -79,6 +94,36 @@ namespace axe
         m_EditorUI->OnCanUndo = [this]() { return m_CommandHistory.CanUndo(); };
         m_EditorUI->OnCanRedo = [this]() { return m_CommandHistory.CanRedo(); };
         m_EditorUI->IsPlaying = [this]() { return m_EditorState != EditorState::Edit; };
+
+        m_EditorUI->OnSaveProject = [this]()
+            {
+                if (m_EditorState != EditorState::Edit)
+                {
+                    AXE_EDITOR_WARN("Não é possível salvar o projeto durante o Play. Pressione Stop primeiro.");
+                    return;
+                }
+                if (!ProjectManager::Get().HasProject())
+                {
+                    AXE_EDITOR_WARN("Nenhum projeto aberto pra salvar.");
+                    return;
+                }
+                ProjectManager::Get().SaveProject();
+                AXE_EDITOR_INFO("Projeto salvo: {}", ProjectManager::Get().GetCurrent().Name);
+            };
+
+        m_EditorUI->OnOpenProject = [this](const std::string& path)
+            {
+                if (m_EditorState != EditorState::Edit)
+                {
+                    AXE_EDITOR_WARN("Não é possível abrir outro projeto durante o Play. Pressione Stop primeiro.");
+                    return;
+                }
+                // Troca o EditorLayer inteiro — ver comentário em
+                // EditorApp::RequestReopenProject pra entender por quê (e
+                // por que isso roda agendado, não direto aqui).
+                if (!EditorApp::Get().RequestReopenProject(path))
+                    AXE_EDITOR_WARN("Falha ao abrir o projeto: {}", path);
+            };
 
         m_EditorUI->OnDrawEnvironment = [this]()
             {
@@ -568,7 +613,7 @@ namespace axe
             {
                 auto* dl = ImGui::GetForegroundDrawList();
 
-            
+
                 const auto& msgs = axe::ScriptBase::GetScreenMessages();
                 if (!msgs.empty())
                 {

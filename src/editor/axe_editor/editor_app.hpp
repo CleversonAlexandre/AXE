@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <vector>
+#include <filesystem>
 
 
 
@@ -29,6 +30,16 @@ namespace axe
 		void Run();
 		void OnEvent(Event& e);
 		void Close() { m_Running = false; }
+
+		// Troca o projeto atual com segurança — usado pelo menu File >
+		// "Abrir Projeto" de dentro do editor já em execução. Abre o novo
+		// projeto e AGENDA a troca de EditorLayer (pop do atual + push de um
+		// novo do zero) pro próximo frame, fora do loop de update atual —
+		// mesmo mecanismo que já existia só pra transição do launcher pro
+		// editor. Troca o EditorLayer inteiro (não tenta resetar o estado
+		// do atual em cena) de propósito: garante que cena/seleção/undo
+		// history/etc. do projeto antigo não sobrevivam por acidente.
+		bool RequestReopenProject(const std::filesystem::path& projectFile);
 
 		inline static EditorApp& Get() { return *s_Instance; }
 		inline Window& GetWindow() { return *m_Window; }

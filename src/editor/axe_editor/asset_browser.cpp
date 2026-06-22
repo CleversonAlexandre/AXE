@@ -10,6 +10,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <shellapi.h>  // Windows — ShellExecuteA para Open in Explorer
+#include <windows.h>
 
 namespace axe
 {
@@ -19,6 +20,8 @@ namespace axe
         ".png", ".jpg", ".jpeg",
         ".axemat", ".axescene"
     };
+
+   
 
     // ==================== Utilitários ====================
 
@@ -1265,5 +1268,7 @@ namespace axe
     {
         DrawEmptyAreaContextMenu();
     }
+
+   
 
 } // namespace axe

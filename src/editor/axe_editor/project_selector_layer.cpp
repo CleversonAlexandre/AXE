@@ -9,6 +9,9 @@
 #ifdef AXE_PLATFORM_WINDOWS
 #include <windows.h>
 #include <ShlObj.h>
+#include <commdlg.h>
+#pragma comment(lib, "Comdlg32.lib")
+#pragma comment(lib, "Shell32.lib")
 #endif
 
 namespace axe
@@ -126,136 +129,162 @@ namespace axe
 
 		}
 	}
-		void ProjectSelectorLayer::DrawNewProject()
+	void ProjectSelectorLayer::DrawNewProject()
+	{
+		ImGui::Text("Nome do Projeto.");
+		ImGui::InputText("##name", m_ProjectName, sizeof(m_ProjectName));
+
+		ImGui::Spacing();
+		ImGui::Text("Folder:");
+		ImGui::InputText("##path", m_ProjectPath, sizeof(m_ProjectPath));
+		ImGui::SameLine();
+
+		if (ImGui::Button("..."))
 		{
-			ImGui::Text("Nome do Projeto.");
-			ImGui::InputText("##name", m_ProjectName, sizeof(m_ProjectName));
+			std::string selected;
+			if (TrySelectFolder(selected))
+				std::strncpy(m_ProjectPath, selected.c_str(), sizeof(m_ProjectPath) - 1);
 
-			ImGui::Spacing();
-			ImGui::Text("Folder:");
-			ImGui::InputText("##path", m_ProjectPath, sizeof(m_ProjectPath));
-			ImGui::SameLine();
-
-			if(ImGui::Button("..."))
-			{ 
-				std::string selected;
-				if (TrySelectFolder(selected))
-					std::strncpy(m_ProjectPath, selected.c_str(), sizeof(m_ProjectPath) - 1);
-
-			}
-
-			//Preview do caminho final
-			std::filesystem::path finalPath =
-				std::filesystem::path(m_ProjectPath) / m_ProjectName;
-
-			ImGui::TextDisabled("Será criado em: %s", finalPath.string().c_str());
-
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
-
-			if (!m_ErrorMessage.empty())
-			{
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-				ImGui::TextWrapped("%s", m_ErrorMessage.c_str());
-				ImGui::PopStyleColor();
-				ImGui::Spacing();
-			}
-
-			bool nameValid = std::strlen(m_ProjectName) > 0;
-			bool pathValid = std::strlen(m_ProjectPath) > 0;
-
-			if (!nameValid || !pathValid)
-				ImGui::BeginDisabled();
-
-			if (ImGui::Button("Criar PRojeto", ImVec2(150, 35)))
-			{
-				m_ErrorMessage.clear();
-				std::filesystem::path root(m_ProjectPath);
-
-				if (ProjectManager::Get().NewProject(m_ProjectName, root))
-				{
-					auto projectFile = root / m_ProjectName / (std::string(m_ProjectName) + ".axeproject");
-					m_ShouldClose = true;
-					m_Callback(projectFile);
-				}
-				else
-				{
-					m_ErrorMessage = "Falaha ao criar projet, Verifique se a pasta já existe.";
-				}
-			}
-			if (!nameValid || !pathValid)
-				ImGui::EndDisabled();
 		}
 
-		void ProjectSelectorLayer::DrawOpenProject()
+		//Preview do caminho final
+		std::filesystem::path finalPath =
+			std::filesystem::path(m_ProjectPath) / m_ProjectName;
+
+		ImGui::TextDisabled("Será criado em: %s", finalPath.string().c_str());
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		if (!m_ErrorMessage.empty())
 		{
-			ImGui::Text("Selecione um arquivo .axeproject:");
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+			ImGui::TextWrapped("%s", m_ErrorMessage.c_str());
+			ImGui::PopStyleColor();
 			ImGui::Spacing();
-
-			static char openPath[512] = "";
-			ImGui::InputText("##openpath", openPath, sizeof(openPath));
-			ImGui::SameLine();
-
-			if (ImGui::Button("Procurar"))
-			{
-#ifdef AXE_WINDOW_PLATFORM
-				OPENFILENAME ofn;
-				char szFile[512] = { 0 };
-				ZeroMemory(&ofn, sizeof(ofn));
-				ofn.lStructSize = sizeof(ofn);
-				ofn.hwndOwner = nullptr;
-				ofn.lpstrFile = szFile;
-				ofn.nMaxFile = sizeof(szFile);
-				ofn.lpstrFilter = "AXE Project\0*.axeproject\0";
-				ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-
-				if (GetOpenFileNameA(&ofn))
-					std::strncpy(openPath, szFile, sizeof(openPath) - 1);
-#endif // AXE_WINDOW_PLATFORM
-			}
-
-			ImGui::Spacing();
-			bool pathValid = std::strlen(openPath) > 0 && std::filesystem::exists(openPath);
-
-			if (!pathValid)
-				ImGui::BeginDisabled();
-
-			if (ImGui::Button("Abrir", ImVec2(150, 35)))
-			{
-				if (ProjectManager::Get().OpenProject(openPath))
-					m_ShouldClose = true;
-					m_Callback(std::filesystem::path(openPath));
-			}
-
-			if (!pathValid)
-				ImGui::EndDisabled();
 		}
 
-		bool ProjectSelectorLayer::TrySelectFolder(std::string& outPath)
-		{
-#ifdef AXE_PLATFORM_WINOWS
-			BROWSEINFOA bi = { 0 };
-			bi.lpszTitle = "Selecione a pasta do projeto";
-			bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-			LPITEMIDLIST pidl = SHBrowseForFolder(&bi);
+		bool nameValid = std::strlen(m_ProjectName) > 0;
+		bool pathValid = std::strlen(m_ProjectPath) > 0;
 
-			if (pidl)
+		if (!nameValid || !pathValid)
+			ImGui::BeginDisabled();
+
+		if (ImGui::Button("Criar PRojeto", ImVec2(150, 35)))
+		{
+			m_ErrorMessage.clear();
+			std::filesystem::path root(m_ProjectPath);
+
+			if (ProjectManager::Get().NewProject(m_ProjectName, root))
 			{
-				char path[MAX_PATH];
-				if (SHGetPathFromIDListA(pidl, path))
-				{
-					outPath = path;
-					CoTaskMemFree(pidl);
-					return true;
-				}
-				CoTaskMemFree(pidl)
+				auto projectFile = root / m_ProjectName / (std::string(m_ProjectName) + ".axeproject");
+				m_ShouldClose = true;
+				m_Callback(projectFile);
 			}
+			else
+			{
+				m_ErrorMessage = "Falaha ao criar projet, Verifique se a pasta já existe.";
+			}
+		}
+		if (!nameValid || !pathValid)
+			ImGui::EndDisabled();
+	}
+
+	void ProjectSelectorLayer::DrawOpenProject()
+	{
+		ImGui::Text("Selecione um arquivo .axeproject:");
+		ImGui::Spacing();
+
+		static char openPath[512] = "";
+		ImGui::InputText("##openpath", openPath, sizeof(openPath));
+		ImGui::SameLine();
+
+		if (ImGui::Button("Procurar"))
+		{
+			// BUGFIX: estava "AXE_WINDOW_PLATFORM" (ordem das palavras
+			// trocada) — o macro certo é AXE_PLATFORM_WINDOWS, mesmo
+			// typo-de-nome do bug em TrySelectFolder acima. Por isso
+			// esse botão também nunca abria nada.
+#ifdef AXE_PLATFORM_WINDOWS
+				// OPENFILENAMEA explícito (não o macro ambíguo OPENFILENAME)
+				// — mesmo motivo do SHBrowseForFolderA acima: evita resolver
+				// pra versão Wide se o projeto compilar com UNICODE definido.
+			OPENFILENAMEA ofn;
+			char szFile[512] = { 0 };
+			ZeroMemory(&ofn, sizeof(ofn));
+			ofn.lStructSize = sizeof(ofn);
+			ofn.hwndOwner = nullptr;
+			ofn.lpstrFile = szFile;
+			ofn.nMaxFile = sizeof(szFile);
+			ofn.lpstrFilter = "AXE Project\0*.axeproject\0";
+			ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+			if (GetOpenFileNameA(&ofn))
+				std::strncpy(openPath, szFile, sizeof(openPath) - 1);
+#endif // AXE_PLATFORM_WINDOWS
+		}
+
+		ImGui::Spacing();
+		bool pathValid = std::strlen(openPath) > 0 && std::filesystem::exists(openPath);
+
+		if (!pathValid)
+			ImGui::BeginDisabled();
+
+		if (ImGui::Button("Abrir", ImVec2(150, 35)))
+		{
+			// BUGFIX: faltavam as chaves aqui — só "m_ShouldClose = true;"
+			// fazia parte do if; "m_Callback(...)" rodava SEMPRE, mesmo
+			// se OpenProject falhasse (chamava o callback com um projeto
+			// que nem abriu de verdade).
+			if (ProjectManager::Get().OpenProject(openPath))
+			{
+				m_ShouldClose = true;
+				m_Callback(std::filesystem::path(openPath));
+			}
+		}
+
+		if (!pathValid)
+			ImGui::EndDisabled();
+	}
+
+	bool ProjectSelectorLayer::TrySelectFolder(std::string& outPath)
+	{
+		// BUGFIX: estava "AXE_PLATFORM_WINOWS" (faltava o D) — o macro
+		// certo é AXE_PLATFORM_WINDOWS (confirma no topo do arquivo,
+		// onde windows.h/ShlObj.h são incluídos corretamente). Com o
+		// typo, esse #ifdef NUNCA batia, o corpo inteiro era compilado
+		// fora, e a função sempre retornava false — exatamente o
+		// sintoma do botão "..." de Nova Cena não fazer nada.
+#ifdef AXE_PLATFORM_WINDOWS
+		BROWSEINFOA bi = { 0 };
+		bi.lpszTitle = "Selecione a pasta do projeto";
+		bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+		// BUGFIX: "SHBrowseForFolder" sem sufixo é macro — resolve pra
+		// SHBrowseForFolderW (espera LPBROWSEINFOW) quando o projeto
+		// compila com UNICODE definido, mesmo a struct aqui sendo
+		// BROWSEINFOA. Força a versão ANSI explicitamente, já que bi
+		// é ANSI e outPath é std::string (não std::wstring).
+		LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+
+		if (pidl)
+		{
+			char path[MAX_PATH];
+			if (SHGetPathFromIDListA(pidl, path))
+			{
+				outPath = path;
+				CoTaskMemFree(pidl);
+				return true;
+			}
+			// BUGFIX: faltava o ';' aqui — nunca compilava de verdade
+			// porque o #ifdef acima escondia esse erro de sintaxe.
+			CoTaskMemFree(pidl);
+		}
 
 #endif
 
-			return false;
+		return false;
 
-		}
-	
+	}
+
 }//namespace axe

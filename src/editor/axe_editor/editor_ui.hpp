@@ -32,6 +32,8 @@ namespace axe
         std::function<void()> OnNewScene;
         std::function<void(const std::string&)> OnOpenScene;
         std::function<void(const std::string&)> OnSaveScene;
+        std::function<void()> OnSaveProject;
+        std::function<void(const std::string&)> OnOpenProject;
         std::function<void()> OnDrawEnvironment;
         std::function<void()> OnUndo;
         std::function<void()> OnRedo;

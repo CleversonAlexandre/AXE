@@ -177,6 +177,32 @@ namespace axe
 		m_PendingCommands.clear();
 	}
 
+	bool EditorApp::RequestReopenProject(const std::filesystem::path& projectFile)
+	{
+		if (!ProjectManager::Get().OpenProject(projectFile))
+			return false;
+
+		// Agenda a troca pro próximo frame (fora do loop de update atual) —
+		// mesmo motivo do callback do ProjectSelectorLayer: trocar de layer
+		// NO MEIO do update do EditorLayer atual (chamado a partir do menu
+		// File dele mesmo) destruiria o objeto enquanto ele ainda está
+		// rodando código, o que é use-after-free na volta da chamada.
+		m_PendingCommands.push_back([this]()
+			{
+				for (auto* layer : m_LayerStack)
+				{
+					if (layer->GetName() == "EditorLayer")
+					{
+						m_LayerStack.PopLayer(layer);
+						delete layer;
+						break;
+					}
+				}
+				m_LayerStack.PushLayer(new EditorLayer());
+			});
+		return true;
+	}
+
 
 
 
