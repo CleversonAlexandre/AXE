@@ -68,7 +68,7 @@ namespace axe
     }
 
     void ColliderDebugRenderer::PushSphere(std::vector<float>& verts,
-        const glm::mat4& model, float radius)
+        const glm::mat4& model, float radius, const glm::vec4& color)
     {
         const int segs = 24;
         glm::vec3 center = glm::vec3(model[3]);
@@ -80,7 +80,7 @@ namespace axe
                 {
                     float a0 = (float)i / segs * glm::two_pi<float>();
                     float a1 = (float)(i + 1) / segs * glm::two_pi<float>();
-                    PushLine(verts, getPoint(a0), getPoint(a1), m_Color);
+                    PushLine(verts, getPoint(a0), getPoint(a1), color);
                 }
             };
 
@@ -206,7 +206,7 @@ namespace axe
                     PushBox(verts, model, col.HalfExtent * scale);
                     break;
                 case ColliderShape::Sphere:
-                    PushSphere(verts, model, col.Radius * glm::compMax(scale));
+                    PushSphere(verts, model, col.Radius * glm::compMax(scale), m_Color);
                     break;
                 case ColliderShape::Capsule:
                     PushCapsule(verts, model,
@@ -234,6 +234,90 @@ namespace axe
                     }
                     break;
                 }
+                }
+            });
+
+        UploadAndDraw(verts, vp);
+    }
+
+    void ColliderDebugRenderer::PushCone(std::vector<float>& verts, const glm::vec3& apex,
+        const glm::vec3& direction, float length, float halfAngleDegrees, const glm::vec4& color)
+    {
+        // Constrói uma base ortonormal (right/up) perpendicular à direção
+        // do cone, pra desenhar o círculo da "boca" do cone nessa base.
+        glm::vec3 dir = glm::length(direction) > 0.0001f ? glm::normalize(direction) : glm::vec3(0, -1, 0);
+        glm::vec3 up = (fabsf(dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        glm::vec3 right = glm::normalize(glm::cross(dir, up));
+        up = glm::normalize(glm::cross(right, dir));
+
+        float radius = length * tanf(glm::radians(halfAngleDegrees));
+        glm::vec3 baseCenter = apex + dir * length;
+
+        const int segs = 24;
+        auto pointOnCircle = [&](float a)
+            {
+                return baseCenter + (right * cosf(a) + up * sinf(a)) * radius;
+            };
+
+        // Círculo da boca do cone
+        for (int i = 0; i < segs; i++)
+        {
+            float a0 = (float)i / segs * glm::two_pi<float>();
+            float a1 = (float)(i + 1) / segs * glm::two_pi<float>();
+            PushLine(verts, pointOnCircle(a0), pointOnCircle(a1), color);
+        }
+
+        // Linhas do ápice até 8 pontos da borda — dão a sensação de "leque"
+        // do cone, igual ao gizmo de Spot Light de outras engines
+        for (int i = 0; i < 8; i++)
+        {
+            float a = (float)i / 8 * glm::two_pi<float>();
+            PushLine(verts, apex, pointOnCircle(a), color);
+        }
+    }
+
+    void ColliderDebugRenderer::RenderLights(const Scene& scene,
+        const glm::mat4& view, const glm::mat4& projection)
+    {
+        if (!m_Initialized) return;
+
+        glm::mat4 vp = projection * view;
+        std::vector<float> verts;
+
+        auto& registry = const_cast<Scene&>(scene).GetRegistry();
+
+        // Só Point Light tem "raio de alcance" — Directional Light é
+        // paralela/infinita, não faz sentido um gizmo de raio pra ela.
+        registry.view<PointLightComponent>().each(
+            [&](entt::entity e, PointLightComponent& plc)
+            {
+                if (!plc.Data) return;
+
+                // Posição sincronizada com o TransformComponent, igual ao
+                // SceneCollector faz pra renderização real da luz.
+                glm::vec3 position = plc.Data->Position;
+                glm::vec3 direction = plc.Data->Direction;
+                if (auto* tc = registry.try_get<TransformComponent>(e))
+                {
+                    position = tc->Data.Position;
+                    // Mesmo cálculo do SceneCollector — o gizmo precisa
+                    // bater exatamente com a direção real da luz, senão o
+                    // cone desenhado mente sobre pra onde a luz aponta.
+                    direction = ComputeSpotDirection(tc->Data.Rotation);
+                }
+
+                if (plc.Data->IsSpot)
+                {
+                    // Spot Light — mostra o cone (ângulo externo) em vez da
+                    // esfera, já que o raio de alcance só se aplica dentro
+                    // do feixe, não em todas as direções.
+                    PushCone(verts, position, direction,
+                        plc.Data->Radius, plc.Data->OuterConeAngle, m_LightColor);
+                }
+                else
+                {
+                    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+                    PushSphere(verts, model, plc.Data->Radius, m_LightColor);
                 }
             });
 

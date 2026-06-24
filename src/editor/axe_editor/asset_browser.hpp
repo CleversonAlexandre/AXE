@@ -51,7 +51,7 @@ namespace axe
         // Desenho
         void DrawToolbar();
         void DrawFolderTree();
-        void DrawFolderNode(const std::string& folderPath, int depth = 0);
+        void DrawFolderNode(const std::string& folderPath);
         void DrawAssetGrid();
         void DrawAssetItem(const AssetRecord& record);
         void DrawFolderItem(const VirtualFolderDef& folder);
@@ -67,6 +67,13 @@ namespace axe
         void DuplicateAsset(const AssetRecord& record);
         void OpenInExplorer(const std::filesystem::path& path);
         void MoveAssetToFolder(const std::string& uuid, const std::string& folder);
+
+        // Relocate Assets — move assets registrados que estão FORA da pasta
+        // Assets do projeto (importados antes da correção do OnFileDrop, ou
+        // arquivos manualmente referenciados de outro lugar) para dentro dela.
+        void DrawRelocateAssetsModals();
+        void ScanExternalAssets(std::vector<std::string>& outUUIDs) const;
+        void RelocateAssets(const std::vector<std::string>& uuids);
 
         // Pastas virtuais
         void CreateFolder(const std::string& name, const std::string& parent = "");
@@ -89,6 +96,7 @@ namespace axe
 
         std::string m_SelectedFolder = "";   // path completo da pasta selecionada
         float       m_IconSize = 64.0f;
+        float       m_FolderPanelWidth = 200.0f; // largura do painel de pastas — redimensionável com o mouse
 
         // Pastas virtuais — path completo (ex: "Meshes/Characters") → def
         std::vector<VirtualFolderDef> m_Folders = {
@@ -126,6 +134,13 @@ namespace axe
         std::string m_DeleteConfirmUUID = "";
         std::string m_DeleteConfirmFolder = "";
         std::string m_DeleteConfirmFolderDiskPath = "";
+
+        // Relocate Assets — fluxo de confirmação/resultado
+        bool                     m_RelocateConfirmOpen = false;
+        bool                     m_RelocateResultOpen = false;
+        std::vector<std::string> m_PendingRelocateUUIDs;
+        int                      m_RelocateSuccessCount = 0;
+        std::vector<std::string> m_RelocateErrorMessages;
     };
 
 } // namespace axe

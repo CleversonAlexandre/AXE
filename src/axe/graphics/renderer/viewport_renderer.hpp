@@ -54,6 +54,7 @@ namespace axe
 
 		bool  ShowGrid = true;
 		bool  ShowColliders = true; // wireframe dos colliders no editor
+		bool  ShowLights = true;    // wireframe do raio das Point Lights no editor
 		bool  SnapEnabled = false;
 		float SnapValue = 0.5f;   // unidades para translate
 		float SnapAngle = 15.0f;  // graus para rotate

@@ -9,6 +9,7 @@
 #include "axe/utils/glm_config.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
+#include <GLFW/glfw3.h>
 
 
 namespace axe
@@ -152,6 +153,12 @@ namespace axe
             glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
             activeShader->SetMat3("u_NormalMatrix", glm::value_ptr(normalMatrix));
             activeShader->SetFloat3("u_CameraPosition", m_CameraPosition);
+
+            // Tempo de execução, em segundos, desde a inicialização do GLFW.
+            // Usado pelos nodes "Time" e "Panner" do Material Graph para
+            // animar materiais (água, energia, hologramas, etc.) — igual ao
+            // node "Time" da Unreal.
+            activeShader->SetFloat("u_Time", (float)glfwGetTime());
 
             // Binda texturas pelo nome do sampler conforme atribuído pelo MaterialCompiler.
             // SamplerTextures já contém TODAS as texturas (albedo, normal, etc.)

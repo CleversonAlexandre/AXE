@@ -128,7 +128,8 @@ namespace axe
         fs << "uniform vec3  u_LightDirection;\n";
         fs << "uniform vec3  u_LightColor;\n";
         fs << "uniform float u_LightIntensity;\n";
-        fs << "uniform vec3  u_CameraPosition;\n\n";
+        fs << "uniform vec3  u_CameraPosition;\n";
+        fs << "uniform float u_Time;\n\n";
         fs << "uniform samplerCube u_IrradianceMap;\n";
         fs << "uniform samplerCube u_PrefilteredMap;\n";
         fs << "uniform sampler2D   u_BRDFLut;\n";
@@ -185,6 +186,8 @@ namespace axe
         std::string roughness = resolveInput(2, "0.5");
         std::string emissive = resolveInput(4, "vec3(0.0)");
         std::string opacity = resolveInput(5, "1.0");
+        std::string ao = resolveInput(6, "1.0");
+        std::string specular = resolveInput(7, "0.5");
 
         // Converte tipos
         Pin* metallicSrc = (outputNode->Inputs.size() > 1)
@@ -212,6 +215,28 @@ namespace axe
             PinType t = compiler.GetPinType(opacitySrc->ID);
             if (t == PinType::Vec3 || t == PinType::Vec4)
                 opacity = "dot(" + opacity + ", vec3(0.299, 0.587, 0.114))";
+        }
+
+        // Opacity conectado a algo => este material precisa do forward
+        // pass de transparência (vidro, etc.) — ver SceneRenderer.
+        result.IsTransparent = (opacitySrc != nullptr);
+
+        Pin* aoSrc = (outputNode->Inputs.size() > 6)
+            ? compiler.GetSourcePin(&outputNode->Inputs[6]) : nullptr;
+        if (aoSrc)
+        {
+            PinType t = compiler.GetPinType(aoSrc->ID);
+            if (t == PinType::Vec3 || t == PinType::Vec4)
+                ao = "(" + ao + ").r"; // mapas de AO são monocromáticos; .r basta
+        }
+
+        Pin* specularSrc = (outputNode->Inputs.size() > 7)
+            ? compiler.GetSourcePin(&outputNode->Inputs[7]) : nullptr;
+        if (specularSrc)
+        {
+            PinType t = compiler.GetPinType(specularSrc->ID);
+            if (t == PinType::Vec3 || t == PinType::Vec4)
+                specular = "dot(" + specular + ", vec3(0.299, 0.587, 0.114))";
         }
 
         Pin* baseColorSrc = compiler.GetSourcePin(&outputNode->Inputs[0]);
@@ -251,7 +276,8 @@ namespace axe
         fs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n";
         fs << "    vec3  matEmissive  = " << emissive << ";\n";
         fs << "    float matOpacity   = " << opacity << ";\n\n";
-        fs << "    float matAO = 1.0;\n";
+        fs << "    float matAO = clamp(" << ao << ", 0.0, 1.0);\n";
+        fs << "    float matSpecular = clamp(" << specular << ", 0.0, 1.0);\n";
 
         // 7. PBR Cook-Torrance
         fs << "    // --- PBR Cook-Torrance ---\n";
@@ -313,12 +339,21 @@ namespace axe
         gs << "layout(location = 0) out vec3 g_Position;\n";
         gs << "layout(location = 1) out vec3 g_Normal;\n";
         gs << "layout(location = 2) out vec4 g_Albedo;\n";
-        gs << "layout(location = 3) out vec2 g_PBR;\n\n";
+        gs << "layout(location = 3) out vec2 g_PBR;\n";
+        gs << "layout(location = 4) out vec3 g_Emissive;\n\n";
         gs << "in vec3 v_Normal;\n";
         gs << "in vec3 v_FragPos;\n";
         gs << "in vec2 v_TexCoord;\n";
         gs << "in vec3 v_Tangent;\n";
         gs << "in vec3 v_Bitangent;\n\n";
+
+        // u_CameraPosition e u_Time faltavam aqui — sem eles, nodes como
+        // Fresnel/Camera Vector/Reflection Vector/Time/Panner compilavam
+        // certinho no preview (caminho forward) mas falhavam ao compilar
+        // o Geometry Shader do caminho deferred (usado na cena principal),
+        // pois referenciavam um uniform nunca declarado.
+        gs << "uniform vec3  u_CameraPosition;\n";
+        gs << "uniform float u_Time;\n\n";
 
         // Declara os mesmos samplers do forward
         for (auto& node : graph->GetNodes())
@@ -343,13 +378,16 @@ namespace axe
         // Propriedades do material
         gs << "    vec3  matBaseColor = " << baseColor << ";\n";
         gs << "    float matMetallic  = " << metallic << ";\n";
-        gs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n\n";
+        gs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n";
+        gs << "    float matAO        = clamp(" << ao << ", 0.0, 1.0);\n";
+        gs << "    vec3  matEmissive  = " << emissive << ";\n\n";
 
         // Escreve no G-Buffer
         gs << "    g_Position = v_FragPos;\n";
         gs << "    g_Normal   = N;\n";
         gs << "    g_Albedo   = vec4(matBaseColor, matMetallic);\n";
-        gs << "    g_PBR      = vec2(matRoughness, 1.0);\n";
+        gs << "    g_PBR      = vec2(matRoughness, matAO);\n";
+        gs << "    g_Emissive = matEmissive;\n";
         gs << "}\n";
 
         result.FragmentShader = fs.str();
@@ -488,6 +526,8 @@ namespace axe
         {
             std::string var = MakeVar("uv");
             RegisterPin(node->Outputs[0].ID, var, PinType::Vec2);
+            RegisterPin(node->Outputs[1].ID, var + ".x", PinType::Float);
+            RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float);
             code << "vec2 " << var << " = v_TexCoord;";
         }
 
@@ -514,6 +554,7 @@ namespace axe
             RegisterPin(node->Outputs[0].ID, var, PinType::Vec4);
             RegisterPin(node->Outputs[1].ID, var + ".rgb", PinType::Vec3);
             RegisterPin(node->Outputs[2].ID, var + ".r", PinType::Float);
+            RegisterPin(node->Outputs[3].ID, var + ".a", PinType::Float);
             code << "vec4 " << var << " = texture(" << sampler << ", " << uv << ");";
         }
 
@@ -525,7 +566,8 @@ namespace axe
         else if (node->Name == "Multiply")
         {
             std::string var = MakeVar("mul");
-            std::string valA = "1.0", valB = "1.0";
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
             PinType typeA = PinType::Float, typeB = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -546,7 +588,8 @@ namespace axe
         else if (node->Name == "Add")
         {
             std::string var = MakeVar("add");
-            std::string valA = "0.0", valB = "0.0";
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
             PinType typeA = PinType::Float, typeB = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -567,7 +610,8 @@ namespace axe
         else if (node->Name == "Subtract")
         {
             std::string var = MakeVar("sub");
-            std::string valA = "0.0", valB = "0.0";
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
             PinType typeA = PinType::Float, typeB = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -588,7 +632,8 @@ namespace axe
         else if (node->Name == "Divide")
         {
             std::string var = MakeVar("div");
-            std::string valA = "1.0", valB = "1.0";
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
             PinType typeA = PinType::Float, typeB = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -610,7 +655,7 @@ namespace axe
         else if (node->Name == "Power")
         {
             std::string var = MakeVar("pw");
-            std::string valA = "1.0", valB = "2.0";
+            std::string valA = "1.0", valB = std::to_string(node->Inputs[1].DefaultFloat);
             PinType typeA = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -643,7 +688,9 @@ namespace axe
         else if (node->Name == "Lerp")
         {
             std::string var = MakeVar("lerp");
-            std::string valA = "0.0", valB = "1.0", alpha = "0.5";
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
+            std::string alpha = std::to_string(node->Inputs[2].DefaultFloat);
             PinType typeA = PinType::Float, typeB = PinType::Float;
 
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
@@ -678,7 +725,9 @@ namespace axe
         else if (node->Name == "Clamp")
         {
             std::string var = MakeVar("clamp");
-            std::string val = "0.0", minVal = "0.0", maxVal = "1.0";
+            std::string val = "0.0";
+            std::string minVal = std::to_string(node->Inputs[1].DefaultFloat);
+            std::string maxVal = std::to_string(node->Inputs[2].DefaultFloat);
             PinType     typeV = PinType::Float;
 
             Pin* srcVal = GetSourcePin(&node->Inputs[0]);
@@ -760,7 +809,7 @@ namespace axe
         else if (node->Name == "Fresnel")
         {
             std::string var = MakeVar("fresnel");
-            std::string exponent = "5.0";
+            std::string exponent = std::to_string(node->Inputs[0].DefaultFloat);
             std::string normal = "N";
 
             Pin* srcExp = GetSourcePin(&node->Inputs[0]);
@@ -793,7 +842,7 @@ namespace axe
         {
             std::string var = MakeVar("normalmap");
             std::string texVal = "vec3(0.5, 0.5, 1.0)"; // normal padrão
-            std::string strength = "1.0";
+            std::string strength = std::to_string(node->Inputs[1].DefaultFloat);
 
             Pin* srcTex = GetSourcePin(&node->Inputs[0]);
             if (srcTex)
@@ -817,6 +866,433 @@ namespace axe
                 << "_raw * 2.0 - 1.0);\n";
             code << "vec3 " << var << " = normalize(mat3(v_Tangent, v_Bitangent, v_Normal) * "
                 << var << "_ts * vec3(" << strength << ", " << strength << ", 1.0));";
+        }
+
+        // -----------------------------------------------------------------
+        // Sine — sin(x)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Sine")
+        {
+            std::string var = MakeVar("sine");
+            std::string val = std::to_string(node->Inputs[0].DefaultFloat);
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) val = GetPinVariable(src->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = sin(" << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Cosine — cos(x)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Cosine")
+        {
+            std::string var = MakeVar("cosine");
+            std::string val = std::to_string(node->Inputs[0].DefaultFloat);
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) val = GetPinVariable(src->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = cos(" << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Step — step(edge, x)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Step")
+        {
+            std::string var = MakeVar("step");
+            std::string edge = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string val = std::to_string(node->Inputs[1].DefaultFloat);
+
+            Pin* srcEdge = GetSourcePin(&node->Inputs[0]);
+            if (srcEdge) edge = GetPinVariable(srcEdge->ID);
+            Pin* srcVal = GetSourcePin(&node->Inputs[1]);
+            if (srcVal) val = GetPinVariable(srcVal->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = step(" << edge << ", " << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // SmoothStep — smoothstep(min, max, x)
+        // -----------------------------------------------------------------
+        else if (node->Name == "SmoothStep")
+        {
+            std::string var = MakeVar("smoothstep");
+            std::string minVal = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string maxVal = std::to_string(node->Inputs[1].DefaultFloat);
+            std::string val = std::to_string(node->Inputs[2].DefaultFloat);
+
+            Pin* srcMin = GetSourcePin(&node->Inputs[0]);
+            if (srcMin) minVal = GetPinVariable(srcMin->ID);
+            Pin* srcMax = GetSourcePin(&node->Inputs[1]);
+            if (srcMax) maxVal = GetPinVariable(srcMax->ID);
+            Pin* srcVal = GetSourcePin(&node->Inputs[2]);
+            if (srcVal) val = GetPinVariable(srcVal->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = smoothstep(" << minVal << ", " << maxVal << ", " << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Normalize — normalize(v)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Normalize")
+        {
+            std::string var = MakeVar("normalize");
+            std::string val = "vec3(0.0, 1.0, 0.0)";
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) val = GetPinVariable(src->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << " = normalize(" << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Distance — distance(A, B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Distance")
+        {
+            std::string var = MakeVar("dist");
+            std::string valA = "vec3(0.0)", valB = "vec3(0.0)";
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) valA = GetPinVariable(srcA->ID);
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) valB = GetPinVariable(srcB->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = distance(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // DotProduct — dot(A, B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "DotProduct")
+        {
+            std::string var = MakeVar("dotp");
+            std::string valA = "vec3(0.0)", valB = "vec3(0.0)";
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) valA = GetPinVariable(srcA->ID);
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) valB = GetPinVariable(srcB->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = dot(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Desaturate — mistura entre a cor original e seu nível de cinza
+        // (luminância) de acordo com Fraction (0 = original, 1 = P&B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Desaturate")
+        {
+            std::string var = MakeVar("desat");
+            std::string color = "vec3(1.0)";
+            std::string fraction = std::to_string(node->Inputs[1].DefaultFloat);
+
+            Pin* srcColor = GetSourcePin(&node->Inputs[0]);
+            if (srcColor) color = GetPinVariable(srcColor->ID);
+            Pin* srcFrac = GetSourcePin(&node->Inputs[1]);
+            if (srcFrac) fraction = GetPinVariable(srcFrac->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "float " << var << "_lum = dot(" << color << ", vec3(0.299, 0.587, 0.114));\n";
+            code << "vec3 " << var << " = mix(" << color << ", vec3(" << var << "_lum), " << fraction << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Append — combina um Vec3 e um Float num Vec4 (ex: RGB + Alpha,
+        // ou qualquer empacotamento de canais)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Append")
+        {
+            std::string var = MakeVar("append");
+            std::string valA = "vec3(0.0)";
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) valA = GetPinVariable(srcA->ID);
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) valB = GetPinVariable(srcB->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec4);
+            code << "vec4 " << var << " = vec4(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Vector Split — separa um Vec3 em X, Y, Z
+        // -----------------------------------------------------------------
+        else if (node->Name == "Vector Split")
+        {
+            std::string var = MakeVar("split");
+            std::string val = "vec3(0.0)";
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) val = GetPinVariable(src->ID);
+
+            code << "vec3 " << var << " = " << val << ";";
+            RegisterPin(node->Outputs[0].ID, var + ".x", PinType::Float);
+            RegisterPin(node->Outputs[1].ID, var + ".y", PinType::Float);
+            RegisterPin(node->Outputs[2].ID, var + ".z", PinType::Float);
+        }
+
+        // -----------------------------------------------------------------
+        // Camera Vector — direção (normalizada) da superfície até a câmera
+        // -----------------------------------------------------------------
+        else if (node->Name == "Camera Vector")
+        {
+            std::string var = MakeVar("camvec");
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << " = normalize(u_CameraPosition - v_FragPos);";
+        }
+
+        // -----------------------------------------------------------------
+        // Reflection Vector — reflexo do vetor de visão em torno da normal
+        // -----------------------------------------------------------------
+        else if (node->Name == "Reflection Vector")
+        {
+            std::string var = MakeVar("reflvec");
+            std::string normal = "N";
+
+            Pin* srcNorm = GetSourcePin(&node->Inputs[0]);
+            if (srcNorm)
+            {
+                PinType t = GetPinType(srcNorm->ID);
+                if (t == PinType::Vec3) normal = GetPinVariable(srcNorm->ID);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << " = reflect(-normalize(u_CameraPosition - v_FragPos), normalize("
+                << normal << "));";
+        }
+
+        // -----------------------------------------------------------------
+        // Time — tempo de execução em segundos (u_Time, atualizado por
+        // frame pelo renderer). Base para animar materiais.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Time")
+        {
+            RegisterPin(node->Outputs[0].ID, "u_Time", PinType::Float);
+            // Sem declaração de variável — u_Time já é um uniform global,
+            // referenciá-lo direto evita uma cópia desnecessária.
+        }
+
+        // -----------------------------------------------------------------
+        // Panner — desloca um UV ao longo do tempo (água, energia,
+        // hologramas, etc.) — igual ao node "Panner" da Unreal.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Panner")
+        {
+            std::string var = MakeVar("pan");
+            std::string uv = "v_TexCoord";
+            std::string speedX = std::to_string(node->Inputs[1].DefaultFloat);
+            std::string speedY = std::to_string(node->Inputs[2].DefaultFloat);
+
+            Pin* srcUV = GetSourcePin(&node->Inputs[0]);
+            if (srcUV)
+            {
+                PinType t = GetPinType(srcUV->ID);
+                if (t == PinType::Vec2) uv = GetPinVariable(srcUV->ID);
+            }
+
+            Pin* srcSpeedX = GetSourcePin(&node->Inputs[1]);
+            if (srcSpeedX) speedX = GetPinVariable(srcSpeedX->ID);
+            Pin* srcSpeedY = GetSourcePin(&node->Inputs[2]);
+            if (srcSpeedY) speedY = GetPinVariable(srcSpeedY->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec2);
+            code << "vec2 " << var << " = " << uv
+                << " + u_Time * vec2(" << speedX << ", " << speedY << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Min — min(A, B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Min")
+        {
+            std::string var = MakeVar("min");
+            std::string valA = "0.0", valB = "0.0";
+            PinType typeA = PinType::Float, typeB = PinType::Float;
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) { valA = GetPinVariable(srcA->ID); typeA = GetPinType(srcA->ID); }
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) { valB = GetPinVariable(srcB->ID); typeB = GetPinType(srcB->ID); }
+
+            PinType resultType = (typeA >= typeB) ? typeA : typeB;
+            RegisterPin(node->Outputs[0].ID, var, resultType);
+            code << GetGLSLType(resultType) << " " << var
+                << " = min(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Max — max(A, B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Max")
+        {
+            std::string var = MakeVar("max");
+            std::string valA = "0.0", valB = "0.0";
+            PinType typeA = PinType::Float, typeB = PinType::Float;
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) { valA = GetPinVariable(srcA->ID); typeA = GetPinType(srcA->ID); }
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) { valB = GetPinVariable(srcB->ID); typeB = GetPinType(srcB->ID); }
+
+            PinType resultType = (typeA >= typeB) ? typeA : typeB;
+            RegisterPin(node->Outputs[0].ID, var, resultType);
+            code << GetGLSLType(resultType) << " " << var
+                << " = max(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Saturate — clamp(value, 0, 1). GLSL aceita clamp(vecN, float, float)
+        // nativamente, então funciona igual pra float/vec2/vec3/vec4.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Saturate")
+        {
+            std::string var = MakeVar("sat");
+            std::string val = "0.0";
+            PinType type = PinType::Float;
+
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) { val = GetPinVariable(src->ID); type = GetPinType(src->ID); }
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var << " = clamp(" << val << ", 0.0, 1.0);";
+        }
+
+        // -----------------------------------------------------------------
+        // Length — length(v)
+        // -----------------------------------------------------------------
+        else if (node->Name == "Length")
+        {
+            std::string var = MakeVar("len");
+            std::string val = "vec3(0.0)";
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) val = GetPinVariable(src->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = length(" << val << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // CrossProduct — cross(A, B)
+        // -----------------------------------------------------------------
+        else if (node->Name == "CrossProduct")
+        {
+            std::string var = MakeVar("cross");
+            std::string valA = "vec3(0.0)", valB = "vec3(0.0)";
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) valA = GetPinVariable(srcA->ID);
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) valB = GetPinVariable(srcB->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << " = cross(" << valA << ", " << valB << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // If — compara A e B, escolhe entre 3 valores (A>B / A==B / A<B).
+        // Igual ao node "If" da Unreal.
+        // -----------------------------------------------------------------
+        else if (node->Name == "If")
+        {
+            std::string var = MakeVar("ifres");
+            std::string a = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string b = std::to_string(node->Inputs[1].DefaultFloat);
+
+            Pin* srcA = GetSourcePin(&node->Inputs[0]);
+            if (srcA) a = GetPinVariable(srcA->ID);
+            Pin* srcB = GetSourcePin(&node->Inputs[1]);
+            if (srcB) b = GetPinVariable(srcB->ID);
+
+            std::string greater = "0.0", equal = "0.0", less = "0.0";
+            PinType type = PinType::Float;
+
+            Pin* srcGreater = GetSourcePin(&node->Inputs[2]);
+            if (srcGreater) { greater = GetPinVariable(srcGreater->ID); type = GetPinType(srcGreater->ID); }
+            Pin* srcEqual = GetSourcePin(&node->Inputs[3]);
+            if (srcEqual) equal = GetPinVariable(srcEqual->ID);
+            Pin* srcLess = GetSourcePin(&node->Inputs[4]);
+            if (srcLess) less = GetPinVariable(srcLess->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var << " = (" << a << " > " << b << ") ? ("
+                << greater << ") : ((" << a << " < " << b << ") ? (" << less << ") : (" << equal << "));";
+        }
+
+        // -----------------------------------------------------------------
+        // Noise — ruído pseudo-aleatório baseado em UV (hash determinístico,
+        // sem necessidade de textura). Útil pra quebrar padrões repetitivos.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Noise")
+        {
+            std::string var = MakeVar("noise");
+            std::string uv = "v_TexCoord";
+
+            Pin* srcUV = GetSourcePin(&node->Inputs[0]);
+            if (srcUV)
+            {
+                PinType t = GetPinType(srcUV->ID);
+                if (t == PinType::Vec2) uv = GetPinVariable(srcUV->ID);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = fract(sin(dot(" << uv
+                << ", vec2(12.9898, 78.233))) * 43758.5453);";
+        }
+
+        // -----------------------------------------------------------------
+        // Vec2 / Vec3 — constantes vetoriais
+        // -----------------------------------------------------------------
+        else if (node->Name == "Vec2")
+        {
+            std::string var = MakeVar("vec2");
+            auto& v = node->Value.Vec2Val;
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec2);
+            code << "vec2 " << var << " = vec2(" << v.x << ", " << v.y << ");";
+        }
+        else if (node->Name == "Vec3")
+        {
+            std::string var = MakeVar("vec3");
+            auto& v = node->Value.Vec3Val;
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            code << "vec3 " << var << " = vec3(" << v.x << ", " << v.y << ", " << v.z << ");";
+        }
+
+        // -----------------------------------------------------------------
+        // Texture Coordinate — UV com tiling, offset e rotação (em graus,
+        // pivotada no centro 0.5,0.5) — igual ao "Texture Coordinate" da
+        // Unreal, mais completo que o "UV Coordinate" simples.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Texture Coordinate")
+        {
+            std::string var = MakeVar("texcoord");
+            std::string uTiling = std::to_string(node->Inputs[0].DefaultFloat);
+            std::string vTiling = std::to_string(node->Inputs[1].DefaultFloat);
+            std::string uOffset = std::to_string(node->Inputs[2].DefaultFloat);
+            std::string vOffset = std::to_string(node->Inputs[3].DefaultFloat);
+            std::string rotation = std::to_string(node->Inputs[4].DefaultFloat);
+
+            Pin* srcUT = GetSourcePin(&node->Inputs[0]); if (srcUT) uTiling = GetPinVariable(srcUT->ID);
+            Pin* srcVT = GetSourcePin(&node->Inputs[1]); if (srcVT) vTiling = GetPinVariable(srcVT->ID);
+            Pin* srcUO = GetSourcePin(&node->Inputs[2]); if (srcUO) uOffset = GetPinVariable(srcUO->ID);
+            Pin* srcVO = GetSourcePin(&node->Inputs[3]); if (srcVO) vOffset = GetPinVariable(srcVO->ID);
+            Pin* srcRot = GetSourcePin(&node->Inputs[4]); if (srcRot) rotation = GetPinVariable(srcRot->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec2);
+            code << "float " << var << "_rad = radians(" << rotation << ");\n";
+            code << "vec2 " << var << "_centered = v_TexCoord - vec2(0.5);\n";
+            code << "vec2 " << var << "_rotated = vec2(\n";
+            code << "    " << var << "_centered.x * cos(" << var << "_rad) - " << var << "_centered.y * sin(" << var << "_rad),\n";
+            code << "    " << var << "_centered.x * sin(" << var << "_rad) + " << var << "_centered.y * cos(" << var << "_rad)\n";
+            code << ") + vec2(0.5);\n";
+            code << "vec2 " << var << " = " << var << "_rotated * vec2(" << uTiling << ", " << vTiling
+                << ") + vec2(" << uOffset << ", " << vOffset << ");";
         }
 
         return code.str();

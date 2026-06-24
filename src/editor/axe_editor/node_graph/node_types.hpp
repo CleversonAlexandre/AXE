@@ -49,8 +49,15 @@ namespace axe
         PinType     Type;
         ed::PinKind     Kind; // Input ou Output
 
+        // Valor usado quando este pin é um INPUT e está desconectado — evita
+        // ter que criar um node "Float" só pra alimentar uma constante
+        // simples (igual a digitar direto no pin na Unreal). Só Float por
+        // ora; Vec2/Vec3/Color desconectados continuam usando o fallback
+        // fixo do node (ou um node constante dedicado).
+        float DefaultFloat = 0.0f;
+
         Pin(int id, const char* name, PinType type, ed::PinKind kind)
-            : ID(id), ParentNode(nullptr), Name(name), Type(type),Kind(kind){}
+            : ID(id), ParentNode(nullptr), Name(name), Type(type), Kind(kind) {}
     };
 
     struct Link
@@ -83,10 +90,10 @@ namespace axe
     struct Node
     {
         ed::NodeId          ID;
-        std::string         Name;        
+        std::string         Name;
         std::vector<Pin>    Inputs;
         std::vector<Pin>    Outputs;
-        ImVec4              Color = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);        
+        ImVec4              Color = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
         NodeType Type;
         ImVec2 Size;
         // Dados específicos do node
@@ -96,6 +103,15 @@ namespace axe
         std::vector<int> ChildNodeIDs;
         bool IsConstant = false;
 
+        // Usado apenas quando Name == "Comment" — o TEXTO exibido/editável
+        // pelo usuário. Importante: Name continua sendo "Comment" sempre
+        // (é o identificador de tipo usado por compilador/serialização/
+        // undo); antes disso, o comment guardava o texto direto em Name,
+        // o que quebrava a desserialização e o undo depois de renomear
+        // (o node deixava de ser reconhecido como tipo "Comment").
+        std::string StringValue;
+        float CommentColor[3] = { 0.10f, 0.35f, 0.45f };
+
         Node(int id, const char* name, ImColor color = ImColor(255, 255, 255)) :
             ID(id), Name(name), Color(color), Type(NodeType::Blueprint), Size(0, 0)
         {}
@@ -103,8 +119,8 @@ namespace axe
         virtual ~Node() = default;
     };
 
-  
-    
+
+
 
 
 } // namespace axe

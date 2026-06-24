@@ -15,7 +15,7 @@
 
 #include "asset/asset_picker.hpp"
 #include "axe/material/material_compiler.hpp"
-#include "material_editor_window.hpp"
+#include "editor/axe_editor/material/material_editor_window.hpp"
 
 
 namespace axe
@@ -208,7 +208,13 @@ namespace axe
 		}
 
 		if (auto* plc = registry.try_get<PointLightComponent>(entity))
-			if (plc->Data) DrawPointLight(*plc->Data);
+			if (plc->Data)
+			{
+				glm::vec3 rotation = glm::vec3(0.0f);
+				if (auto* tc = registry.try_get<TransformComponent>(entity))
+					rotation = tc->Data.Rotation;
+				DrawPointLight(*plc->Data, rotation);
+			}
 
 		// Física — podem coexistir com outros componentes
 		if (registry.any_of<RigidbodyComponent>(entity))
@@ -429,7 +435,7 @@ namespace axe
 		ImGui::DragFloat("Rotação Skybox", &ec.SkyboxRotation, 1.0f, -360.0f, 360.0f);
 	}
 
-	void InspectorWindow::DrawPointLight(PointLight& light)
+	void InspectorWindow::DrawPointLight(PointLight& light, const glm::vec3& rotationEuler)
 	{
 		ImGui::Separator();
 		ImGui::Text("Point Light");
@@ -437,6 +443,35 @@ namespace axe
 		ImGui::ColorEdit3("Cor", glm::value_ptr(light.Color));
 		ImGui::DragFloat("Intensidade", &light.Intensity, 0.1f, 0.0f, 100.0f);
 		ImGui::DragFloat("Radius", &light.Radius, 0.1f, 0.1f, 200.0f);
+
+		ImGui::Separator();
+		ImGui::Checkbox("Animada (flicker/pulso)", &light.Animated);
+		if (light.Animated)
+		{
+			ImGui::DragFloat("Velocidade", &light.AnimSpeed, 0.05f, 0.0f, 20.0f);
+			ImGui::DragFloat("Amplitude", &light.AnimAmplitude, 0.05f, 0.0f, 50.0f);
+			ImGui::TextDisabled("Intensidade final oscila entre %.2f e %.2f",
+				std::max(0.0f, light.Intensity - light.AnimAmplitude),
+				light.Intensity + light.AnimAmplitude);
+		}
+
+		ImGui::Separator();
+		ImGui::Checkbox("Spot Light (cone)", &light.IsSpot);
+		if (light.IsSpot)
+		{
+			ImGui::TextDisabled("Direção segue a Rotation do Transform —");
+			ImGui::TextDisabled("rotacione o objeto pra apontar o cone.");
+			glm::vec3 dir = ComputeSpotDirection(rotationEuler); // valor real, ao vivo
+			ImGui::BeginDisabled();
+			ImGui::DragFloat3("Direção (calculada)", glm::value_ptr(dir), 0.01f);
+			ImGui::EndDisabled();
+			ImGui::DragFloat("Ângulo Interno", &light.InnerConeAngle, 0.5f, 0.0f, light.OuterConeAngle);
+			ImGui::DragFloat("Ângulo Externo", &light.OuterConeAngle, 0.5f, light.InnerConeAngle, 89.0f);
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("Cookie (textura projetada através do cone)");
+			DrawTextureSlot("Cookie", light.CookieTexture, light.CookieTextureUUID);
+		}
 	}
 
 	void InspectorWindow::DrawLight(DirectionalLight& light)
@@ -450,6 +485,12 @@ namespace axe
 		ImGui::TextDisabled("Luz Indireta");
 		ImGui::DragFloat("IBL Intensity", &light.IBLIntensity, 0.01f, 0.0f, 5.0f);
 		ImGui::DragFloat("Ambient Flat", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Cookie (textura projetada, com tiling)");
+		DrawTextureSlot("Cookie", light.CookieTexture, light.CookieTextureUUID);
+		if (light.CookieTexture)
+			ImGui::DragFloat("Escala (tamanho do tile)", &light.CookieScale, 0.1f, 0.1f, 200.0f);
 	}
 
 	void InspectorWindow::DrawTransform(Transform& t)

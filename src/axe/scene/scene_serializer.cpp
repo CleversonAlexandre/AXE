@@ -114,6 +114,8 @@ namespace axe
 					components["Light"]["ibl_intensity"] = c->Data->IBLIntensity;
 					components["Light"]["specular"] = c->Data->SpecularStrength;
 					components["Light"]["shininess"] = c->Data->Shininess;
+					components["Light"]["cookie_uuid"] = c->Data->CookieTextureUUID;
+					components["Light"]["cookie_scale"] = c->Data->CookieScale;
 				}
 			}
 			// PointLightComponent
@@ -125,6 +127,17 @@ namespace axe
 					components["PointLight"]["color"] = { c->Data->Color.x,    c->Data->Color.y,    c->Data->Color.z };
 					components["PointLight"]["intensity"] = c->Data->Intensity;
 					components["PointLight"]["radius"] = c->Data->Radius;
+
+					components["PointLight"]["animated"] = c->Data->Animated;
+					components["PointLight"]["anim_speed"] = c->Data->AnimSpeed;
+					components["PointLight"]["anim_amplitude"] = c->Data->AnimAmplitude;
+
+					components["PointLight"]["is_spot"] = c->Data->IsSpot;
+					components["PointLight"]["direction"] = {
+						c->Data->Direction.x, c->Data->Direction.y, c->Data->Direction.z };
+					components["PointLight"]["inner_cone_angle"] = c->Data->InnerConeAngle;
+					components["PointLight"]["outer_cone_angle"] = c->Data->OuterConeAngle;
+					components["PointLight"]["cookie_uuid"] = c->Data->CookieTextureUUID;
 				}
 			}
 			// PostProcessComponent
@@ -384,6 +397,17 @@ namespace axe
 				light->IBLIntensity = t.value("ibl_intensity", 1.0f);
 				light->SpecularStrength = t["specular"];
 				light->Shininess = t["shininess"];
+				light->CookieScale = t.value("cookie_scale", 5.0f);
+				std::string dirCookieUUID = t.value("cookie_uuid", std::string());
+				if (!dirCookieUUID.empty())
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(dirCookieUUID);
+					if (record)
+					{
+						light->CookieTexture = Texture2D::Create(record->FilePath.string());
+						light->CookieTextureUUID = dirCookieUUID;
+					}
+				}
 				registry.emplace<LightComponent>(entity, light);
 			}
 
@@ -396,6 +420,30 @@ namespace axe
 				pl->Color = { t["color"][0],    t["color"][1],    t["color"][2] };
 				pl->Intensity = t["intensity"];
 				pl->Radius = t["radius"];
+
+				// .value(...) com default — cenas salvas antes desses campos
+				// existirem continuam abrindo normalmente (luz não-animada,
+				// não-spot).
+				pl->Animated = t.value("animated", false);
+				pl->AnimSpeed = t.value("anim_speed", 2.0f);
+				pl->AnimAmplitude = t.value("anim_amplitude", 0.3f);
+
+				pl->IsSpot = t.value("is_spot", false);
+				if (t.contains("direction"))
+					pl->Direction = { t["direction"][0], t["direction"][1], t["direction"][2] };
+				pl->InnerConeAngle = t.value("inner_cone_angle", 25.0f);
+				pl->OuterConeAngle = t.value("outer_cone_angle", 35.0f);
+
+				std::string ptCookieUUID = t.value("cookie_uuid", std::string());
+				if (!ptCookieUUID.empty())
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(ptCookieUUID);
+					if (record)
+					{
+						pl->CookieTexture = Texture2D::Create(record->FilePath.string());
+						pl->CookieTextureUUID = ptCookieUUID;
+					}
+				}
 				registry.emplace<PointLightComponent>(entity, pl);
 			}
 

@@ -179,7 +179,6 @@ namespace axe
                     auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
                     if (matAsset)
                         m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
-                    m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
                 }
             });
 
@@ -452,8 +451,9 @@ namespace axe
                         if (geometryShader) material->SetGeometryShader(geometryShader);
                     }
                     material->SamplerTextures = result.SamplerTextures;
-                    if (result.AlbedoTexture) material->AlbedoMap = result.AlbedoTexture;
-                    if (result.NormalTexture) material->NormalMap = result.NormalTexture;
+                    material->AlbedoMap = result.AlbedoTexture;
+                    material->NormalMap = result.NormalTexture;
+                    material->IsTransparent = result.IsTransparent;
                 }
                 catch (...) {}
             });

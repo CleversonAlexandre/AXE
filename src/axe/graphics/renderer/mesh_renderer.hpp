@@ -20,15 +20,17 @@ namespace axe
 
 		void Begin(const glm::mat4& viewProjection, const glm::vec3& cameraPosition);
 		void DrawMesh(const Mesh& mesh, const glm::mat4& model, const Material* material = nullptr,
-																const DirectionalLight* light = nullptr);		
+			const DirectionalLight* light = nullptr,
+			bool transparent = false);
 		void End();
 		std::shared_ptr<Shader> GetDefaultShader() const { return m_Shader; }
 		void SetEnvironment(const SceneEnvironment* env) { m_Environment = env; }
 		void SetShadowMap(uint32_t depthMapID, const glm::mat4& lightSpaceMatrix);
-		
+
 	private:
 		std::shared_ptr<Shader> m_Shader;
 		std::shared_ptr<Pipeline> m_Pipeline;
+		std::shared_ptr<Pipeline> m_TransparentPipeline; // blend on, depth-write off
 		std::shared_ptr<Material> m_DefaultMaterial;
 
 		glm::mat4 m_ViewProjection{ 1.0f };

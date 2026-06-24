@@ -17,10 +17,10 @@ namespace axe
 		Node* AddColorNode();
 		Node* AddFloatNode();
 		Node* AddComment();
-		
+
 		Node* AddMultiplyNode();
 		Node* AddAddNode();
-		Node* AddLerpNode();		
+		Node* AddLerpNode();
 		Node* AddSubtractNode();
 		Node* AddDivideNode();
 		Node* AddPowerNode();
@@ -33,6 +33,42 @@ namespace axe
 		Node* FindNodeByID(int id);
 		Node* AddFresnelNode();
 		Node* AddNormalMapNode();
+
+		// Lote inspirado na Unreal — math/vector utilities que só usam
+		// globais já disponíveis no shader (sem precisar de novos uniforms)
+		Node* AddSineNode();
+		Node* AddCosineNode();
+		Node* AddStepNode();
+		Node* AddSmoothStepNode();
+		Node* AddNormalizeNode();
+		Node* AddDistanceNode();
+		Node* AddDotProductNode();
+		Node* AddDesaturateNode();
+		Node* AddAppendNode();
+		Node* AddVectorSplitNode();
+		Node* AddCameraVectorNode();
+		Node* AddReflectionVectorNode();
+
+		// Animação — dependem do uniform u_Time (passagem de tempo por frame)
+		Node* AddTimeNode();
+		Node* AddPannerNode();
+
+		// Mais math/vetor/constantes
+		Node* AddMinNode();
+		Node* AddMaxNode();
+		Node* AddSaturateNode();
+		Node* AddLengthNode();
+		Node* AddCrossProductNode();
+		Node* AddIfNode();
+		Node* AddNoiseNode();
+		Node* AddVec2Node();
+		Node* AddVec3Node();
+		Node* AddTextureCoordinateNode();
+
+		// Dispatcher genérico por nome — usado por Deserialize(), pelo menu
+		// de criação (busca) e pelo undo de deleção, eliminando a antiga
+		// triplicação do mesmo if/else gigante em 3 lugares diferentes.
+		Node* AddNodeByName(const std::string& name);
 
 		//Acesso
 		std::vector<std::unique_ptr<Node>>& GetNodes() { return m_Nodes; }
@@ -53,7 +89,7 @@ namespace axe
 		ed::LinkId contextLinkId = 0;
 
 		std::unique_ptr<Node>* FindNode(ed::NodeId id);
-		
+
 		std::vector<Link> m_Links;
 		bool CanCreateLink(Pin* a, Pin* b);
 
@@ -80,8 +116,8 @@ namespace axe
 		std::vector<std::unique_ptr<Node>> m_Nodes;
 		Node* m_MaterialOutputNode = nullptr;
 		int m_NextID = 1;
-		
-			
+
+
 		std::unordered_map<int, int> m_PinRemap;
 	};
 }//namespace axe

@@ -8,6 +8,7 @@
 #include "axe/material/material.hpp"
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
+#include <GLFW/glfw3.h>
 namespace axe
 {
     MeshRenderer::MeshRenderer()
@@ -306,6 +307,24 @@ namespace axe
         spec.Cull = CullMode::None;
         m_Pipeline = Pipeline::Create(spec);
 
+        // Pipeline usada para o forward pass de materiais transparentes
+        // (vidro, etc.): blend habilitado, depth-write desligado (não
+        // sobrescreve o depth do passe opaco — vários objetos transparentes
+        // sobrepostos continuam visíveis uns através dos outros), mas
+        // depth-test ligado (ainda é ocluído corretamente pela geometria
+        // opaca já desenhada).
+        PipelineSpecification transparentSpec = spec;
+        transparentSpec.Blend = true;
+        transparentSpec.DepthWrite = false;
+        // Culla as back-faces: sem isso, a parede de TRÁS do vidro (virada
+        // "pra dentro", normal na direção oposta à câmera) também é
+        // desenhada, e como não há ordenação por triângulo (só por objeto),
+        // pedaços da frente e do fundo se misturam em ordem arbitrária —
+        // o efeito de manchas/remendos, como se a normal estivesse invertida
+        // em partes aleatórias da superfície.
+        transparentSpec.Cull = CullMode::Back;
+        m_TransparentPipeline = Pipeline::Create(transparentSpec);
+
         m_DefaultMaterial = std::make_shared<Material>(m_Shader, "Default");
     }
 
@@ -319,7 +338,7 @@ namespace axe
 
 
     void MeshRenderer::DrawMesh(const Mesh& mesh, const glm::mat4& model,
-        const Material* material, const DirectionalLight* light)
+        const Material* material, const DirectionalLight* light, bool transparent)
     {
 
 
@@ -340,7 +359,7 @@ namespace axe
         // Usa o shader do material se tiver, senão usa o padrão
         auto shader = mat->GetShader() ? mat->GetShader() : m_Shader;
 
-        m_Pipeline->Bind();
+        (transparent ? m_TransparentPipeline : m_Pipeline)->Bind();
         shader->Bind();
         mesh.GetVertexArray()->Bind();
 
@@ -352,6 +371,11 @@ namespace axe
         shader->SetMat3("u_NormalMatrix", glm::value_ptr(normalMatrix));
 
         shader->SetFloat3("u_CameraPosition", m_CameraPosition);
+
+        // Tempo de execução, em segundos, desde a inicialização do GLFW.
+        // Usado pelos nodes "Time" e "Panner" do Material Graph — ver
+        // comentário equivalente em OpenGLGeometryPass.
+        shader->SetFloat("u_Time", (float)glfwGetTime());
 
         // Material — base
         shader->SetFloat4("u_Color", mat->Color);

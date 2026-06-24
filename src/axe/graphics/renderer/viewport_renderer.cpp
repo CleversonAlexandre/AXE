@@ -267,6 +267,13 @@ namespace axe
 				m_Camera->GetViewMatrix(),
 				m_Camera->GetProjectionMatrix());
 
+		// Raio de alcance das Point Lights — só no modo editor
+		if (ShowLights && m_Camera && !m_GameCamera && m_Scene)
+			m_ColliderDebugRenderer.RenderLights(
+				*m_Scene,
+				m_Camera->GetViewMatrix(),
+				m_Camera->GetProjectionMatrix());
+
 		// ── Ghost preview de drag & drop ────────────────────────────────────────
 		// Renderizado no framebuffer final com blending, sobre tudo
 		if (m_HasGhost && m_GhostMesh && m_Camera && s_GhostShader)

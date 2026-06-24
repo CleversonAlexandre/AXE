@@ -33,10 +33,10 @@ namespace axe
 		float     Shininess = 32.0f;
 
 		//--- Parâmetros PBR -- 
-		float Metallic  = 0.0f;
+		float Metallic = 0.0f;
 		float Roughness = 0.5f;
-		float AO		= 1.0f;
-		bool UsePBR		= false; // false = Blinn-Phong, true = PBR
+		float AO = 1.0f;
+		bool UsePBR = false; // false = Blinn-Phong, true = PBR
 
 		//Texturas PBR
 		std::shared_ptr<Texture2D> AlbedoMap;
@@ -58,10 +58,17 @@ namespace axe
 		bool HasMetallicMap()   const { return MetallicMap && MetallicMap->IsLoaded(); }
 		bool HasAOMap()         const { return AOMap && AOMap->IsLoaded(); }
 
-		
+
 		std::shared_ptr<Shader> GetGeometryShader() const { return m_GeometryShader; }
 		void SetGeometryShader(std::shared_ptr<Shader> shader) { m_GeometryShader = shader; }
 		std::map<std::string, std::shared_ptr<Texture2D>> SamplerTextures;
+
+		// true quando o pin "Opacity" do Material Output está conectado a
+		// algo (não é só o valor neutro 1.0) — ver MaterialCompiler::Compile.
+		// Materiais transparentes (vidro, etc.) são desenhados num forward
+		// pass separado, depois do passe opaco/deferred, com blend
+		// habilitado e sem depth-write — ver SceneRenderer::RenderDeferred.
+		bool IsTransparent = false;
 	private:
 		std::string m_Name;
 		std::shared_ptr<Shader> m_Shader;
@@ -69,4 +76,3 @@ namespace axe
 
 	};
 }//namespace axe
-

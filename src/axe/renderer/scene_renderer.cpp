@@ -8,7 +8,9 @@
 #include "axe/graphics/render_command.hpp"
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/log/log.hpp"
+#include "axe/material/material.hpp"
 #include <glad/glad.h>
+#include <algorithm>
 
 namespace axe
 {
@@ -80,7 +82,8 @@ namespace axe
 
         m_MeshRenderer.Begin(viewProjection, cameraPosition);
         for (auto& dc : queue.Meshes)
-            if (dc.Mesh) m_MeshRenderer.DrawMesh(*dc.Mesh, dc.Transform, dc.Material, queue.Light);
+            if (dc.Mesh) m_MeshRenderer.DrawMesh(*dc.Mesh, dc.Transform, dc.Material, queue.Light,
+                dc.Material && dc.Material->IsTransparent);
         m_MeshRenderer.End();
     }
 
@@ -105,9 +108,14 @@ namespace axe
         }
 
         // --- 1. Geometry Pass ---
+        // Materiais transparentes (vidro, etc.) NÃO entram no G-Buffer —
+        // o G-Buffer só guarda um fragmento por pixel (o mais próximo da
+        // câmera), então não tem como "ver através" dele. Eles são
+        // desenhados depois, num forward pass separado (passo 4.5).
         m_GeometryPass->Begin(m_GBuffer, viewProjection, cameraPosition);
         for (auto& dc : queue.Meshes)
-            if (dc.Mesh) m_GeometryPass->DrawMesh(*dc.Mesh, dc.Transform, dc.Material);
+            if (dc.Mesh && !(dc.Material && dc.Material->IsTransparent))
+                m_GeometryPass->DrawMesh(*dc.Mesh, dc.Transform, dc.Material);
         m_GeometryPass->End();
 
         // --- 2. SSAO ---
@@ -137,6 +145,46 @@ namespace axe
         // pela geometria onde depth < 1.0.
         if (m_SkyboxRenderer)
             m_SkyboxRenderer->RenderDeferred(m_SkyboxView, m_SkyboxProjection);
+
+        // --- 4.5. Forward pass de materiais transparentes ---
+        // Desenhados em cima do resultado do deferred (que já está em
+        // m_TargetFBO, com o depth do passe opaco preservado): depth-test
+        // ligado (continuam sendo ocluídos pela geometria opaca), mas
+        // depth-write desligado (não se ocluem incorretamente entre si) e
+        // blend habilitado. Ordenados de trás pra frente — essencial pro
+        // blend ficar visualmente correto quando há vários objetos
+        // transparentes sobrepostos (ex: vários tubos de vidro).
+        {
+            std::vector<const MeshDrawCall*> transparent;
+            for (auto& dc : queue.Meshes)
+                if (dc.Mesh && dc.Material && dc.Material->IsTransparent)
+                    transparent.push_back(&dc);
+
+            if (!transparent.empty())
+            {
+                std::sort(transparent.begin(), transparent.end(),
+                    [&cameraPosition](const MeshDrawCall* a, const MeshDrawCall* b)
+                    {
+                        glm::vec3 posA = glm::vec3(a->Transform[3]);
+                        glm::vec3 posB = glm::vec3(b->Transform[3]);
+                        float distA = glm::length(posA - cameraPosition);
+                        float distB = glm::length(posB - cameraPosition);
+                        return distA > distB; // mais distante primeiro
+                    });
+
+                m_MeshRenderer.SetEnvironment(m_Environment);
+                if (m_ShadowPass)
+                    m_MeshRenderer.SetShadowMap(
+                        m_ShadowPass->GetDepthMapID(),
+                        m_ShadowPass->GetLightSpaceMatrix());
+
+                m_MeshRenderer.Begin(viewProjection, cameraPosition);
+                for (auto* dc : transparent)
+                    m_MeshRenderer.DrawMesh(*dc->Mesh, dc->Transform, dc->Material,
+                        queue.Light, /*transparent*/ true);
+                m_MeshRenderer.End();
+            }
+        }
 
         // --- 5. Outline ---
         if (queue.SelectedMesh && queue.SelectedID != UINT32_MAX)

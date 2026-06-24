@@ -23,11 +23,21 @@ namespace axe
             const glm::mat4& view,
             const glm::mat4& projection);
 
+        // Renderiza esferas wireframe mostrando o raio de alcance de cada
+        // Point Light da cena — ajuda a visualizar até onde a luz "pega"
+        // sem precisar testar em Play.
+        void RenderLights(const Scene& scene,
+            const glm::mat4& view,
+            const glm::mat4& projection);
+
     private:
         // Gera vértices de linha para cada shape
         void PushBox(std::vector<float>& verts, const glm::mat4& model, const glm::vec3& halfExt);
-        void PushSphere(std::vector<float>& verts, const glm::mat4& model, float radius);
+        void PushSphere(std::vector<float>& verts, const glm::mat4& model, float radius,
+            const glm::vec4& color);
         void PushCapsule(std::vector<float>& verts, const glm::mat4& model, float radius, float height);
+        void PushCone(std::vector<float>& verts, const glm::vec3& apex, const glm::vec3& direction,
+            float length, float halfAngleDegrees, const glm::vec4& color);
 
         void UploadAndDraw(const std::vector<float>& verts,
             const glm::mat4& viewProjection);
@@ -37,6 +47,10 @@ namespace axe
 
         // Cor do wireframe de collider (verde lima semitransparente)
         glm::vec4 m_Color = { 0.1f, 0.9f, 0.2f, 0.8f };
+
+        // Cor do wireframe de raio de luz (amarelo semitransparente —
+        // convenção comum em outras engines pra gizmo de luz)
+        glm::vec4 m_LightColor = { 1.0f, 0.85f, 0.2f, 0.5f };
     };
 
 } // namespace axe

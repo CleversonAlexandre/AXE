@@ -121,9 +121,36 @@ namespace axe
 
 		if (ReadMeta(metaPath, record))
 		{
-			// Meta existe — usa UUID existente
-			record.FilePath = std::filesystem::absolute(filepath);
-			record.Name = filepath.stem().string();
+			// Defesa extra: se esse UUID já está em uso por um registro vivo
+			// apontando para OUTRO arquivo que ainda existe no disco, o .axemeta
+			// lido aqui é órfão (sobrou de um rename/move anterior). Reaproveitar
+			// esse UUID corromperia o asset original — gera um UUID novo.
+			auto existingIt = m_Records.find(record.UUID);
+			bool staleMeta = existingIt != m_Records.end()
+				&& std::filesystem::absolute(existingIt->second.FilePath) != std::filesystem::absolute(filepath)
+				&& std::filesystem::exists(existingIt->second.FilePath);
+
+			if (staleMeta)
+			{
+				AXE_CORE_WARN("AssetDatabase: .axemeta órfão detectado em '{}' (UUID já usado por '{}'). Gerando novo UUID.",
+					filepath.string(), existingIt->second.FilePath.string());
+
+				std::error_code ec;
+				std::filesystem::remove(metaPath, ec);
+
+				record = AssetRecord{};
+				record.UUID = GenerateUUID();
+				record.FilePath = std::filesystem::absolute(filepath);
+				record.Type = AssetTypeFromExtension(filepath.extension().string());
+				record.Name = filepath.stem().string();
+				WriteMeta(record);
+			}
+			else
+			{
+				// Meta existe — usa UUID existente
+				record.FilePath = std::filesystem::absolute(filepath);
+				record.Name = filepath.stem().string();
+			}
 		}
 		else
 		{
@@ -159,6 +186,49 @@ namespace axe
 		m_PathIndex[absPath] = record.UUID;
 
 		return record.UUID;
+	}
+
+	bool AssetDatabase::UpdatePath(const std::string& uuid, const std::filesystem::path& newPath,
+		const std::string& newName)
+	{
+		auto it = m_Records.find(uuid);
+		if (it == m_Records.end())
+			return false;
+
+		AssetRecord& record = it->second;
+
+		// Remove a entrada antiga do índice de caminhos — crítico para não
+		// deixar o caminho antigo "fantasma" registrado em memória.
+		std::string oldAbsPath = std::filesystem::absolute(record.FilePath).string();
+		m_PathIndex.erase(oldAbsPath);
+
+		// Remove o .axemeta antigo (o novo será escrito no novo caminho)
+		auto oldMeta = GetMetaPath(record.FilePath);
+		std::error_code ec;
+		if (std::filesystem::exists(oldMeta))
+			std::filesystem::remove(oldMeta, ec);
+
+		record.FilePath = std::filesystem::absolute(newPath);
+		if (!newName.empty())
+			record.Name = newName;
+
+		std::string newAbsPath = record.FilePath.string();
+		m_PathIndex[newAbsPath] = uuid;
+
+		WriteMeta(record);
+		return true;
+	}
+
+	bool AssetDatabase::Unregister(const std::string& uuid)
+	{
+		auto it = m_Records.find(uuid);
+		if (it == m_Records.end())
+			return false;
+
+		std::string absPath = std::filesystem::absolute(it->second.FilePath).string();
+		m_PathIndex.erase(absPath);
+		m_Records.erase(it);
+		return true;
 	}
 
 	void AssetDatabase::Scan(const std::filesystem::path& directory)

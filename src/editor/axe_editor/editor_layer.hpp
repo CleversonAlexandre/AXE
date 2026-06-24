@@ -38,7 +38,7 @@
 #include "axe/events/key_event.hpp"
 #include "axe/input/key_codes.hpp"
 
-#include "material_editor_window.hpp"
+#include "editor/axe_editor/material/material_editor_window.hpp"
 #include "node_graph/material_graph.hpp"
 #include "axe/material/material_compiler.hpp"
 #include <nlohmann/json.hpp>

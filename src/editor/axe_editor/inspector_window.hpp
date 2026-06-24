@@ -49,7 +49,7 @@ namespace axe
             std::shared_ptr<Texture2D>& tex,
             std::string& uuid);
         void DrawLight(DirectionalLight& light);
-        void DrawPointLight(PointLight& light);
+        void DrawPointLight(PointLight& light, const glm::vec3& rotationEuler);
         void DrawEnvironment(EnvironmentComponent& ec);
         void DrawFolder(FolderComponent& folder);
         void DrawSpringArm(SpringArmComponent& sa);

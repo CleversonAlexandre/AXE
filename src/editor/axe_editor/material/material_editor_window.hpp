@@ -6,14 +6,12 @@
 #include <string>
 #include <imgui-node-editor/imgui_node_editor.h>
 
-#include "node_graph/material_graph.hpp"
-
-//#include "node_types.hpp"
+#include "editor/axe_editor/node_graph/material_graph.hpp"
 
 #include <imgui/imgui_internal.h>
 #include "axe/material/material.hpp"
 
-#include "hierarchy_window.hpp"
+#include "editor/axe_editor/hierarchy_window.hpp"
 
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/graphics/editor_camera.hpp"
@@ -22,8 +20,8 @@
 #include <entt/entt.hpp>
 
 #include "axe/scene/scene_environment.hpp" 
-#include "editor_context.hpp"
-#include "material_thumbnail_renderer.hpp"
+#include "editor/axe_editor/editor_context.hpp"
+#include "editor/axe_editor/material_thumbnail_renderer.hpp"
 
 
 namespace ed = ax::NodeEditor;
@@ -32,7 +30,22 @@ namespace axe
 {
     class MaterialGraph;
 
-    class MaterialEditorWindow 
+    // ==========================================================================
+    // MaterialEditorWindow — editor de materiais via node graph (estilo
+    // Material Editor da Unreal). A implementação é dividida em vários .cpp
+    // dentro desta mesma pasta (mesmo padrão usado pelo ScriptGraphWindow):
+    //
+    //   material_editor_window.cpp — núcleo: ctor/dtor, abrir material,
+    //                                 dockspace/Draw, input de teclado.
+    //   material_preview.cpp       — cena/câmera/janela de preview 3D.
+    //   material_params.cpp        — painel de parâmetros / inspeção de node.
+    //   material_compile.cpp       — compilar shader e salvar/carregar grafo.
+    //   material_node_graph.cpp    — lógica do grafo: links, menus de
+    //                                 contexto, atalhos, criação de nodes.
+    //   material_node_draw.cpp     — desenho visual de cada node/pin/comment.
+    //   material_shader_log.cpp    — log de compilação do shader.
+    // ==========================================================================
+    class MaterialEditorWindow
     {
     public:
         MaterialEditorWindow();
@@ -40,7 +53,7 @@ namespace axe
 
         struct ShaderLogEntry
         {
-            enum class Level {Info, Warnning, Error};
+            enum class Level { Info, Warnning, Error };
             Level level;
             std::string message;
         };
@@ -56,21 +69,21 @@ namespace axe
         void Draw();
 
         // Abre um material para edição
-        void OpenMaterial(std::shared_ptr<MaterialAsset> asset);        
+        void OpenMaterial(std::shared_ptr<MaterialAsset> asset);
         bool IsOpen() const { return m_Open; }
         void Initialize();
 
         ImColor GetIconColor(PinType type);
         void DrawPinIcon(const Pin& pin, bool connected, int alpha);
         bool CanCreateLink(Pin* a, Pin* b);
-        
+
         void UpdatePreviewCamera();
 
         void RenderPreview();
         void HandleInput();
         void SaveGraph();
         void LoadGraph();
-        
+
 
         void SetContext(EditorContext* context) { m_Context = context; }
 
@@ -99,7 +112,7 @@ namespace axe
         // Skybox
         std::unique_ptr<SkyboxRenderer> m_SkyboxRenderer;
         std::shared_ptr<CubemapTexture> m_PreviewSkybox;
-        
+
         float m_PreviewRotation = 0.0f;
 
         //void DrawPreview();
@@ -115,7 +128,7 @@ namespace axe
 
         std::unique_ptr<SceneEnvironment> m_PreviewEnvironment;
 
-        void DrawPreviewWindow();  
+        void DrawPreviewWindow();
         void HandlePreviewInput();
 
         EditorContext* m_Context = nullptr;
@@ -137,8 +150,16 @@ namespace axe
 
         void DrawNodeGraph();
         void DrawNode(Node& node);
-        
+
         void CompileAndApply();
+
+        // Extrai a textura conectada ao Base Color e ao Normal do Material
+        // Output e aplica em m_Material->AlbedoMap/NormalMap. Compartilhado
+        // por CompileAndApply() e LoadGraph() — antes essa lógica estava
+        // duplicada e o LoadGraph() só preenchia o Normal, nunca o Base
+        // Color, fazendo o preview aparecer "errado" toda vez que o material
+        // era aberto, até o usuário compilar manualmente.
+        void ApplyOutputTextures();
 
         void DrawMaterialParamsWindow();
         void DrawNodeGraphWindow();
@@ -154,10 +175,17 @@ namespace axe
         int m_FrameCount = 0;
         int            m_PinIconSize = 24;
         bool createNewNode = false;
-        Pin* newNodeLinkPin = nullptr;    
-        Node* m_EditingCommentNode = nullptr;
-        std::string m_CommentEditBuffer;
-        ImVec2 m_CommentEditPopupPos;
+        Pin* newNodeLinkPin = nullptr;
+
+        // Edição/cor do Comment — rename inline com duplo clique no título
+        // e paleta de cor via botão direito, igual ao Script Editor.
+        int  m_RenamingComment = -1;
+        bool m_RenameCommentJustStarted = false;
+
+        // Menu "Create New Node" — busca + categorias colapsáveis (mesmo
+        // padrão visual usado no Script Editor)
+        char m_NodeSearchBuf[128] = {};
+        bool m_NodeCatOpen[6] = { true, true, true, true, true, true };
         void UpdateCommentChildren(Node* commentNode);
         std::shared_ptr<Material> m_Material;
         std::shared_ptr<Material> m_PreviewMaterial;
@@ -167,10 +195,10 @@ namespace axe
         void DeleteNodeWithHistory(ed::NodeId nodeId);
 
         CommandHistory m_History;
-        
+
         std::unordered_map<int, Link> m_OriginalPinLinks;
 
-        
+
     };
 
 } // namespace axe

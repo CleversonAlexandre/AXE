@@ -4,8 +4,10 @@
 #include "axe/lighting/point_light.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/cubemap_texture.hpp"
+#include "axe/graphics/texture.hpp"
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
+#include <algorithm>
 
 namespace axe
 {
@@ -31,6 +33,7 @@ namespace axe
     uniform sampler2D u_Normal;
     uniform sampler2D u_Albedo;
     uniform sampler2D u_PBR;
+    uniform sampler2D u_Emissive;
 
     // SSAO
     uniform sampler2D u_SSAO;
@@ -50,6 +53,13 @@ namespace axe
     uniform vec3  u_CameraPosition;
     uniform int   u_HasLight;
 
+    // Cookie da luz direcional — projeção planar (paralela), com tiling
+    uniform sampler2D u_DirCookie;
+    uniform int       u_HasDirCookie;
+    uniform vec3      u_DirCookieRight;
+    uniform vec3      u_DirCookieUp;
+    uniform float     u_DirCookieScale;
+
     // IBL
     uniform samplerCube u_IrradianceMap;
     uniform samplerCube u_PrefilteredMap;
@@ -63,9 +73,29 @@ namespace axe
         vec3  Color;
         float Intensity;
         float Radius;
+
+        // Spot Light
+        int   IsSpot;
+        vec3  Direction;
+        float InnerCutoff; // cos(InnerConeAngle), pré-calculado na CPU
+        float OuterCutoff; // cos(OuterConeAngle)
+
+        // Cookie — projeção cônica (perspectiva). Right/Up são a base
+        // ortonormal perpendicular à Direction (mesma do gizmo do cone);
+        // TanOuterAngle normaliza o offset pra -1..1 na borda do cone.
+        // CookieIndex: -1 = sem cookie, 0..3 = slot em u_PointCookies.
+        vec3  Right;
+        vec3  Up;
+        float TanOuterAngle;
+        int   CookieIndex;
     };
     uniform PointLight u_PointLights[16];
     uniform int        u_NumPointLights;
+
+    // Cookies de Point Light — limite de 4 simultâneas na cena (texturas
+    // são caras de bindar; além desse número a luz funciona normal, só
+    // sem o padrão projetado)
+    uniform sampler2D u_PointCookies[4];
 
     const float PI = 3.14159265359;
 
@@ -126,6 +156,19 @@ namespace axe
         // Atenuação física com smooth falloff no radius
         float att  = clamp(1.0 - (dist / pl.Radius), 0.0, 1.0);
         att        = att * att;
+
+        // Atenuação do cone (Spot Light) — theta é o cosseno do ângulo
+        // entre a direção da luz (apontando PARA o fragmento, por isso o
+        // -L) e o eixo do cone. Fora do OuterCutoff = 0 (escuro); dentro
+        // do InnerCutoff = 1 (intensidade máxima); entre os dois, suaviza.
+        if (pl.IsSpot == 1)
+        {
+            float theta = dot(-L, normalize(pl.Direction));
+            float epsilon = pl.InnerCutoff - pl.OuterCutoff;
+            float coneAtt = clamp((theta - pl.OuterCutoff) / max(epsilon, 0.0001), 0.0, 1.0);
+            att *= coneAtt;
+        }
+
         vec3 radiance = pl.Color * pl.Intensity * att;
 
         float NDF = DistributionGGX(N, H, roughness);
@@ -203,12 +246,58 @@ namespace axe
             if (u_HasShadowMap == 1)
                 shadow = ShadowCalculation(fragPos, N, L);
 
-            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5);
+            // Cookie — projeta fragPos no plano perpendicular à direção da
+            // luz (paralela, então sem perspectiva — só tiling por escala)
+            vec3 dirCookieTint = vec3(1.0);
+            if (u_HasDirCookie == 1)
+            {
+                float cu = dot(fragPos, u_DirCookieRight) / u_DirCookieScale;
+                float cv = dot(fragPos, u_DirCookieUp) / u_DirCookieScale;
+                dirCookieTint = texture(u_DirCookie, fract(vec2(cu, cv))).rgb;
+            }
+
+            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5) * dirCookieTint;
         }
 
         // --- Point lights --- (independente da direcional)
         for (int i = 0; i < u_NumPointLights; i++)
-            Lo += CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0);
+        {
+            vec3 contribution = CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0);
+
+            // Cookie — só Spot Light com CookieIndex válido. Projeção
+            // cônica (perspectiva): divide pelo cosseno do ângulo em
+            // relação ao eixo, igual a uma divisão de perspectiva real.
+            if (u_PointLights[i].IsSpot == 1 && u_PointLights[i].CookieIndex >= 0)
+            {
+                vec3 toFrag = normalize(fragPos - u_PointLights[i].Position);
+                vec3 dir = normalize(u_PointLights[i].Direction);
+                float cosAngle = dot(toFrag, dir);
+
+                if (cosAngle > 0.0001)
+                {
+                    vec3 perp = toFrag - dir * cosAngle;
+                    vec2 cuv = vec2(dot(perp, u_PointLights[i].Right),
+                                     dot(perp, u_PointLights[i].Up))
+                               / (cosAngle * max(u_PointLights[i].TanOuterAngle, 0.0001));
+                    cuv = cuv * 0.5 + 0.5;
+
+                    if (cuv.x >= 0.0 && cuv.x <= 1.0 && cuv.y >= 0.0 && cuv.y <= 1.0)
+                    {
+                        // Índices sempre constantes (0/1/2/3) — evita
+                        // indexação dinâmica de array de sampler, que não
+                        // é garantida em todo hardware/driver.
+                        vec3 cookieTint = vec3(1.0);
+                        if (u_PointLights[i].CookieIndex == 0) cookieTint = texture(u_PointCookies[0], cuv).rgb;
+                        else if (u_PointLights[i].CookieIndex == 1) cookieTint = texture(u_PointCookies[1], cuv).rgb;
+                        else if (u_PointLights[i].CookieIndex == 2) cookieTint = texture(u_PointCookies[2], cuv).rgb;
+                        else if (u_PointLights[i].CookieIndex == 3) cookieTint = texture(u_PointCookies[3], cuv).rgb;
+                        contribution *= cookieTint;
+                    }
+                }
+            }
+
+            Lo += contribution;
+        }
 
         // --- Ambient / IBL --- (independente da direcional)
         vec3 ambient;
@@ -234,6 +323,10 @@ namespace axe
 
         vec3 color = ambient + Lo;
         color = max(color, albedo * 0.02);
+
+        // Emissive — somado direto, sem ser afetado por luz/sombra/AO,
+        // assim como no caminho forward (preview do material).
+        color += texture(u_Emissive, v_TexCoord).rgb;
 
         FragColor = vec4(color, 1.0);
     }
@@ -306,6 +399,11 @@ namespace axe
         m_Shader->SetInt("u_Albedo", 2);
         m_Shader->SetInt("u_PBR", 3);
 
+        // Emissive — slot 9 (0-3 = G-Buffer base, 4 = SSAO, 5 = shadow map,
+        // 6-8 = IBL — ver binds abaixo)
+        glBindTextureUnit(9, gbuffer.GetEmissiveID());
+        m_Shader->SetInt("u_Emissive", 9);
+
         // SSAO — slot 4
         if (ssaoTextureID != 0)
         {
@@ -338,12 +436,32 @@ namespace axe
             m_Shader->SetFloat("u_LightIntensity", light->Intensity);
             m_Shader->SetFloat("u_AmbientStrength", light->AmbientStrength);
             m_Shader->SetFloat("u_IBLIntensity", light->IBLIntensity);
+
+            // Cookie — slot 10. Right/Up: base ortonormal perpendicular à
+            // direção da luz, pra projetar fragPos num plano 2D.
+            if (light->CookieTexture && light->CookieTexture->IsLoaded())
+            {
+                glm::vec3 dir = glm::length(light->Direction) > 0.0001f
+                    ? glm::normalize(light->Direction) : glm::vec3(0, -1, 0);
+                glm::vec3 up = (fabsf(dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+                glm::vec3 right = glm::normalize(glm::cross(dir, up));
+                up = glm::normalize(glm::cross(right, dir));
+
+                light->CookieTexture->Bind(10);
+                m_Shader->SetInt("u_DirCookie", 10);
+                m_Shader->SetInt("u_HasDirCookie", 1);
+                m_Shader->SetFloat3("u_DirCookieRight", right);
+                m_Shader->SetFloat3("u_DirCookieUp", up);
+                m_Shader->SetFloat("u_DirCookieScale", std::max(light->CookieScale, 0.01f));
+            }
+            else m_Shader->SetInt("u_HasDirCookie", 0);
         }
         else
         {
             m_Shader->SetInt("u_HasLight", 0);
             m_Shader->SetFloat("u_IBLIntensity", 1.0f);
             m_Shader->SetFloat("u_AmbientStrength", 0.0f); // sem flat ambient sem luz
+            m_Shader->SetInt("u_HasDirCookie", 0);
         }
 
         m_Shader->SetFloat3("u_CameraPosition", cameraPosition);
@@ -364,6 +482,12 @@ namespace axe
         // Point Lights
         int numLights = (int)std::min(pointLights.size(), (size_t)16);
         m_Shader->SetInt("u_NumPointLights", numLights);
+
+        // Cookies de Point Light — slots 11, 12, 13, 14 (limite de 4
+        // simultâneas; a partir da 5ª, a luz funciona normal sem padrão)
+        int nextCookieSlot = 0;
+        const int cookieTextureUnits[4] = { 11, 12, 13, 14 };
+
         for (int i = 0; i < numLights; i++)
         {
             const auto& pl = pointLights[i];
@@ -372,6 +496,39 @@ namespace axe
             m_Shader->SetFloat3(base + ".Color", pl.Color);
             m_Shader->SetFloat(base + ".Intensity", pl.Intensity);
             m_Shader->SetFloat(base + ".Radius", pl.Radius);
+
+            m_Shader->SetInt(base + ".IsSpot", pl.IsSpot ? 1 : 0);
+            m_Shader->SetFloat3(base + ".Direction", pl.Direction);
+            // cos() pré-calculado aqui — mais barato que recalcular por
+            // pixel no fragment shader, já que o ângulo é o mesmo para
+            // todos os fragmentos afetados por esta luz no frame.
+            m_Shader->SetFloat(base + ".InnerCutoff", cosf(glm::radians(pl.InnerConeAngle)));
+            m_Shader->SetFloat(base + ".OuterCutoff", cosf(glm::radians(pl.OuterConeAngle)));
+
+            // Cookie — base ortonormal (Right/Up) perpendicular à direção,
+            // mesma usada no gizmo do cone, e TanOuterAngle pra normalizar
+            // o offset projetado pra -1..1 na borda do cone.
+            m_Shader->SetFloat(base + ".TanOuterAngle", tanf(glm::radians(pl.OuterConeAngle)));
+
+            int cookieIndex = -1;
+            if (pl.IsSpot && pl.CookieTexture && pl.CookieTexture->IsLoaded() && nextCookieSlot < 4)
+            {
+                glm::vec3 dir = glm::length(pl.Direction) > 0.0001f
+                    ? glm::normalize(pl.Direction) : glm::vec3(0, -1, 0);
+                glm::vec3 up = (fabsf(dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+                glm::vec3 right = glm::normalize(glm::cross(dir, up));
+                up = glm::normalize(glm::cross(right, dir));
+
+                m_Shader->SetFloat3(base + ".Right", right);
+                m_Shader->SetFloat3(base + ".Up", up);
+
+                cookieIndex = nextCookieSlot;
+                int unit = cookieTextureUnits[nextCookieSlot];
+                pl.CookieTexture->Bind(unit);
+                m_Shader->SetInt("u_PointCookies[" + std::to_string(nextCookieSlot) + "]", unit);
+                nextCookieSlot++;
+            }
+            m_Shader->SetInt(base + ".CookieIndex", cookieIndex);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);

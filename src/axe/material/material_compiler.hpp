@@ -23,6 +23,11 @@ namespace axe
         std::shared_ptr<Texture2D> RoughnessTexture;
         std::shared_ptr<Texture2D> MetallicTexture;
         std::map<std::string, std::shared_ptr<Texture2D>> SamplerTextures;
+
+        // true se o pin "Opacity" do Material Output estiver conectado a
+        // algo — sinaliza que este material precisa do forward pass de
+        // transparência (ver Material::IsTransparent).
+        bool IsTransparent = false;
     };
 
     // -------------------------------------------------------------------------
@@ -40,7 +45,7 @@ namespace axe
     {
     public:
         static CompiledMaterial Compile(MaterialGraph* graph);
-        
+
     private:
         MaterialCompiler(MaterialGraph* graph);
 

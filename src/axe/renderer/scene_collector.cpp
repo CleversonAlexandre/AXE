@@ -1,6 +1,8 @@
 #include "scene_collector.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/lighting/point_light.hpp"
+#include <GLFW/glfw3.h>
+#include <algorithm>
 
 namespace axe
 {
@@ -24,7 +26,19 @@ namespace axe
 
             PointLight pl = *plc.Data;
             if (auto* tc = registry.try_get<TransformComponent>(entity))
+            {
                 pl.Position = tc->Data.Position;
+                // Direção do cone vem da rotação do objeto, não de um
+                // valor digitado — rotacionar o objeto aponta a luz.
+                pl.Direction = ComputeSpotDirection(tc->Data.Rotation);
+            }
+
+            // Flicker/pulsação — Intensity do componente continua sendo o
+            // valor base editado no Inspector; só a CÓPIA usada pra
+            // renderizar este frame oscila em torno dele.
+            if (pl.Animated)
+                pl.Intensity = std::max(0.0f,
+                    pl.Intensity + sinf((float)glfwGetTime() * pl.AnimSpeed) * pl.AnimAmplitude);
 
             queue.PointLights.push_back(pl);
         }

@@ -35,6 +35,23 @@ namespace axe
 		void Save(const std::filesystem::path& projectRoot);
 		void Load(const std::filesystem::path& projectRoot);
 
+		// Atualiza o caminho de um asset já registrado (rename/move).
+		// Corrige o m_PathIndex (removendo a entrada antiga e criando a nova)
+		// e reescreve o .axemeta. Sem isso, o caminho antigo continua
+		// "registrado" em memória e um novo asset criado nesse mesmo caminho
+		// reaproveita o UUID do asset antigo, corrompendo o registro dele.
+		// Se newName for fornecido, também atualiza o Name do record.
+		bool UpdatePath(const std::string& uuid, const std::filesystem::path& newPath,
+			const std::string& newName = "");
+
+		// Remove um asset do índice em memória (m_Records + m_PathIndex).
+		// Sem isso, excluir um asset só removia o arquivo do disco — o
+		// registro continuava vivo em memória e só desaparecia do browser
+		// depois de reiniciar o editor (quando Load() filtra por existência
+		// no disco). Os arquivos (.ext e .axemeta) devem já ter sido
+		// removidos do disco pelo chamador antes de chamar este método.
+		bool Unregister(const std::string& uuid);
+
 		void Clear();
 
 		void RegisterPrimitives();

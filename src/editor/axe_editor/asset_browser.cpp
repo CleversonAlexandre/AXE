@@ -6,6 +6,7 @@
 #include "axe/script/script_asset.hpp"
 #include "axe/scene/game_mode_asset.hpp"
 #include <imgui.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -21,7 +22,7 @@ namespace axe
         ".axemat", ".axescene"
     };
 
-   
+
 
     // ==================== Utilitários ====================
 
@@ -32,6 +33,87 @@ namespace axe
         for (const auto& s : s_SupportedExtensions)
             if (ext == s) return true;
         return false;
+    }
+
+    // Quebra um nome em até `maxLines` linhas que cabem em `maxWidth` pixels,
+    // ao invés de truncar com "..." — usado nos itens do grid (assets e pastas)
+    // para que o nome inteiro fique visível sempre que possível.
+    static std::vector<std::string> WrapNameToLines(const std::string& text, float maxWidth, int maxLines)
+    {
+        std::vector<std::string> lines;
+        std::string current;
+
+        auto pushWord = [&](const std::string& word)
+            {
+                if (word.empty()) return;
+                // Sem espaço artificial aqui: o separador original (' ' ou '_')
+                // já fica anexado ao FINAL do token anterior pelo tokenizador
+                // abaixo. Inserir " " de novo duplicava o espaço visualmente
+                // (ex: "Computador_" + " " + "Base" => "Computador_ Base",
+                // com um espaço fantasma que não existe no nome real).
+                std::string candidate = current + word;
+                if (current.empty() || ImGui::CalcTextSize(candidate.c_str()).x <= maxWidth)
+                    current = candidate;
+                else
+                {
+                    lines.push_back(current);
+                    current = word;
+                }
+            };
+
+        // Tokeniza por espaço/underscore, mantendo o separador junto da palavra
+        // para evitar "comer" caracteres do nome original.
+        std::string token;
+        for (size_t i = 0; i <= text.size(); ++i)
+        {
+            bool isBreak = (i == text.size()) || text[i] == ' ' || text[i] == '_';
+            if (!isBreak) { token += text[i]; continue; }
+            if (i < text.size()) token += text[i];
+
+            if (!token.empty())
+            {
+                // Palavra sozinha não cabe na largura — quebra por caractere
+                if (ImGui::CalcTextSize(token.c_str()).x > maxWidth)
+                {
+                    std::string piece;
+                    for (char c : token)
+                    {
+                        std::string test = piece + c;
+                        if (!piece.empty() && ImGui::CalcTextSize(test.c_str()).x > maxWidth)
+                        {
+                            pushWord(piece);
+                            piece = std::string(1, c);
+                        }
+                        else piece += c;
+                    }
+                    if (!piece.empty()) pushWord(piece);
+                }
+                else pushWord(token);
+
+                token.clear();
+            }
+
+            if ((int)lines.size() >= maxLines) break;
+        }
+        if (!current.empty() && (int)lines.size() < maxLines)
+            lines.push_back(current);
+
+        // Se ainda sobrou conteúdo não exibido, adiciona "..." só na última linha
+        if ((int)lines.size() >= maxLines)
+        {
+            lines.resize(maxLines);
+            size_t shownLen = 0;
+            for (auto& l : lines) shownLen += l.size();
+            if (shownLen < text.size())
+            {
+                std::string& last = lines.back();
+                while (!last.empty() && ImGui::CalcTextSize((last + "...").c_str()).x > maxWidth)
+                    last.pop_back();
+                last += "...";
+            }
+        }
+        if (lines.empty()) lines.push_back("");
+        return lines;
     }
 
     std::string AssetBrowser::GetFullFolderPath(const std::string& name, const std::string& parent)
@@ -55,11 +137,169 @@ namespace axe
 
     // ==================== Operações de arquivo ====================
 
+    // Verifica se 'path' está dentro de 'dir' (ambos resolvidos para absoluto)
+    static bool IsPathInsideDir(const std::filesystem::path& path, const std::filesystem::path& dir)
+    {
+        std::error_code ec;
+        auto rel = std::filesystem::relative(path, dir, ec);
+        if (ec || rel.empty()) return false;
+        // relative() começa com ".." quando 'path' está FORA de 'dir'
+        return rel.begin()->string() != "..";
+    }
+
+    // Copia para 'targetDir' qualquer arquivo da mesma pasta de 'srcPath' que
+    // compartilhe o nome-base (stem) — cobre o caso clássico de .obj + .mtl
+    // (e texturas que sigam a mesma convenção de nome).
+    static void CopySiblingFiles(const std::filesystem::path& srcPath, const std::filesystem::path& targetDir)
+    {
+        std::error_code dirEc;
+        if (!std::filesystem::exists(srcPath.parent_path())) return;
+
+        for (const auto& entry : std::filesystem::directory_iterator(srcPath.parent_path(), dirEc))
+        {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path() == srcPath) continue;
+            if (entry.path().stem() != srcPath.stem()) continue;
+            if (entry.path().extension() == ".axemeta") continue;
+
+            auto siblingDest = targetDir / entry.path().filename();
+            if (!std::filesystem::exists(siblingDest))
+            {
+                std::error_code sCopyEc;
+                std::filesystem::copy_file(entry.path(), siblingDest,
+                    std::filesystem::copy_options::none, sCopyEc);
+            }
+        }
+    }
+
+    void AssetBrowser::ScanExternalAssets(std::vector<std::string>& outUUIDs) const
+    {
+        outUUIDs.clear();
+        if (!ProjectManager::Get().HasProject()) return;
+
+        auto assetsDir = std::filesystem::absolute(ProjectManager::Get().GetCurrent().AssetsPath);
+
+        for (const auto& [uuid, record] : AssetDatabase::Get().GetAll())
+        {
+            if (record.FilePath.empty()) continue;             // primitivas (Cube, Sphere...)
+            if (!std::filesystem::exists(record.FilePath)) continue; // já quebrado — nada a mover
+
+            auto absPath = std::filesystem::absolute(record.FilePath);
+            if (!IsPathInsideDir(absPath, assetsDir))
+                outUUIDs.push_back(uuid);
+        }
+    }
+
+    void AssetBrowser::RelocateAssets(const std::vector<std::string>& uuids)
+    {
+        m_RelocateErrorMessages.clear();
+        m_RelocateSuccessCount = 0;
+
+        if (!ProjectManager::Get().HasProject()) return;
+        auto assetsRoot = ProjectManager::Get().GetCurrent().AssetsPath;
+
+        for (const auto& uuid : uuids)
+        {
+            const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+            if (!rec) continue;
+
+            std::filesystem::path srcPath = rec->FilePath;
+            std::string virtualFolder = rec->VirtualFolder; // copia — rec fica inválido após UpdatePath
+            std::string recordName = rec->Name;
+
+            auto targetDir = assetsRoot;
+            if (!virtualFolder.empty())
+                targetDir /= virtualFolder;
+
+            std::error_code ec;
+            std::filesystem::create_directories(targetDir, ec);
+
+            auto destPath = targetDir / srcPath.filename();
+            int i = 1;
+            while (std::filesystem::exists(destPath))
+                destPath = targetDir / (srcPath.stem().string() + "_" + std::to_string(i++) + srcPath.extension().string());
+
+            std::error_code copyEc;
+            std::filesystem::copy_file(srcPath, destPath, std::filesystem::copy_options::none, copyEc);
+
+            if (copyEc)
+            {
+                m_RelocateErrorMessages.push_back(recordName + ": " + copyEc.message());
+                continue;
+            }
+
+            CopySiblingFiles(srcPath, targetDir);
+
+            // Atualiza o registro para o novo caminho — move o .axemeta e
+            // corrige o índice de caminhos (ver comentário em UpdatePath).
+            // O arquivo ORIGINAL (em Downloads, etc.) não é apagado.
+            AssetDatabase::Get().UpdatePath(uuid, destPath);
+            m_RelocateSuccessCount++;
+        }
+
+        SaveIfProject();
+    }
+
     void AssetBrowser::OnFileDrop(const std::string& filepath)
     {
         if (!IsSupported(filepath)) return;
 
-        std::string uuid = AssetDatabase::Get().Register(filepath);
+        std::filesystem::path srcPath = std::filesystem::absolute(filepath);
+        std::string finalPath = srcPath.string();
+
+        // CRÍTICO: copia o arquivo importado para dentro da pasta Assets do
+        // projeto (respeitando a pasta virtual selecionada), em vez de só
+        // registrar o caminho ORIGINAL de onde foi arrastado. Sem isso, o
+        // asset "morava" para sempre fora do projeto (ex: na pasta Downloads)
+        // — o .axemeta era criado lá, e a pasta correspondente dentro do
+        // projeto nunca recebia o arquivo de fato.
+        if (ProjectManager::Get().HasProject())
+        {
+            auto targetDir = ProjectManager::Get().GetCurrent().AssetsPath;
+            if (!m_SelectedFolder.empty())
+                targetDir /= m_SelectedFolder;
+
+            std::error_code ec;
+            std::filesystem::create_directories(targetDir, ec);
+
+            // Já está dentro da própria pasta Assets do projeto? não duplica.
+            std::error_code eqEc;
+            bool alreadyInProject = std::filesystem::exists(targetDir) &&
+                std::filesystem::equivalent(srcPath.parent_path(), targetDir, eqEc) && !eqEc;
+
+            if (!alreadyInProject)
+            {
+                auto destPath = targetDir / srcPath.filename();
+
+                // Evita sobrescrever um arquivo existente com o mesmo nome
+                int i = 1;
+                while (std::filesystem::exists(destPath))
+                    destPath = targetDir / (srcPath.stem().string() + "_" + std::to_string(i++) + srcPath.extension().string());
+
+                std::error_code copyEc;
+                std::filesystem::copy_file(srcPath, destPath, std::filesystem::copy_options::none, copyEc);
+
+                if (!copyEc)
+                {
+                    finalPath = destPath.string();
+                    AXE_CORE_INFO("AssetBrowser: '{}' importado para '{}'.",
+                        srcPath.filename().string(), targetDir.string());
+
+                    // Malhas .obj costumam vir com um .mtl (e às vezes texturas)
+                    // na mesma pasta, referenciados por caminho relativo. Copia
+                    // junto qualquer arquivo com o mesmo nome-base (stem), senão
+                    // o material da malha quebra ao carregar do novo local.
+                    CopySiblingFiles(srcPath, targetDir);
+                }
+                else
+                {
+                    AXE_CORE_ERROR("AssetBrowser: falha ao copiar asset importado '{}': {}",
+                        srcPath.string(), copyEc.message());
+                }
+            }
+        }
+
+        std::string uuid = AssetDatabase::Get().Register(finalPath);
 
         // Coloca na pasta selecionada
         auto* record = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
@@ -69,35 +309,54 @@ namespace axe
         if (ProjectManager::Get().HasProject())
             AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
 
-        std::string ext = std::filesystem::path(filepath).extension().string();
+        std::string ext = std::filesystem::path(finalPath).extension().string();
         for (char& c : ext) c = (char)std::tolower(c);
         if (AssetTypeFromExtension(ext) == AssetType::Mesh && m_FileDropCallback)
-            m_FileDropCallback(filepath);
+            m_FileDropCallback(finalPath);
     }
 
     void AssetBrowser::DeleteAsset(const AssetRecord& record)
     {
+        // Copia os dados necessários ANTES de remover do AssetDatabase —
+        // 'record' é uma referência para dentro do map; depois do Unregister()
+        // ela fica pendurada (dangling) e não pode mais ser usada.
+        std::string uuid = record.UUID;
+        std::string name = record.Name;
+        auto filePath = record.FilePath;
+
         try
         {
-            if (std::filesystem::exists(record.FilePath))
-                std::filesystem::remove(record.FilePath);
+            if (std::filesystem::exists(filePath))
+                std::filesystem::remove(filePath);
 
             // Remove meta se existir
-            auto meta = record.FilePath;
+            auto meta = filePath;
             meta += ".axemeta";
             if (std::filesystem::exists(meta))
                 std::filesystem::remove(meta);
 
             // Remove do cache de texturas
-            m_TextureCache.erase(record.UUID);
-            m_TexturesPendingLoad.erase(record.UUID);
-            m_TexturesFailedLoad.erase(record.UUID);
+            m_TextureCache.erase(uuid);
+            m_TexturesPendingLoad.erase(uuid);
+            m_TexturesFailedLoad.erase(uuid);
 
-            AXE_CORE_INFO("AssetBrowser: '{}' excluído.", record.Name);
+            // CRÍTICO: remove o registro do AssetDatabase em memória.
+            // Sem isso, o asset só desaparecia do browser depois de reiniciar
+            // o editor — o arquivo já tinha sido apagado do disco, mas o
+            // registro continuava vivo em m_Records até o próximo Load().
+            AssetDatabase::Get().Unregister(uuid);
+
+            if (m_SelectedUUID == uuid)
+                m_SelectedUUID.clear();
+
+            if (ProjectManager::Get().HasProject())
+                AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+            AXE_CORE_INFO("AssetBrowser: '{}' excluído.", name);
         }
         catch (const std::exception& e)
         {
-            AXE_CORE_ERROR("AssetBrowser: falha ao excluir '{}': {}", record.Name, e.what());
+            AXE_CORE_ERROR("AssetBrowser: falha ao excluir '{}': {}", name, e.what());
         }
     }
 
@@ -108,14 +367,43 @@ namespace axe
         auto newPath = record.FilePath.parent_path() / (newName + record.FilePath.extension().string());
         try
         {
+            // Não permite renomear para um nome que colida com outro arquivo já existente
+            if (std::filesystem::exists(newPath) && newPath != record.FilePath)
+            {
+                AXE_CORE_ERROR("AssetBrowser: já existe um arquivo '{}'. Renomeação cancelada.", newPath.string());
+                return;
+            }
+
             std::filesystem::rename(record.FilePath, newPath);
 
-            // Atualiza o record
-            auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(record.UUID));
-            if (rec)
+            // Atualiza o record E corrige o índice de caminhos do AssetDatabase
+            // (ver comentário em AssetDatabase::UpdatePath — sem isso o caminho
+            // antigo fica "fantasma" registrado e pode ser reaproveitado por um
+            // asset novo, corrompendo este registro).
+            AssetDatabase::Get().UpdatePath(record.UUID, newPath, newName);
+
+            // Materiais guardam o próprio nome dentro do JSON do .axemat
+            // (separado do nome do arquivo). Sem isso, o Material Editor
+            // continuaria mostrando "NewMaterial" mesmo após renomear no browser.
+            if (newPath.extension() == ".axemat")
             {
-                rec->FilePath = newPath;
-                rec->Name = newName;
+                try
+                {
+                    std::ifstream in(newPath);
+                    if (in.is_open())
+                    {
+                        nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+                        in.close();
+                        if (!j.is_discarded())
+                        {
+                            j["name"] = newName;
+                            std::ofstream out(newPath);
+                            if (out.is_open())
+                                out << j.dump(4);
+                        }
+                    }
+                }
+                catch (...) {}
             }
 
             if (ProjectManager::Get().HasProject())
@@ -188,12 +476,15 @@ namespace axe
                 {
                     AXE_CORE_INFO("AssetBrowser: '{}' movido para '{}'",
                         rec->Name, targetDir.string());
-                    rec->FilePath = newPath;
+                    // Corrige o índice de caminhos — ver UpdatePath para detalhes
+                    // de por que isso é crítico (caminho antigo fantasma).
+                    AssetDatabase::Get().UpdatePath(uuid, newPath);
+                    rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
                 }
             }
         }
 
-        rec->VirtualFolder = folder;
+        if (rec) rec->VirtualFolder = folder;
         SaveIfProject();
     }
 
@@ -433,9 +724,9 @@ namespace axe
         DrawToolbar();
         ImGui::Separator();
 
-        float leftWidth = 180.0f;
+        float totalAvailWidth = ImGui::GetContentRegionAvail().x;
 
-        ImGui::BeginChild("##folders", ImVec2(leftWidth, 0), true);
+        ImGui::BeginChild("##folders", ImVec2(m_FolderPanelWidth, 0), true);
 
         // Atalhos para pasta — só quando o painel de pastas tem foco
         if (ImGui::IsWindowFocused() && !m_SelectedFolder.empty())
@@ -459,7 +750,30 @@ namespace axe
 
         DrawFolderTree();
         ImGui::EndChild();
-        ImGui::SameLine();
+        ImGui::SameLine(0.0f, 0.0f);
+
+        // Splitter arrastável — permite redimensionar o painel de pastas com o mouse
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.55f, 0.85f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.55f, 0.85f, 0.8f));
+        ImGui::Button("##folder_splitter", ImVec2(6.0f, ImGui::GetContentRegionAvail().y));
+        ImGui::PopStyleColor(3);
+
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+        if (ImGui::IsItemActive())
+            m_FolderPanelWidth += ImGui::GetIO().MouseDelta.x;
+
+        // Limites razoáveis — não deixa colapsar nem tomar a janela inteira
+        // (usa a largura TOTAL capturada antes dos painéis, não a sobra atual,
+        // que já reflete o painel de pastas no tamanho antigo)
+        float minAssetAreaWidth = 150.0f;
+        float splitterWidth = 6.0f;
+        float maxFolderWidth = std::max(120.0f, totalAvailWidth - splitterWidth - minAssetAreaWidth);
+        m_FolderPanelWidth = std::clamp(m_FolderPanelWidth, 120.0f, maxFolderWidth);
+
+        ImGui::SameLine(0.0f, 0.0f);
 
         ImGui::BeginChild("##assets", ImVec2(0, 0), true);
         DrawAssetGrid();
@@ -481,17 +795,17 @@ namespace axe
             auto* rec = AssetDatabase::Get().GetByUUID(m_DeleteConfirmUUID);
             if (ImGui::BeginPopupModal("##confirm_delete_asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
             {
-                ImGui::Text("Excluir '%s'?", rec ? rec->Name.c_str() : "?");
-                ImGui::TextDisabled("Esta ação não pode ser desfeita.");
+                ImGui::Text("Delete '%s'?", rec ? rec->Name.c_str() : "?");
+                ImGui::TextDisabled("This action cannot be undone.");
                 ImGui::Separator();
-                if (ImGui::Button("Excluir", ImVec2(100, 0)))
+                if (ImGui::Button("Delete", ImVec2(100, 0)))
                 {
                     if (rec) DeleteAsset(*rec);
                     m_DeleteConfirmUUID.clear();
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
                 {
                     m_DeleteConfirmUUID.clear();
                     ImGui::CloseCurrentPopup();
@@ -508,22 +822,22 @@ namespace axe
                 ImGuiWindowFlags_AlwaysAutoResize))
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-                ImGui::Text("ATENÇÃO — Esta ação é irreversível!");
+                ImGui::Text("WARNING — This action is irreversible!");
                 ImGui::PopStyleColor();
 
                 ImGui::Separator();
-                ImGui::Text("A pasta '%s' será excluída:", m_DeleteConfirmFolder.c_str());
+                ImGui::Text("Folder '%s' will be deleted:", m_DeleteConfirmFolder.c_str());
                 ImGui::Spacing();
 
-                ImGui::BulletText("Do editor (organização virtual)");
-                ImGui::BulletText("Do disco permanentemente:");
+                ImGui::BulletText("From the editor (virtual organization)");
+                ImGui::BulletText("From disk, permanently:");
                 ImGui::Indent(20.0f);
                 ImGui::TextDisabled("%s", m_DeleteConfirmFolderDiskPath.c_str());
                 ImGui::Unindent(20.0f);
 
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
-                ImGui::Text("Todos os arquivos dentro da pasta serao perdidos!");
+                ImGui::Text("All files inside this folder will be lost!");
                 ImGui::PopStyleColor();
 
                 ImGui::Separator();
@@ -531,7 +845,7 @@ namespace axe
 
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-                if (ImGui::Button("Excluir permanentemente", ImVec2(200, 0)))
+                if (ImGui::Button("Delete permanently", ImVec2(200, 0)))
                 {
                     DeleteFolder(m_DeleteConfirmFolder);
                     m_DeleteConfirmFolder.clear();
@@ -541,7 +855,7 @@ namespace axe
                 ImGui::PopStyleColor(2);
 
                 ImGui::SameLine();
-                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
                 {
                     m_DeleteConfirmFolder.clear();
                     m_DeleteConfirmFolderDiskPath.clear();
@@ -555,9 +869,9 @@ namespace axe
             ImGui::OpenPopup("##folder_color");
             if (ImGui::BeginPopupModal("##folder_color", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
             {
-                ImGui::Text("Cor da pasta");
+                ImGui::Text("Folder Color");
                 ImGui::ColorPicker4("##color", m_PickerColor, ImGuiColorEditFlags_NoAlpha);
-                if (ImGui::Button("Aplicar", ImVec2(100, 0)))
+                if (ImGui::Button("Apply", ImVec2(100, 0)))
                 {
                     uint32_t r = (uint32_t)(m_PickerColor[0] * 255);
                     uint32_t g = (uint32_t)(m_PickerColor[1] * 255);
@@ -571,7 +885,7 @@ namespace axe
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
                 {
                     m_ColorPickerFolder.clear();
                     ImGui::CloseCurrentPopup();
@@ -580,6 +894,8 @@ namespace axe
             }
         }
 
+        DrawRelocateAssetsModals();
+
         ImGui::End();
     }
 
@@ -587,22 +903,109 @@ namespace axe
     {
         ImGui::SliderFloat("##iconsize", &m_IconSize, 32.0f, 128.0f, "%.0f");
         ImGui::SameLine();
-        ImGui::TextDisabled("Tamanho");
+        ImGui::TextDisabled("Size");
         ImGui::SameLine(0, 20);
 
         // Breadcrumb da pasta atual
         if (m_SelectedFolder.empty())
-            ImGui::TextDisabled("/ Todos");
+            ImGui::TextDisabled("/ All");
         else
             ImGui::TextDisabled("/ %s", m_SelectedFolder.c_str());
 
         ImGui::SameLine();
 
         // Botão nova pasta
-        if (ImGui::SmallButton("+ Pasta"))
+        if (ImGui::SmallButton("+ Folder"))
         {
-            char buf[64] = "Nova Pasta";
+            char buf[64] = "New Folder";
             CreateFolder(buf, m_SelectedFolder);
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::SmallButton("Relocate Assets"))
+        {
+            ScanExternalAssets(m_PendingRelocateUUIDs);
+            m_RelocateConfirmOpen = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Copies assets that live outside the project's Assets folder\n"
+                "(e.g. imported before this fix, or referenced from Downloads)\n"
+                "into the project. Originals are not deleted.");
+    }
+
+    void AssetBrowser::DrawRelocateAssetsModals()
+    {
+        if (m_RelocateConfirmOpen)
+        {
+            ImGui::OpenPopup("##relocate_confirm");
+            if (ImGui::BeginPopupModal("##relocate_confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                if (m_PendingRelocateUUIDs.empty())
+                {
+                    ImGui::Text("Every asset is already inside the project.");
+                    ImGui::TextDisabled("Nothing to relocate.");
+                }
+                else
+                {
+                    ImGui::Text("%d asset(s) found outside the project's Assets folder.",
+                        (int)m_PendingRelocateUUIDs.size());
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("They will be COPIED into the project, organized by their");
+                    ImGui::TextDisabled("current virtual folder. Original files are kept untouched.");
+                }
+
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (!m_PendingRelocateUUIDs.empty())
+                {
+                    if (ImGui::Button("Relocate", ImVec2(120, 0)))
+                    {
+                        RelocateAssets(m_PendingRelocateUUIDs);
+                        m_PendingRelocateUUIDs.clear();
+                        m_RelocateConfirmOpen = false;
+                        m_RelocateResultOpen = true;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                }
+                if (ImGui::Button("Cancel", ImVec2(100, 0)))
+                {
+                    m_PendingRelocateUUIDs.clear();
+                    m_RelocateConfirmOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
+
+        if (m_RelocateResultOpen)
+        {
+            ImGui::OpenPopup("##relocate_result");
+            if (ImGui::BeginPopupModal("##relocate_result", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("%d asset(s) relocated successfully.", m_RelocateSuccessCount);
+
+                if (!m_RelocateErrorMessages.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.3f, 1.0f));
+                    ImGui::Text("%d failed:", (int)m_RelocateErrorMessages.size());
+                    ImGui::PopStyleColor();
+                    for (auto& msg : m_RelocateErrorMessages)
+                        ImGui::BulletText("%s", msg.c_str());
+                }
+
+                ImGui::Separator();
+                if (ImGui::Button("OK", ImVec2(100, 0)))
+                {
+                    m_RelocateResultOpen = false;
+                    m_RelocateErrorMessages.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
         }
     }
 
@@ -617,7 +1020,7 @@ namespace axe
         bool rootSelected = m_SelectedFolder.empty();
         if (rootSelected)
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
-        if (ImGui::Selectable("/ Todos", rootSelected))
+        if (ImGui::Selectable("/ All", rootSelected))
             m_SelectedFolder = "";
         if (rootSelected)
             ImGui::PopStyleColor();
@@ -639,35 +1042,34 @@ namespace axe
         for (auto& folder : m_Folders)
         {
             if (!folder.Parent.empty()) continue;
-            DrawFolderNode(folder.Name, 0);
+            DrawFolderNode(folder.Name); // path == name na raiz (parent vazio)
         }
 
         ImGui::Separator();
 
         // Botão para criar nova pasta raiz
-        if (ImGui::SmallButton("+ Nova Pasta"))
+        if (ImGui::SmallButton("+ New Folder"))
         {
-            CreateFolder("Nova Pasta", "");
+            CreateFolder("New Folder", "");
             // Inicia rename
-            m_RenamingFolder = "Nova Pasta";
-            strncpy(m_RenameBuffer, "Nova Pasta", sizeof(m_RenameBuffer));
+            m_RenamingFolder = "New Folder";
+            strncpy(m_RenameBuffer, "New Folder", sizeof(m_RenameBuffer));
         }
     }
 
-    void AssetBrowser::DrawFolderNode(const std::string& folderName, int depth)
+    void AssetBrowser::DrawFolderNode(const std::string& folderPath)
     {
-        // Encontra a definição
+        // Identifica a pasta pelo CAMINHO COMPLETO, não só pelo nome.
+        // Antes, a busca era "f.Name == folderName" aceitando qualquer parent
+        // para profundidade > 0 — então duas pastas com o mesmo nome em
+        // lugares diferentes da árvore colidiam: renomear/editar uma acabava
+        // afetando a primeira pasta com aquele nome encontrada no vetor.
         VirtualFolderDef* folderDef = nullptr;
-        std::string folderPath;
         for (auto& f : m_Folders)
         {
-            // Para depth 0, parent deve ser ""
-            // Para outros, montar o path correto
-            if (f.Name == folderName &&
-                (depth == 0 ? f.Parent.empty() : true))
+            if (GetFullFolderPath(f.Name, f.Parent) == folderPath)
             {
                 folderDef = &f;
-                folderPath = GetFullFolderPath(f.Name, f.Parent);
                 break;
             }
         }
@@ -736,12 +1138,12 @@ namespace axe
             ImGui::EndDragDropTarget();
         }
 
-        // Subpastas
+        // Subpastas — passa o CAMINHO COMPLETO do filho, não só o nome
         if (hasChildren && folderDef->Expanded)
         {
             ImGui::Indent(12.0f);
             for (auto* sub : subfolders)
-                DrawFolderNode(sub->Name, depth + 1);
+                DrawFolderNode(GetFullFolderPath(sub->Name, sub->Parent));
             ImGui::Unindent(12.0f);
         }
     }
@@ -750,15 +1152,15 @@ namespace axe
 
     void AssetBrowser::DrawFolderContextMenu(const std::string& folderPath)
     {
-        if (ImGui::MenuItem("Nova Subpasta"))
+        if (ImGui::MenuItem("New Subfolder"))
         {
-            CreateFolder("Nova Pasta", folderPath);
-            m_RenamingFolder = GetFullFolderPath("Nova Pasta", folderPath);
-            strncpy(m_RenameBuffer, "Nova Pasta", sizeof(m_RenameBuffer));
+            CreateFolder("New Folder", folderPath);
+            m_RenamingFolder = GetFullFolderPath("New Folder", folderPath);
+            strncpy(m_RenameBuffer, "New Folder", sizeof(m_RenameBuffer));
             m_SelectedFolder = folderPath;
         }
 
-        if (ImGui::MenuItem("Renomear", "F2"))
+        if (ImGui::MenuItem("Rename", "F2"))
         {
             m_RenamingFolder = folderPath;
             // Pega só o nome sem o path do pai
@@ -767,7 +1169,7 @@ namespace axe
             strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer));
         }
 
-        if (ImGui::MenuItem("Cor da Pasta..."))
+        if (ImGui::MenuItem("Folder Color..."))
         {
             m_ColorPickerFolder = folderPath;
             // Carrega a cor atual
@@ -787,7 +1189,7 @@ namespace axe
         ImGui::Separator();
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.3f, 0.3f, 1));
-        if (ImGui::MenuItem("Excluir Pasta", "Del"))
+        if (ImGui::MenuItem("Delete Folder", "Del"))
         {
             m_DeleteConfirmFolder = folderPath;
             auto diskPath = GetDiskPath(folderPath);
@@ -798,7 +1200,7 @@ namespace axe
 
     void AssetBrowser::DrawAssetContextMenu(const AssetRecord& record)
     {
-        if (ImGui::MenuItem("Abrir"))
+        if (ImGui::MenuItem("Open"))
         {
             if (record.FilePath.extension() == ".axescript")
             {
@@ -820,29 +1222,29 @@ namespace axe
             }
         }
 
-        if (ImGui::MenuItem("Abrir no Explorer"))
+        if (ImGui::MenuItem("Open in Explorer"))
             OpenInExplorer(record.FilePath);
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Renomear", "F2"))
+        if (ImGui::MenuItem("Rename", "F2"))
         {
             m_RenamingUUID = record.UUID;
             m_RenameFocusNeeded = true;
             strncpy(m_RenameBuffer, record.Name.c_str(), sizeof(m_RenameBuffer));
         }
 
-        if (ImGui::MenuItem("Duplicar", "Ctrl+D"))
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
             DuplicateAsset(record);
 
-        if (ImGui::MenuItem("Copiar Path", "Ctrl+C"))
+        if (ImGui::MenuItem("Copy Path", "Ctrl+C"))
             ImGui::SetClipboardText(record.FilePath.string().c_str());
 
         ImGui::Separator();
 
-        if (ImGui::BeginMenu("Mover para"))
+        if (ImGui::BeginMenu("Move to"))
         {
-            if (ImGui::MenuItem("/ Raiz"))
+            if (ImGui::MenuItem("/ Root"))
                 MoveAssetToFolder(record.UUID, "");
             for (auto& f : m_Folders)
             {
@@ -856,14 +1258,14 @@ namespace axe
         ImGui::Separator();
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.3f, 0.3f, 1));
-        if (ImGui::MenuItem("Excluir", "Del"))
+        if (ImGui::MenuItem("Delete", "Del"))
             m_DeleteConfirmUUID = record.UUID;
         ImGui::PopStyleColor();
     }
 
     void AssetBrowser::DrawEmptyAreaContextMenu()
     {
-        if (ImGui::BeginMenu("Novo"))
+        if (ImGui::BeginMenu("New"))
         {
             if (ImGui::MenuItem("Material"))
             {
@@ -912,11 +1314,11 @@ namespace axe
             {
                 struct ScriptTypeEntry { const char* label; const char* type; const char* desc; };
                 static const ScriptTypeEntry entries[] = {
-                    { "Entity",       "Entity",       "Objeto generico com Transform" },
-                    { "Agent",        "Agent",        "Controlavel pelo player ou AI" },
+                    { "Entity",       "Entity",       "Generic object with a Transform" },
+                    { "Agent",        "Agent",        "Controllable by the player or AI" },
                     { "Character",    "Character",    "Agent + CharacterController" },
-                    { "StaticObject", "StaticObject", "So visual, sem fisica" },
-                    { "Trigger",      "Trigger",      "Colisao invisivel, dispara eventos" },
+                    { "StaticObject", "StaticObject", "Visual only, no physics" },
+                    { "Trigger",      "Trigger",      "Invisible collision, fires events" },
                 };
                 for (auto& e : entries)
                 {
@@ -948,18 +1350,18 @@ namespace axe
             ImGui::EndMenu();
         }
 
-        if (ImGui::MenuItem("Nova Pasta"))
+        if (ImGui::MenuItem("New Folder"))
         {
-            CreateFolder("Nova Pasta", m_SelectedFolder);
+            CreateFolder("New Folder", m_SelectedFolder);
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Importar Asset..."))
+        if (ImGui::MenuItem("Import Asset..."))
         {
             auto path = FileDialog::Open(
                 "Assets\0*.png;*.jpg;*.jpeg;*.gltf;*.glb;*.obj;*.axemat\0All Files\0*.*\0",
-                "Importar Asset");
+                "Import Asset");
             if (!path.empty())
                 OnFileDrop(path.string());
         }
@@ -990,7 +1392,7 @@ namespace axe
 
         // Barra de pesquisa
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 8.0f);
-        ImGui::InputTextWithHint("##search", "Pesquisar asset...", m_SearchBuffer, sizeof(m_SearchBuffer));
+        ImGui::InputTextWithHint("##search", "Search assets...", m_SearchBuffer, sizeof(m_SearchBuffer));
         ImGui::Separator();
 
         auto& db = AssetDatabase::Get();
@@ -999,46 +1401,18 @@ namespace axe
         std::string searchLower = m_SearchBuffer;
         for (char& c : searchLower) c = (char)std::tolower(c);
 
-        // Mapeamento de pasta predefinida → tipo de asset
-        static const std::unordered_map<std::string, AssetType> s_FolderTypeMap = {
-            { "Meshes",    AssetType::Mesh     },
-            { "Textures",  AssetType::Texture  },
-            { "Scenes",    AssetType::Scene    },
-            { "Scripts",   AssetType::Script   },
-            { "Audio",     AssetType::Audio    },
-            { "Materials", AssetType::Material },
-        };
-
-        // Verifica se a pasta selecionada é uma pasta predefinida de tipo
-        AssetType folderTypeFilter = AssetType::Unknown;
-        if (!m_SelectedFolder.empty())
-        {
-            auto it = s_FolderTypeMap.find(m_SelectedFolder);
-            if (it != s_FolderTypeMap.end())
-                folderTypeFilter = it->second;
-        }
-
         std::vector<const AssetRecord*> filtered;
         for (const auto& [uuid, record] : records)
         {
-            // Filtro de pasta
-            bool inFolder = false;
-            if (m_SelectedFolder.empty())
-            {
-                // "/ Todos" — mostra tudo
-                inFolder = true;
-            }
-            else if (folderTypeFilter != AssetType::Unknown)
-            {
-                // Pasta predefinida de tipo — mostra por tipo OU por VirtualFolder
-                inFolder = (record.Type == folderTypeFilter) ||
-                    (record.VirtualFolder == m_SelectedFolder);
-            }
-            else
-            {
-                // Pasta customizada — filtra por VirtualFolder
-                inFolder = (record.VirtualFolder == m_SelectedFolder);
-            }
+            // Filtro de pasta — uma pasta mostra SOMENTE o que está diretamente
+            // dentro dela (igual ao Content Browser da Unreal). Antes, pastas
+            // predefinidas como "Materials" ou "Audio" filtravam por TIPO,
+            // mostrando todos os materiais/áudios do projeto inteiro mesmo que
+            // estivessem organizados em outras subpastas — por isso o filtro
+            // parecia "não funcionar".
+            bool inFolder = m_SelectedFolder.empty()
+                ? true                                          // "/ Todos" — mostra tudo
+                : (record.VirtualFolder == m_SelectedFolder);    // só o que está nesta pasta
 
             if (!inFolder) continue;
 
@@ -1054,14 +1428,31 @@ namespace axe
             filtered.push_back(&record);
         }
 
-        if (filtered.empty())
+        // Subpastas diretas da pasta atual — exibidas como itens navegáveis
+        // no próprio grid, igual ao Content Browser da Unreal. Antes, pastas
+        // só apareciam na árvore à esquerda; ao selecionar uma pasta-pai
+        // (ex: "Content") o grid ficava vazio mesmo havendo subpastas dentro.
+        std::vector<VirtualFolderDef*> subfolders = GetSubfolders(m_SelectedFolder);
+
+        // Filtro de pesquisa também se aplica às subpastas
+        if (!searchLower.empty())
+        {
+            subfolders.erase(std::remove_if(subfolders.begin(), subfolders.end(),
+                [&](VirtualFolderDef* f) {
+                    std::string nameLower = f->Name;
+                    for (char& c : nameLower) c = (char)std::tolower(c);
+                    return nameLower.find(searchLower) == std::string::npos;
+                }), subfolders.end());
+        }
+
+        if (filtered.empty() && subfolders.empty())
         {
             if (strlen(m_SearchBuffer) > 0)
-                ImGui::TextDisabled("Nenhum asset encontrado para \"%s\".", m_SearchBuffer);
+                ImGui::TextDisabled("No assets found for \"%s\".", m_SearchBuffer);
             else
             {
-                ImGui::TextDisabled("Pasta vazia.");
-                ImGui::TextDisabled("Arraste arquivos para importar.");
+                ImGui::TextDisabled("This folder is empty.");
+                ImGui::TextDisabled("Drag files here to import.");
             }
             return;
         }
@@ -1072,10 +1463,99 @@ namespace axe
 
         ImGui::Columns(columns, nullptr, false);
 
+        for (auto* folder : subfolders)
+            DrawFolderItem(*folder);
+
         for (const auto* record : filtered)
             DrawAssetItem(*record);
 
         ImGui::Columns(1);
+    }
+
+    void AssetBrowser::DrawFolderItem(const VirtualFolderDef& folder)
+    {
+        std::string folderPath = GetFullFolderPath(folder.Name, folder.Parent);
+
+        auto& icons = EditorIconLibrary::Get();
+        auto  icon = icons.GetFolder();
+
+        ImGui::PushID(folderPath.c_str());
+
+        ImVec2 itemPos = ImGui::GetCursorScreenPos();
+        float  padding = 6.0f;
+        float  totalW = m_IconSize + padding * 2.0f;
+        float  iconBlockH = totalW;
+        float  lineHeight = ImGui::GetTextLineHeight();
+        const int kMaxNameLines = 3;
+        float  textBlockH = lineHeight * kMaxNameLines + 4.0f;
+        float  totalH = iconBlockH + textBlockH;
+
+        bool selected = (m_SelectedFolder == folderPath);
+
+        ImGui::InvisibleButton("##folderitem", ImVec2(totalW, totalH));
+
+        bool hovered = ImGui::IsItemHovered();
+        bool dclicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+
+        if (ImGui::IsItemClicked()) m_SelectedFolder = folderPath;
+        if (dclicked) m_SelectedFolder = folderPath; // navega para dentro
+
+        // Drag & drop target — soltar um asset aqui o move para esta pasta
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+            {
+                std::string uuid = (const char*)payload->Data;
+                MoveAssetToFolder(uuid, folderPath);
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if (hovered && !dclicked)
+            ImGui::SetTooltip("%s\nDouble-click to open", folder.Name.c_str());
+
+        if (ImGui::BeginPopupContextItem("##folderitem_ctx"))
+        {
+            DrawFolderContextMenu(folderPath);
+            ImGui::EndPopup();
+        }
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+
+        ImVec2 rectMin = itemPos;
+        ImVec2 rectMax = ImVec2(itemPos.x + totalW, itemPos.y + totalH);
+
+        if (selected)
+            draw->AddRectFilled(rectMin, rectMax, IM_COL32(60, 100, 200, 80), 6.0f);
+        else if (hovered)
+            draw->AddRectFilled(rectMin, rectMax, IM_COL32(60, 120, 200, 50), 6.0f);
+
+        ImVec2 iconMin = ImVec2(itemPos.x + padding, itemPos.y + padding);
+        ImVec2 iconMax = ImVec2(iconMin.x + m_IconSize, iconMin.y + m_IconSize);
+
+        ImVec4 folderColorF = ImGui::ColorConvertU32ToFloat4(folder.Color);
+        if (icon && icon->IsLoaded())
+            draw->AddImage((ImTextureID)(uintptr_t)icon->GetRendererID(),
+                iconMin, iconMax, ImVec2(0, 1), ImVec2(1, 0),
+                ImGui::ColorConvertFloat4ToU32(folderColorF));
+        else
+            draw->AddRectFilled(iconMin, iconMax, folder.Color, 4.0f);
+
+        float textBlockY = itemPos.y + iconBlockH + 2.0f;
+        auto lines = WrapNameToLines(folder.Name, totalW - 2.0f, kMaxNameLines);
+        ImU32 textColor = selected ? IM_COL32(140, 190, 255, 255) :
+            hovered ? IM_COL32(140, 180, 255, 255) :
+            IM_COL32(220, 220, 220, 255);
+
+        for (size_t li = 0; li < lines.size(); ++li)
+        {
+            float lineTextW = ImGui::CalcTextSize(lines[li].c_str()).x;
+            float lineTextX = itemPos.x + (totalW - lineTextW) * 0.5f;
+            draw->AddText(ImVec2(lineTextX, textBlockY + li * lineHeight), textColor, lines[li].c_str());
+        }
+
+        ImGui::NextColumn();
+        ImGui::PopID();
     }
 
     void AssetBrowser::DrawAssetItem(const AssetRecord& record)
@@ -1123,7 +1603,11 @@ namespace axe
         ImVec2 itemPos = ImGui::GetCursorScreenPos();
         float  padding = 6.0f;
         float  totalW = m_IconSize + padding * 2.0f;
-        float  totalH = totalW + 22.0f;
+        float  iconBlockH = totalW; // área do ícone (quadrada) + padding
+        float  lineHeight = ImGui::GetTextLineHeight();
+        const int kMaxNameLines = 3;
+        float  textBlockH = lineHeight * kMaxNameLines + 4.0f;
+        float  totalH = iconBlockH + textBlockH;
 
         bool selected = (m_SelectedUUID == record.UUID);
 
@@ -1208,12 +1692,12 @@ namespace axe
         else
             draw->AddRectFilled(iconMin, iconMax, IM_COL32(60, 60, 60, 255), 4.0f);
 
-        // Nome — rename inline ou texto
-        float textY = itemPos.y + totalH - 20.0f;
+        // Nome — rename inline ou texto (com quebra de linha, sem truncar)
+        float textBlockY = itemPos.y + iconBlockH + 2.0f;
 
         if (m_RenamingUUID == record.UUID)
         {
-            ImGui::SetCursorScreenPos(ImVec2(itemPos.x, textY));
+            ImGui::SetCursorScreenPos(ImVec2(itemPos.x, textBlockY));
             ImGui::SetNextItemWidth(totalW);
 
             // Foco automático no primeiro frame do rename
@@ -1246,18 +1730,17 @@ namespace axe
         }
         else
         {
-            std::string displayName = record.Name;
-            if (displayName.size() > 10)
-                displayName = displayName.substr(0, 9) + "...";
-
-            float textW = ImGui::CalcTextSize(displayName.c_str()).x;
-            float textX = itemPos.x + (totalW - textW) * 0.5f;
-
-            draw->AddText(ImVec2(textX, textY),
-                selected ? IM_COL32(140, 190, 255, 255) :
+            auto lines = WrapNameToLines(record.Name, totalW - 2.0f, kMaxNameLines);
+            ImU32 textColor = selected ? IM_COL32(140, 190, 255, 255) :
                 hovered ? IM_COL32(140, 180, 255, 255) :
-                IM_COL32(200, 200, 200, 255),
-                displayName.c_str());
+                IM_COL32(200, 200, 200, 255);
+
+            for (size_t li = 0; li < lines.size(); ++li)
+            {
+                float lineTextW = ImGui::CalcTextSize(lines[li].c_str()).x;
+                float lineTextX = itemPos.x + (totalW - lineTextW) * 0.5f;
+                draw->AddText(ImVec2(lineTextX, textBlockY + li * lineHeight), textColor, lines[li].c_str());
+            }
         }
 
         ImGui::NextColumn();
@@ -1269,6 +1752,6 @@ namespace axe
         DrawEmptyAreaContextMenu();
     }
 
-   
+
 
 } // namespace axe
