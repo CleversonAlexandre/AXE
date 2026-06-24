@@ -5,8 +5,10 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <map>
+#include <filesystem>
 namespace axe
 {
+    class Shader;
     // -------------------------------------------------------------------------
     // Resultado da compilação — contém os shaders prontos para uso
     // -------------------------------------------------------------------------
@@ -41,10 +43,30 @@ namespace axe
     //   if (result.Success)
     //       auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
     // -------------------------------------------------------------------------
-    class AXE_API MaterialCompiler
+    class MaterialCompiler
     {
     public:
         static CompiledMaterial Compile(MaterialGraph* graph);
+
+        // Compila um grafo no domínio Light Function: gera um shader bem
+        // menor que o de superfície — sem PBR, sem G-Buffer, sem depender
+        // de UV/posição de uma malha real. Só resolve o que alimenta o pin
+        // Emissive do Material Output. O resultado é avaliado uma vez por
+        // frame (não por pixel da tela) e o valor lido de volta alimenta
+        // Color/Intensity da luz — ver LightMaterialEvaluator.
+        static CompiledMaterial CompileLightFunction(MaterialGraph* graph);
+
+        // Helper único — carrega o .axegraph correspondente a um .axemat,
+        // compila como Light Function e já cria o Shader pronto. Usado
+        // tanto pelo Inspector (ao attachar/trocar o material de uma luz)
+        // quanto ao recarregar a cena — UM lugar só pra essa lógica, pra
+        // não repetir o mesmo código em vários pontos (igual já tínhamos
+        // identificado como problema no SceneSerializer).
+        // Retorna false em caso de falha (sem material, sem grafo, erro de
+        // compilação) — outShader/outSamplers não são alterados nesse caso.
+        static bool CompileLightFunctionFromFile(const std::filesystem::path& materialFilePath,
+            std::shared_ptr<Shader>& outShader,
+            std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
 
     private:
         MaterialCompiler(MaterialGraph* graph);

@@ -111,6 +111,64 @@ namespace axe
         ImGui::TextDisabled("Selecione um node para editar.");
         ImGui::Separator();
 
+        // --- Material Domain / Blend Mode / Shading Model ---
+        // Estrutura inspirada na Unreal. Só os itens marcados como
+        // disponíveis são realmente suportados pelo motor — o resto
+        // aparece no dropdown (pra já deixar o caminho familiar) mas fica
+        // desabilitado, sem fingir que funciona.
+        auto drawDomainCombo = [](const char* label, const char* const* names,
+            const bool* available, int count, int& current)
+            {
+                ImGui::TextDisabled("%s", label);
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::BeginCombo((std::string("##") + label).c_str(), names[current]))
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        ImGuiSelectableFlags flags = available[i] ? 0 : ImGuiSelectableFlags_Disabled;
+                        std::string itemLabel = available[i]
+                            ? names[i] : std::string(names[i]) + " (indisponível)";
+                        if (ImGui::Selectable(itemLabel.c_str(), current == i, flags))
+                            current = i;
+                    }
+                    ImGui::EndCombo();
+                }
+            };
+
+        static const char* s_DomainNames[] = {
+            "Surface", "Light Function", "Deferred Decal", "Volume", "Post Process", "User Interface" };
+        static const bool s_DomainAvailable[] = { true, true, false, false, false, false };
+        int domain = (int)m_Graph->Domain;
+        drawDomainCombo("Material Domain", s_DomainNames, s_DomainAvailable, 6, domain);
+        m_Graph->Domain = (MaterialDomain)domain;
+
+        static const char* s_BlendNames[] = {
+            "Opaque", "Masked", "Translucent", "Additive", "Modulate", "Alpha Composite", "Alpha Holdout" };
+        static const bool s_BlendAvailable[] = { true, true, true, true, false, false, false };
+        int blend = (int)m_Graph->BlendMode;
+        drawDomainCombo("Blend Mode", s_BlendNames, s_BlendAvailable, 7, blend);
+        m_Graph->BlendMode = (MaterialBlendMode)blend;
+
+        static const char* s_ShadingNames[] = {
+            "Default Lit", "Unlit", "Subsurface", "Clear Coat", "Preintegrated Skin",
+            "Two Sided Foliage", "Hair", "Cloth", "Eye", "Single Layer Water",
+            "Thin Translucent", "From Material Expression" };
+        static const bool s_ShadingAvailable[] = {
+            true, true, false, false, false, false, false, false, false, false, false, false };
+        int shading = (int)m_Graph->ShadingModel;
+        drawDomainCombo("Shading Model", s_ShadingNames, s_ShadingAvailable, 12, shading);
+        m_Graph->ShadingModel = (MaterialShadingModel)shading;
+
+        if (m_Graph->Domain == MaterialDomain::LightFunction)
+        {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f),
+                "Light Function: só o pin Emissive do Material Output\n"
+                "é usado — os outros pins ficam acinzentados no grafo.");
+        }
+
+        ImGui::Separator();
+
         bool usePBR = mat.UsePBR;
         if (ImGui::Checkbox("PBR", &usePBR))
             mat.UsePBR = usePBR;

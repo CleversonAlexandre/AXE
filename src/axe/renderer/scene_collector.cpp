@@ -1,21 +1,43 @@
 #include "scene_collector.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/material/light_material_evaluator.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 
 namespace axe
 {
+    // Uma instância só, reaproveitada frame a frame — Initialize() é
+    // idempotente (retorna na hora se já inicializada).
+    static LightMaterialEvaluator s_LightMaterialEvaluator;
+
     RenderQueue SceneCollector::Collect(const Scene& scene, uint32_t selectedEntityID)
     {
         RenderQueue queue;
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
 
         // --- Luz direcional ---
+        DirectionalLight* mutableLight = nullptr; // não-const, só pra esta seção
         for (auto entity : registry.view<LightComponent>())
         {
             auto& lc = registry.get<LightComponent>(entity);
-            if (lc.Data) { queue.Light = lc.Data.get(); break; }
+            if (lc.Data) { mutableLight = lc.Data.get(); queue.Light = mutableLight; break; }
+        }
+
+        if (mutableLight && mutableLight->LightMaterialShader)
+        {
+            s_LightMaterialEvaluator.Initialize();
+            // Sobrescreve (não multiplica) — recalculado do zero a cada
+            // frame. Ver comentário em LightMaterialResult: esta luz é
+            // referenciada por ponteiro, não copiada, então multiplicar
+            // Color direto aqui corromperia o valor a cada frame.
+            mutableLight->LightMaterialResult = s_LightMaterialEvaluator.Evaluate(
+                mutableLight->LightMaterialShader, mutableLight->LightMaterialSamplers,
+                (float)glfwGetTime(), glm::vec3(0.0f));
+        }
+        else if (mutableLight)
+        {
+            mutableLight->LightMaterialResult = glm::vec3(1.0f);
         }
 
         // --- Point lights — posição sincronizada com TransformComponent ---
@@ -39,6 +61,19 @@ namespace axe
             if (pl.Animated)
                 pl.Intensity = std::max(0.0f,
                     pl.Intensity + sinf((float)glfwGetTime() * pl.AnimSpeed) * pl.AnimAmplitude);
+
+            // Light Material — grafo real (Time, Sine, Noise, etc.),
+            // avaliado uma vez por frame, multiplicado na Color. Um
+            // Emissive em escala de cinza oscilando 0..1 funciona como
+            // flicker/pulso; colorido tinge a luz.
+            if (pl.LightMaterialShader)
+            {
+                s_LightMaterialEvaluator.Initialize();
+                glm::vec3 emissive = s_LightMaterialEvaluator.Evaluate(
+                    pl.LightMaterialShader, pl.LightMaterialSamplers,
+                    (float)glfwGetTime(), pl.Position);
+                pl.Color = pl.Color * emissive;
+            }
 
             queue.PointLights.push_back(pl);
         }

@@ -33,6 +33,54 @@ namespace axe
         Houdini
     };
 
+    // Material Domain — pra onde este material vai ser usado. Estrutura
+    // inspirada na Unreal; só Surface e LightFunction são REALMENTE
+    // suportados pelo motor hoje. Os outros aparecem no dropdown (pra já
+    // deixar o caminho familiar/aberto) mas ficam desabilitados — não
+    // fingimos suportar o que ainda não existe de verdade.
+    enum class MaterialDomain
+    {
+        Surface,        // material de superfície normal (já existe)
+        LightFunction,  // controla Color/Intensity de uma luz, via Emissive
+        DeferredDecal,  // [indisponível] decal projetado num superfície
+        Volume,         // [indisponível] material volumétrico
+        PostProcess,    // [indisponível] efeito de tela inteira
+        UserInterface,  // [indisponível] material pra UI/widgets
+    };
+
+    // Blend Mode — como o resultado final é composto com o que já está
+    // desenhado. Opaque/Masked/Translucent/Additive são reais; o resto é
+    // placeholder.
+    enum class MaterialBlendMode
+    {
+        Opaque,
+        Masked,       // corta com alpha (sem precisar do passe transparente)
+        Translucent,  // já existente (Opacity + forward pass)
+        Additive,     // soma a cor (fogo, energia, holograma)
+        Modulate,         // [indisponível]
+        AlphaComposite,   // [indisponível]
+        AlphaHoldout,     // [indisponível]
+    };
+
+    // Shading Model — qual fórmula de iluminação usar. DefaultLit (PBR
+    // completo, já existente) e Unlit (sem luz nenhuma, mostra a cor
+    // direto — base pra cartoon/VFX/UI) são reais; o resto é placeholder.
+    enum class MaterialShadingModel
+    {
+        DefaultLit,
+        Unlit,
+        Subsurface,             // [indisponível]
+        ClearCoat,              // [indisponível]
+        PreintegratedSkin,      // [indisponível]
+        TwoSidedFoliage,        // [indisponível]
+        Hair,                   // [indisponível]
+        Cloth,                  // [indisponível]
+        Eye,                    // [indisponível]
+        SingleLayerWater,       // [indisponível]
+        ThinTranslucent,        // [indisponível]
+        FromMaterialExpression, // [indisponível]
+    };
+
     //enum class PinKind
     //{
     //    Output,

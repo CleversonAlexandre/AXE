@@ -3,10 +3,12 @@
 #include "axe/utils/glm_config.hpp"
 #include <memory>
 #include <string>
+#include <map>
 
 namespace axe
 {
     class Texture2D;
+    class Shader;
 
     struct AXE_API DirectionalLight
     {
@@ -31,5 +33,20 @@ namespace axe
         std::shared_ptr<Texture2D> CookieTexture;
         std::string CookieTextureUUID;
         float CookieScale = 5.0f;
+
+        // Light Material — ver comentário equivalente em PointLight.
+        std::string LightMaterialUUID;
+        std::shared_ptr<Shader> LightMaterialShader;
+        std::map<std::string, std::shared_ptr<Texture2D>> LightMaterialSamplers;
+
+        // Resultado da última avaliação do Light Material — TRANSITÓRIO,
+        // recalculado do zero a cada frame (nunca serializado, nunca
+        // multiplicado em si mesmo). Necessário porque, diferente da Point
+        // Light, esta struct é referenciada por ponteiro direto pelo
+        // SceneCollector (não copiada por frame) — multiplicar Color
+        // direto aqui composto a cada frame seria um bug (a cor iria pra
+        // preto ou explodiria com o tempo). O Lighting Pass multiplica
+        // Color por este valor na hora de fazer upload do uniform.
+        glm::vec3 LightMaterialResult{ 1.0f, 1.0f, 1.0f };
     };
 }

@@ -36,6 +36,17 @@ namespace axe
                 float textHeight = ImGui::GetTextLineHeight();
                 float verticalOffset = (iconSize - textHeight) * 0.5f;
 
+                // Domínio Light Function: só o Emissive do Material Output
+                // tem efeito (vira a cor/intensidade da luz) — os outros
+                // pins (Base Color, Metallic, Roughness, etc.) ficam
+                // acinzentados pra deixar claro que são ignorados, igual a
+                // Unreal faz quando troca o Material Domain.
+                bool dimmedByDomain = (node.Name == "Material Output")
+                    && (m_Graph->Domain == MaterialDomain::LightFunction)
+                    && (pin.Name != "Emissive");
+                if (dimmedByDomain)
+                    imcol = ImVec4(0.45f, 0.45f, 0.45f, 1.0f);
+
                 ed::BeginPin(pin.ID, isInput ? ed::PinKind::Input : ed::PinKind::Output);
                 ed::PinPivotAlignment(isInput ? ImVec2(0.0f, 0.5f) : ImVec2(1.0f, 0.5f));
                 ed::PinPivotSize(ImVec2(0, 0));
@@ -44,7 +55,7 @@ namespace axe
                 if (isInput)
                 {
                     bool connected = m_Graph->IsPinLinked(pin.ID);
-                    DrawPinIcon(pin, connected, 255);
+                    DrawPinIcon(pin, connected, dimmedByDomain ? 90 : 255);
                     ImGui::SameLine();
 
                     // Pin Float desconectado — edita o valor direto, sem

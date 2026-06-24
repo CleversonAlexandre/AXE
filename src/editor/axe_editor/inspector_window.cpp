@@ -24,6 +24,60 @@ namespace axe
 	static std::string s_CachedGraphUUID;
 	static bool s_GraphCacheDirty = false;
 
+	// Slot de "Light Material" — compartilhado entre PointLight e
+	// DirectionalLight (mesmos nomes de campo: LightMaterialUUID/Shader/
+	// Samplers), pra não duplicar a mesma lógica duas vezes. Compila via
+	// MaterialCompiler::CompileLightFunctionFromFile (domínio Light
+	// Function: só o pin Emissive importa) — ver comentário em PointLight.
+	template<typename TLight>
+	static void DrawLightMaterialSlot(TLight& light)
+	{
+		ImGui::Separator();
+		ImGui::TextDisabled("Light Material (grafo controla a cor da luz)");
+
+		bool changed = AssetPicker::Draw("Light Material", light.LightMaterialUUID,
+			{ AssetType::Material },
+			[&](const AssetRecord& record)
+			{
+				std::shared_ptr<Shader> shader;
+				std::map<std::string, std::shared_ptr<Texture2D>> samplers;
+				if (MaterialCompiler::CompileLightFunctionFromFile(record.FilePath, shader, samplers))
+				{
+					light.LightMaterialShader = shader;
+					light.LightMaterialSamplers = samplers;
+					light.LightMaterialUUID = record.UUID;
+				}
+			});
+
+		if (changed && light.LightMaterialUUID.empty())
+		{
+			// Limpo via botão "X" do próprio AssetPicker (não passa pelo
+			// callback onSelect, que só dispara numa seleção nova)
+			light.LightMaterialShader = nullptr;
+			light.LightMaterialSamplers.clear();
+		}
+
+		if (light.LightMaterialShader)
+		{
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Recompilar"))
+			{
+				const AssetRecord* record = AssetDatabase::Get().GetByUUID(light.LightMaterialUUID);
+				if (record)
+				{
+					std::shared_ptr<Shader> shader;
+					std::map<std::string, std::shared_ptr<Texture2D>> samplers;
+					if (MaterialCompiler::CompileLightFunctionFromFile(record->FilePath, shader, samplers))
+					{
+						light.LightMaterialShader = shader;
+						light.LightMaterialSamplers = samplers;
+					}
+				}
+			}
+			ImGui::TextDisabled("Multiplica a Cor da luz (cinza = brilho, cor = tingimento)");
+		}
+	}
+
 	static bool DrawComponentHeader(const char* label, entt::entity entity, int componentIdx, bool* outRemove)
 	{
 		*outRemove = false;
@@ -472,6 +526,8 @@ namespace axe
 			ImGui::TextDisabled("Cookie (textura projetada através do cone)");
 			DrawTextureSlot("Cookie", light.CookieTexture, light.CookieTextureUUID);
 		}
+
+		DrawLightMaterialSlot(light);
 	}
 
 	void InspectorWindow::DrawLight(DirectionalLight& light)
@@ -491,6 +547,8 @@ namespace axe
 		DrawTextureSlot("Cookie", light.CookieTexture, light.CookieTextureUUID);
 		if (light.CookieTexture)
 			ImGui::DragFloat("Escala (tamanho do tile)", &light.CookieScale, 0.1f, 0.1f, 200.0f);
+
+		DrawLightMaterialSlot(light);
 	}
 
 	void InspectorWindow::DrawTransform(Transform& t)

@@ -100,6 +100,13 @@ namespace axe
 		nlohmann::json Serialize() const;
 		void Deserialize(const nlohmann::json& json);
 
+		// Material Domain / Blend Mode / Shading Model — configuração do
+		// material inteiro (não de um node específico). Ver node_types.hpp
+		// pra quais valores são realmente suportados hoje.
+		MaterialDomain Domain = MaterialDomain::Surface;
+		MaterialBlendMode BlendMode = MaterialBlendMode::Opaque;
+		MaterialShadingModel ShadingModel = MaterialShadingModel::DefaultLit;
+
 
 		// Posições salvas durante o Draw — válidas para Serialize()
 		std::unordered_map<int, ImVec2> m_NodePositions;

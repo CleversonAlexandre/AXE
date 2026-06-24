@@ -432,7 +432,10 @@ namespace axe
         {
             m_Shader->SetInt("u_HasLight", 1);
             m_Shader->SetFloat3("u_LightDirection", light->Direction);
-            m_Shader->SetFloat3("u_LightColor", light->Color);
+            // LightMaterialResult é 1.0 (neutro) quando não há Light
+            // Material attachado, então essa multiplicação é segura mesmo
+            // sem nenhum grafo configurado.
+            m_Shader->SetFloat3("u_LightColor", light->Color * light->LightMaterialResult);
             m_Shader->SetFloat("u_LightIntensity", light->Intensity);
             m_Shader->SetFloat("u_AmbientStrength", light->AmbientStrength);
             m_Shader->SetFloat("u_IBLIntensity", light->IBLIntensity);

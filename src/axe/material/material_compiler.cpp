@@ -5,6 +5,9 @@
 #include <unordered_set>
 
 #include "axe/graphics/texture.hpp"
+#include "axe/graphics/shader.hpp"
+#include <nlohmann/json.hpp>
+#include <fstream>
 
 namespace axe
 {
@@ -440,6 +443,146 @@ namespace axe
 
         //AXE_CORE_INFO("MaterialCompiler: Compilation successful.");
         return result;
+    }
+
+    // =========================================================================
+    // CompileLightFunction — domínio "Light Function"
+    //
+    // Bem mais simples que Compile(): sem PBR, sem G-Buffer, sem depender
+    // de geometria real. Só resolve o que alimenta o pin Emissive do
+    // Material Output e gera um shader pequeno, avaliado uma vez por frame
+    // num framebuffer mínimo (ver LightMaterialEvaluator) — não por pixel
+    // da tela. v_FragPos/v_Normal/v_TexCoord existem só pra nodes que os
+    // referenciam (World Position, UV Coordinate, Fresnel, etc.) não
+    // falharem a compilar; têm valores neutros fixos, já que não há uma
+    // superfície real sendo avaliada aqui.
+    // =========================================================================
+    CompiledMaterial MaterialCompiler::CompileLightFunction(MaterialGraph* graph)
+    {
+        MaterialCompiler compiler(graph);
+        CompiledMaterial result;
+
+        Node* outputNode = nullptr;
+        for (auto& node : graph->GetNodes())
+            if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+        if (!outputNode)
+        {
+            result.ErrorMessage = "Material Output node not found";
+            return result;
+        }
+
+        // Emissive é o pin 4 do Material Output
+        if (outputNode->Inputs.size() <= 4)
+        {
+            result.ErrorMessage = "Material Output sem pin Emissive";
+            return result;
+        }
+        compiler.VisitPin(&outputNode->Inputs[4]);
+
+        Pin* emissiveSrc = compiler.GetSourcePin(&outputNode->Inputs[4]);
+        std::string emissive = emissiveSrc ? compiler.GetPinVariable(emissiveSrc->ID) : "vec3(1.0)";
+        if (emissiveSrc && compiler.GetPinType(emissiveSrc->ID) == PinType::Float)
+            emissive = "vec3(" + emissive + ")";
+
+        // Texture Sample eventualmente usado pelo Emissive — mesmo
+        // esquema de slot por node usado em Compile(), só que mais simples
+        // (não precisa achar especificamente Base Color/Normal).
+        std::map<std::string, std::shared_ptr<Texture2D>> samplerTextures;
+        {
+            int slot = 0;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!compiler.m_VisitedNodes.count(node->ID.Get())) continue; // só os usados
+                if (!node->Value.TextureVal) continue;
+                std::string samplerName = "u_LightTex_" + std::to_string(slot++);
+                compiler.m_NodeSamplers[node->ID.Get()] = samplerName;
+                samplerTextures[samplerName] = node->Value.TextureVal;
+            }
+        }
+
+        // Vertex shader — quad simples (sem transformação de mundo: este
+        // shader nunca é desenhado numa malha real, só num retângulo cobrindo
+        // o framebuffer mínimo onde o resultado é lido de volta).
+        result.VertexShader = R"(
+        #version 460 core
+        layout(location = 0) in vec3 a_Position;
+        void main() { gl_Position = vec4(a_Position.xy, 0.0, 1.0); }
+    )";
+
+        std::ostringstream fs;
+        fs << "#version 460 core\n";
+        fs << "out vec4 FragColor;\n\n";
+        fs << "uniform float u_Time;\n";
+        fs << "uniform vec3  u_CameraPosition;\n\n";
+        for (auto& [samplerName, tex] : samplerTextures)
+            fs << "uniform sampler2D " << samplerName << ";\n";
+        fs << "\n";
+        fs << "void main()\n{\n";
+        fs << "    // Valores neutros — não há uma superfície real sendo avaliada,\n";
+        fs << "    // existem só pra nodes que dependem deles não falharem ao compilar.\n";
+        fs << "    vec3 v_FragPos = vec3(0.0);\n";
+        fs << "    vec3 v_Normal = vec3(0.0, 1.0, 0.0);\n";
+        fs << "    vec3 N = v_Normal;\n";
+        fs << "    vec2 v_TexCoord = vec2(0.5, 0.5);\n";
+        fs << "    vec3 v_Tangent = vec3(1.0, 0.0, 0.0);\n";
+        fs << "    vec3 v_Bitangent = vec3(0.0, 0.0, 1.0);\n\n";
+        fs << compiler.m_FragmentCode;
+        fs << "\n    vec3 finalColor = " << emissive << ";\n";
+        fs << "    FragColor = vec4(finalColor, 1.0);\n";
+        fs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.SamplerTextures = samplerTextures;
+        result.Success = true;
+        return result;
+    }
+
+    bool MaterialCompiler::CompileLightFunctionFromFile(const std::filesystem::path& materialFilePath,
+        std::shared_ptr<Shader>& outShader,
+        std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers)
+    {
+        auto graphPath = materialFilePath;
+        graphPath.replace_extension(".axegraph");
+        if (!std::filesystem::exists(graphPath))
+        {
+            AXE_CORE_WARN("CompileLightFunctionFromFile: grafo não encontrado em '{}'", graphPath.string());
+            return false;
+        }
+
+        std::ifstream file(graphPath);
+        if (!file.is_open())
+        {
+            AXE_CORE_WARN("CompileLightFunctionFromFile: falha ao abrir '{}'", graphPath.string());
+            return false;
+        }
+
+        try
+        {
+            nlohmann::json j = nlohmann::json::parse(file);
+            MaterialGraph graph;
+            graph.Deserialize(j);
+
+            auto result = CompileLightFunction(&graph);
+            if (!result.Success)
+            {
+                AXE_CORE_WARN("CompileLightFunctionFromFile: {}", result.ErrorMessage);
+                return false;
+            }
+
+            auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+            if (!shader) return false;
+
+            outShader = shader;
+            outSamplers = result.SamplerTextures;
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            AXE_CORE_ERROR("CompileLightFunctionFromFile: erro ao compilar: {}", e.what());
+            return false;
+        }
     }
 
 

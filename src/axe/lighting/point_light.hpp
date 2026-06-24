@@ -3,10 +3,12 @@
 #include "axe/utils/glm_config.hpp"
 #include <memory>
 #include <string>
+#include <map>
 
 namespace axe
 {
 	class Texture2D;
+	class Shader;
 
 	struct AXE_API PointLight
 	{
@@ -47,6 +49,17 @@ namespace axe
 		// alem desse limite a luz funciona normal, só sem o padrão.
 		std::shared_ptr<Texture2D> CookieTexture;
 		std::string CookieTextureUUID;
+
+		// Light Material (domínio "Light Function") — um material de
+		// verdade, com grafo de nodes (Time, Sine, Noise, etc.), compilado
+		// e avaliado uma vez por frame (não por pixel) pra controlar a cor
+		// da luz dinamicamente. Ver MaterialCompiler::CompileLightFunction
+		// e LightMaterialEvaluator. O resultado MULTIPLICA Color: um
+		// Emissive em escala de cinza oscilando 0..1 funciona como
+		// flicker/pulso; um Emissive colorido também tinge a luz.
+		std::string LightMaterialUUID;
+		std::shared_ptr<Shader> LightMaterialShader;
+		std::map<std::string, std::shared_ptr<Texture2D>> LightMaterialSamplers;
 	};
 
 	// Direção "pra baixo" local (0,-1,0), rotacionada pelo Transform do
