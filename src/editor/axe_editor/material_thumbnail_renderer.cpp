@@ -7,7 +7,7 @@
 #include "axe/scene/scene_serializer.hpp"
 #include "axe/graphics/shader.hpp"
 #include "node_graph/material_graph.hpp"
-#include "axe/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_compiler.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -206,7 +206,7 @@ namespace axe
                         {
                             auto shader = Shader::Create(
                                 result.VertexShader, result.FragmentShader);
-                           
+
                             if (shader)
                             {
                                 material->SetShader(shader);

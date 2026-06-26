@@ -214,26 +214,50 @@ namespace axe
         const EditorCamera& camera,
         entt::entity selectedEntity)
     {
-        const glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
+        // Só extrai os dados da câmera e delega pra sobrecarga unificada
+        // abaixo — não existe mais lógica própria de coleta/render aqui.
+        // Antes essa função tinha sua PRÓPRIA chamada de
+        // SceneCollector::Collect + Render, e a sobrecarga da GameCamera
+        // tinha a SUA, separada — foi exatamente essa duplicação que
+        // deixou os dois caminhos divergirem (um recebia o tamanho real
+        // do viewport, o outro não). Delegando assim, só existe UM lugar
+        // de verdade fazendo o trabalho — Editor e Play sempre passam
+        // pelo mesmo código, ficando impossível divergir de novo.
         const glm::mat4 projection = camera.GetProjectionMatrix();
         const glm::vec3 cameraPosition = camera.GetPosition();
         const glm::mat4 view = camera.GetViewMatrix();
         uint32_t width = (uint32_t)camera.GetViewportWidth();
         uint32_t height = (uint32_t)camera.GetViewportHeight();
 
-        auto queue = SceneCollector::Collect(scene, (uint32_t)selectedEntity);
-        Render(queue, viewProjection, view, projection, cameraPosition, width, height);
+        RenderScene(scene, view, projection, cameraPosition, selectedEntity, width, height);
     }
 
     void SceneRenderer::RenderScene(const Scene& scene,
         const glm::mat4& view,
         const glm::mat4& projection,
         const glm::vec3& cameraPosition,
-        entt::entity selectedEntity)
+        entt::entity selectedEntity,
+        uint32_t width,
+        uint32_t height)
     {
         glm::mat4 viewProjection = projection * view;
         auto queue = SceneCollector::Collect(scene, (uint32_t)selectedEntity);
-        Render(queue, viewProjection, view, projection, cameraPosition, m_Width, m_Height);
+
+        // Antes este caminho (usado pela GameCamera no modo Play) sempre
+        // usava m_Width/m_Height — o último tamanho conhecido de QUALQUER
+        // chamada anterior, geralmente vindo do modo Edit (já que é o
+        // outro overload, com EditorCamera, que de fato atualiza esses
+        // valores). Se o viewport real no momento do Play tivesse um
+        // tamanho diferente do último frame em Edit, o G-Buffer ficava
+        // com dimensões erradas — causando os objetos perderem a
+        // textura/cor correta (sample incorreto no Lighting Pass).
+        // Agora usa o tamanho real passado pelo ViewportRenderer; só cai
+        // no fallback antigo se ninguém passar nada (width/height = 0),
+        // por segurança/compatibilidade.
+        uint32_t w = (width > 0) ? width : m_Width;
+        uint32_t h = (height > 0) ? height : m_Height;
+
+        Render(queue, viewProjection, view, projection, cameraPosition, w, h);
     }
 
     // =============================================================================

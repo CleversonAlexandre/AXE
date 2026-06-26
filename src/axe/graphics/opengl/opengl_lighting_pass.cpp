@@ -8,6 +8,7 @@
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
 #include <algorithm>
+#include <GLFW/glfw3.h>
 
 namespace axe
 {
@@ -347,6 +348,27 @@ namespace axe
         }
     }
 
+    void OpenGLLightingPass::RecompileShader()
+    {
+        // Só o shader — o quad (VAO/VBO) não precisa ser refeito, a
+        // geometria nunca muda. Substituir o shared_ptr libera o shader
+        // antigo automaticamente (OpenGLShader::~OpenGLShader já chama
+        // glDeleteProgram), então não vaza recurso de GPU.
+        try
+        {
+            auto newShader = Shader::Create(s_QuadVert, s_LightingFrag);
+            if (newShader)
+            {
+                m_Shader = newShader;
+                AXE_CORE_INFO("OpenGLLightingPass: shader recompilado.");
+            }
+        }
+        catch (const std::exception& e)
+        {
+            AXE_CORE_ERROR("OpenGLLightingPass::RecompileShader falhou: {}", e.what());
+        }
+    }
+
     void OpenGLLightingPass::SetupQuad()
     {
         float verts[] = {
@@ -384,6 +406,36 @@ namespace axe
             return;
         }
 
+        // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
+        {
+            static double s_LastLogTime = 0.0;
+            double now = glfwGetTime();
+            if (now - s_LastLogTime > 1.0)
+            {
+                s_LastLogTime = now;
+                AXE_CORE_INFO("[DIAG-LP] gbuffer={}x{} albedoID={} posID={} hasLight={} numPointLights={}",
+                    gbuffer.GetWidth(), gbuffer.GetHeight(), gbuffer.GetAlbedoID(), gbuffer.GetPositionID(),
+                    (light != nullptr), (int)pointLights.size());
+
+                if (light)
+                    AXE_CORE_INFO("[DIAG-LP] DirLight color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} ambient={:.2f}",
+                        light->Color.x, light->Color.y, light->Color.z, light->Intensity, light->AmbientStrength);
+
+                for (size_t i = 0; i < pointLights.size(); i++)
+                {
+                    const auto& pl = pointLights[i];
+                    AXE_CORE_INFO("[DIAG-LP] PointLight[{}] color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} pos=({:.2f},{:.2f},{:.2f}) radius={:.2f} isSpot={} hasLightMaterial={}",
+                        i, pl.Color.x, pl.Color.y, pl.Color.z, pl.Intensity,
+                        pl.Position.x, pl.Position.y, pl.Position.z, pl.Radius,
+                        pl.IsSpot, (pl.LightMaterialShader != nullptr));
+                    if (pl.IsSpot)
+                        AXE_CORE_INFO("[DIAG-LP]   -> dir=({:.3f},{:.3f},{:.3f}) innerAngle={:.1f} outerAngle={:.1f}",
+                            pl.Direction.x, pl.Direction.y, pl.Direction.z,
+                            pl.InnerConeAngle, pl.OuterConeAngle);
+                }
+            }
+        }
+
         glDisable(GL_DEPTH_TEST);
         glDepthMask(GL_FALSE); // preserva o depth copiado pelo BlitDepth para o skybox
         glBindVertexArray(m_QuadVAO);
@@ -403,6 +455,18 @@ namespace axe
         // 6-8 = IBL — ver binds abaixo)
         glBindTextureUnit(9, gbuffer.GetEmissiveID());
         m_Shader->SetInt("u_Emissive", 9);
+
+        // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
+        {
+            static double s_LastLogTime2 = 0.0;
+            double now2 = glfwGetTime();
+            if (now2 - s_LastLogTime2 > 1.0)
+            {
+                s_LastLogTime2 = now2;
+                AXE_CORE_INFO("[DIAG-SHADOW] ssaoTextureID={} shadowMapID={} hasSSAO={} hasShadow={}",
+                    ssaoTextureID, shadowMapID, (ssaoTextureID != 0), (shadowMapID != 0));
+            }
+        }
 
         // SSAO — slot 4
         if (ssaoTextureID != 0)

@@ -21,7 +21,7 @@
 namespace axe
 {
 
-    class AXE_API InspectorWindow
+    class InspectorWindow
     {
     public:
         void SetContext(EditorContext* context);

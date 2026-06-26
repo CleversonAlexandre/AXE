@@ -5,6 +5,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <unordered_map>
 
 namespace axe
 {
@@ -69,8 +70,30 @@ namespace axe
 		return s_DefaultShader;
 	}
 
+	// Cache por filepath — evita reimportar via Assimp toda vez que a mesma
+	// malha é referenciada por outra entidade, ou que a cena é
+	// (re)serializada (abrir cena, entrar no Play, sair do Play/Stop).
+	// LoadedAsset guarda só shared_ptr<Mesh>/shared_ptr<Material> — Mesh é
+	// somente-leitura após construído (VAO/VBO/IBO + vértices pra física),
+	// então é seguro compartilhar a mesma instância entre N entidades.
+	static std::unordered_map<std::string, LoadedAsset> s_MeshCache;
+
+	void MeshLoader::ClearCache()
+	{
+		s_MeshCache.clear();
+	}
+
+	void MeshLoader::InvalidateCache(const std::string& filepath)
+	{
+		s_MeshCache.erase(filepath);
+	}
+
 	LoadedAsset MeshLoader::Load(const std::string& filepath)
 	{
+		auto cached = s_MeshCache.find(filepath);
+		if (cached != s_MeshCache.end())
+			return cached->second;
+
 		Assimp::Importer importer;
 
 		const aiScene* scene = importer.ReadFile(filepath,
@@ -94,7 +117,11 @@ namespace axe
 		//AXE_CORE_INFO("MeshLoader: carregando '{}' ({} mesh(es) encontrada(s))", filepath, scene->mNumMeshes);
 
 		if (scene->mNumMeshes == 1)
-			return ProcessMesh(scene->mMeshes[0], scene);
+		{
+			LoadedAsset single = ProcessMesh(scene->mMeshes[0], scene);
+			s_MeshCache[filepath] = single;
+			return single;
+		}
 
 		// Múltiplos meshes — combina vértices e índices direto do Assimp
 		std::vector<Vertex>   allVertices;
@@ -133,6 +160,7 @@ namespace axe
 
 		LoadedAsset combined;
 		combined.MeshData = std::make_shared<Mesh>(allVertices, allIndices);
+		s_MeshCache[filepath] = combined;
 		return combined;
 	}
 

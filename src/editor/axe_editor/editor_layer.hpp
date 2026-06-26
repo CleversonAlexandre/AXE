@@ -40,7 +40,7 @@
 
 #include "editor/axe_editor/material/material_editor_window.hpp"
 #include "node_graph/material_graph.hpp"
-#include "axe/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_compiler.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -103,6 +103,14 @@ namespace axe
         void SaveScene();
         void LoadScene();
         void EnterPlay();
+
+        // Recompila TODOS os materiais usados na cena, de uma vez —
+        // mesma ideia da Unreal compilando shaders do projeto inteiro
+        // antes de rodar. Workaround pra um bug ainda não totalmente
+        // isolado onde a iluminação no Play só aplica certo depois de
+        // QUALQUER material ser recompilado manualmente; chamado
+        // automaticamente ao entrar em Play (ver EnterPlay).
+        void RecompileAllMaterials();
         void EnterPause();
         void EnterEdit();
         void InstantiateScriptAsset(const std::filesystem::path& scriptPath,

@@ -166,10 +166,20 @@ namespace axe
 			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox())
 			{
 				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
+				// Mesmo tratamento do caminho do Editor: remove a translação
+				// da view (o céu fica "infinitamente distante", não anda
+				// junto com a câmera) e aplica a rotação configurada do
+				// skybox. Antes o Play usava a view da câmera direto —
+				// o céu deslizava ao mover e a rotação configurada não
+				// tinha efeito nenhum.
 				m_SceneRenderer->SetSkyboxRenderer(
 					&m_SkyboxRenderer,
-					m_GameCamera->GetViewMatrix(),
+					m_Environment->GetSkyboxView(m_GameCamera->GetViewMatrix()),
 					m_GameCamera->GetProjectionMatrix(aspect));
+			}
+			else if (m_SceneRenderer)
+			{
+				m_SceneRenderer->SetSkyboxRenderer(nullptr, {}, {});
 			}
 
 			if (m_SceneRenderer && m_Scene)
@@ -178,7 +188,8 @@ namespace axe
 					m_GameCamera->GetViewMatrix(),
 					m_GameCamera->GetProjectionMatrix(aspect),
 					m_GameCamera->GetPosition(),
-					entt::null);
+					entt::null,
+					width, height);
 		}
 		else
 		{

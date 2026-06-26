@@ -2,6 +2,7 @@
 #include "axe/graphics/shader.hpp"
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
+#include <GLFW/glfw3.h>
 
 namespace axe
 {
@@ -186,8 +187,18 @@ namespace axe
 
         GLint destFBO = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destFBO);
-        //AXE_CORE_INFO("PostProcess Execute: width={} height={} destFBO={}",
-        //    m_Width, m_Height, destFBO);
+
+        // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
+        //{
+        //    static double s_LastLogTime = 0.0;
+        //    double now = glfwGetTime();
+        //    if (now - s_LastLogTime > 1.0)
+        //    {
+        //        s_LastLogTime = now;
+        //        AXE_CORE_INFO("[DIAG-PP] hdrColorID={} destFBO={} m_Width={} m_Height={} exposure={}",
+        //            hdrColorID, destFBO, m_Width, m_Height, settings.Exposure);
+        //    }
+        //}
 
 
         // --- Bloom ---

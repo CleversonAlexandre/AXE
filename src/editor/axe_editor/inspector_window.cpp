@@ -14,7 +14,7 @@
 #include "axe/script/script_component.hpp"
 
 #include "asset/asset_picker.hpp"
-#include "axe/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_compiler.hpp"
 #include "editor/axe_editor/material/material_editor_window.hpp"
 
 

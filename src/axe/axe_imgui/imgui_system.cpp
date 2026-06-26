@@ -1,7 +1,6 @@
 #include "axe/axe_imgui/imgui_system.hpp"
 #include "axe/axe_window/window.hpp"
 #include "axe/log/log.hpp"
-#include "editor/axe_editor/editor_app.hpp"
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>

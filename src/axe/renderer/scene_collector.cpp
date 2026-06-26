@@ -2,6 +2,7 @@
 #include "axe/scene/components.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/material/light_material_evaluator.hpp"
+#include "axe/log/log.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 

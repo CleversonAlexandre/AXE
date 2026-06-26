@@ -4,7 +4,7 @@
 
 #include "material_editor_window.hpp"
 #include "axe/asset/asset_database.hpp"
-#include "axe/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_compiler.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/log/log.hpp"
 #include "editor/axe_editor/inspector_window.hpp"

@@ -9,6 +9,7 @@
 #include "axe/utils/glm_config.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
+#include <set>
 #include <GLFW/glfw3.h>
 
 
@@ -138,6 +139,31 @@ namespace axe
         const glm::mat4& model,
         const Material* material)
     {
+        // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
+        // Loga cada material DIFERENTE (pra listar todos da cena, não só
+        // o primeiro desenhado no frame), mas reseta a lista a cada 2s —
+        // assim também conseguimos comparar o mesmo material entre Edit e
+        // Play, em vez de só logar ele uma vez pra sempre.
+        //{
+        //    static std::set<const void*> s_LoggedMaterials;
+        //    static double s_LastResetTime = 0.0;
+        //    double now = glfwGetTime();
+        //    if (now - s_LastResetTime > 2.0)
+        //    {
+        //        s_LoggedMaterials.clear();
+        //        s_LastResetTime = now;
+        //    }
+        //    if (material && s_LoggedMaterials.find((const void*)material) == s_LoggedMaterials.end())
+        //    {
+        //        s_LoggedMaterials.insert((const void*)material);
+        //        AXE_CORE_INFO("[DIAG-ALL] material={} geomShader={} samplerCount={} albedoMap={}",
+        //            (void*)material,
+        //            material->GetGeometryShader() ? "OK" : "NULL",
+        //            (int)material->SamplerTextures.size(),
+        //            material->AlbedoMap ? (material->AlbedoMap->IsLoaded() ? "loaded" : "not-loaded") : "null");
+        //    }
+        //}
+
         // ✅ Usa geometry shader compilado do material graph se existir
         // senão usa o shader fixo do geometry pass
         auto activeShader = (material && material->GetGeometryShader())

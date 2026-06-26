@@ -9,6 +9,7 @@ namespace axe
     {
     public:
         void Initialize() override;
+        void RecompileShader() override;
         void Execute(const GBuffer& gbuffer,
             uint32_t ssaoTextureID,
             uint32_t shadowMapID,

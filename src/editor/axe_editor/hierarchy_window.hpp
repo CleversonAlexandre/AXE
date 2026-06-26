@@ -9,7 +9,7 @@
 namespace axe
 {
 
-    class AXE_API HierarchyWindow
+    class HierarchyWindow
     {
     public:
         HierarchyWindow();

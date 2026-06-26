@@ -13,7 +13,7 @@ namespace axe
 	class EditorCamera;
 	class ViewportRenderer;
 
-	class AXE_API ViewportWindow
+	class ViewportWindow
 	{
 	public:
 		ViewportWindow();

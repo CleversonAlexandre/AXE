@@ -11,7 +11,7 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 #include "axe/material/material_asset.hpp"
-#include "axe/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_compiler.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "editor/axe_editor/asset/asset_picker.hpp"

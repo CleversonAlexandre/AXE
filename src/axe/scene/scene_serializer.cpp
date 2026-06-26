@@ -12,7 +12,6 @@
 #include <imgui.h>
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
-#include "editor/axe_editor/node_graph/material_graph.hpp"
 #include "axe/scene/scene_environment.hpp"
 
 namespace axe

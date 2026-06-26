@@ -65,6 +65,13 @@ namespace axe
 
 		void SetGameCamera(GameCamera* cam) { m_GameCamera = cam; }
 
+		// Força recompilação do shader do Lighting Pass — ver
+		// SceneRenderer::RecompileLightingShader.
+		void RecompileLightingShader()
+		{
+			if (m_SceneRenderer) m_SceneRenderer->RecompileLightingShader();
+		}
+
 		void SetEnvironment(SceneEnvironment* env) { m_Environment = env; }
 		void DrawGrid();
 		void Resize(uint32_t width, uint32_t height);

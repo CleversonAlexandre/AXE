@@ -116,6 +116,7 @@ namespace axe
     void MaterialEditorWindow::Draw()
     {
         if (!m_Open || !m_Asset || !m_Material) return;
+        
 
         if (s_NeedsReload && m_Open)
         {
@@ -141,9 +142,6 @@ namespace axe
 
         ImGuiID dockspace_id = ImGui::GetID("MaterialEditorDockSpace");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
-
-
-
 
         //ImGuiID dock_preview, dock_log;
         //ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.6f, &dock_preview, &dock_log);

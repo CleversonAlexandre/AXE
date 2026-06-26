@@ -5,6 +5,7 @@
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/graphics/texture.hpp"
 #include "axe/graphics/render_command.hpp"
+#include <glad/glad.h>
 
 namespace axe
 {
@@ -53,6 +54,17 @@ namespace axe
         if (!m_Initialized || !shader || !m_Framebuffer || !m_VertexArray)
             return glm::vec3(1.0f);
 
+        // Salva o estado real da GPU ANTES de usar o framebuffer de 1x1 —
+        // sem isso, o viewport e o framebuffer ativo ficam "vazando" pro
+        // resto do frame depois que esta função termina. Foi exatamente
+        // esse bug que fazia a cena toda ficar escura no modo Play: o
+        // viewport ficava travado em 1x1 pixel pro resto do frame inteiro,
+        // já que nada mais re-setava ele de volta no caminho do Play.
+        GLint previousFBO = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
+        GLint previousViewport[4] = { 0, 0, 0, 0 };
+        glGetIntegerv(GL_VIEWPORT, previousViewport);
+
         m_Framebuffer->Bind();
         RenderCommand::SetViewport(0, 0, 1, 1);
         RenderCommand::SetDepthTest(false);
@@ -85,7 +97,14 @@ namespace axe
             ((packed >> 8) & 0xFF) / 255.0f,
             ((packed >> 16) & 0xFF) / 255.0f);
 
-        m_Framebuffer->Unbind();
+        // Restaura tudo exatamente como estava antes — framebuffer ativo
+        // E viewport. Framebuffer::Unbind() sempre volta pro framebuffer 0
+        // (a tela), não pro que estava ativo antes (ex: o HDR framebuffer
+        // da cena) — por isso restauramos via glBindFramebuffer direto,
+        // em vez de confiar em Unbind().
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previousFBO);
+        glViewport(previousViewport[0], previousViewport[1],
+            previousViewport[2], previousViewport[3]);
         RenderCommand::SetDepthTest(true);
 
         return color;

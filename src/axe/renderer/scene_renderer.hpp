@@ -39,7 +39,17 @@ namespace axe
             const glm::mat4& view,
             const glm::mat4& projection,
             const glm::vec3& cameraPosition,
-            entt::entity selectedEntity);
+            entt::entity selectedEntity,
+            uint32_t width = 0,
+            uint32_t height = 0);
+
+        // Força o shader do Lighting Pass a recompilar do zero — ver
+        // comentário em LightingPass::RecompileShader (no header base)
+        // pro contexto completo do porquê isso existe.
+        void RecompileLightingShader()
+        {
+            if (m_LightingPass) m_LightingPass->RecompileShader();
+        }
 
         void SetEnvironment(const SceneEnvironment* env)
         {

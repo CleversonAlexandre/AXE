@@ -23,7 +23,7 @@ namespace ed = ax::NodeEditor;
 
 namespace axe
 {
-    class AXE_API ScriptGraphWindow
+    class ScriptGraphWindow
     {
     public:
         ScriptGraphWindow();
