@@ -13,8 +13,12 @@ namespace axe
 
 	void OpenGLPipeline::Bind() const
 	{
-		//Shader
-		m_Spec.Shader->Bind();
+		// Shader é OPCIONAL: um Pipeline pode representar só estado
+		// fixed-function (cull/blend/depth) quando o passe binda os
+		// shaders por conta própria — ex.: o GeometryPass, que troca de
+		// shader por malha (material graph vs. shader fixo).
+		if (m_Spec.Shader)
+			m_Spec.Shader->Bind();
 
 		//Depth Test
 		if (m_Spec.DepthTest)
@@ -23,7 +27,15 @@ namespace axe
 			glDisable(GL_DEPTH_TEST);
 
 		//Depth Write
-		glDepthMask(m_Spec.DepthWrite ? GL_TRUE: GL_FALSE);
+		glDepthMask(m_Spec.DepthWrite ? GL_TRUE : GL_FALSE);
+
+		//Depth Function
+		switch (m_Spec.DepthFunc)
+		{
+		case RendererAPI::DepthFunc::Less:      glDepthFunc(GL_LESS);   break;
+		case RendererAPI::DepthFunc::LessEqual: glDepthFunc(GL_LEQUAL); break;
+		case RendererAPI::DepthFunc::Always:    glDepthFunc(GL_ALWAYS); break;
+		}
 
 		//Blending
 		if (m_Spec.Blend)
@@ -39,19 +51,19 @@ namespace axe
 		//Face Culling
 		switch (m_Spec.Cull)
 		{
-			case CullMode::Back:
-				glEnable(GL_CULL_FACE);
-				glCullFace(GL_BACK);
-				break;
+		case CullMode::Back:
+			glEnable(GL_CULL_FACE);
+			glCullFace(GL_BACK);
+			break;
 
-			case CullMode::Front:
-				glEnable(GL_CULL_FACE);
-				glCullFace(GL_FRONT);
-				break;
+		case CullMode::Front:
+			glEnable(GL_CULL_FACE);
+			glCullFace(GL_FRONT);
+			break;
 
-			case CullMode::None:
-				glDisable(GL_CULL_FACE);				
-				break;
+		case CullMode::None:
+			glDisable(GL_CULL_FACE);
+			break;
 		}
 	}
 }

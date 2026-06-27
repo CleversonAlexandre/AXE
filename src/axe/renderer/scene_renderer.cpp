@@ -9,7 +9,6 @@
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/log/log.hpp"
 #include "axe/material/material.hpp"
-#include <glad/glad.h>
 #include <algorithm>
 
 namespace axe

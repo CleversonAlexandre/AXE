@@ -72,9 +72,27 @@ namespace axe
 		else         glDisable(GL_BLEND);
 	}
 
-	void OpenGLRendererAPI::SetBlendFunc(uint32_t src, uint32_t dst)
+	// Tradução BlendFactor (agnóstico) -> enum nativo do OpenGL. Fica
+	// CONTIDA no back-end: nenhum hexadecimal de GL escapa pra engine.
+	static GLenum ToGLBlendFactor(RendererAPI::BlendFactor f)
 	{
-		glBlendFunc(src, dst);
+		switch (f)
+		{
+		case RendererAPI::BlendFactor::Zero:             return GL_ZERO;
+		case RendererAPI::BlendFactor::One:              return GL_ONE;
+		case RendererAPI::BlendFactor::SrcColor:         return GL_SRC_COLOR;
+		case RendererAPI::BlendFactor::OneMinusSrcColor: return GL_ONE_MINUS_SRC_COLOR;
+		case RendererAPI::BlendFactor::SrcAlpha:         return GL_SRC_ALPHA;
+		case RendererAPI::BlendFactor::OneMinusSrcAlpha: return GL_ONE_MINUS_SRC_ALPHA;
+		case RendererAPI::BlendFactor::DstAlpha:         return GL_DST_ALPHA;
+		case RendererAPI::BlendFactor::OneMinusDstAlpha: return GL_ONE_MINUS_DST_ALPHA;
+		}
+		return GL_ONE;
+	}
+
+	void OpenGLRendererAPI::SetBlendFunc(BlendFactor src, BlendFactor dst)
+	{
+		glBlendFunc(ToGLBlendFactor(src), ToGLBlendFactor(dst));
 	}
 
 	void OpenGLRendererAPI::SetDepthFunc(DepthFunc func)
@@ -140,15 +158,48 @@ namespace axe
 		glBindFramebuffer(GL_FRAMEBUFFER, id);
 	}
 
+	uint32_t OpenGLRendererAPI::GetBoundFramebuffer()
+	{
+		GLint id = 0;
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &id);
+		return (uint32_t)id;
+	}
+
+	RendererAPI::Viewport OpenGLRendererAPI::GetViewport()
+	{
+		GLint vp[4] = { 0, 0, 0, 0 };
+		glGetIntegerv(GL_VIEWPORT, vp);
+		return { (uint32_t)vp[0], (uint32_t)vp[1], (uint32_t)vp[2], (uint32_t)vp[3] };
+	}
+
 	void OpenGLRendererAPI::ResetState()
 	{
 		glBindVertexArray(0);
 		glUseProgram(0);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, 0);
+
+		// Depth: ligado, escrevendo, LESS.
 		glEnable(GL_DEPTH_TEST);
 		glDepthMask(GL_TRUE);
+		glDepthFunc(GL_LESS);
+
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+		// Blend e Cull — as duas flags que ANTES o ResetState deixava
+		// vazar (a "meia-verdade" que originou os bugs de cull e blend).
+		// Agora o baseline é EXPLÍCITO e idêntico ao que
+		// GraphicsDevice::Initialize estabelece no boot: blend ligado com
+		// SRC_ALPHA/ONE_MINUS_SRC_ALPHA e cull desligado (a engine
+		// renderiza double-sided por padrão; quem quer cull o liga no seu
+		// pipeline/passe). Assim nenhum passe futuro herda lixo de estado.
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable(GL_CULL_FACE);
+
+		// Stencil desligado por padrão.
+		glDisable(GL_STENCIL_TEST);
+		glStencilMask(0xFF);
 	}
 
 	void OpenGLRendererAPI::BlitDepth(uint32_t srcFBO, uint32_t dstFBO,

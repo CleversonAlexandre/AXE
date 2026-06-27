@@ -780,6 +780,14 @@ namespace axe
             j["links"].push_back(linkJson);
         }
 
+        // Configuração de nível de MATERIAL (não pertence a nenhum node).
+        // Sem isto, Domain/BlendMode/ShadingModel voltavam ao default
+        // (Surface/Opaque/DefaultLit) toda vez que o material era reaberto —
+        // um grafo Light Function virava Surface ao reabrir o motor.
+        j["domain"] = (int)Domain;
+        j["blend_mode"] = (int)BlendMode;
+        j["shading_model"] = (int)ShadingModel;
+
         return j;
     }
 
@@ -836,6 +844,13 @@ namespace axe
         m_Links.clear();
         m_MaterialOutputNode = nullptr;
         m_PinRemap.clear();
+
+        // Config de nível de material. .value(...) com default garante que
+        // grafos salvos ANTES desses campos existirem continuam abrindo
+        // normalmente (caem em Surface/Opaque/DefaultLit, comportamento antigo).
+        Domain = (MaterialDomain)j.value("domain", (int)MaterialDomain::Surface);
+        BlendMode = (MaterialBlendMode)j.value("blend_mode", (int)MaterialBlendMode::Opaque);
+        ShadingModel = (MaterialShadingModel)j.value("shading_model", (int)MaterialShadingModel::DefaultLit);
 
         // Reconstrói cada node pelo nome — dispatch centralizado em
         // AddNodeByName() (mesma função usada pelo menu de criação e pelo

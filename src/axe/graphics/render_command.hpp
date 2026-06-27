@@ -48,7 +48,7 @@ namespace axe
             s_RendererAPI->SetBlend(enabled);
         }
 
-        static void SetBlendFunc(uint32_t src, uint32_t dst)
+        static void SetBlendFunc(RendererAPI::BlendFactor src, RendererAPI::BlendFactor dst)
         {
             s_RendererAPI->SetBlendFunc(src, dst);
         }
@@ -115,6 +115,16 @@ namespace axe
         static void BindFramebuffer(uint32_t id)
         {
             s_RendererAPI->BindFramebuffer(id);
+        }
+
+        static uint32_t GetBoundFramebuffer()
+        {
+            return s_RendererAPI->GetBoundFramebuffer();
+        }
+
+        static RendererAPI::Viewport GetViewport()
+        {
+            return s_RendererAPI->GetViewport();
         }
 
         static void ResetState() { s_RendererAPI->ResetState(); }

@@ -4,7 +4,6 @@
 #include "axe/graphics/render_command.hpp"
 #include "axe/log/log.hpp"
 #include "axe/utils/glm_config.hpp"
-#include <glad/glad.h>
 namespace axe
 {
 

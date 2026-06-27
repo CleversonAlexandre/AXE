@@ -1,9 +1,11 @@
 #pragma once
 #include "axe/graphics/renderer/geometry_pass.hpp"
+#include <memory>
 
 namespace axe
 {
     class Shader;
+    class Pipeline;
 
     class OpenGLGeometryPass final : public GeometryPass
     {
@@ -20,7 +22,8 @@ namespace axe
         bool IsInitialized() const override { return m_Initialized; }
 
     private:
-        std::shared_ptr<Shader> m_Shader;
+        std::shared_ptr<Shader>   m_Shader;
+        std::shared_ptr<Pipeline> m_Pipeline; // estado fixed-function do G-Buffer (PSO)
         bool      m_Initialized = false;
         glm::mat4 m_ViewProjection{ 1.0f };
         glm::vec3 m_CameraPosition{ 0.0f };

@@ -185,7 +185,7 @@ namespace axe
         // Menu "Create New Node" — busca + categorias colapsáveis (mesmo
         // padrão visual usado no Script Editor)
         char m_NodeSearchBuf[128] = {};
-        bool m_NodeCatOpen[6] = { true, true, true, true, true, true };
+        bool m_NodeCatOpen[6] = { false, false, false, false, false, false };
         void UpdateCommentChildren(Node* commentNode);
         std::shared_ptr<Material> m_Material;
         std::shared_ptr<Material> m_PreviewMaterial;

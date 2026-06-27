@@ -7,8 +7,7 @@
 #include "axe/mesh/mesh.hpp"
 #include "axe/material/material.hpp"
 #include "axe/log/log.hpp"
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#include "axe/core/time.hpp"
 namespace axe
 {
     MeshRenderer::MeshRenderer()
@@ -375,7 +374,7 @@ namespace axe
         // Tempo de execução, em segundos, desde a inicialização do GLFW.
         // Usado pelos nodes "Time" e "Panner" do Material Graph — ver
         // comentário equivalente em OpenGLGeometryPass.
-        shader->SetFloat("u_Time", (float)glfwGetTime());
+        shader->SetFloat("u_Time", Time::Elapsed());
 
         // Material — base
         shader->SetFloat4("u_Color", mat->Color);
@@ -397,7 +396,7 @@ namespace axe
             {
                 if (tex && tex->IsLoaded())
                 {
-                    glBindTextureUnit(slot, tex->GetRendererID());
+                    RenderCommand::BindTextureUnit(slot, tex->GetRendererID());
                     shader->SetInt(samplerName, slot);
                     ++slot;
                 }
@@ -444,7 +443,7 @@ namespace axe
         {
             //AXE_CORE_INFO("Setando shadow - ID:{} LightSpaceMatrix[3][3]:{}",
             //	m_ShadowMapID, m_LightSpaceMatrix[3][3]);
-            glBindTextureUnit(8, m_ShadowMapID);
+            RenderCommand::BindTextureUnit(8, m_ShadowMapID);
             shader->SetInt("u_ShadowMap", 8);
             shader->SetMat4("u_LightSpaceMatrix", glm::value_ptr(m_LightSpaceMatrix));
             shader->SetInt("u_HasShadowMap", 1);
@@ -472,7 +471,7 @@ namespace axe
         // Shadow map — slot 8
         if (m_ShadowMapID != 0)
         {
-            glBindTextureUnit(8, m_ShadowMapID);
+            RenderCommand::BindTextureUnit(8, m_ShadowMapID);
             shader->SetInt("u_ShadowMap", 8);
             shader->SetMat4("u_LightSpaceMatrix", glm::value_ptr(m_LightSpaceMatrix));
             shader->SetInt("u_HasShadowMap", 1);

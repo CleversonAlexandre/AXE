@@ -1,6 +1,7 @@
 #pragma once
 
 #include "axe/core/types.hpp"
+#include "axe/graphics/renderer_api.hpp" // RendererAPI::DepthFunc
 #include <memory>
 
 namespace axe
@@ -19,6 +20,10 @@ namespace axe
 		bool DepthTest = true;
 		bool DepthWrite = true;
 
+		// Função de comparação de profundidade. Agora faz parte do "PSO":
+		// o passe não precisa mais chamar SetDepthFunc à mão.
+		RendererAPI::DepthFunc DepthFunc = RendererAPI::DepthFunc::Less;
+
 		bool Blend = false;
 
 		CullMode Cull = CullMode::Back;
@@ -35,4 +40,3 @@ namespace axe
 		static std::shared_ptr<Pipeline> Create(const PipelineSpecification& spec);
 	};
 }
-

@@ -3,7 +3,7 @@
 #include "axe/lighting/point_light.hpp"
 #include "axe/material/light_material_evaluator.hpp"
 #include "axe/log/log.hpp"
-#include <GLFW/glfw3.h>
+#include "axe/core/time.hpp"
 #include <algorithm>
 
 namespace axe
@@ -34,7 +34,7 @@ namespace axe
             // Color direto aqui corromperia o valor a cada frame.
             mutableLight->LightMaterialResult = s_LightMaterialEvaluator.Evaluate(
                 mutableLight->LightMaterialShader, mutableLight->LightMaterialSamplers,
-                (float)glfwGetTime(), glm::vec3(0.0f));
+                Time::Elapsed(), glm::vec3(0.0f));
         }
         else if (mutableLight)
         {
@@ -56,12 +56,10 @@ namespace axe
                 pl.Direction = ComputeSpotDirection(tc->Data.Rotation);
             }
 
-            // Flicker/pulsação — Intensity do componente continua sendo o
-            // valor base editado no Inspector; só a CÓPIA usada pra
-            // renderizar este frame oscila em torno dele.
-            if (pl.Animated)
-                pl.Intensity = std::max(0.0f,
-                    pl.Intensity + sinf((float)glfwGetTime() * pl.AnimSpeed) * pl.AnimAmplitude);
+            // (O antigo flicker/pulso por sinf(Time) foi removido — o Light
+            // Material faz isso pelo grafo, de forma mais flexível. Os campos
+            // Animated/AnimSpeed/AnimAmplitude continuam na struct apenas por
+            // compatibilidade de cenas antigas; não têm mais efeito.)
 
             // Light Material — grafo real (Time, Sine, Noise, etc.),
             // avaliado uma vez por frame, multiplicado na Color. Um
@@ -72,7 +70,7 @@ namespace axe
                 s_LightMaterialEvaluator.Initialize();
                 glm::vec3 emissive = s_LightMaterialEvaluator.Evaluate(
                     pl.LightMaterialShader, pl.LightMaterialSamplers,
-                    (float)glfwGetTime(), pl.Position);
+                    Time::Elapsed(), pl.Position);
                 pl.Color = pl.Color * emissive;
             }
 

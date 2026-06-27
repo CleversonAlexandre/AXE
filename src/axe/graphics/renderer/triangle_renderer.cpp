@@ -9,7 +9,6 @@
 #include "axe/graphics/texture.hpp"
 
 
-#include <glad/glad.h>
 
 namespace axe
 {
@@ -67,14 +66,14 @@ namespace axe
         m_VertexArray->SetIndexBuffer(ib);
 
 
-		PipelineSpecification spec;
-		spec.Shader = m_Shader;
-		spec.DepthTest = false; // triângulo 2D
-		spec.Blend = false;
+        PipelineSpecification spec;
+        spec.Shader = m_Shader;
+        spec.DepthTest = false; // triângulo 2D
+        spec.Blend = false;
 
-		m_Pipeline = Pipeline::Create(spec);
+        m_Pipeline = Pipeline::Create(spec);
 
-        
+
         m_Texture = Texture2D::Create(1, 1);
 
         AXE_CORE_INFO("TriangleRenderer created");
@@ -82,12 +81,12 @@ namespace axe
 
     void TriangleRenderer::Render()
     {
-        
+
         m_Pipeline->Bind();
         m_VertexArray->Bind();
         m_Texture->Bind(0);
 
         RenderCommand::DrawIndexed(m_VertexArray);
-            
+
     }
 }

@@ -667,7 +667,7 @@ namespace axe
 
         dispatcher.Dispatch<KeyPressedEvent>([this](KeyPressedEvent& event)
             {
-                if (m_EditorState == EditorState::Play && event.GetKeyCode() == GLFW_KEY_ESCAPE)
+                if (m_EditorState == EditorState::Play && event.GetKeyCode() == static_cast<int>(axe::Key::Escape))
                 {
                     EnterPause();
                     return true;
@@ -1047,8 +1047,8 @@ namespace axe
         m_PhysicsWorld.OnSceneStop(*m_Scene);
         axe::ScriptBase::ClearScreenMessages();
 
-        GLFWwindow* window = (GLFWwindow*)EditorApp::Get().GetWindow().GetNativeWindow();
-        if (window) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        // Libera o cursor ao parar o Play — via abstração Window, sem GLFW cru.
+        EditorApp::Get().GetWindow().CaptureCursor(false);
 
         if (!m_SceneSnapshot.empty())
         {

@@ -12,7 +12,7 @@ namespace axe
 	class WindowGlfw : public Window
 	{
 
-		
+
 
 	public:
 		WindowGlfw(const WindowProps& props);
@@ -24,6 +24,11 @@ namespace axe
 
 		inline unsigned int GetWidth() const override { return m_Data.Width; }
 		inline unsigned int GetHeight() const override { return m_Data.Height; }
+
+		// Tamanho do framebuffer em PIXELS (high-DPI). Mantém o
+		// glfwGetFramebufferSize encapsulado aqui, dentro da impl de
+		// janela — o GraphicsDevice consome via interface Window.
+		void GetFramebufferSize(int& width, int& height) const override;
 
 		inline void SetEventCallback(const EventCallbackFunc& callback) override { m_Data.EventCallback = callback; }
 
@@ -46,7 +51,7 @@ namespace axe
 			unsigned int Width, Height;
 			bool VSync;
 
-			EventCallbackFunc EventCallback;			
+			EventCallbackFunc EventCallback;
 		};
 
 		GLFWwindow* m_Window = nullptr;

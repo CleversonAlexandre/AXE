@@ -157,7 +157,7 @@ namespace axe
         m_Shader->SetMat4("u_VP", glm::value_ptr(vp));
 
         RenderCommand::SetBlend(true);
-        RenderCommand::SetBlendFunc(0x0302, 0x0303);
+        RenderCommand::SetBlendFunc(RendererAPI::BlendFactor::SrcAlpha, RendererAPI::BlendFactor::OneMinusSrcAlpha);
         RenderCommand::SetDepthTest(false);
         RenderCommand::SetDepthWrite(false);
 

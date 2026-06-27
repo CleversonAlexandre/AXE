@@ -91,7 +91,7 @@ namespace axe
         glm::mat4 vp = projection * view;
 
         RenderCommand::SetBlend(true);
-        RenderCommand::SetBlendFunc(0x0302, 0x0303); // GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+        RenderCommand::SetBlendFunc(RendererAPI::BlendFactor::SrcAlpha, RendererAPI::BlendFactor::OneMinusSrcAlpha);
         RenderCommand::SetDepthTest(true);
         RenderCommand::SetDepthWrite(false); // lê depth mas não escreve — não sobrepõe objetos
 

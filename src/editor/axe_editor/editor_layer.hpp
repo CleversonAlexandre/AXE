@@ -6,7 +6,6 @@
 #include "axe/core/command_history.hpp"
 #include "axe/physics/physics_world.hpp"
 
-#include "GLFW/glfw3.h"
 
 #include "axe/graphics/renderer/viewport_renderer.hpp"
 #include "axe/graphics/framebuffer.hpp"

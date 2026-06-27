@@ -5,7 +5,7 @@
 #include "axe_editor/editor_layer.hpp"
 
 #include "axe/core/timestep.hpp"
-#include <GLFW/glfw3.h>
+#include "axe/core/time.hpp"
 
 
 #include <imgui.h>
@@ -137,6 +137,7 @@ namespace axe
 		while (m_Running)
 		{
 			float currentTime = m_Window->GetTime();
+			Time::SetElapsed(currentTime); // fonte de tempo única da engine
 			TimeStamp deltaTime = currentTime - lastFrameTime;
 			lastFrameTime = currentTime;
 

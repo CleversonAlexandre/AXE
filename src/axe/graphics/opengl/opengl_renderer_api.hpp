@@ -16,7 +16,7 @@ namespace axe
         void SetDepthTest(bool enabled) override;
         void SetDepthWrite(bool enabled) override;
         void SetBlend(bool enabled) override;
-        void SetBlendFunc(uint32_t src, uint32_t dst) override;
+        void SetBlendFunc(BlendFactor src, BlendFactor dst) override;
         void SetDepthFunc(DepthFunc func) override;
 
         void SetCullFace(bool enabled) override;
@@ -35,6 +35,8 @@ namespace axe
         void SetPolygonMode(PolygonMode mode) override;
 
         void BindFramebuffer(uint32_t id) override;
+        uint32_t GetBoundFramebuffer() override;
+        Viewport GetViewport() override;
         void ResetState() override;
         void BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
             uint32_t width, uint32_t height) override;

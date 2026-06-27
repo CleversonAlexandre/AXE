@@ -4,10 +4,6 @@
 #include "axe/log/log.hpp"
 #include "axe/graphics/render_command.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-
 namespace axe
 {
 	bool GraphicsDevice::Initialize(Window* window)
@@ -26,17 +22,15 @@ namespace axe
 			return false;
 		}
 
-		//AXE_CORE_INFO("GraphicsDevice initialized");
-		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-		glEnable(GL_DEPTH_TEST);
-
-		// Mostrar informações do OpenGL (opcional, só para debug)
-		//AXE_CORE_INFO("OpenGL Version: {}", (const char*)glGetString(GL_VERSION));
-		//AXE_CORE_INFO("GLSL Version: {}", (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
-		//AXE_CORE_INFO("Renderer: {}", (const char*)glGetString(GL_RENDERER));
-
+		// RenderCommand::Init() cria o backend (RendererAPI::Create) — TEM
+		// que vir ANTES de qualquer comando de estado, senão s_RendererAPI
+		// ainda é nulo. Antes este bloco usava glEnable/glBlendFunc crus e
+		// chamava Init() depois; agora o estado inicial passa pela abstração.
 		RenderCommand::Init();
+
+		RenderCommand::SetBlend(true);
+		RenderCommand::SetBlendFunc(RendererAPI::BlendFactor::SrcAlpha, RendererAPI::BlendFactor::OneMinusSrcAlpha);
+		RenderCommand::SetDepthTest(true);
 
 		//AXE_CORE_INFO("GraphicsDevice Initialized successfully");
 		return true;
@@ -49,20 +43,20 @@ namespace axe
 
 	void GraphicsDevice::BeginFrame()
 	{
-		GLFWwindow* native = static_cast<GLFWwindow*>(m_Window->GetNativeWindow());
-
+		// Tamanho do framebuffer vem da abstração de janela (que sabe lidar
+		// com high-DPI), não de glfwGetFramebufferSize direto.
 		int width = 0;
 		int height = 0;
-		glfwGetFramebufferSize(native, &width, &height);
+		m_Window->GetFramebufferSize(width, height);
 
-		glViewport(0, 0, width, height);
-		glClearColor(
+		RenderCommand::SetViewport(0, 0, (uint32_t)width, (uint32_t)height);
+		RenderCommand::SetClearColor(
 			m_ClearColor[0],
 			m_ClearColor[1],
 			m_ClearColor[2],
 			m_ClearColor[3]
 		);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		RenderCommand::ClearColorDepth();
 	}
 
 	void GraphicsDevice::EndFrame()

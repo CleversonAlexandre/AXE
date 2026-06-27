@@ -499,17 +499,6 @@ namespace axe
 		ImGui::DragFloat("Radius", &light.Radius, 0.1f, 0.1f, 200.0f);
 
 		ImGui::Separator();
-		ImGui::Checkbox("Animada (flicker/pulso)", &light.Animated);
-		if (light.Animated)
-		{
-			ImGui::DragFloat("Velocidade", &light.AnimSpeed, 0.05f, 0.0f, 20.0f);
-			ImGui::DragFloat("Amplitude", &light.AnimAmplitude, 0.05f, 0.0f, 50.0f);
-			ImGui::TextDisabled("Intensidade final oscila entre %.2f e %.2f",
-				std::max(0.0f, light.Intensity - light.AnimAmplitude),
-				light.Intensity + light.AnimAmplitude);
-		}
-
-		ImGui::Separator();
 		ImGui::Checkbox("Spot Light (cone)", &light.IsSpot);
 		if (light.IsSpot)
 		{

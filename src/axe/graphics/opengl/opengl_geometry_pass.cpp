@@ -1,5 +1,6 @@
 #include "opengl_geometry_pass.hpp"
 #include "axe/graphics/shader.hpp"
+#include "axe/graphics/pipeline.hpp"
 #include "axe/mesh/mesh.hpp"
 #include "axe/graphics/vertex_array.hpp"
 #include "axe/material/material.hpp"
@@ -10,7 +11,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
 #include <set>
-#include <GLFW/glfw3.h>
+#include "axe/core/time.hpp"
 
 
 namespace axe
@@ -113,6 +114,24 @@ namespace axe
     void OpenGLGeometryPass::Initialize()
     {
         m_Shader = Shader::Create(s_GeomVert, s_GeomFrag);
+
+        // Estado fixed-function do G-Buffer empacotado num Pipeline (PSO).
+        // Antes isto vivia em chamadas avulsas de SetCullFace/SetBlend/etc.
+        // no Begin(), que herdavam/vazavam estado global e causavam os bugs
+        // de paredes invisíveis (cull) e cena escura no Play (blend). Agora
+        // o estado é DECLARATIVO e viaja junto do passe — é exatamente o
+        // formato que um back-end moderno (Vulkan/DX12) assa num PSO.
+        // Shader fica nulo de propósito: o shader é bindado POR MALHA no
+        // DrawMesh (material graph compilado, ou o shader fixo s_Geom*).
+        PipelineSpecification spec;
+        spec.Shader = nullptr;
+        spec.DepthTest = true;
+        spec.DepthWrite = true;
+        spec.DepthFunc = RendererAPI::DepthFunc::Less;
+        spec.Blend = false;              // G-Buffer NUNCA blenda
+        spec.Cull = CullMode::None;     // casa com o forward; double-sided
+        m_Pipeline = Pipeline::Create(spec);
+
         m_Initialized = true;
         //AXE_CORE_INFO("OpenGLGeometryPass initialized");
     }
@@ -127,8 +146,14 @@ namespace axe
         gbuffer.Bind();
         RenderCommand::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         RenderCommand::ClearColorDepth(); // G-Buffer não tem stencil — não usar Clear()
-        RenderCommand::SetDepthTest(true);
-        RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
+
+        // Todo o estado fixed-function do G-Buffer (depth test/write/func,
+        // blend OFF, cull None) vem do Pipeline montado no Initialize().
+        // O passe não herda mais NADA de estado global — o que matou os
+        // bugs de cull (paredes invisíveis) e blend (cena escura no Play)
+        // de forma estrutural, e deixa este passe portável pra outro
+        // back-end sem reconfigurar estado à mão.
+        m_Pipeline->Bind();
 
         m_Shader->Bind();
         m_Shader->SetMat4("u_ViewProjection", glm::value_ptr(viewProjection));
@@ -184,7 +209,7 @@ namespace axe
             // Usado pelos nodes "Time" e "Panner" do Material Graph para
             // animar materiais (água, energia, hologramas, etc.) — igual ao
             // node "Time" da Unreal.
-            activeShader->SetFloat("u_Time", (float)glfwGetTime());
+            activeShader->SetFloat("u_Time", Time::Elapsed());
 
             // Binda texturas pelo nome do sampler conforme atribuído pelo MaterialCompiler.
             // SamplerTextures já contém TODAS as texturas (albedo, normal, etc.)

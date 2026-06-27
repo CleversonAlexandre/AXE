@@ -44,7 +44,7 @@ namespace axe
 
 		m_Window = glfwCreateWindow(props.Width, props.Height, props.Title.c_str(), nullptr, nullptr);
 
-	
+
 		if (!m_Window)
 		{
 			AXE_CORE_ERROR("Failed to create GLFW window");
@@ -52,7 +52,7 @@ namespace axe
 		}
 
 		glfwSetWindowUserPointer(m_Window, &m_Data);
-		
+
 
 		// ADICIONE ESTA LINHA - FORÇA A JANELA A SER VISÍVEL
 		//glfwShowWindow(m_Window);
@@ -75,94 +75,94 @@ namespace axe
 
 		/* Atualiza o redimensionamento da janela principal*/
 		glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int width, int height)
-		{
-			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-			data.Width = width;
-			data.Height = height;
-
-			WindowResizeEvent event(width, height);
-			if (data.EventCallback)
 			{
-				data.EventCallback(event);
-			}
-			
-			//AXE_CORE_INFO("WindowResizeEvent width {} height {}", width, height);
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				data.Width = width;
+				data.Height = height;
 
-		});
+				WindowResizeEvent event(width, height);
+				if (data.EventCallback)
+				{
+					data.EventCallback(event);
+				}
+
+				//AXE_CORE_INFO("WindowResizeEvent width {} height {}", width, height);
+
+			});
 
 		glfwSetWindowCloseCallback(m_Window, [](GLFWwindow* window)
-		{
-			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-			WindowCloseEvent event;
-			if (data.EventCallback)
 			{
-				data.EventCallback(event);
-			}
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				WindowCloseEvent event;
+				if (data.EventCallback)
+				{
+					data.EventCallback(event);
+				}
 
-			//AXE_CORE_INFO("Window Close: ");
-		});
+				//AXE_CORE_INFO("Window Close: ");
+			});
 
 		glfwSetKeyCallback(m_Window, [](GLFWwindow* window, int key, int scancode, int action, int modes)
-		{
-			WindowData & data = *(WindowData*)glfwGetWindowUserPointer(window);
-			switch (action)
 			{
-			case GLFW_PRESS:
-			{
-				KeyPressedEvent event(key, 0);
-				if (data.EventCallback)				
-					data.EventCallback(event);
-				
-				//AXE_CORE_INFO(" GLFW_REPEAT: {} {} {}", key, scancode, action, modes);
-				break;
-			}
-			case GLFW_RELEASE:
-			{
-				KeyReleasedEvent event(key);
-				if (data.EventCallback)
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				switch (action)
 				{
-					data.EventCallback(event);
+				case GLFW_PRESS:
+				{
+					KeyPressedEvent event(key, 0);
+					if (data.EventCallback)
+						data.EventCallback(event);
+
+					//AXE_CORE_INFO(" GLFW_REPEAT: {} {} {}", key, scancode, action, modes);
+					break;
+				}
+				case GLFW_RELEASE:
+				{
+					KeyReleasedEvent event(key);
+					if (data.EventCallback)
+					{
+						data.EventCallback(event);
+					}
+
+					//AXE_CORE_INFO(" GLFW_RELEASE: {}", key);
+					break;
+				}
+				case GLFW_REPEAT:
+				{
+					KeyPressedEvent event(key, 1);
+					if (data.EventCallback)
+					{
+						data.EventCallback(event);
+					}
+					//AXE_CORE_INFO(" GLFW_REPEAT: {}", key);
+					break;
 				}
 
-				//AXE_CORE_INFO(" GLFW_RELEASE: {}", key);
-				break;
-			}
-			case GLFW_REPEAT:
-			{
-				KeyPressedEvent event(key, 1);
-				if (data.EventCallback)
-				{
-					data.EventCallback(event);
 				}
-				//AXE_CORE_INFO(" GLFW_REPEAT: {}", key);
-				break;
-			}
-							
-			}
-		});
+			});
 
 		glfwSetScrollCallback(m_Window, [](GLFWwindow* window, double xOffset, double yOffset)
-		{
-			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-
-			MouseScrolledEvent event((float)xOffset, (float)yOffset);
-			if (data.EventCallback)
 			{
-				data.EventCallback(event);
-			}
-			//AXE_CORE_INFO("MouseScrolledEvent: {} {}", xOffset, yOffset);
-		});
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+
+				MouseScrolledEvent event((float)xOffset, (float)yOffset);
+				if (data.EventCallback)
+				{
+					data.EventCallback(event);
+				}
+				//AXE_CORE_INFO("MouseScrolledEvent: {} {}", xOffset, yOffset);
+			});
 
 
 		glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int keycode)
-		{
-			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-			KeyTypedEvent event(keycode);
-			if (data.EventCallback)
 			{
-				data.EventCallback(event);
-			}
-		});
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				KeyTypedEvent event(keycode);
+				if (data.EventCallback)
+				{
+					data.EventCallback(event);
+				}
+			});
 
 		glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* window, int button, int action, int modes)
 			{
@@ -194,20 +194,20 @@ namespace axe
 			});
 		/* Atualiza a posição do mouse na tela */
 		glfwSetCursorPosCallback(m_Window, [](GLFWwindow* window, double xpos, double ypos)
-		{
-			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-			MouseMovedEvent event((float)xpos, (float)ypos);
-			if (data.EventCallback)
 			{
-				data.EventCallback(event);
-			}
+				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				MouseMovedEvent event((float)xpos, (float)ypos);
+				if (data.EventCallback)
+				{
+					data.EventCallback(event);
+				}
 
-			//AXE_CORE_INFO("XPos {} YPos {}", xpos, ypos);
-		});
+				//AXE_CORE_INFO("XPos {} YPos {}", xpos, ypos);
+			});
 
 		glfwSetDropCallback(m_Window, [](GLFWwindow* window, int count, const char** paths)
-		{
-			
+			{
+
 				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
 
 				//Suporta um arquivo por vez o primeiro da lista
@@ -216,7 +216,7 @@ namespace axe
 					FileDropEvent event(paths[0]);
 					data.EventCallback(event);
 				}
-		});
+			});
 
 
 
@@ -224,7 +224,7 @@ namespace axe
 			{
 				// Necessário para o ImGui rastrear quando o cursor entra/sai
 			});
-	
+
 	}
 
 	WindowGlfw::~WindowGlfw()
@@ -289,6 +289,13 @@ namespace axe
 		return (float)glfwGetTime(); // chamado dentro da DLL onde o GLFW vive
 	}
 
+	void WindowGlfw::GetFramebufferSize(int& width, int& height) const
+	{
+		// glfwGetFramebufferSize encapsulado na impl de janela — o GLFW
+		// não vaza pro GraphicsDevice nem pro resto da engine.
+		glfwGetFramebufferSize(m_Window, &width, &height);
+	}
+
 	void WindowGlfw::CaptureCursor(bool capture)
 	{
 		if (capture)
@@ -317,6 +324,6 @@ namespace axe
 	{
 		glfwSetCursorPos(m_Window, (double)x, (double)y);
 	}
-	
-	
+
+
 }

@@ -7,7 +7,6 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/utils/glm_config.hpp"
 
-#include <glad/glad.h>
 
 namespace axe
 {
@@ -68,8 +67,8 @@ namespace axe
 		m_ViewProjection = viewProjection;
 
 		m_Framebuffer->Bind();
-		glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // ID 0 = nenhum objeto
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		RenderCommand::SetClearColor(0.0f, 0.0f, 0.0f, 0.0f); // ID 0 = nenhum objeto
+		RenderCommand::ClearColorDepth();
 	}
 
 	void PickingRenderer::DrawMesh(const Mesh& mesh, const glm::mat4& model, std::uint32_t objectID)

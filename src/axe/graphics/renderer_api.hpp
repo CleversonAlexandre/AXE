@@ -16,6 +16,27 @@ namespace axe
 
         enum class DepthFunc { Less = 0, LessEqual, Always };
 
+        // Fatores de blend agnósticos de back-end. O back-end traduz para o
+        // enum nativo (GL_SRC_ALPHA, etc.) — a camada de engine não fala mais
+        // hexadecimal de OpenGL via SetBlendFunc.
+        enum class BlendFactor
+        {
+            Zero = 0,
+            One,
+            SrcColor,
+            OneMinusSrcColor,
+            SrcAlpha,
+            OneMinusSrcAlpha,
+            DstAlpha,
+            OneMinusDstAlpha,
+        };
+
+        // Estado de viewport consultável — usado para salvar/restaurar em
+        // passes que desviam o viewport temporariamente (ex.: avaliação de
+        // Light Material num framebuffer 1x1). Mantém esse save/restore
+        // dentro da abstração, sem glGetIntegerv cru na camada de engine.
+        struct Viewport { uint32_t x = 0, y = 0, width = 0, height = 0; };
+
         virtual ~RendererAPI() = default;
 
         // Estado
@@ -47,7 +68,7 @@ namespace axe
 
         // Blending
         virtual void SetBlend(bool enabled) = 0;
-        virtual void SetBlendFunc(uint32_t src, uint32_t dst) = 0;
+        virtual void SetBlendFunc(BlendFactor src, BlendFactor dst) = 0;
 
         // Draw
         virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;
@@ -61,6 +82,8 @@ namespace axe
         static std::unique_ptr<RendererAPI> Create();
 
         virtual void BindFramebuffer(uint32_t id) = 0;
+        virtual uint32_t GetBoundFramebuffer() = 0; // FBO atualmente ligado
+        virtual Viewport GetViewport() = 0;          // viewport atual
         virtual void ResetState() = 0;
 
         virtual void BlitDepth(uint32_t srcFBO, uint32_t dstFBO,
