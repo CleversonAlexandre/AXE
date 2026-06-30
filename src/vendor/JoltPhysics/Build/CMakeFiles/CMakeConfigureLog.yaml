@@ -5,7 +5,7 @@ events:
     kind: "message-v1"
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineSystem.cmake:212 (message)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     message: |
       The system is: Windows - 10.0.26200 - AMD64
   -
@@ -15,8 +15,591 @@ events:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/"
+    found: "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler:  
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      VersÃ£o do MSBuild 18.7.8+1ac568fee para .NET Framework
+      CompilaÃ§Ã£o de 29/06/2026 11:03:01 iniciada.
+      
+      Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
+      PrepareForBuild:
+        Criando o diretÃ³rio "Debug\\".
+        Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+        Criando o diretÃ³rio "Debug\\CompilerIdC.tlog\\".
+      InitializeBuildStatus:
+        Criando "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
+        Tocando "Debug\\CompilerIdC.tlog\\unsuccessfulbuild".
+      ClCompile:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /nologo /W0 /WX- /diagnostics:column /Od /D _MBCS /Gm- /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"Debug\\\\" /Fd"Debug\\vc145.pdb" /external:W0 /Gd /TC /FC /errorReport:queue CMakeCCompilerId.c
+        CMakeCCompilerId.c
+      Link:
+        C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdC.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdC.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdC.lib" /MACHINE:X64 Debug\\CMakeCCompilerId.obj
+        CompilerIdC.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.exe
+      PostBuildEvent:
+        for %%i in (cl.exe) do @echo CMAKE_C_COMPILER=%%~$PATH:i
+        :VCEnd
+        CMAKE_C_COMPILER=C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64\\cl.exe
+      FinalizeBuildStatus:
+        Excluindo o arquivo "Debug\\CompilerIdC.tlog\\unsuccessfulbuild".
+        Tocando "Debug\\CompilerIdC.tlog\\CompilerIdC.lastbuildstate".
+      Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\4.3.2\\CompilerIdC\\CompilerIdC.vcxproj" (destinos padrÃ£o).
+      
+      CompilaÃ§Ã£o com Ãªxito.
+          0 Aviso(s)
+          0 Erro(s)
+      
+      Tempo Decorrido 00:00:00.78
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.exe"
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.vcxproj"
+      
+      The C compiler identification is MSVC, found in:
+        C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/4.3.2/CompilerIdC/CompilerIdC.exe
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:103 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/nodejs/npm/"
+      - "C:/msys64/ucrt64/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
+      - "C:/Users/Clever/.local/bin/"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Clever/AppData/Roaming/npm/"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:104 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lld-link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/nodejs/npm/"
+      - "C:/msys64/ucrt64/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
+      - "C:/Users/Clever/.local/bin/"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Clever/AppData/Roaming/npm/"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lld-link.com"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lld-link.exe"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lld-link"
+      - "C:/Windows/System32/lld-link.com"
+      - "C:/Windows/System32/lld-link.exe"
+      - "C:/Windows/System32/lld-link"
+      - "C:/Windows/lld-link.com"
+      - "C:/Windows/lld-link.exe"
+      - "C:/Windows/lld-link"
+      - "C:/Windows/System32/wbem/lld-link.com"
+      - "C:/Windows/System32/wbem/lld-link.exe"
+      - "C:/Windows/System32/wbem/lld-link"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "C:/Windows/System32/OpenSSH/lld-link.com"
+      - "C:/Windows/System32/OpenSSH/lld-link.exe"
+      - "C:/Windows/System32/OpenSSH/lld-link"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "C:/Program Files/nodejs/lld-link.com"
+      - "C:/Program Files/nodejs/lld-link.exe"
+      - "C:/Program Files/nodejs/lld-link"
+      - "C:/Program Files/nodejs/npm/lld-link.com"
+      - "C:/Program Files/nodejs/npm/lld-link.exe"
+      - "C:/Program Files/nodejs/npm/lld-link"
+      - "C:/msys64/ucrt64/bin/lld-link.com"
+      - "C:/msys64/ucrt64/bin/lld-link.exe"
+      - "C:/msys64/ucrt64/bin/lld-link"
+      - "C:/Program Files/CMake/bin/lld-link.com"
+      - "C:/Program Files/CMake/bin/lld-link.exe"
+      - "C:/Program Files/CMake/bin/lld-link"
+      - "C:/Program Files/dotnet/lld-link.com"
+      - "C:/Program Files/dotnet/lld-link.exe"
+      - "C:/Program Files/dotnet/lld-link"
+      - "C:/Program Files/Git/cmd/lld-link.com"
+      - "C:/Program Files/Git/cmd/lld-link.exe"
+      - "C:/Program Files/Git/cmd/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link"
+      - "C:/Users/Clever/.local/bin/lld-link.com"
+      - "C:/Users/Clever/.local/bin/lld-link.exe"
+      - "C:/Users/Clever/.local/bin/lld-link"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "C:/Users/Clever/AppData/Roaming/npm/lld-link.com"
+      - "C:/Users/Clever/AppData/Roaming/npm/lld-link.exe"
+      - "C:/Users/Clever/AppData/Roaming/npm/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/lld-link"
+      - "C:/Users/Clever/.dotnet/tools/lld-link.com"
+      - "C:/Users/Clever/.dotnet/tools/lld-link.exe"
+      - "C:/Users/Clever/.dotnet/tools/lld-link"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "link"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/nodejs/npm/"
+      - "C:/msys64/ucrt64/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
+      - "C:/Users/Clever/.local/bin/"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Clever/AppData/Roaming/npm/"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt"
+    mode: "program"
+    variable: "CMAKE_MT"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "mt"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/nodejs/npm/"
+      - "C:/msys64/ucrt64/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
+      - "C:/Users/Clever/.local/bin/"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Clever/AppData/Roaming/npm/"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt.com"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt.exe"
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt"
+      - "C:/Windows/System32/mt.com"
+      - "C:/Windows/System32/mt.exe"
+      - "C:/Windows/System32/mt"
+      - "C:/Windows/mt.com"
+      - "C:/Windows/mt.exe"
+      - "C:/Windows/mt"
+      - "C:/Windows/System32/wbem/mt.com"
+      - "C:/Windows/System32/wbem/mt.exe"
+      - "C:/Windows/System32/wbem/mt"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt"
+      - "C:/Windows/System32/OpenSSH/mt.com"
+      - "C:/Windows/System32/OpenSSH/mt.exe"
+      - "C:/Windows/System32/OpenSSH/mt"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt"
+      - "C:/Program Files/nodejs/mt.com"
+      - "C:/Program Files/nodejs/mt.exe"
+      - "C:/Program Files/nodejs/mt"
+      - "C:/Program Files/nodejs/npm/mt.com"
+      - "C:/Program Files/nodejs/npm/mt.exe"
+      - "C:/Program Files/nodejs/npm/mt"
+      - "C:/msys64/ucrt64/bin/mt.com"
+      - "C:/msys64/ucrt64/bin/mt.exe"
+      - "C:/msys64/ucrt64/bin/mt"
+      - "C:/Program Files/CMake/bin/mt.com"
+      - "C:/Program Files/CMake/bin/mt.exe"
+      - "C:/Program Files/CMake/bin/mt"
+      - "C:/Program Files/dotnet/mt.com"
+      - "C:/Program Files/dotnet/mt.exe"
+      - "C:/Program Files/dotnet/mt"
+      - "C:/Program Files/Git/cmd/mt.com"
+      - "C:/Program Files/Git/cmd/mt.exe"
+      - "C:/Program Files/Git/cmd/mt"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/mt.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/mt.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/mt"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/mt.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/mt.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/mt"
+      - "C:/Users/Clever/.local/bin/mt.com"
+      - "C:/Users/Clever/.local/bin/mt.exe"
+      - "C:/Users/Clever/.local/bin/mt"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt.com"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt.exe"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt"
+      - "C:/Users/Clever/AppData/Roaming/npm/mt.com"
+      - "C:/Users/Clever/AppData/Roaming/npm/mt.exe"
+      - "C:/Users/Clever/AppData/Roaming/npm/mt"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt"
+      - "C:/Users/Clever/.dotnet/tools/mt.com"
+      - "C:/Users/Clever/.dotnet/tools/mt.exe"
+      - "C:/Users/Clever/.dotnet/tools/mt"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/mt.com"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/mt.exe"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/mt"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lib"
+    candidate_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/nodejs/npm/"
+      - "C:/msys64/ucrt64/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
+      - "C:/Users/Clever/.local/bin/"
+      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Clever/AppData/Roaming/npm/"
+      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
+    searched_directories:
+      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lib.com"
+    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lib.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\nodejs\\npm"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
+        - "C:\\Users\\Clever\\.local\\bin"
+        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
+        - "C:\\msys64\\ucrt64\\bin"
+        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     mode: "file"
     variable: "src_in"
     description: "Path to a file."
@@ -41,12 +624,14 @@ events:
         - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
         - "C:\\WINDOWS\\System32\\OpenSSH\\"
         - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
         - "C:\\Program Files\\nodejs\\"
         - "C:\\Program Files\\nodejs\\npm"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Program Files\\CMake\\bin"
         - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
         - "C:\\Users\\Clever\\.local\\bin"
         - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
@@ -54,13 +639,14 @@ events:
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
   -
     kind: "message-v1"
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     message: |
       Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
       Compiler:  
@@ -69,8 +655,8 @@ events:
       
       The output was:
       0
-      VersÃ£o do MSBuild 18.6.3+84d3e95b4 para .NET Framework
-      CompilaÃ§Ã£o de 04/06/2026 14:49:37 iniciada.
+      VersÃ£o do MSBuild 18.7.8+1ac568fee para .NET Framework
+      CompilaÃ§Ã£o de 29/06/2026 11:03:02 iniciada.
       
       Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\4.3.2\\CompilerIdCXX\\CompilerIdCXX.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
       PrepareForBuild:
@@ -99,7 +685,7 @@ events:
           0 Aviso(s)
           0 Erro(s)
       
-      Tempo Decorrido 00:00:00.38
+      Tempo Decorrido 00:00:00.35
       
       
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.exe"
@@ -114,74 +700,9 @@ events:
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:103 (__resolve_linker_path)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
-      - "CMakeLists.txt:3 (project)"
-    mode: "program"
-    variable: "_CMAKE_TOOL_WITH_PATH"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: false
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "link"
-    candidate_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-    searched_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.com"
-    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.exe"
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:104 (__resolve_linker_path)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     mode: "program"
     variable: "_CMAKE_TOOL_WITH_PATH"
     description: "Path to a program."
@@ -203,18 +724,21 @@ events:
       - "C:/Windows/System32/WindowsPowerShell/v1.0/"
       - "C:/Windows/System32/OpenSSH/"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
       - "C:/Program Files/nodejs/"
       - "C:/Program Files/nodejs/npm/"
       - "C:/msys64/ucrt64/bin/"
       - "C:/Program Files/CMake/bin/"
       - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
       - "C:/Users/Clever/.local/bin/"
       - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
       - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
       - "C:/Users/Clever/AppData/Roaming/npm/"
       - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
       - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lld-link.com"
       - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lld-link.exe"
@@ -237,9 +761,6 @@ events:
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
-      - "C:/Program Files/Git/cmd/lld-link.com"
-      - "C:/Program Files/Git/cmd/lld-link.exe"
-      - "C:/Program Files/Git/cmd/lld-link"
       - "C:/Program Files/nodejs/lld-link.com"
       - "C:/Program Files/nodejs/lld-link.exe"
       - "C:/Program Files/nodejs/lld-link"
@@ -255,6 +776,15 @@ events:
       - "C:/Program Files/dotnet/lld-link.com"
       - "C:/Program Files/dotnet/lld-link.exe"
       - "C:/Program Files/dotnet/lld-link"
+      - "C:/Program Files/Git/cmd/lld-link.com"
+      - "C:/Program Files/Git/cmd/lld-link.exe"
+      - "C:/Program Files/Git/cmd/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/lld-link"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/lld-link"
       - "C:/Users/Clever/.local/bin/lld-link.com"
       - "C:/Users/Clever/.local/bin/lld-link.exe"
       - "C:/Users/Clever/.local/bin/lld-link"
@@ -273,6 +803,9 @@ events:
       - "C:/Users/Clever/.dotnet/tools/lld-link.com"
       - "C:/Users/Clever/.dotnet/tools/lld-link.exe"
       - "C:/Users/Clever/.dotnet/tools/lld-link"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link.com"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link.exe"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/lld-link"
     found: false
     search_context:
       ENV{PATH}:
@@ -282,12 +815,14 @@ events:
         - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
         - "C:\\WINDOWS\\System32\\OpenSSH\\"
         - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
         - "C:\\Program Files\\nodejs\\"
         - "C:\\Program Files\\nodejs\\npm"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Program Files\\CMake\\bin"
         - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
         - "C:\\Users\\Clever\\.local\\bin"
         - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
@@ -295,260 +830,16 @@ events:
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Users\\Clever\\.dotnet\\tools"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
-      - "CMakeLists.txt:3 (project)"
-    mode: "program"
-    variable: "CMAKE_LINKER"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: false
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "link"
-    candidate_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-    searched_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.com"
-    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.exe"
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
-      - "CMakeLists.txt:3 (project)"
-    mode: "program"
-    variable: "CMAKE_MT"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: false
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "mt"
-    candidate_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-    searched_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt.com"
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt.exe"
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/mt"
-      - "C:/Windows/System32/mt.com"
-      - "C:/Windows/System32/mt.exe"
-      - "C:/Windows/System32/mt"
-      - "C:/Windows/mt.com"
-      - "C:/Windows/mt.exe"
-      - "C:/Windows/mt"
-      - "C:/Windows/System32/wbem/mt.com"
-      - "C:/Windows/System32/wbem/mt.exe"
-      - "C:/Windows/System32/wbem/mt"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.com"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt.exe"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/mt"
-      - "C:/Windows/System32/OpenSSH/mt.com"
-      - "C:/Windows/System32/OpenSSH/mt.exe"
-      - "C:/Windows/System32/OpenSSH/mt"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.com"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt.exe"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/mt"
-      - "C:/Program Files/Git/cmd/mt.com"
-      - "C:/Program Files/Git/cmd/mt.exe"
-      - "C:/Program Files/Git/cmd/mt"
-      - "C:/Program Files/nodejs/mt.com"
-      - "C:/Program Files/nodejs/mt.exe"
-      - "C:/Program Files/nodejs/mt"
-      - "C:/Program Files/nodejs/npm/mt.com"
-      - "C:/Program Files/nodejs/npm/mt.exe"
-      - "C:/Program Files/nodejs/npm/mt"
-      - "C:/msys64/ucrt64/bin/mt.com"
-      - "C:/msys64/ucrt64/bin/mt.exe"
-      - "C:/msys64/ucrt64/bin/mt"
-      - "C:/Program Files/CMake/bin/mt.com"
-      - "C:/Program Files/CMake/bin/mt.exe"
-      - "C:/Program Files/CMake/bin/mt"
-      - "C:/Program Files/dotnet/mt.com"
-      - "C:/Program Files/dotnet/mt.exe"
-      - "C:/Program Files/dotnet/mt"
-      - "C:/Users/Clever/.local/bin/mt.com"
-      - "C:/Users/Clever/.local/bin/mt.exe"
-      - "C:/Users/Clever/.local/bin/mt"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt.com"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt.exe"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/mt"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/mt"
-      - "C:/Users/Clever/AppData/Roaming/npm/mt.com"
-      - "C:/Users/Clever/AppData/Roaming/npm/mt.exe"
-      - "C:/Users/Clever/AppData/Roaming/npm/mt"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/mt"
-      - "C:/Users/Clever/.dotnet/tools/mt.com"
-      - "C:/Users/Clever/.dotnet/tools/mt.exe"
-      - "C:/Users/Clever/.dotnet/tools/mt"
-    found: false
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
-      - "CMakeLists.txt:3 (project)"
-    mode: "program"
-    variable: "CMAKE_AR"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: false
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "lib"
-    candidate_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/"
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-    searched_directories:
-      - "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lib.com"
-    found: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/lib.exe"
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
   -
     kind: "find-v1"
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineRCCompiler.cmake:40 (find_program)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC.cmake:592 (enable_language)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC.cmake:565 (__windows_compiler_msvc_enable_rc)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC-CXX.cmake:6 (__windows_compiler_msvc)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCXXInformation.cmake:48 (include)"
-      - "CMakeLists.txt:3 (project)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Platform/Windows-MSVC-C.cmake:5 (__windows_compiler_msvc)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeCInformation.cmake:48 (include)"
+      - "CMakeLists.txt"
     mode: "program"
     variable: "CMAKE_RC_COMPILER"
     description: "RC compiler"
@@ -569,18 +860,21 @@ events:
       - "C:/Windows/System32/WindowsPowerShell/v1.0/"
       - "C:/Windows/System32/OpenSSH/"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
       - "C:/Program Files/nodejs/"
       - "C:/Program Files/nodejs/npm/"
       - "C:/msys64/ucrt64/bin/"
       - "C:/Program Files/CMake/bin/"
       - "C:/Program Files/dotnet/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/"
       - "C:/Users/Clever/.local/bin/"
       - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
       - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
       - "C:/Users/Clever/AppData/Roaming/npm/"
       - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
       - "C:/Users/Clever/.dotnet/tools/"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/"
       - "C:/Program Files/bin/"
       - "C:/Program Files/sbin/"
       - "C:/Program Files/"
@@ -590,9 +884,9 @@ events:
       - "C:/Program Files/CMake/bin/"
       - "C:/Program Files/CMake/sbin/"
       - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/bin/"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/"
-      - "C:/Program Files (x86)/JoltPhysics/"
+      - "C:/Program Files (x86)/Project/bin/"
+      - "C:/Program Files (x86)/Project/sbin/"
+      - "C:/Program Files (x86)/Project/"
     searched_directories:
       - "C:/Windows/System32/rc.com"
       - "C:/Windows/System32/rc.exe"
@@ -612,9 +906,6 @@ events:
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/rc.com"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/rc.exe"
       - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/rc"
-      - "C:/Program Files/Git/cmd/rc.com"
-      - "C:/Program Files/Git/cmd/rc.exe"
-      - "C:/Program Files/Git/cmd/rc"
       - "C:/Program Files/nodejs/rc.com"
       - "C:/Program Files/nodejs/rc.exe"
       - "C:/Program Files/nodejs/rc"
@@ -630,6 +921,15 @@ events:
       - "C:/Program Files/dotnet/rc.com"
       - "C:/Program Files/dotnet/rc.exe"
       - "C:/Program Files/dotnet/rc"
+      - "C:/Program Files/Git/cmd/rc.com"
+      - "C:/Program Files/Git/cmd/rc.exe"
+      - "C:/Program Files/Git/cmd/rc"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/rc.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/rc.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/Scripts/rc"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/rc.com"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/rc.exe"
+      - "C:/Users/Clever/AppData/Local/Programs/Python/Python310/rc"
       - "C:/Users/Clever/.local/bin/rc.com"
       - "C:/Users/Clever/.local/bin/rc.exe"
       - "C:/Users/Clever/.local/bin/rc"
@@ -648,6 +948,9 @@ events:
       - "C:/Users/Clever/.dotnet/tools/rc.com"
       - "C:/Users/Clever/.dotnet/tools/rc.exe"
       - "C:/Users/Clever/.dotnet/tools/rc"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/rc.com"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/rc.exe"
+      - "C:/Users/Clever/AppData/Local/SoX/sox-14.4.2/rc"
       - "C:/Program Files/bin/rc.com"
       - "C:/Program Files/bin/rc.exe"
       - "C:/Program Files/bin/rc"
@@ -675,15 +978,15 @@ events:
       - "C:/Program Files/CMake/rc.com"
       - "C:/Program Files/CMake/rc.exe"
       - "C:/Program Files/CMake/rc"
-      - "C:/Program Files (x86)/JoltPhysics/bin/rc.com"
-      - "C:/Program Files (x86)/JoltPhysics/bin/rc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/bin/rc"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/rc.com"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/rc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/rc"
-      - "C:/Program Files (x86)/JoltPhysics/rc.com"
-      - "C:/Program Files (x86)/JoltPhysics/rc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/rc"
+      - "C:/Program Files (x86)/Project/bin/rc.com"
+      - "C:/Program Files (x86)/Project/bin/rc.exe"
+      - "C:/Program Files (x86)/Project/bin/rc"
+      - "C:/Program Files (x86)/Project/sbin/rc.com"
+      - "C:/Program Files (x86)/Project/sbin/rc.exe"
+      - "C:/Program Files (x86)/Project/sbin/rc"
+      - "C:/Program Files (x86)/Project/rc.com"
+      - "C:/Program Files (x86)/Project/rc.exe"
+      - "C:/Program Files (x86)/Project/rc"
     found: false
     search_context:
       ENV{PATH}:
@@ -693,12 +996,14 @@ events:
         - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
         - "C:\\WINDOWS\\System32\\OpenSSH\\"
         - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
         - "C:\\Program Files\\nodejs\\"
         - "C:\\Program Files\\nodejs\\npm"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Program Files\\CMake\\bin"
         - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\"
+        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Python\\Python310\\"
         - "C:\\Users\\Clever\\.local\\bin"
         - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
@@ -706,26 +1011,108 @@ events:
         - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
         - "C:\\msys64\\ucrt64\\bin"
         - "C:\\Users\\Clever\\.dotnet\\tools"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/JoltPhysics"
+        - "C:\\Users\\Clever\\AppData\\Local\\SoX\\sox-14.4.2"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/Project"
       CMAKE_SYSTEM_PREFIX_PATH:
         - "C:/Program Files"
         - "C:/Program Files (x86)"
         - "C:/Program Files/CMake"
-        - "C:/Program Files (x86)/JoltPhysics"
+        - "C:/Program Files (x86)/Project"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-yelrz7"
+      binary: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-yelrz7"
+    cmakeVariables:
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS /W3"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-yelrz7'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_987b4.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        VersÃ£o do MSBuild 18.7.8+1ac568fee para .NET Framework
+        CompilaÃ§Ã£o de 29/06/2026 11:03:03 iniciada.
+        
+        Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-yelrz7\\cmTC_987b4.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          Criando o diretÃ³rio "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-yelrz7\\Debug\\".
+          Criando o diretÃ³rio "cmTC_987b4.dir\\Debug\\cmTC_987b4.tlog\\".
+        InitializeBuildStatus:
+          Criando "cmTC_987b4.dir\\Debug\\cmTC_987b4.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
+          Tocando "cmTC_987b4.dir\\Debug\\cmTC_987b4.tlog\\unsuccessfulbuild".
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /Zi /W3 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_987b4.dir\\Debug\\\\" /Fd"cmTC_987b4.dir\\Debug\\vc145.pdb" /external:W3 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCCompilerABI.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36248 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W3 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_987b4.dir\\Debug\\\\" /Fd"cmTC_987b4.dir\\Debug\\vc145.pdb" /external:W3 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCCompilerABI.c"
+          CMakeCCompilerABI.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-yelrz7\\Debug\\cmTC_987b4.exe" /INCREMENTAL /ILK:"cmTC_987b4.dir\\Debug\\cmTC_987b4.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-yelrz7/Debug/cmTC_987b4.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-yelrz7/Debug/cmTC_987b4.lib" /MACHINE:X64  /machine:x64 cmTC_987b4.dir\\Debug\\CMakeCCompilerABI.obj
+          cmTC_987b4.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-yelrz7\\Debug\\cmTC_987b4.exe
+        FinalizeBuildStatus:
+          Excluindo o arquivo "cmTC_987b4.dir\\Debug\\cmTC_987b4.tlog\\unsuccessfulbuild".
+          Tocando "cmTC_987b4.dir\\Debug\\cmTC_987b4.tlog\\cmTC_987b4.lastbuildstate".
+        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-yelrz7\\cmTC_987b4.vcxproj" (destinos padrÃ£o).
+        
+        CompilaÃ§Ã£o com Ãªxito.
+            0 Aviso(s)
+            0 Erro(s)
+        
+        Tempo Decorrido 00:00:00.34
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?))("|,| |$)]
+        linker tool for 'C': C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/HostX64/x64/link.exe
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: []
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt"
+    message: |
+      Running the C compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/HostX64/x64/link.exe" "-v"
+      Microsoft (R) Incremental Linker Version 14.51.36248.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
   -
     kind: "try_compile-v1"
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-31236x"
-      binary: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-31236x"
+      source: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-eu25fv"
+      binary: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-eu25fv"
     cmakeVariables:
-      CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /EHsc"
-      CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /W3 /GR /EHsc"
       CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
       CMAKE_CXX_STDLIB_MODULES_JSON: ""
       CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
@@ -733,39 +1120,39 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-31236x'
+        Change Dir: 'C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-eu25fv'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_42d15.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
-        VersÃ£o do MSBuild 18.6.3+84d3e95b4 para .NET Framework
-        CompilaÃ§Ã£o de 04/06/2026 14:49:38 iniciada.
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_26093.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        VersÃ£o do MSBuild 18.7.8+1ac568fee para .NET Framework
+        CompilaÃ§Ã£o de 29/06/2026 11:03:04 iniciada.
         
-        Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-31236x\\cmTC_42d15.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
+        Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-eu25fv\\cmTC_26093.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Criando o diretÃ³rio "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-31236x\\Debug\\".
-          Criando o diretÃ³rio "cmTC_42d15.dir\\Debug\\cmTC_42d15.tlog\\".
+          Criando o diretÃ³rio "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-eu25fv\\Debug\\".
+          Criando o diretÃ³rio "cmTC_26093.dir\\Debug\\cmTC_26093.tlog\\".
         InitializeBuildStatus:
-          Criando "cmTC_42d15.dir\\Debug\\cmTC_42d15.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
-          Tocando "cmTC_42d15.dir\\Debug\\cmTC_42d15.tlog\\unsuccessfulbuild".
+          Criando "cmTC_26093.dir\\Debug\\cmTC_26093.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
+          Tocando "cmTC_26093.dir\\Debug\\cmTC_26093.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_42d15.dir\\Debug\\\\" /Fd"cmTC_42d15.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36244 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /Zi /W3 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_26093.dir\\Debug\\\\" /Fd"cmTC_26093.dir\\Debug\\vc145.pdb" /external:W3 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36248 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_42d15.dir\\Debug\\\\" /Fd"cmTC_42d15.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
+          cl /c /Zi /W3 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_26093.dir\\Debug\\\\" /Fd"cmTC_26093.dir\\Debug\\vc145.pdb" /external:W3 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.3\\Modules\\CMakeCXXCompilerABI.cpp"
           CMakeCXXCompilerABI.cpp
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-31236x\\Debug\\cmTC_42d15.exe" /INCREMENTAL /ILK:"cmTC_42d15.dir\\Debug\\cmTC_42d15.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-31236x/Debug/cmTC_42d15.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-31236x/Debug/cmTC_42d15.lib" /MACHINE:X64  /machine:x64 cmTC_42d15.dir\\Debug\\CMakeCXXCompilerABI.obj
-          cmTC_42d15.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-31236x\\Debug\\cmTC_42d15.exe
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-eu25fv\\Debug\\cmTC_26093.exe" /INCREMENTAL /ILK:"cmTC_26093.dir\\Debug\\cmTC_26093.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-eu25fv/Debug/cmTC_26093.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/CMakeScratch/TryCompile-eu25fv/Debug/cmTC_26093.lib" /MACHINE:X64  /machine:x64 cmTC_26093.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_26093.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-eu25fv\\Debug\\cmTC_26093.exe
         FinalizeBuildStatus:
-          Excluindo o arquivo "cmTC_42d15.dir\\Debug\\cmTC_42d15.tlog\\unsuccessfulbuild".
-          Tocando "cmTC_42d15.dir\\Debug\\cmTC_42d15.tlog\\cmTC_42d15.lastbuildstate".
-        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-31236x\\cmTC_42d15.vcxproj" (destinos padrÃ£o).
+          Excluindo o arquivo "cmTC_26093.dir\\Debug\\cmTC_26093.tlog\\unsuccessfulbuild".
+          Tocando "cmTC_26093.dir\\Debug\\cmTC_26093.tlog\\cmTC_26093.lastbuildstate".
+        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\CMakeScratch\\TryCompile-eu25fv\\cmTC_26093.vcxproj" (destinos padrÃ£o).
         
         CompilaÃ§Ã£o com Ãªxito.
             0 Aviso(s)
             0 Erro(s)
         
-        Tempo Decorrido 00:00:00.32
+        Tempo Decorrido 00:00:00.33
         
       exitCode: 0
   -
@@ -773,7 +1160,7 @@ events:
     backtrace:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     message: |
       Parsed CXX implicit link information:
         link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
@@ -791,661 +1178,9 @@ events:
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
       - "C:/Program Files/CMake/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
-      - "CMakeLists.txt:3 (project)"
+      - "CMakeLists.txt"
     message: |
       Running the CXX compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/HostX64/x64/link.exe" "-v"
-      Microsoft (R) Incremental Linker Version 14.51.36244.0
+      Microsoft (R) Incremental Linker Version 14.51.36248.0
       Copyright (C) Microsoft Corporation.  All rights reserved.
-  -
-    kind: "try_compile-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CheckIPOSupported.cmake:197 (try_compile)"
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/CheckIPOSupported.cmake:320 (_ipo_run_language_check)"
-      - "CMakeLists.txt:293 (check_ipo_supported)"
-      - "CMakeLists.txt:304 (SET_INTERPROCEDURAL_OPTIMIZATION)"
-    directories:
-      source: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/src"
-      binary: "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/bin"
-    buildResult:
-      variable: "_IPO_LANGUAGE_CHECK_RESULT"
-      cached: true
-      stdout: |
-        Change Dir: 'C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/bin'
-        
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" ALL_BUILD.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
-        VersÃ£o do MSBuild 18.6.3+84d3e95b4 para .NET Framework
-        CompilaÃ§Ã£o de 04/06/2026 14:49:39 iniciada.
-        
-        Projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ALL_BUILD.vcxproj" no nÃ³ 1 (destinos padrÃ£o).
-        O projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ALL_BUILD.vcxproj" (1) estÃ¡ compilando "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ZERO_CHECK.vcxproj" (2) no nÃ³ 1 (destinos padrÃ£o).
-        PrepareForBuild:
-          Criando o diretÃ³rio "x64\\Debug\\ZERO_CHECK\\".
-          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Criando o diretÃ³rio "x64\\Debug\\ZERO_CHECK\\ZERO_CHECK.tlog\\".
-        InitializeBuildStatus:
-          Criando "x64\\Debug\\ZERO_CHECK\\ZERO_CHECK.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
-          Tocando "x64\\Debug\\ZERO_CHECK\\ZERO_CHECK.tlog\\unsuccessfulbuild".
-        CustomBuild:
-          1>Checking Build System
-        FinalizeBuildStatus:
-          Excluindo o arquivo "x64\\Debug\\ZERO_CHECK\\ZERO_CHECK.tlog\\unsuccessfulbuild".
-          Tocando "x64\\Debug\\ZERO_CHECK\\ZERO_CHECK.tlog\\ZERO_CHECK.lastbuildstate".
-        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ZERO_CHECK.vcxproj" (destinos padrÃ£o).
-        O projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ALL_BUILD.vcxproj" (1) estÃ¡ compilando "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\boo.vcxproj" (3) no nÃ³ 1 (destinos padrÃ£o).
-        O projeto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\boo.vcxproj" (3) estÃ¡ compilando "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\foo.vcxproj" (4) no nÃ³ 1 (destinos padrÃ£o).
-        PrepareForBuild:
-          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Criando o diretÃ³rio "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\".
-          Criando o diretÃ³rio "foo.dir\\Debug\\foo.tlog\\".
-        InitializeBuildStatus:
-          Criando "foo.dir\\Debug\\foo.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
-          Tocando "foo.dir\\Debug\\foo.tlog\\unsuccessfulbuild".
-        CustomBuild:
-          Building Custom Rule C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/src/CMakeLists.txt
-        ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /GL /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"foo.dir\\Debug\\\\" /Fd"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\foo.pdb" /external:W1 /TP /errorReport:queue "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\src\\foo.cpp"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36244 for x64
-          Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /GL /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"foo.dir\\Debug\\\\" /Fd"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\foo.pdb" /external:W1 /TP /errorReport:queue "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\src\\foo.cpp"
-          foo.cpp
-        Lib:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\Lib.exe /OUT:"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\foo.lib" /NOLOGO /MACHINE:X64 /LTCG foo.dir\\Debug\\foo.obj
-          foo.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\foo.lib
-        FinalizeBuildStatus:
-          Excluindo o arquivo "foo.dir\\Debug\\foo.tlog\\unsuccessfulbuild".
-          Tocando "foo.dir\\Debug\\foo.tlog\\foo.lastbuildstate".
-        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\foo.vcxproj" (destinos padrÃ£o).
-        PrepareForBuild:
-          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Criando o diretÃ³rio "boo.dir\\Debug\\boo.tlog\\".
-        InitializeBuildStatus:
-          Criando "boo.dir\\Debug\\boo.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
-          Tocando "boo.dir\\Debug\\boo.tlog\\unsuccessfulbuild".
-        CustomBuild:
-          Building Custom Rule C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/src/CMakeLists.txt
-        ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /GL /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"boo.dir\\Debug\\\\" /Fd"boo.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\src\\main.cpp"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36244 for x64
-          Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /GL /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"boo.dir\\Debug\\\\" /Fd"boo.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\src\\main.cpp"
-          main.cpp
-        Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\boo.exe" /NOLOGO Debug\\foo.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/bin/Debug/boo.pdb" /SUBSYSTEM:CONSOLE /OPT:REF /OPT:ICF /LTCG:incremental /LTCGOUT:"boo.dir\\Debug\\boo.iobj" /TLBID:1 /IMPLIB:"C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/bin/Debug/boo.lib" /MACHINE:X64 boo.dir\\Debug\\main.obj
-          Generating code
-          Not all modules are compiled with -Gy (function comdat), build without incremental LTCG.
-          Finished generating code
-          boo.vcxproj -> C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\Debug\\boo.exe
-        FinalizeBuildStatus:
-          Excluindo o arquivo "boo.dir\\Debug\\boo.tlog\\unsuccessfulbuild".
-          Tocando "boo.dir\\Debug\\boo.tlog\\boo.lastbuildstate".
-        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\boo.vcxproj" (destinos padrÃ£o).
-        PrepareForBuild:
-          Criando o diretÃ³rio "x64\\Debug\\ALL_BUILD\\".
-          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Criando o diretÃ³rio "x64\\Debug\\ALL_BUILD\\ALL_BUILD.tlog\\".
-        InitializeBuildStatus:
-          Criando "x64\\Debug\\ALL_BUILD\\ALL_BUILD.tlog\\unsuccessfulbuild" porque "AlwaysCreate" foi especificado.
-          Tocando "x64\\Debug\\ALL_BUILD\\ALL_BUILD.tlog\\unsuccessfulbuild".
-        CustomBuild:
-          Building Custom Rule C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/Build/CMakeFiles/_CMakeLTOTest-CXX/src/CMakeLists.txt
-        FinalizeBuildStatus:
-          Excluindo o arquivo "x64\\Debug\\ALL_BUILD\\ALL_BUILD.tlog\\unsuccessfulbuild".
-          Tocando "x64\\Debug\\ALL_BUILD\\ALL_BUILD.tlog\\ALL_BUILD.lastbuildstate".
-        Projeto de compilaÃ§Ã£o pronto "C:\\Users\\Clever\\Documents\\AXE\\src\\vendor\\JoltPhysics\\Build\\CMakeFiles\\_CMakeLTOTest-CXX\\bin\\ALL_BUILD.vcxproj" (destinos padrÃ£o).
-        
-        CompilaÃ§Ã£o com Ãªxito.
-            0 Aviso(s)
-            0 Erro(s)
-        
-        Tempo Decorrido 00:00:00.85
-        
-      exitCode: 0
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/FindVulkan.cmake:409 (find_path)"
-      - "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/TestFramework/TestFramework.cmake:2 (find_package)"
-      - "CMakeLists.txt:432 (include)"
-    mode: "path"
-    variable: "Vulkan_INCLUDE_DIR"
-    description: "Path to a file."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: true
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "vulkan/vulkan.h"
-    candidate_directories:
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-      - "C:/Program Files/include/"
-      - "C:/Program Files/"
-      - "C:/Program Files (x86)/include/"
-      - "C:/Program Files (x86)/"
-      - "C:/Program Files/CMake/include/"
-      - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/include/"
-      - "C:/Program Files (x86)/JoltPhysics/"
-    searched_directories:
-      - "C:/Windows/System32/vulkan/vulkan.h"
-      - "C:/Windows/vulkan/vulkan.h"
-      - "C:/Windows/System32/wbem/vulkan/vulkan.h"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/vulkan/vulkan.h"
-      - "C:/Windows/System32/OpenSSH/vulkan/vulkan.h"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/vulkan/vulkan.h"
-      - "C:/Program Files/Git/cmd/vulkan/vulkan.h"
-      - "C:/Program Files/nodejs/vulkan/vulkan.h"
-      - "C:/Program Files/nodejs/npm/vulkan/vulkan.h"
-      - "C:/msys64/ucrt64/bin/vulkan/vulkan.h"
-      - "C:/Program Files/CMake/bin/vulkan/vulkan.h"
-      - "C:/Program Files/dotnet/vulkan/vulkan.h"
-      - "C:/Users/Clever/.local/bin/vulkan/vulkan.h"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/vulkan/vulkan.h"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/vulkan/vulkan.h"
-      - "C:/Users/Clever/AppData/Roaming/npm/vulkan/vulkan.h"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/vulkan/vulkan.h"
-      - "C:/Users/Clever/.dotnet/tools/vulkan/vulkan.h"
-      - "C:/Program Files/include/vulkan/vulkan.h"
-      - "C:/Program Files/vulkan/vulkan.h"
-      - "C:/Program Files (x86)/include/vulkan/vulkan.h"
-      - "C:/Program Files (x86)/vulkan/vulkan.h"
-      - "C:/Program Files/CMake/include/vulkan/vulkan.h"
-      - "C:/Program Files/CMake/vulkan/vulkan.h"
-      - "C:/Program Files (x86)/JoltPhysics/include/vulkan/vulkan.h"
-      - "C:/Program Files (x86)/JoltPhysics/vulkan/vulkan.h"
-    found: false
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/JoltPhysics"
-      CMAKE_SYSTEM_PREFIX_PATH:
-        - "C:/Program Files"
-        - "C:/Program Files (x86)"
-        - "C:/Program Files/CMake"
-        - "C:/Program Files (x86)/JoltPhysics"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/FindVulkan.cmake:416 (find_library)"
-      - "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/TestFramework/TestFramework.cmake:2 (find_package)"
-      - "CMakeLists.txt:432 (include)"
-    mode: "library"
-    variable: "Vulkan_LIBRARY"
-    description: "Path to a library."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: true
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "vulkan-1"
-    candidate_directories:
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-      - "C:/Program Files/lib/"
-      - "C:/Program Files/"
-      - "C:/Program Files (x86)/lib/"
-      - "C:/Program Files (x86)/"
-      - "C:/Program Files/CMake/lib/"
-      - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/lib/"
-      - "C:/Program Files (x86)/JoltPhysics/"
-      - "C:/Program Files (x86)/JoltPhysics/bin/"
-      - "/bin/"
-    searched_directories:
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-      - "C:/Program Files/lib/"
-      - "C:/Program Files/"
-      - "C:/Program Files (x86)/lib/"
-      - "C:/Program Files (x86)/"
-      - "C:/Program Files/CMake/lib/"
-      - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/lib/"
-      - "C:/Program Files (x86)/JoltPhysics/"
-      - "C:/Program Files (x86)/JoltPhysics/bin/"
-      - "/bin/"
-    found: false
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/JoltPhysics"
-      CMAKE_SYSTEM_PREFIX_PATH:
-        - "C:/Program Files"
-        - "C:/Program Files (x86)"
-        - "C:/Program Files/CMake"
-        - "C:/Program Files (x86)/JoltPhysics"
-      CMAKE_SYSTEM_LIBRARY_PATH:
-        - "C:/Program Files (x86)/JoltPhysics/bin"
-        - "C:/Program Files/CMake/bin"
-        - "/bin"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/FindVulkan.cmake:424 (find_program)"
-      - "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/TestFramework/TestFramework.cmake:2 (find_package)"
-      - "CMakeLists.txt:432 (include)"
-    mode: "program"
-    variable: "Vulkan_GLSLC_EXECUTABLE"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: true
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "glslc"
-    candidate_directories:
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-      - "C:/Program Files/bin/"
-      - "C:/Program Files/sbin/"
-      - "C:/Program Files/"
-      - "C:/Program Files (x86)/bin/"
-      - "C:/Program Files (x86)/sbin/"
-      - "C:/Program Files (x86)/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/CMake/sbin/"
-      - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/bin/"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/"
-      - "C:/Program Files (x86)/JoltPhysics/"
-    searched_directories:
-      - "C:/Windows/System32/glslc.com"
-      - "C:/Windows/System32/glslc.exe"
-      - "C:/Windows/System32/glslc"
-      - "C:/Windows/glslc.com"
-      - "C:/Windows/glslc.exe"
-      - "C:/Windows/glslc"
-      - "C:/Windows/System32/wbem/glslc.com"
-      - "C:/Windows/System32/wbem/glslc.exe"
-      - "C:/Windows/System32/wbem/glslc"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslc.com"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslc.exe"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslc"
-      - "C:/Windows/System32/OpenSSH/glslc.com"
-      - "C:/Windows/System32/OpenSSH/glslc.exe"
-      - "C:/Windows/System32/OpenSSH/glslc"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslc.com"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslc.exe"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslc"
-      - "C:/Program Files/Git/cmd/glslc.com"
-      - "C:/Program Files/Git/cmd/glslc.exe"
-      - "C:/Program Files/Git/cmd/glslc"
-      - "C:/Program Files/nodejs/glslc.com"
-      - "C:/Program Files/nodejs/glslc.exe"
-      - "C:/Program Files/nodejs/glslc"
-      - "C:/Program Files/nodejs/npm/glslc.com"
-      - "C:/Program Files/nodejs/npm/glslc.exe"
-      - "C:/Program Files/nodejs/npm/glslc"
-      - "C:/msys64/ucrt64/bin/glslc.com"
-      - "C:/msys64/ucrt64/bin/glslc.exe"
-      - "C:/msys64/ucrt64/bin/glslc"
-      - "C:/Program Files/CMake/bin/glslc.com"
-      - "C:/Program Files/CMake/bin/glslc.exe"
-      - "C:/Program Files/CMake/bin/glslc"
-      - "C:/Program Files/dotnet/glslc.com"
-      - "C:/Program Files/dotnet/glslc.exe"
-      - "C:/Program Files/dotnet/glslc"
-      - "C:/Users/Clever/.local/bin/glslc.com"
-      - "C:/Users/Clever/.local/bin/glslc.exe"
-      - "C:/Users/Clever/.local/bin/glslc"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslc.com"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslc.exe"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslc"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslc.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslc.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslc"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslc.com"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslc.exe"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslc"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslc.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslc.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslc"
-      - "C:/Users/Clever/.dotnet/tools/glslc.com"
-      - "C:/Users/Clever/.dotnet/tools/glslc.exe"
-      - "C:/Users/Clever/.dotnet/tools/glslc"
-      - "C:/Program Files/bin/glslc.com"
-      - "C:/Program Files/bin/glslc.exe"
-      - "C:/Program Files/bin/glslc"
-      - "C:/Program Files/sbin/glslc.com"
-      - "C:/Program Files/sbin/glslc.exe"
-      - "C:/Program Files/sbin/glslc"
-      - "C:/Program Files/glslc.com"
-      - "C:/Program Files/glslc.exe"
-      - "C:/Program Files/glslc"
-      - "C:/Program Files (x86)/bin/glslc.com"
-      - "C:/Program Files (x86)/bin/glslc.exe"
-      - "C:/Program Files (x86)/bin/glslc"
-      - "C:/Program Files (x86)/sbin/glslc.com"
-      - "C:/Program Files (x86)/sbin/glslc.exe"
-      - "C:/Program Files (x86)/sbin/glslc"
-      - "C:/Program Files (x86)/glslc.com"
-      - "C:/Program Files (x86)/glslc.exe"
-      - "C:/Program Files (x86)/glslc"
-      - "C:/Program Files/CMake/bin/glslc.com"
-      - "C:/Program Files/CMake/bin/glslc.exe"
-      - "C:/Program Files/CMake/bin/glslc"
-      - "C:/Program Files/CMake/sbin/glslc.com"
-      - "C:/Program Files/CMake/sbin/glslc.exe"
-      - "C:/Program Files/CMake/sbin/glslc"
-      - "C:/Program Files/CMake/glslc.com"
-      - "C:/Program Files/CMake/glslc.exe"
-      - "C:/Program Files/CMake/glslc"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslc.com"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslc"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslc.com"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslc"
-      - "C:/Program Files (x86)/JoltPhysics/glslc.com"
-      - "C:/Program Files (x86)/JoltPhysics/glslc.exe"
-      - "C:/Program Files (x86)/JoltPhysics/glslc"
-    found: false
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/JoltPhysics"
-      CMAKE_SYSTEM_PREFIX_PATH:
-        - "C:/Program Files"
-        - "C:/Program Files (x86)"
-        - "C:/Program Files/CMake"
-        - "C:/Program Files (x86)/JoltPhysics"
-  -
-    kind: "find-v1"
-    backtrace:
-      - "C:/Program Files/CMake/share/cmake-4.3/Modules/FindVulkan.cmake:432 (find_program)"
-      - "C:/Users/Clever/Documents/AXE/src/vendor/JoltPhysics/TestFramework/TestFramework.cmake:2 (find_package)"
-      - "CMakeLists.txt:432 (include)"
-    mode: "program"
-    variable: "Vulkan_GLSLANG_VALIDATOR_EXECUTABLE"
-    description: "Path to a program."
-    settings:
-      SearchFramework: "NEVER"
-      SearchAppBundle: "NEVER"
-      CMAKE_FIND_USE_CMAKE_PATH: true
-      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
-      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
-      CMAKE_FIND_USE_INSTALL_PREFIX: true
-    names:
-      - "glslangValidator"
-    candidate_directories:
-      - "C:/Windows/System32/"
-      - "C:/Windows/"
-      - "C:/Windows/System32/wbem/"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
-      - "C:/Windows/System32/OpenSSH/"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
-      - "C:/Program Files/Git/cmd/"
-      - "C:/Program Files/nodejs/"
-      - "C:/Program Files/nodejs/npm/"
-      - "C:/msys64/ucrt64/bin/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/dotnet/"
-      - "C:/Users/Clever/.local/bin/"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/"
-      - "C:/Users/Clever/AppData/Roaming/npm/"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/"
-      - "C:/Users/Clever/.dotnet/tools/"
-      - "C:/Program Files/bin/"
-      - "C:/Program Files/sbin/"
-      - "C:/Program Files/"
-      - "C:/Program Files (x86)/bin/"
-      - "C:/Program Files (x86)/sbin/"
-      - "C:/Program Files (x86)/"
-      - "C:/Program Files/CMake/bin/"
-      - "C:/Program Files/CMake/sbin/"
-      - "C:/Program Files/CMake/"
-      - "C:/Program Files (x86)/JoltPhysics/bin/"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/"
-      - "C:/Program Files (x86)/JoltPhysics/"
-    searched_directories:
-      - "C:/Windows/System32/glslangValidator.com"
-      - "C:/Windows/System32/glslangValidator.exe"
-      - "C:/Windows/System32/glslangValidator"
-      - "C:/Windows/glslangValidator.com"
-      - "C:/Windows/glslangValidator.exe"
-      - "C:/Windows/glslangValidator"
-      - "C:/Windows/System32/wbem/glslangValidator.com"
-      - "C:/Windows/System32/wbem/glslangValidator.exe"
-      - "C:/Windows/System32/wbem/glslangValidator"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslangValidator.com"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslangValidator.exe"
-      - "C:/Windows/System32/WindowsPowerShell/v1.0/glslangValidator"
-      - "C:/Windows/System32/OpenSSH/glslangValidator.com"
-      - "C:/Windows/System32/OpenSSH/glslangValidator.exe"
-      - "C:/Windows/System32/OpenSSH/glslangValidator"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslangValidator.com"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslangValidator.exe"
-      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/glslangValidator"
-      - "C:/Program Files/Git/cmd/glslangValidator.com"
-      - "C:/Program Files/Git/cmd/glslangValidator.exe"
-      - "C:/Program Files/Git/cmd/glslangValidator"
-      - "C:/Program Files/nodejs/glslangValidator.com"
-      - "C:/Program Files/nodejs/glslangValidator.exe"
-      - "C:/Program Files/nodejs/glslangValidator"
-      - "C:/Program Files/nodejs/npm/glslangValidator.com"
-      - "C:/Program Files/nodejs/npm/glslangValidator.exe"
-      - "C:/Program Files/nodejs/npm/glslangValidator"
-      - "C:/msys64/ucrt64/bin/glslangValidator.com"
-      - "C:/msys64/ucrt64/bin/glslangValidator.exe"
-      - "C:/msys64/ucrt64/bin/glslangValidator"
-      - "C:/Program Files/CMake/bin/glslangValidator.com"
-      - "C:/Program Files/CMake/bin/glslangValidator.exe"
-      - "C:/Program Files/CMake/bin/glslangValidator"
-      - "C:/Program Files/dotnet/glslangValidator.com"
-      - "C:/Program Files/dotnet/glslangValidator.exe"
-      - "C:/Program Files/dotnet/glslangValidator"
-      - "C:/Users/Clever/.local/bin/glslangValidator.com"
-      - "C:/Users/Clever/.local/bin/glslangValidator.exe"
-      - "C:/Users/Clever/.local/bin/glslangValidator"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslangValidator.com"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslangValidator.exe"
-      - "C:/Users/Clever/AppData/Local/Microsoft/WindowsApps/glslangValidator"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslangValidator.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslangValidator.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Microsoft VS Code/bin/glslangValidator"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslangValidator.com"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslangValidator.exe"
-      - "C:/Users/Clever/AppData/Roaming/npm/glslangValidator"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslangValidator.com"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslangValidator.exe"
-      - "C:/Users/Clever/AppData/Local/Programs/Ollama/glslangValidator"
-      - "C:/Users/Clever/.dotnet/tools/glslangValidator.com"
-      - "C:/Users/Clever/.dotnet/tools/glslangValidator.exe"
-      - "C:/Users/Clever/.dotnet/tools/glslangValidator"
-      - "C:/Program Files/bin/glslangValidator.com"
-      - "C:/Program Files/bin/glslangValidator.exe"
-      - "C:/Program Files/bin/glslangValidator"
-      - "C:/Program Files/sbin/glslangValidator.com"
-      - "C:/Program Files/sbin/glslangValidator.exe"
-      - "C:/Program Files/sbin/glslangValidator"
-      - "C:/Program Files/glslangValidator.com"
-      - "C:/Program Files/glslangValidator.exe"
-      - "C:/Program Files/glslangValidator"
-      - "C:/Program Files (x86)/bin/glslangValidator.com"
-      - "C:/Program Files (x86)/bin/glslangValidator.exe"
-      - "C:/Program Files (x86)/bin/glslangValidator"
-      - "C:/Program Files (x86)/sbin/glslangValidator.com"
-      - "C:/Program Files (x86)/sbin/glslangValidator.exe"
-      - "C:/Program Files (x86)/sbin/glslangValidator"
-      - "C:/Program Files (x86)/glslangValidator.com"
-      - "C:/Program Files (x86)/glslangValidator.exe"
-      - "C:/Program Files (x86)/glslangValidator"
-      - "C:/Program Files/CMake/bin/glslangValidator.com"
-      - "C:/Program Files/CMake/bin/glslangValidator.exe"
-      - "C:/Program Files/CMake/bin/glslangValidator"
-      - "C:/Program Files/CMake/sbin/glslangValidator.com"
-      - "C:/Program Files/CMake/sbin/glslangValidator.exe"
-      - "C:/Program Files/CMake/sbin/glslangValidator"
-      - "C:/Program Files/CMake/glslangValidator.com"
-      - "C:/Program Files/CMake/glslangValidator.exe"
-      - "C:/Program Files/CMake/glslangValidator"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslangValidator.com"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslangValidator.exe"
-      - "C:/Program Files (x86)/JoltPhysics/bin/glslangValidator"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslangValidator.com"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslangValidator.exe"
-      - "C:/Program Files (x86)/JoltPhysics/sbin/glslangValidator"
-      - "C:/Program Files (x86)/JoltPhysics/glslangValidator.com"
-      - "C:/Program Files (x86)/JoltPhysics/glslangValidator.exe"
-      - "C:/Program Files (x86)/JoltPhysics/glslangValidator"
-    found: false
-    search_context:
-      ENV{PATH}:
-        - "C:\\WINDOWS\\system32"
-        - "C:\\WINDOWS"
-        - "C:\\WINDOWS\\System32\\Wbem"
-        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
-        - "C:\\WINDOWS\\System32\\OpenSSH\\"
-        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
-        - "C:\\Program Files\\Git\\cmd"
-        - "C:\\Program Files\\nodejs\\"
-        - "C:\\Program Files\\nodejs\\npm"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Program Files\\CMake\\bin"
-        - "C:\\Program Files\\dotnet\\"
-        - "C:\\Users\\Clever\\.local\\bin"
-        - "C:\\Users\\Clever\\AppData\\Local\\Microsoft\\WindowsApps"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-        - "C:\\Users\\Clever\\AppData\\Roaming\\npm"
-        - "C:\\Users\\Clever\\AppData\\Local\\Programs\\Ollama"
-        - "C:\\msys64\\ucrt64\\bin"
-        - "C:\\Users\\Clever\\.dotnet\\tools"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/JoltPhysics"
-      CMAKE_SYSTEM_PREFIX_PATH:
-        - "C:/Program Files"
-        - "C:/Program Files (x86)"
-        - "C:/Program Files/CMake"
-        - "C:/Program Files (x86)/JoltPhysics"
 ...

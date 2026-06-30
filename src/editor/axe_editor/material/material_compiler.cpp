@@ -220,9 +220,16 @@ namespace axe
                 opacity = "dot(" + opacity + ", vec3(0.299, 0.587, 0.114))";
         }
 
+        // Blend Mode Masked (alpha test): recorta via discard e continua
+        // OPACO (deferred) — não entra no forward translúcido.
+        bool isMasked = (graph->BlendMode == MaterialBlendMode::Masked);
+        result.IsMasked = isMasked;
+        result.AlphaCutoff = 0.5f;
+
         // Opacity conectado a algo => este material precisa do forward
         // pass de transparência (vidro, etc.) — ver SceneRenderer.
-        result.IsTransparent = (opacitySrc != nullptr);
+        // Exceção: Masked vai pelo deferred (o discard faz o recorte).
+        result.IsTransparent = (opacitySrc != nullptr) && !isMasked;
 
         Pin* aoSrc = (outputNode->Inputs.size() > 6)
             ? compiler.GetSourcePin(&outputNode->Inputs[6]) : nullptr;
@@ -334,7 +341,16 @@ namespace axe
         fs << "    finalColor = max(finalColor, matBaseColor * 0.02);\n\n";
         //fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
         //fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
-        fs << "    FragColor = vec4(finalColor, matOpacity);\n";
+        if (isMasked)
+        {
+            // Alpha test: recorta o pixel e sai opaco (sem blend).
+            fs << "    if (matOpacity < 0.5) discard;\n";
+            fs << "    FragColor = vec4(finalColor, 1.0);\n";
+        }
+        else
+        {
+            fs << "    FragColor = vec4(finalColor, matOpacity);\n";
+        }
         fs << "}\n";
 
         std::stringstream gs;
@@ -384,6 +400,15 @@ namespace axe
         gs << "    float matRoughness = clamp(" << roughness << ", 0.05, 1.0);\n";
         gs << "    float matAO        = clamp(" << ao << ", 0.0, 1.0);\n";
         gs << "    vec3  matEmissive  = " << emissive << ";\n\n";
+
+        // Masked: recorta ANTES de escrever no G-Buffer. O pixel descartado
+        // não entra no deferred, então o fundo aparece pelo vão — recorte
+        // limpo, com o material continuando opaco (luz/sombra normais).
+        if (isMasked)
+        {
+            gs << "    float matOpacity = " << opacity << ";\n";
+            gs << "    if (matOpacity < 0.5) discard;\n\n";
+        }
 
         // Escreve no G-Buffer
         gs << "    g_Position = v_FragPos;\n";
@@ -1480,7 +1505,13 @@ namespace axe
             for (auto& node : m_Graph->GetNodes())
                 for (auto& output : node->Outputs)
                     if (output.ID == link.StartPin)
+                    {
+                        // Reroute é transparente: segue pro input dele até a
+                        // fonte real (encadeamento de reroutes inclusive).
+                        if (node->Name == "Reroute" && !node->Inputs.empty())
+                            return GetSourceNode(&node->Inputs[0]);
                         return node.get();
+                    }
         }
         return nullptr;
     }
@@ -1493,7 +1524,13 @@ namespace axe
             for (auto& node : m_Graph->GetNodes())
                 for (auto& output : node->Outputs)
                     if (output.ID == link.StartPin)
+                    {
+                        // Mesmo pass-through: devolve o pin da fonte REAL,
+                        // pulando o(s) reroute(s) no caminho.
+                        if (node->Name == "Reroute" && !node->Inputs.empty())
+                            return GetSourcePin(&node->Inputs[0]);
                         return &output;
+                    }
         }
         return nullptr;
     }

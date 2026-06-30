@@ -458,6 +458,21 @@ namespace axe
                 catch (...) {}
             });
 
+        // ── Light Material recompile callback (SceneSerializer) ───────────────
+        // Re-resolve o shader/samplers do Light Material a partir do UUID
+        // quando a cena é desserializada (snapshot do Stop ou load do disco).
+        // O compilador de light function vive no editor, por isso é callback.
+        SceneSerializer::SetLightMaterialRecompileCallback(
+            [](const std::string& assetUUID,
+                std::shared_ptr<Shader>& outShader,
+                std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers) -> bool
+            {
+                const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+                if (!record) return false;
+                return MaterialCompiler::CompileLightFunctionFromFile(
+                    record->FilePath, outShader, outSamplers);
+            });
+
         m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         EditorIconLibrary::Get().Load("resources");
 
@@ -540,6 +555,10 @@ namespace axe
             m_EditorUI->GetAssetBrowser()->Update();
         else
             AXE_CORE_ERROR("AssetBrowser é nullptr!");
+
+        // Partículas tickam em Edit (preview ao vivo) E em Play; congelam no Pause.
+        if (m_Scene && m_EditorState != EditorState::Pause)
+            m_ParticleWorld.OnUpdate(*m_Scene, deltaTime);
 
         if (m_EditorState == EditorState::Play)
         {
@@ -1041,6 +1060,7 @@ namespace axe
         if (m_EditorState == EditorState::Edit) return;
 
         m_ScriptWorld.OnSceneStop(*m_Scene);
+        m_ParticleWorld.OnSceneStop(*m_Scene);
         m_GameCamera.CameraMode = GameCamera::Mode::FreeFly;
         m_GameCamera.ClearTarget();
         m_PlayerEntity = entt::null;

@@ -26,6 +26,12 @@ namespace axe
             return;
         }
 
+        if (node.Name == "Reroute")
+        {
+            DrawRerouteNode(node);
+            return;
+        }
+
         const float NODE_WIDTH = 180.0f;
 
         auto drawPin = [&](Pin& pin, bool isInput)
@@ -217,6 +223,37 @@ namespace axe
         ed::PopStyleVar(3);
     }
 
+
+    void MaterialEditorWindow::DrawRerouteNode(Node& node)
+    {
+        if (node.Inputs.empty() || node.Outputs.empty()) return;
+
+        // Knot minúsculo: sem título nem corpo, só os dois pins coladinhos
+        // pra "dobrar" o fio — mesmo espírito do Reroute do Script Editor.
+        ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(4, 2, 4, 2));
+        ed::PushStyleVar(ed::StyleVar_NodeRounding, 4.0f);
+        ed::BeginNode(node.ID);
+
+        Pin& in = node.Inputs[0];
+        Pin& out = node.Outputs[0];
+
+        ed::BeginPin(in.ID, ed::PinKind::Input);
+        ed::PinPivotAlignment(ImVec2(0.5f, 0.5f));
+        ed::PinPivotSize(ImVec2(0, 0));
+        DrawPinIcon(in, m_Graph->IsPinLinked(in.ID), 255);
+        ed::EndPin();
+
+        ImGui::SameLine();
+
+        ed::BeginPin(out.ID, ed::PinKind::Output);
+        ed::PinPivotAlignment(ImVec2(0.5f, 0.5f));
+        ed::PinPivotSize(ImVec2(0, 0));
+        DrawPinIcon(out, m_Graph->IsPinLinked(out.ID), 255);
+        ed::EndPin();
+
+        ed::EndNode();
+        ed::PopStyleVar(2);
+    }
 
     void MaterialEditorWindow::DrawCommentNode(Node* node)
     {

@@ -5,6 +5,7 @@
 #include "file_dialog.hpp"
 #include "axe/core/command_history.hpp"
 #include "axe/physics/physics_world.hpp"
+#include "axe/particles/particle_world.hpp"
 
 
 #include "axe/graphics/renderer/viewport_renderer.hpp"
@@ -80,6 +81,7 @@ namespace axe
         // ── Física / Scripts ──────────────────────────────────────────────────
         PhysicsWorld  m_PhysicsWorld;
         ScriptWorld   m_ScriptWorld;
+        ParticleWorld m_ParticleWorld;
         entt::entity  m_PlayerEntity = entt::null;
 
         // ── Câmera de jogo ────────────────────────────────────────────────────

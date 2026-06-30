@@ -1,13 +1,17 @@
 #pragma once
-#pragma once
 #include "axe/core/types.hpp"
 #include "scene.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include <filesystem>
 #include <string>
+#include <functional>
+#include <memory>
+#include <map>
 
 namespace axe
 {
+	class Shader;
+	class Texture2D;
 
 	class AXE_API SceneSerializer
 	{
@@ -45,6 +49,27 @@ namespace axe
 		}
 
 		static MaterialRecompileCallback s_MaterialRecompileCallback;
+
+		// Light Material usa um callback análogo: o MaterialCompiler
+		// (CompileLightFunctionFromFile) vive no editor, então a engine não
+		// resolve o shader direto — o editor registra esta callback. Retorna
+		// true se conseguiu compilar; preenche shader + samplers.
+		using LightMaterialRecompileCallback =
+			std::function<bool(const std::string& assetUUID,
+				std::shared_ptr<Shader>& outShader,
+				std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers)>;
+
+		static void SetLightMaterialRecompileCallback(LightMaterialRecompileCallback cb)
+		{
+			s_LightMaterialRecompileCallback = cb;
+		}
+
+		static LightMaterialRecompileCallback GetLightMaterialRecompileCallback()
+		{
+			return s_LightMaterialRecompileCallback;
+		}
+
+		static LightMaterialRecompileCallback s_LightMaterialRecompileCallback;
 
 	};
 

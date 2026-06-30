@@ -15,6 +15,7 @@
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/graphics/renderer/outline_renderer.hpp"
+#include "axe/graphics/renderer/particle_renderer.hpp"
 
 namespace axe
 {
@@ -84,6 +85,7 @@ namespace axe
         MeshRenderer    m_MeshRenderer;
         LineRenderer    m_LineRenderer;
         OutlineRenderer m_OutlineRenderer;
+        ParticleRenderer m_ParticleRenderer;
 
         std::shared_ptr<ShadowMapPass> m_ShadowPass;
         GBuffer                        m_GBuffer;

@@ -185,6 +185,12 @@ namespace axe
             }
         }
 
+        // --- 4.6. Partículas (billboards) ---
+        // Em cima do deferred (depth da cena já no m_TargetFBO via BlitDepth):
+        // depth-test occlui contra a geometria, depth-write off, blend on.
+        if (!queue.ParticleBatches.empty())
+            m_ParticleRenderer.Render(queue.ParticleBatches, viewProjection, view);
+
         // --- 5. Outline ---
         if (queue.SelectedMesh && queue.SelectedID != UINT32_MAX)
         {

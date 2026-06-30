@@ -66,7 +66,14 @@ namespace axe
 
         // Garante alinhamento correto — texturas de 1 canal (GL_RED)
         // precisam de alinhamento 1 em vez do padrão 4
-        glPixelStorei(GL_UNPACK_ALIGNMENT, channels == 1 ? 1 : 4);
+        //glPixelStorei(GL_UNPACK_ALIGNMENT, channels == 1 ? 1 : 4);
+
+        if (channels == 1)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        else if (channels == 3)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        else
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
         glGenTextures(1, &m_RendererID);
         glBindTexture(GL_TEXTURE_2D, m_RendererID);

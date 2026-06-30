@@ -1,4 +1,5 @@
 #include "scene.hpp"
+#include "scene_serializer.hpp"
 #include "axe/log/log.hpp"
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -52,25 +53,26 @@ namespace axe
 		if (!m_Registry.valid(entity))
 			return entt::null;
 
-		entt::entity copy = m_Registry.create();
+		// Duplica via caminho canônico de serialização: copia TODOS os
+		// componentes (PointLight com spot/cookie/light material, DirectionalLight,
+		// Camera, SpringArm, Script, física, etc.) sem listar cada um na mão —
+		// fica sempre em sincronia com o serializador, sem divergir.
+		std::string snapshot = SceneSerializer::SerializeEntity(entity, *this);
+		entt::entity copy = SceneSerializer::DeserializeEntity(snapshot, *this);
 
-		// Copia NameComponent
-		if (auto* c = m_Registry.try_get<NameComponent>(entity))
-			m_Registry.emplace<NameComponent>(copy, c->Name + " (Copy)");
+		// Renomeia a cópia (o snapshot trouxe o nome original)
+		if (m_Registry.valid(copy))
+		{
+			if (auto* c = m_Registry.try_get<NameComponent>(copy))
+				c->Name += " (Copy)";
 
-		// Copia TransformComponent
-		if (auto* c = m_Registry.try_get<TransformComponent>(entity))
-			m_Registry.emplace<TransformComponent>(copy, *c);
-
-		// Copia MeshComponent — mesh é shared, não duplica o asset
-		if (auto* c = m_Registry.try_get<MeshComponent>(entity))
-			m_Registry.emplace<MeshComponent>(copy, *c);
-
-		// Copia MaterialComponent — material é shared, não duplica
-		if (auto* c = m_Registry.try_get<MaterialComponent>(entity))
-			m_Registry.emplace<MaterialComponent>(copy, *c);
-
-		// Luz não é duplicada — faz sentido ter só uma por vez por enquanto
+			// A cópia herda o pai do original (mesma pasta / hierarquia).
+			// Sem isso, duplicar um objeto dentro de uma pasta jogava a
+			// cópia pro nível raiz, obrigando a arrastá-la de volta.
+			if (auto* rel = m_Registry.try_get<RelationshipComponent>(entity))
+				if (rel->Parent != entt::null && m_Registry.valid(rel->Parent))
+					SetParent(copy, rel->Parent);
+		}
 
 		return copy;
 	}

@@ -135,6 +135,7 @@ namespace axe
         ed::EditorContext* m_NodeEditorContext = nullptr;
 
         void DrawCommentNode(Node* node);
+        void DrawRerouteNode(Node& node);
         void DrawMaterialParams(Material& mat);
         void DrawTextureSlot(const char* label,
             std::shared_ptr<Texture2D>& tex,

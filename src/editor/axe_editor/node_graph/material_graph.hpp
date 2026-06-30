@@ -17,6 +17,7 @@ namespace axe
 		Node* AddColorNode();
 		Node* AddFloatNode();
 		Node* AddComment();
+		Node* AddRerouteNode();
 
 		Node* AddMultiplyNode();
 		Node* AddAddNode();

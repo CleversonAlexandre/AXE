@@ -12,6 +12,7 @@
 #include "axe/material/material_asset.hpp"
 #include "axe/scene/scene_serializer.hpp"
 #include "axe/script/script_component.hpp"
+#include "axe/particles/particle_system_component.hpp"
 
 #include "asset/asset_picker.hpp"
 #include "editor/axe_editor/material/material_compiler.hpp"
@@ -306,11 +307,47 @@ namespace axe
 			}
 		}
 
+		// Particle System
+		if (auto* ps = registry.try_get<ParticleSystemComponent>(entity))
+		{
+			if (ImGui::CollapsingHeader("Particle System", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::Checkbox("Playing", &ps->Playing);
+
+				ImGui::SeparatorText("Emissao");
+				ImGui::DragFloat("Emission Rate", &ps->EmissionRate, 1.0f, 0.0f, 5000.0f);
+				ImGui::DragInt("Max Particles", &ps->MaxParticles, 10.0f, 1, 100000);
+
+				ImGui::SeparatorText("Vida");
+				ImGui::DragFloat("Lifetime", &ps->Lifetime, 0.05f, 0.05f, 60.0f);
+				ImGui::DragFloat("Lifetime Var", &ps->LifetimeVariation, 0.01f, 0.0f, 1.0f);
+
+				ImGui::SeparatorText("Movimento");
+				ImGui::DragFloat3("Start Velocity", &ps->StartVelocity.x, 0.1f);
+				ImGui::DragFloat3("Velocity Var", &ps->VelocityVariation.x, 0.1f);
+				ImGui::DragFloat3("Gravity", &ps->Gravity.x, 0.1f);
+
+				ImGui::SeparatorText("Aparencia");
+				ImGui::ColorEdit4("Color Start", &ps->ColorStart.x);
+				ImGui::ColorEdit4("Color End", &ps->ColorEnd.x);
+				ImGui::DragFloat("Size Start", &ps->SizeStart, 0.01f, 0.0f, 100.0f);
+				ImGui::DragFloat("Size End", &ps->SizeEnd, 0.01f, 0.0f, 100.0f);
+				ImGui::DragFloat("Size Var", &ps->SizeVariation, 0.01f, 0.0f, 1.0f);
+
+				const char* blendItems[] = { "Alpha", "Additive" };
+				ImGui::Combo("Blend Mode", &ps->BlendMode, blendItems, 2);
+
+				int alive = 0;
+				for (auto& p : ps->Particles) if (p.Alive) ++alive;
+				ImGui::Spacing();
+				ImGui::Text("Vivas: %d / %d", alive, (int)ps->Particles.size());
+			}
+		}
+
 		// Botão Add Component
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
-
 		float btnWidth = ImGui::GetContentRegionAvail().x;
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + btnWidth * 0.15f);
 
@@ -427,6 +464,22 @@ namespace axe
 				auto& sc = registry.emplace<ScriptComponent>(entity);
 				if (auto* nc = registry.try_get<NameComponent>(entity))
 					sc.ScriptName = nc->Name + "Script";
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("Efeitos");
+			ImGui::Separator();
+
+			if (registry.any_of<ParticleSystemComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Particle System (ja adicionado)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Particle System"))
+			{
+				registry.emplace<ParticleSystemComponent>(entity);
 				ImGui::CloseCurrentPopup();
 			}
 

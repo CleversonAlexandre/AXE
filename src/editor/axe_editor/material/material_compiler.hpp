@@ -30,6 +30,12 @@ namespace axe
         // algo — sinaliza que este material precisa do forward pass de
         // transparência (ver Material::IsTransparent).
         bool IsTransparent = false;
+
+        // Masked (alpha test): recorta o pixel via discard quando a máscara
+        // de opacidade fica abaixo do cutoff. Renderiza no passe OPACO
+        // (deferred), com sombra e luz normais — não é o forward translúcido.
+        bool  IsMasked = false;
+        float AlphaCutoff = 0.5f;
     };
 
     // -------------------------------------------------------------------------

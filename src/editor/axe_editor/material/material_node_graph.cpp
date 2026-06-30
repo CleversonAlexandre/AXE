@@ -200,6 +200,65 @@ namespace axe
         for (auto& link : m_Graph->GetLinks())
             ed::Link(link.ID, link.StartPin, link.EndPin);
 
+        // ── Duplo clique num fio insere um Reroute ─────────────────────────
+        // Estilo Unreal / igual ao Script Editor: o fio se parte em
+        // origem -> Reroute -> destino. Posição via m_PendingPositions (é
+        // aplicada no topo do Draw, dentro do contexto do canvas) — assim
+        // funciona tanto agora quanto no redo (que roda fora do contexto).
+        {
+            ed::LinkId hoveredLink = ed::GetHoveredLink();
+            if (hoveredLink != ed::LinkId{} && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                ed::PinId startId{}, endId{};
+                bool found = false;
+                for (auto& lk : m_Graph->GetLinks())
+                    if (lk.ID == hoveredLink) { startId = lk.StartPin; endId = lk.EndPin; found = true; break; }
+
+                if (found)
+                {
+                    PinType linkType = PinType::Any;
+                    if (auto* pStart = m_Graph->FindPin(startId)) linkType = pStart->Type;
+                    ImVec2 pos = ImGui::GetMousePos();
+                    auto rerouteId = std::make_shared<int>(0);
+
+                    m_History.Push({
+                        "Insert Reroute",
+                        [this, startId, endId, linkType, pos, rerouteId]()
+                        {
+                            // Remove o fio direto, se ainda existir
+                            for (auto& l : m_Graph->GetLinks())
+                                if (l.StartPin == startId && l.EndPin == endId)
+                                {
+ m_Graph->RemoveLink(l.ID); break;
+}
+
+auto* r = m_Graph->AddNodeByName("Reroute");
+if (r)
+{
+    // Fixa o tipo no tipo do fio (cor do wire certa)
+    r->Inputs[0].Type = linkType;
+    r->Outputs[0].Type = linkType;
+    *rerouteId = (int)r->ID.Get();
+    m_Graph->m_PendingPositions[(int)r->ID.Get()] = pos;
+    m_Graph->AddLink(startId, r->Inputs[0].ID);
+    m_Graph->AddLink(r->Outputs[0].ID, endId);
+}
+},
+[this, startId, endId, rerouteId]()
+{
+                            // DeleteNode remove o Reroute E seus 2 links juntos
+                            if (*rerouteId != 0)
+                            {
+                                m_Graph->DeleteNode(ed::NodeId(*rerouteId));
+                                *rerouteId = 0;
+                            }
+                            m_Graph->AddLink(startId, endId); // restaura o fio direto
+                        }
+                        });
+                }
+            }
+        }
+
         if (m_FrameCount > 2)
         {
             // --- Criação de links ---
@@ -412,6 +471,8 @@ namespace axe
                     if (ImGui::MenuItem("+ Material Output")) spawnNode("Material Output");
                 if (!filtering || std::string("comment").find(s) != std::string::npos)
                     if (ImGui::MenuItem("+ Add Comment")) spawnNode("Comment");
+                if (!filtering || std::string("reroute").find(s) != std::string::npos)
+                    if (ImGui::MenuItem("+ Add Reroute")) spawnNode("Reroute");
                 if (!filtering)
                     ImGui::Separator();
 

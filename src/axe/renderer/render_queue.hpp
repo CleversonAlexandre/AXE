@@ -20,6 +20,22 @@ namespace axe
         bool            Selected = false;
     };
 
+    // Uma partícula pronta pra desenhar — billboard. Sem ECS.
+    struct ParticleInstance
+    {
+        glm::vec3 Position{ 0.0f };
+        glm::vec4 Color{ 1.0f };
+        float     Size = 1.0f;
+        float     Rotation = 0.0f;
+    };
+
+    // Lote de partículas de um emissor (mesmo blend mode).
+    struct ParticleBatch
+    {
+        int BlendMode = 1;   // 0 = alpha, 1 = additive
+        std::vector<ParticleInstance> Instances;
+    };
+
     // Fila de renderização — tudo que o SceneRenderer precisa saber
     // para produzir um frame, sem nenhuma dependência de ECS.
     struct RenderQueue
@@ -30,6 +46,9 @@ namespace axe
 
         // Meshes a renderizar
         std::vector<MeshDrawCall> Meshes;
+
+        // Partículas (billboards) — um lote por emissor
+        std::vector<ParticleBatch> ParticleBatches;
 
         // Entity selecionada — ID opaco para o outline
         // SceneRenderer não precisa saber o que é uma "entity"
@@ -42,6 +61,7 @@ namespace axe
             Light = nullptr;
             PointLights.clear();
             Meshes.clear();
+            ParticleBatches.clear();
             SelectedID = UINT32_MAX;
             SelectedMesh = nullptr;
             SelectedTransform = glm::mat4(1.0f);

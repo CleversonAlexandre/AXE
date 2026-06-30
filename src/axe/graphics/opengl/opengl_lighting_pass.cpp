@@ -407,34 +407,34 @@ namespace axe
         }
 
         // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
-        {
-            static double s_LastLogTime = 0.0;
-            double now = glfwGetTime();
-            if (now - s_LastLogTime > 1.0)
-            {
-                s_LastLogTime = now;
-                AXE_CORE_INFO("[DIAG-LP] gbuffer={}x{} albedoID={} posID={} hasLight={} numPointLights={}",
-                    gbuffer.GetWidth(), gbuffer.GetHeight(), gbuffer.GetAlbedoID(), gbuffer.GetPositionID(),
-                    (light != nullptr), (int)pointLights.size());
+        //{
+        //    static double s_LastLogTime = 0.0;
+        //    double now = glfwGetTime();
+        //    if (now - s_LastLogTime > 1.0)
+        //    {
+        //        s_LastLogTime = now;
+        //        AXE_CORE_INFO("[DIAG-LP] gbuffer={}x{} albedoID={} posID={} hasLight={} numPointLights={}",
+        //            gbuffer.GetWidth(), gbuffer.GetHeight(), gbuffer.GetAlbedoID(), gbuffer.GetPositionID(),
+        //            (light != nullptr), (int)pointLights.size());
 
-                if (light)
-                    AXE_CORE_INFO("[DIAG-LP] DirLight color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} ambient={:.2f}",
-                        light->Color.x, light->Color.y, light->Color.z, light->Intensity, light->AmbientStrength);
+        //        if (light)
+        //            AXE_CORE_INFO("[DIAG-LP] DirLight color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} ambient={:.2f}",
+        //                light->Color.x, light->Color.y, light->Color.z, light->Intensity, light->AmbientStrength);
 
-                for (size_t i = 0; i < pointLights.size(); i++)
-                {
-                    const auto& pl = pointLights[i];
-                    AXE_CORE_INFO("[DIAG-LP] PointLight[{}] color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} pos=({:.2f},{:.2f},{:.2f}) radius={:.2f} isSpot={} hasLightMaterial={}",
-                        i, pl.Color.x, pl.Color.y, pl.Color.z, pl.Intensity,
-                        pl.Position.x, pl.Position.y, pl.Position.z, pl.Radius,
-                        pl.IsSpot, (pl.LightMaterialShader != nullptr));
-                    if (pl.IsSpot)
-                        AXE_CORE_INFO("[DIAG-LP]   -> dir=({:.3f},{:.3f},{:.3f}) innerAngle={:.1f} outerAngle={:.1f}",
-                            pl.Direction.x, pl.Direction.y, pl.Direction.z,
-                            pl.InnerConeAngle, pl.OuterConeAngle);
-                }
-            }
-        }
+        //        for (size_t i = 0; i < pointLights.size(); i++)
+        //        {
+        //            const auto& pl = pointLights[i];
+        //            AXE_CORE_INFO("[DIAG-LP] PointLight[{}] color=({:.2f},{:.2f},{:.2f}) intensity={:.2f} pos=({:.2f},{:.2f},{:.2f}) radius={:.2f} isSpot={} hasLightMaterial={}",
+        //                i, pl.Color.x, pl.Color.y, pl.Color.z, pl.Intensity,
+        //                pl.Position.x, pl.Position.y, pl.Position.z, pl.Radius,
+        //                pl.IsSpot, (pl.LightMaterialShader != nullptr));
+        //            if (pl.IsSpot)
+        //                AXE_CORE_INFO("[DIAG-LP]   -> dir=({:.3f},{:.3f},{:.3f}) innerAngle={:.1f} outerAngle={:.1f}",
+        //                    pl.Direction.x, pl.Direction.y, pl.Direction.z,
+        //                    pl.InnerConeAngle, pl.OuterConeAngle);
+        //        }
+        //    }
+        //}
 
         glDisable(GL_DEPTH_TEST);
         glDepthMask(GL_FALSE); // preserva o depth copiado pelo BlitDepth para o skybox
@@ -457,16 +457,16 @@ namespace axe
         m_Shader->SetInt("u_Emissive", 9);
 
         // ── DIAGNÓSTICO TEMPORÁRIO — remover depois ──
-        {
-            static double s_LastLogTime2 = 0.0;
-            double now2 = glfwGetTime();
-            if (now2 - s_LastLogTime2 > 1.0)
-            {
-                s_LastLogTime2 = now2;
-                AXE_CORE_INFO("[DIAG-SHADOW] ssaoTextureID={} shadowMapID={} hasSSAO={} hasShadow={}",
-                    ssaoTextureID, shadowMapID, (ssaoTextureID != 0), (shadowMapID != 0));
-            }
-        }
+        //{
+        //    static double s_LastLogTime2 = 0.0;
+        //    double now2 = glfwGetTime();
+        //    if (now2 - s_LastLogTime2 > 1.0)
+        //    {
+        //        s_LastLogTime2 = now2;
+        //        AXE_CORE_INFO("[DIAG-SHADOW] ssaoTextureID={} shadowMapID={} hasSSAO={} hasShadow={}",
+        //            ssaoTextureID, shadowMapID, (ssaoTextureID != 0), (shadowMapID != 0));
+        //    }
+        //}
 
         // SSAO — slot 4
         if (ssaoTextureID != 0)

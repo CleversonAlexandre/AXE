@@ -1,6 +1,7 @@
 #include "scene_collector.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/particles/particle_system_component.hpp"
 #include "axe/material/light_material_evaluator.hpp"
 #include "axe/log/log.hpp"
 #include "axe/core/time.hpp"
@@ -81,6 +82,22 @@ namespace axe
         auto roots = const_cast<Scene&>(scene).GetRootEntities();
         for (auto entity : roots)
             CollectEntity(scene, entity, queue, selectedEntityID);
+
+        // --- Partículas — um lote por emissor, só as vivas ---
+        for (auto entity : registry.view<ParticleSystemComponent>())
+        {
+            auto& ps = registry.get<ParticleSystemComponent>(entity);
+
+            ParticleBatch batch;
+            batch.BlendMode = ps.BlendMode;
+            batch.Instances.reserve(ps.Particles.size());
+            for (auto& p : ps.Particles)
+                if (p.Alive)
+                    batch.Instances.push_back({ p.Position, p.Color, p.Size, p.Rotation });
+
+            if (!batch.Instances.empty())
+                queue.ParticleBatches.push_back(std::move(batch));
+        }
 
         return queue;
     }

@@ -305,6 +305,21 @@ namespace axe
         m_Nodes.push_back(std::move(node));
         return ptr;
     }
+    Node* MaterialGraph::AddRerouteNode()
+    {
+        // "Knot" puramente visual pra dobrar/organizar fios. Pins Any em
+        // ambos os lados (CanCreateLink já aceita Any com tudo) e o
+        // compilador é transparente a ele (segue pro input até a fonte real),
+        // então não altera o resultado — só a aparência do grafo.
+        auto node = std::make_unique<Node>(GetNextID(), "Reroute");
+        node->Inputs.emplace_back(GetNextID(), "", PinType::Any, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Node* MaterialGraph::AddOneMinusNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "OneMinus");
@@ -805,6 +820,7 @@ namespace axe
         if (name == "Power")           return AddPowerNode();
         if (name == "Lerp")            return AddLerpNode();
         if (name == "Comment")         return AddComment();
+        if (name == "Reroute")         return AddRerouteNode();
         if (name == "Clamp")           return AddClampNode();
         if (name == "Abs")             return AddAbsNode();
         if (name == "OneMinus")        return AddOneMinusNode();
