@@ -774,6 +774,149 @@ namespace axe
             return node;
         }
 
+        // ── Particle System nodes ─────────────────────────────────────────────
+        if (t == "ParticlePlay")
+        {
+            auto node = makeNode(baseId, "Particle Play", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ParticleStop")
+        {
+            auto node = makeNode(baseId, "Particle Stop", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ParticleRestart")
+        {
+            auto node = makeNode(baseId, "Particle Restart", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "ParticleBurst")
+        {
+            auto node = makeNode(baseId, "Particle Burst", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Emitter Index", ScriptPinType::Int, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Count", ScriptPinType::Int, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Transform de outras entities ──────────────────────────────────────
+        // "Get*" — dados puro (sem Flow). "Set*" — action com Flow.
+        // Todos recebem "Target" (Object) — diferente dos existentes que
+        // operam em GetTransform() (self). Permitem mover, rotacionar e
+        // escalar qualquer entity pela referência no Blueprint.
+
+        if (t == "GetOtherPosition")
+        {
+            auto node = makeNode(baseId, "Get Position", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetOtherPosition")
+        {
+            auto node = makeNode(baseId, "Set Position", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Position", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetOtherRotation")
+        {
+            auto node = makeNode(baseId, "Get Rotation", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Rotation", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetOtherRotation")
+        {
+            auto node = makeNode(baseId, "Set Rotation", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Rotation", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetOtherScale")
+        {
+            auto node = makeNode(baseId, "Get Scale", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Scale", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetOtherScale")
+        {
+            auto node = makeNode(baseId, "Set Scale", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Scale", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetForwardVector")
+        {
+            auto node = makeNode(baseId, "Get Forward Vector", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Forward", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Camera nodes ──────────────────────────────────────────────────────
+        if (t == "CameraShake")
+        {
+            auto node = makeNode(baseId, "Camera Shake", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Intensity", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Duration", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            node->FloatValue = 0.5f; // default intensity
+            return node;
+        }
+        if (t == "CameraFollow")
+        {
+            auto node = makeNode(baseId, "Camera Follow", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CameraStopFollow")
+        {
+            auto node = makeNode(baseId, "Camera Stop Follow", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetCameraFOV")
+        {
+            auto node = makeNode(baseId, "Set Camera FOV", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "FOV", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
+        // ── Get Self — outputa a entity atual como Object, plugável em Target ─
+        // Permite usar os novos Get/Set Position/Rotation/Scale em si mesmo,
+        // ou passar para Particle Play etc. com target = self.
+        if (t == "GetSelf")
+        {
+            auto node = makeNode(baseId, "Get Self", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Self", ScriptPinType::Object, ed::PinKind::Output);
+            return node;
+        }
+
         // ── IsValid (Entity) — puramente de dados, sem Flow. Útil depois de
         // um Destroy Entity, ou ao guardar referência de array (entidade pode
         // ter sido destruída/recém-reciclada desde então). Checa tanto

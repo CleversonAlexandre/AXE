@@ -3,6 +3,7 @@
 #include "axe/utils/glm_config.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
+#include <chrono>
 #include "axe/scene/components.hpp"
 #include "axe/graphics/renderer/outline_renderer.hpp"
 #include "axe/graphics/render_command.hpp"
@@ -27,12 +28,25 @@ namespace axe
         const glm::vec3& cameraPosition,
         uint32_t width, uint32_t height)
     {
+        // Acumula tempo pra u_Time no shader de material de partícula.
+        // std::chrono aqui é só pra não precisar invadir a assinatura de
+        // Render() com um parâmetro extra — zero dependência de GL.
+        {
+            using clock = std::chrono::steady_clock;
+            static auto s_Last = clock::now();
+            auto now = clock::now();
+            float dt = std::chrono::duration<float>(now - s_Last).count();
+            s_Last = now;
+            dt = glm::clamp(dt, 0.0f, 0.1f); // clamp pra evitar salto no primeiro frame
+            m_ParticleRenderer.Tick(dt);
+        }
+
         RenderShadowPass(queue, cameraPosition);
 
         if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
             RenderDeferred(queue, viewProjection, view, projection, cameraPosition, width, height);
         else
-            RenderForward(queue, viewProjection, cameraPosition);
+            RenderForward(queue, viewProjection, view, cameraPosition);
     }
 
     // =============================================================================
@@ -62,6 +76,7 @@ namespace axe
 
     void SceneRenderer::RenderForward(const RenderQueue& queue,
         const glm::mat4& viewProjection,
+        const glm::mat4& view,
         const glm::vec3& cameraPosition)
     {
         m_MeshRenderer.SetEnvironment(m_Environment);
@@ -84,6 +99,13 @@ namespace axe
             if (dc.Mesh) m_MeshRenderer.DrawMesh(*dc.Mesh, dc.Transform, dc.Material, queue.Light,
                 dc.Material && dc.Material->IsTransparent);
         m_MeshRenderer.End();
+
+        // --- Partículas (billboards) — faltava no forward; só rodava no
+        // deferred. Sem isso, qualquer preview que força forward (Material
+        // Editor, Particle Editor) nunca desenhava partícula nenhuma, mesmo
+        // com a simulação rodando normalmente (CPU-side) por trás.
+        if (!queue.ParticleBatches.empty())
+            m_ParticleRenderer.Render(queue.ParticleBatches, viewProjection, view);
     }
 
     // =============================================================================
@@ -246,7 +268,7 @@ namespace axe
         uint32_t height)
     {
         glm::mat4 viewProjection = projection * view;
-        auto queue = SceneCollector::Collect(scene, (uint32_t)selectedEntity);
+        auto queue = SceneCollector::Collect(scene, (uint32_t)selectedEntity, cameraPosition);
 
         // Antes este caminho (usado pela GameCamera no modo Play) sempre
         // usava m_Width/m_Height — o último tamanho conhecido de QUALQUER

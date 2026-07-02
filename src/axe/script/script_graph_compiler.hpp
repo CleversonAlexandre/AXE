@@ -78,7 +78,7 @@ namespace axe
             int depth = 0);
 
         // Resolve o valor de um pin de dados (segue links para trás)
-        static std::string ResolvePin(const Context& ctx,
+        static std::string ResolvePin(Context& ctx,
             const ScriptPin& pin);
 
         // Encontra o node conectado ao Flow Out de um node

@@ -22,6 +22,8 @@
 #include "axe/scene/components.hpp"
 #include "axe/physics/physics_components.hpp"
 #include "axe/physics/physics_system.hpp"
+#include "axe/particles/particle_system_component.hpp"
+#include "axe/graphics/game_camera.hpp"
 #include <vector>
 #include <algorithm>
 
@@ -136,6 +138,128 @@ namespace axe
     ScriptRigidbodyProxy ScriptBase::GetRigidbody()
     {
         return ScriptRigidbodyProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptParticleProxy ScriptBase::GetParticleSystem()
+    {
+        return ScriptParticleProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptCameraProxy ScriptBase::GetCamera()
+    {
+        return ScriptCameraProxy{ m_Context.CameraPtr, m_Context.ScenePtr };
+    }
+
+    // ── ScriptCameraProxy ─────────────────────────────────────────────────────
+
+    void ScriptCameraProxy::Shake(float intensity, float duration)
+    {
+        if (CameraPtr) CameraPtr->StartShake(intensity, duration);
+    }
+
+    void ScriptCameraProxy::Follow(entt::entity target)
+    {
+        if (CameraPtr && ScenePtr) CameraPtr->SetFollowEntity(target, ScenePtr);
+    }
+
+    void ScriptCameraProxy::StopFollow()
+    {
+        if (CameraPtr) CameraPtr->ClearFollowEntity();
+    }
+
+    void ScriptCameraProxy::SetFOV(float fov)
+    {
+        if (CameraPtr) CameraPtr->Fov = glm::clamp(fov, 10.f, 170.f);
+    }
+
+    // ── ScriptParticleProxy ───────────────────────────────────────────────────
+
+    void ScriptParticleProxy::Play()
+    {
+        if (!ScenePtr) return;
+        auto* ps = ScenePtr->GetRegistry().try_get<ParticleSystemComponent>(Entity);
+        if (ps) ps->Playing = true;
+    }
+
+    void ScriptParticleProxy::Stop()
+    {
+        if (!ScenePtr) return;
+        auto* ps = ScenePtr->GetRegistry().try_get<ParticleSystemComponent>(Entity);
+        if (ps) ps->Playing = false;
+    }
+
+    void ScriptParticleProxy::Restart()
+    {
+        if (!ScenePtr) return;
+        auto* ps = ScenePtr->GetRegistry().try_get<ParticleSystemComponent>(Entity);
+        if (!ps) return;
+        ps->Playing = true;
+        for (auto& rt : ps->EmitterRuntimes)
+        {
+            for (auto& p : rt.Particles) p.Alive = false;
+            rt.EmissionAccumulator = 0.0f;
+            rt.EmitterAge = 0.0f;
+            rt.SpawnAngle = 0.0f;
+            rt.Warmed = false;
+            rt.LastOrigin = glm::vec3(1e38f);
+            rt.BurstStates.clear();
+        }
+    }
+
+    void ScriptParticleProxy::Burst(int emitterIndex, int count)
+    {
+        if (!ScenePtr) return;
+        auto* ps = ScenePtr->GetRegistry().try_get<ParticleSystemComponent>(Entity);
+        if (!ps || !ps->Data) return;
+        if (emitterIndex < 0 || emitterIndex >= (int)ps->EmitterRuntimes.size()) return;
+
+        // Adiciona um burst one-shot no emitter especificado.
+        // É seguro adicionar à lista de bursts em runtime — o ParticleWorld
+        // vai processar no próximo frame e disparar imediatamente se o tempo
+        // do burst já passou (0.0 < EmitterAge, o que é sempre verdade aqui).
+        auto& def = ps->Data->Emitters[emitterIndex];
+        auto& rt = ps->EmitterRuntimes[emitterIndex];
+
+        ParticleBurstDef b;
+        b.Time = rt.EmitterAge; // dispara imediatamente
+        b.Count = glm::max(1, count);
+        b.Cycles = 1;
+        b.Interval = 1.0f;
+
+        // Insere no asset temporariamente — ou dispara diretamente aqui
+        // (mais simples e sem efeito colateral no asset salvo).
+        // Vamos disparar diretamente pra não poluir o asset:
+        int spawned = 0;
+        if (!ps->Data) return;
+        (void)def; // usado pelo ParticleWorld, aqui só precisamos do pool
+        for (auto& p : rt.Particles)
+        {
+            if (!p.Alive && spawned < count)
+            {
+                // Marca como viva com valores mínimos — o ParticleWorld vai
+                // sobrescrever na próxima chamada a spawnParticle, mas aqui
+                // chamamos diretamente via payload de um burst ad-hoc.
+                // Alternativa mais limpa: adiciona o burst à lista e deixa o
+                // ParticleWorld processar — sem race condition.
+                ++spawned;
+                (void)p;
+            }
+        }
+        // Abordagem limpa: injeta um BurstState extra que dispara imediatamente
+        if (emitterIndex < (int)ps->Data->Emitters.size())
+        {
+            // Adiciona o burst como one-shot na definição do emitter.
+            // NOTA: isso modifica o asset em runtime, não em disco.
+            // Para não persistir, limpamos bursts "expirados" em OnSceneStop.
+            ParticleBurstDef bd;
+            bd.Time = rt.EmitterAge;
+            bd.Count = glm::max(1, count);
+            bd.Cycles = 1;
+            bd.Interval = 99999.f; // não repete
+            ps->Data->Emitters[emitterIndex].Bursts.push_back(bd);
+            // BurstState correspondente
+            rt.BurstStates.push_back({ rt.EmitterAge, 0 });
+        }
     }
 
     ScriptCharacterProxy ScriptBase::GetCharacter()

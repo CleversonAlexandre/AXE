@@ -69,7 +69,21 @@ namespace axe
 			return s_LightMaterialRecompileCallback;
 		}
 
-		static LightMaterialRecompileCallback s_LightMaterialRecompileCallback;
+		// Mesmo padrão do LightMaterial, pra material de partícula.
+		using ParticleMaterialRecompileCallback = LightMaterialRecompileCallback;
+
+		static void SetParticleMaterialRecompileCallback(ParticleMaterialRecompileCallback cb)
+		{
+			s_ParticleMaterialRecompileCallback = cb;
+		}
+
+		static ParticleMaterialRecompileCallback GetParticleMaterialRecompileCallback()
+		{
+			return s_ParticleMaterialRecompileCallback;
+		}
+
+		static LightMaterialRecompileCallback    s_LightMaterialRecompileCallback;
+		static ParticleMaterialRecompileCallback s_ParticleMaterialRecompileCallback;
 
 	};
 

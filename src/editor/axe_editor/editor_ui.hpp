@@ -6,6 +6,7 @@
 #include "asset_browser.hpp"
 #include "editor_context.hpp"
 #include "editor/axe_editor/material/material_editor_window.hpp"
+#include "editor/axe_editor/particles/particle_editor_window.hpp"
 #include "editor/axe_editor/input/input_settings_window.hpp"
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
@@ -25,6 +26,7 @@ namespace axe
         ViewportWindow* GetViewport() { return &m_ViewportWindow; }
         AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
         MaterialEditorWindow m_MaterialEditorWindow;
+        ParticleEditorWindow m_ParticleEditorWindow;
         ScriptGraphWindow    m_ScriptGraphWindow;
         InputSettingsWindow  m_InputSettingsWindow;
 

@@ -74,6 +74,18 @@ namespace axe
             std::shared_ptr<Shader>& outShader,
             std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
 
+        // Compila um grafo no domínio Particle: gera um shader para billboards
+        // de partícula. O vertex shader recebe os mesmos atributos do
+        // ParticleRenderer (center, corner, color, size, rotation) e o fragment
+        // shader é gerado a partir do grafo — resolve Color (vec3) e Opacity
+        // (float) do Material Output, com acesso a v_UV, v_Color (da partícula),
+        // v_Age01 (0..1 ao longo da vida) e u_Time.
+        static CompiledMaterial CompileParticleFunction(MaterialGraph* graph);
+
+        static bool CompileParticleFunctionFromFile(const std::filesystem::path& materialFilePath,
+            std::shared_ptr<Shader>& outShader,
+            std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
+
     private:
         MaterialCompiler(MaterialGraph* graph);
 

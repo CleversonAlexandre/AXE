@@ -14,6 +14,20 @@
 
 namespace ed = ax::NodeEditor;
 
+// Helper global — detecta pin splitado ("X","Y","Z" ou "Nome.X","Nome.Y","Nome.Z")
+// Fora do namespace axe pra não ter conflito com AXE_API
+static bool IsSplitPin(const axe::ScriptPin& p)
+{
+    const std::string& n = p.Name;
+    if (n == "X" || n == "Y" || n == "Z") return true;
+    if (n.size() >= 2)
+    {
+        const std::string suf = n.substr(n.size() - 2);
+        return suf == ".X" || suf == ".Y" || suf == ".Z";
+    }
+    return false;
+}
+
 namespace axe
 {
     // ── Tabelas estáticas de nodes e categorias (compartilhadas com DrawNode) ──
@@ -22,7 +36,17 @@ namespace axe
         {"On End","OnEnd"},{"On Collision","OnCollision"},{"On Event","OnEvent"} };
     static const NE sAc[] = { {"Move","Move"},{"Rotate","Rotate"},{"Apply Force","ApplyForce"},
         {"Send Event","SendEvent"},{"Print String","PrintString"},{"Destroy Entity","DestroyEntity"},
-        {"Is Valid","IsValid"} };
+        {"Is Valid","IsValid"},{"Get Self","GetSelf"},
+        {"Particle Play","ParticlePlay"},{"Particle Stop","ParticleStop"},
+        {"Particle Restart","ParticleRestart"},{"Particle Burst","ParticleBurst"} };
+    static const NE sTr[] = {
+        {"Get Position","GetOtherPosition"},{"Set Position","SetOtherPosition"},
+        {"Get Rotation","GetOtherRotation"},{"Set Rotation","SetOtherRotation"},
+        {"Get Scale","GetOtherScale"},{"Set Scale","SetOtherScale"},
+        {"Get Forward Vector","GetForwardVector"} };
+    static const NE sCam[] = {
+        {"Camera Shake","CameraShake"},{"Camera Follow","CameraFollow"},
+        {"Camera Stop Follow","CameraStopFollow"},{"Set Camera FOV","SetCameraFOV"} };
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
         {"Get Variable","GetVariable"},{"Set Variable","SetVariable"},
         {"AND","And"},{"OR","Or"},{"NOT","Not"},{"XOR","Xor"} };
@@ -46,14 +70,16 @@ namespace axe
 
     struct CatDef { const char* name; const NE* e; int n; ImVec4 col; };
     static const CatDef s_Cats[] = {
-        {"Events",  sEv,   5, {0.85f,0.3f,0.2f, 1}},
-        {"Actions", sAc,   7, {0.2f,0.7f,0.45f, 1}},
-        {"Logic",   sLo,   8, {0.8f,0.6f,0.1f,  1}},
-        {"Math",    sMa,   19, {0.3f,0.5f,0.9f,  1}},
-        {"Input",   sIn,   2, {0.7f,0.2f,0.6f,  1}},
-        {"Array",   sArr,  5, {0.55f,0.45f,0.85f, 1}},
-        {"Flow Control", sFlow, 9, {0.45f,0.6f,0.75f, 1}},
-        {"Cast",    sCast, 7, {0.5f,0.8f,0.8f,  1}},
+        {"Events",        sEv,   5,  {0.85f,0.3f,0.2f,  1}},
+        {"Actions",       sAc,  11,  {0.2f, 0.7f,0.45f, 1}},
+        {"Transform",     sTr,   7,  {0.9f, 0.65f,0.2f, 1}},
+        {"Camera",        sCam,  4,  {0.3f, 0.7f,0.95f, 1}},
+        {"Logic",         sLo,   8,  {0.8f, 0.6f,0.1f,  1}},
+        {"Math",          sMa,  19,  {0.3f, 0.5f,0.9f,  1}},
+        {"Input",         sIn,   2,  {0.7f, 0.2f,0.6f,  1}},
+        {"Array",         sArr,  5,  {0.55f,0.45f,0.85f,1}},
+        {"Flow Control",  sFlow, 9,  {0.45f,0.6f,0.75f, 1}},
+        {"Cast",          sCast, 7,  {0.5f, 0.8f,0.8f,  1}},
     };
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
@@ -698,58 +724,121 @@ namespace axe
                         }
             }
 
-            if (isVarNode && isVec3Var)
+            // Detecta se o pin clicado (ou qualquer pin do node) é Vec3 —
+            // permite Split/Recombine em QUALQUER node com pin Vec3,
+            // não só em variáveis. Ex: Velocity de Get Rigidbody,
+            // Position de Get Position, Forward de Get Forward Vector, etc.
+            bool hasClickedVec3Pin = false;
+            bool hasClickedSplitPin = false; // pin já splitado (Float tipo "Nome.X")
+            if (ctxNode && ctxPin)
+            {
+                hasClickedVec3Pin = (ctxPin->Type == ScriptPinType::Vec3);
+                hasClickedSplitPin = IsSplitPin(*ctxPin); // Float "X","Y","Z","Nome.X" etc.
+            }
+            bool hasAnyVec3Pin = false;
+            if (ctxNode && !ctxPin)
+            {
+                for (auto& p : ctxNode->Outputs)
+                    if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
+                if (!hasAnyVec3Pin)
+                    for (auto& p : ctxNode->Inputs)
+                        if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
+            }
+            bool canSplitRecombine = (isVarNode && isVec3Var)
+                || hasClickedVec3Pin
+                || hasClickedSplitPin  // <-- clicou num pin já splitado → mostra Recombine
+                || hasAnyVec3Pin;
+
+            if (canSplitRecombine)
             {
                 bool clickedOutput = ctxPin && ctxPin->Kind == ed::PinKind::Output;
                 bool clickedInput = ctxPin && ctxPin->Kind == ed::PinKind::Input;
 
+                if (!ctxPin)
+                {
+                    // Sem pin específico: prefere lado com pin Vec3 ou split
+                    for (auto& p : ctxNode->Outputs)
+                        if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { clickedOutput = true; break; }
+                    if (!clickedOutput)
+                        clickedInput = true;
+                }
+
                 bool outputSplit = false, inputSplit = false;
-                for (auto& p : ctxNode->Outputs)
-                    if (p.Name == "X" || p.Name == "Y" || p.Name == "Z") { outputSplit = true; break; }
-                for (auto& p : ctxNode->Inputs)
-                    if (p.Name == "X" || p.Name == "Y" || p.Name == "Z") { inputSplit = true; break; }
+                for (auto& p : ctxNode->Outputs) if (IsSplitPin(p)) { outputSplit = true; break; }
+                for (auto& p : ctxNode->Inputs)  if (IsSplitPin(p)) { inputSplit = true; break; }
                 bool thisSideSplit = clickedOutput ? outputSplit : inputSplit;
+
+                // Nome do pin Vec3 que vai ser splitado (pode ser "Value", "Position", "Velocity", etc.)
+                std::string vec3PinName = "Value"; // default para variáveis
+                if (ctxPin && ctxPin->Type == ScriptPinType::Vec3)
+                    vec3PinName = ctxPin->Name;
+                else if (!ctxPin)
+                {
+                    // Acha o primeiro pin Vec3 no lado correto
+                    auto& pins = clickedOutput ? ctxNode->Outputs : ctxNode->Inputs;
+                    for (auto& p : pins)
+                        if (p.Type == ScriptPinType::Vec3) { vec3PinName = p.Name; break; }
+                }
 
                 if (!thisSideSplit && ImGui::MenuItem("Split Struct Pin"))
                 {
+                    std::string prefix = (vec3PinName == "Value") ? "" : vec3PinName + ".";
+                    std::string nameX = prefix + "X";
+                    std::string nameY = prefix + "Y";
+                    std::string nameZ = prefix + "Z";
+                    std::string pinToRemove = vec3PinName;
+
                     if (clickedOutput)
                     {
                         ctxNode->Outputs.erase(std::remove_if(ctxNode->Outputs.begin(), ctxNode->Outputs.end(),
-                            [](const ScriptPin& p) { return p.Name == "Value"; }), ctxNode->Outputs.end());
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), "X", ScriptPinType::Float, ed::PinKind::Output);
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), "Y", ScriptPinType::Float, ed::PinKind::Output);
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), "Z", ScriptPinType::Float, ed::PinKind::Output);
+                            [pinToRemove](const ScriptPin& p) { return p.Name == pinToRemove; }), ctxNode->Outputs.end());
+                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameX.c_str(), ScriptPinType::Float, ed::PinKind::Output);
+                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameY.c_str(), ScriptPinType::Float, ed::PinKind::Output);
+                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameZ.c_str(), ScriptPinType::Float, ed::PinKind::Output);
                     }
                     else
                     {
                         ctxNode->Inputs.erase(std::remove_if(ctxNode->Inputs.begin(), ctxNode->Inputs.end(),
-                            [](const ScriptPin& p) { return p.Name == "Value"; }), ctxNode->Inputs.end());
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), "X", ScriptPinType::Float, ed::PinKind::Input);
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), "Y", ScriptPinType::Float, ed::PinKind::Input);
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), "Z", ScriptPinType::Float, ed::PinKind::Input);
+                            [pinToRemove](const ScriptPin& p) { return p.Name == pinToRemove; }), ctxNode->Inputs.end());
+                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameX.c_str(), ScriptPinType::Float, ed::PinKind::Input);
+                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameY.c_str(), ScriptPinType::Float, ed::PinKind::Input);
+                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameZ.c_str(), ScriptPinType::Float, ed::PinKind::Input);
                     }
                     ctxNode->IntValue |= 0x100;
-                    m_ConsoleLines.push_back("[Info] Pin split: " + ctxNode->StringValue);
+                    m_ConsoleLines.push_back("[Info] Pin split: " + vec3PinName);
                 }
                 else if (thisSideSplit && ImGui::MenuItem("Recombine Pin"))
                 {
+                    std::string recombinedName = vec3PinName;
                     if (clickedOutput)
                     {
                         ctxNode->Outputs.erase(std::remove_if(ctxNode->Outputs.begin(), ctxNode->Outputs.end(),
-                            [](const ScriptPin& p) { return p.Name == "X" || p.Name == "Y" || p.Name == "Z"; }), ctxNode->Outputs.end());
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), "Value", ScriptPinType::Vec3, ed::PinKind::Output);
+                            [](const ScriptPin& p) {
+                                const std::string& n = p.Name;
+                                return (n.size() >= 2 && (n.substr(n.size() - 2) == ".X" ||
+                                    n.substr(n.size() - 2) == ".Y" ||
+                                    n.substr(n.size() - 2) == ".Z"))
+                                    || n == "X" || n == "Y" || n == "Z";
+                            }), ctxNode->Outputs.end());
+                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), recombinedName.c_str(), ScriptPinType::Vec3, ed::PinKind::Output);
                     }
                     else
                     {
                         ctxNode->Inputs.erase(std::remove_if(ctxNode->Inputs.begin(), ctxNode->Inputs.end(),
-                            [](const ScriptPin& p) { return p.Name == "X" || p.Name == "Y" || p.Name == "Z"; }), ctxNode->Inputs.end());
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), "Value", ScriptPinType::Vec3, ed::PinKind::Input);
+                            [](const ScriptPin& p) {
+                                const std::string& n = p.Name;
+                                return (n.size() >= 2 && (n.substr(n.size() - 2) == ".X" ||
+                                    n.substr(n.size() - 2) == ".Y" ||
+                                    n.substr(n.size() - 2) == ".Z"))
+                                    || n == "X" || n == "Y" || n == "Z";
+                            }), ctxNode->Inputs.end());
+                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), recombinedName.c_str(), ScriptPinType::Vec3, ed::PinKind::Input);
                     }
                     outputSplit = inputSplit = false;
-                    for (auto& p : ctxNode->Outputs) if (p.Name == "X" || p.Name == "Y" || p.Name == "Z") { outputSplit = true; break; }
-                    for (auto& p : ctxNode->Inputs)  if (p.Name == "X" || p.Name == "Y" || p.Name == "Z") { inputSplit = true; break; }
+                    for (auto& p : ctxNode->Outputs) if (IsSplitPin(p)) { outputSplit = true; break; }
+                    for (auto& p : ctxNode->Inputs)  if (IsSplitPin(p)) { inputSplit = true; break; }
                     if (!outputSplit && !inputSplit) ctxNode->IntValue &= ~0x100;
-                    m_ConsoleLines.push_back("[Info] Pin recombined: " + ctxNode->StringValue);
+                    m_ConsoleLines.push_back("[Info] Pin recombined: " + vec3PinName);
                 }
             }
             else if (ctxNode && ctxPin && ctxPin->Type != ScriptPinType::Flow)

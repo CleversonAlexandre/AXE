@@ -110,6 +110,7 @@ namespace axe
             const glm::vec3& cameraPosition = glm::vec3(0.0f));
         void RenderForward(const RenderQueue& queue,
             const glm::mat4& viewProjection,
+            const glm::mat4& view,
             const glm::vec3& cameraPosition);
         void RenderDeferred(const RenderQueue& queue,
             const glm::mat4& viewProjection,

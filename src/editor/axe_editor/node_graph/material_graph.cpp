@@ -525,6 +525,31 @@ namespace axe
         return ptr;
     }
 
+    Node* MaterialGraph::AddParticleAgeNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Particle Age");
+        node->Color = ImVec4(0.1f, 0.55f, 0.4f, 1.0f);
+        node->Outputs.emplace_back(GetNextID(), "Age 0-1", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddParticleColorNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Particle Color");
+        node->Color = ImVec4(0.1f, 0.55f, 0.4f, 1.0f); // verde-teal (família Particle)
+        // Expõe v_Color (vec4) — a cor interpolada da partícula entre
+        // ColorStart e ColorEnd ao longo da vida. Use o pin RGB pra tingir
+        // uma textura, e o Alpha pra controlar a opacidade por partícula.
+        node->Outputs.emplace_back(GetNextID(), "RGBA", PinType::Vec4, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "RGB", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Alpha", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Node* MaterialGraph::AddPannerNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "Panner");
@@ -840,6 +865,8 @@ namespace axe
         if (name == "Camera Vector")   return AddCameraVectorNode();
         if (name == "Reflection Vector") return AddReflectionVectorNode();
         if (name == "Time")            return AddTimeNode();
+        if (name == "Particle Age")    return AddParticleAgeNode();
+        if (name == "Particle Color")  return AddParticleColorNode();
         if (name == "Panner")          return AddPannerNode();
         if (name == "Min")             return AddMinNode();
         if (name == "Max")             return AddMaxNode();

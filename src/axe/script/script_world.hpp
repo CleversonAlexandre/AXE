@@ -10,6 +10,8 @@ namespace axe
     class AXE_API ScriptWorld
     {
     public:
+        ScriptWorld();
+        ~ScriptWorld();
         // Chamado no EnterPlay — carrega DLLs e chama OnStart
         void OnSceneStart(Scene& scene);
 
@@ -35,6 +37,13 @@ namespace axe
         // Notifica saída de trigger (chama OnTriggerExit em ambas)
         void DispatchTriggerExit(Scene& scene,
             entt::entity trigger, entt::entity other);
+
+        // Injeta a câmera ativa — chamado pelo EditorLayer ao entrar em Play
+        void SetActiveCamera(class GameCamera* cam) { m_ActiveCamera = cam; }
+        class GameCamera* GetActiveCamera() const { return m_ActiveCamera; }
+
+    private:
+        class GameCamera* m_ActiveCamera = nullptr;
     };
 
 } // namespace axe

@@ -1,5 +1,7 @@
 #include "editor_layer.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe/particles/particle_system_asset.hpp"
+#include "axe/particles/particle_system_component.hpp"
 #include "axe/scene/components.hpp"
 #include "editor/axe_editor/editor_app.hpp"
 #include "axe/script/script_base.hpp"
@@ -180,6 +182,12 @@ namespace axe
                     if (matAsset)
                         m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
                 }
+                else if (record.Type == AssetType::ParticleSystem)
+                {
+                    auto particleAsset = ParticleSystemAsset::LoadFromFile(record.FilePath);
+                    if (particleAsset)
+                        m_EditorUI->m_ParticleEditorWindow.OpenAsset(particleAsset);
+                }
             });
 
         // ── Callback de instanciação (drag para viewport / asset browser) ─────
@@ -261,6 +269,19 @@ namespace axe
                     return;
                 }
 
+                if (record->Type == AssetType::ParticleSystem)
+                {
+                    auto particleAsset = ParticleSystemAsset::LoadFromFile(record->FilePath);
+                    if (!particleAsset) return;
+                    auto entity = m_Scene->CreateEntity(record->Name);
+                    auto& ps = registry.emplace<ParticleSystemComponent>(entity);
+                    ps.Data = particleAsset;
+                    ps.ParticleAssetUUID = uuid;
+                    ps.EmitterRuntimes.resize(particleAsset->Emitters.size());
+                    m_Context.Select(entity);
+                    return;
+                }
+
                 LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
                 if (!asset.MeshData) return;
                 auto entity = m_Scene->CreateEntity(record->Name);
@@ -322,6 +343,19 @@ namespace axe
                 if (record->Type == AssetType::Script)
                 {
                     InstantiateScriptAsset(record->FilePath, uuid);
+                    return;
+                }
+
+                if (record->Type == AssetType::ParticleSystem)
+                {
+                    auto particleAsset = ParticleSystemAsset::LoadFromFile(record->FilePath);
+                    if (!particleAsset) return;
+                    auto entity = m_Scene->CreateEntity(record->Name);
+                    auto& ps = registry.emplace<ParticleSystemComponent>(entity);
+                    ps.Data = particleAsset;
+                    ps.ParticleAssetUUID = uuid;
+                    m_Context.Select(entity);
+                    ps.EmitterRuntimes.resize(particleAsset->Emitters.size());
                     return;
                 }
 
@@ -473,10 +507,22 @@ namespace axe
                     record->FilePath, outShader, outSamplers);
             });
 
+        SceneSerializer::SetParticleMaterialRecompileCallback(
+            [](const std::string& assetUUID,
+                std::shared_ptr<Shader>& outShader,
+                std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers) -> bool
+            {
+                const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+                if (!record) return false;
+                return MaterialCompiler::CompileParticleFunctionFromFile(
+                    record->FilePath, outShader, outSamplers);
+            });
+
         m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         EditorIconLibrary::Get().Load("resources");
 
         m_EditorUI->m_MaterialEditorWindow.Initialize();
+        m_EditorUI->m_ParticleEditorWindow.Initialize();
         m_EditorUI->m_ScriptGraphWindow.Initialize();
         m_EditorUI->m_ScriptGraphWindow.SetInspectorWindow(&m_EditorUI->m_InspectorWindow);
 
@@ -501,6 +547,11 @@ namespace axe
                     if (asset) { m_EditorUI->m_ScriptGraphWindow.OpenForAsset(asset); return; }
                 }
                 m_EditorUI->m_ScriptGraphWindow.OpenForEntity(e, sc, registry);
+            };
+
+        m_EditorUI->m_InspectorWindow.m_OnOpenParticleSystem = [this](std::shared_ptr<ParticleSystemAsset> asset)
+            {
+                m_EditorUI->m_ParticleEditorWindow.OpenAsset(asset);
             };
 
         if (ProjectManager::Get().HasProject())
@@ -557,8 +608,20 @@ namespace axe
             AXE_CORE_ERROR("AssetBrowser é nullptr!");
 
         // Partículas tickam em Edit (preview ao vivo) E em Play; congelam no Pause.
+        // AutoDestroy só é permitido em Play — em Edit nunca destrói entities.
         if (m_Scene && m_EditorState != EditorState::Pause)
-            m_ParticleWorld.OnUpdate(*m_Scene, deltaTime);
+        {
+            bool inPlay = (m_EditorState == EditorState::Play);
+            glm::vec3 camPos(0.f);
+            if (m_ViewportRenderer && m_ViewportRenderer->m_Camera)
+                camPos = m_ViewportRenderer->m_Camera->GetPosition();
+            m_ParticleWorld.OnUpdate(*m_Scene, deltaTime, inPlay, camPos);
+        }
+
+        // Preview do Particle Editor tem sua própria ParticleWorld/cena —
+        // tickado independente do estado de Play/Pause da cena principal.
+        if (m_EditorUI && m_EditorUI->m_ParticleEditorWindow.IsOpen())
+            m_EditorUI->m_ParticleEditorWindow.UpdatePreview(deltaTime);
 
         if (m_EditorState == EditorState::Play)
         {
@@ -615,6 +678,9 @@ namespace axe
         {
             if (m_EditorUI->m_MaterialEditorWindow.IsOpen())
                 m_EditorUI->m_MaterialEditorWindow.RenderPreview();
+
+            if (m_EditorUI->m_ParticleEditorWindow.IsOpen())
+                m_EditorUI->m_ParticleEditorWindow.RenderPreview();
 
             if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
                 m_EditorUI->m_ScriptGraphWindow.RenderPreview();
@@ -946,6 +1012,7 @@ namespace axe
             });
 
         m_PhysicsWorld.OnSceneStart(*m_Scene);
+        m_ScriptWorld.SetActiveCamera(&m_GameCamera); // injeta câmera pra scripts
         m_ScriptWorld.OnSceneStart(*m_Scene);
 
         m_PlayerEntity = entt::null;

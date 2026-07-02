@@ -139,6 +139,11 @@ namespace axe
         fs << "uniform int         u_HasIBL;\n\n";
         fs << "uniform float u_IBLIntensity;\n";
         fs << "uniform float u_AmbientStrength;\n";
+        // v_Age01 não existe como varying no Surface shader — declara como
+        // constante 0.0 pra que o node "Particle Age" compile sem erro
+        // mesmo em materiais Surface (comportamento definido, não crash).
+        fs << "float v_Age01 = 0.0;\n";
+        fs << "vec4  v_Color  = vec4(1.0);\n"; // fallback — sem sentido em Surface, mas não crasha
 
         // Declara samplers usando m_NodeSamplers já preenchido
         std::map<int, std::string> slotToSampler;
@@ -383,6 +388,12 @@ namespace axe
                 gs << "uniform sampler2D " << it->second << ";\n";
         }
         gs << "\n";
+        // Fallbacks pra nodes que existem no Fragment mas não no GeometryShader
+        // (Particle Color, Particle Age). Sem isso o GeometryShader crasha se
+        // o usuário usar esses nodes num material Surface inadvertidamente, e
+        // qualquer uso legítimo compila limpo com valor neutro.
+        gs << "float v_Age01 = 0.0;\n";
+        gs << "vec4  v_Color  = vec4(1.0);\n\n";
 
         gs << "void main()\n{\n";
         gs << "    vec3 N = normalize(v_Normal);\n\n";
@@ -552,7 +563,9 @@ namespace axe
         fs << "    vec3 N = v_Normal;\n";
         fs << "    vec2 v_TexCoord = vec2(0.5, 0.5);\n";
         fs << "    vec3 v_Tangent = vec3(1.0, 0.0, 0.0);\n";
-        fs << "    vec3 v_Bitangent = vec3(0.0, 0.0, 1.0);\n\n";
+        fs << "    vec3 v_Bitangent = vec3(0.0, 0.0, 1.0);\n";
+        fs << "    float v_Age01 = 0.0;\n";
+        fs << "    vec4  v_Color  = vec4(1.0);\n\n";
         fs << compiler.m_FragmentCode;
         fs << "\n    vec3 finalColor = " << emissive << ";\n";
         fs << "    FragColor = vec4(finalColor, 1.0);\n";
@@ -610,6 +623,248 @@ namespace axe
         }
     }
 
+
+    // =========================================================================
+    // CompileParticleFunction — domínio "Particle"
+    //
+    // Gera o vertex shader completo do ParticleRenderer (billboard, rotação,
+    // billboarding com câmera right/up) mais um fragment shader gerado a
+    // partir do grafo do usuário. O grafo expõe:
+    //   Color   (vec3)  → RGB do billboard
+    //   Opacity (float) → alpha final multiplicado pelo falloff radial
+    //
+    // Variáveis disponíveis no grafo (sem vazar GL):
+    //   v_UV     (vec2)  — 0..1 no quad
+    //   v_Color  (vec4)  — cor interpolada da partícula (start→end)
+    //   v_Age01  (float) — 0 no nascimento, 1 na morte
+    //   u_Time   (float) — segundos
+    // =========================================================================
+    CompiledMaterial MaterialCompiler::CompileParticleFunction(MaterialGraph* graph)
+    {
+        MaterialCompiler compiler(graph);
+        CompiledMaterial result;
+
+        Node* outputNode = nullptr;
+        for (auto& node : graph->GetNodes())
+            if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+        if (!outputNode)
+        {
+            result.ErrorMessage = "Material Output node not found";
+            return result;
+        }
+
+        // ── Passo 1: pré-popula m_NodeSamplers com nomes de partícula ────────
+        // CRÍTICO: precisa acontecer ANTES de VisitPin. O VisitNode do
+        // Texture Sample lê m_NodeSamplers pra saber o nome do uniform —
+        // se ainda não estiver preenchido, usa o fallback "u_AlbedoMap"
+        // (nome do domínio Surface) e o shader gerado não declara esse
+        // uniform, causando erro de compilação GLSL.
+        std::map<std::string, std::shared_ptr<Texture2D>> samplerTextures;
+        {
+            int slot = 0;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!node->Value.TextureVal) continue;
+                std::string name = "u_PartTex_" + std::to_string(slot++);
+                compiler.m_NodeSamplers[node->ID.Get()] = name;
+                samplerTextures[name] = node->Value.TextureVal;
+            }
+        }
+
+        // ── Passo 2: percorre o grafo (agora usa os nomes corretos) ──────────
+        Pin* colorSrcPin = nullptr;
+        std::string colorExpr = "v_Color.rgb";
+
+        // Tenta Emissive (pin 4) primeiro — mais natural pra partículas
+        if (outputNode->Inputs.size() > 4)
+        {
+            compiler.VisitPin(&outputNode->Inputs[4]);
+            colorSrcPin = compiler.GetSourcePin(&outputNode->Inputs[4]);
+        }
+        // Fallback: Base Color (pin 0)
+        if (!colorSrcPin && outputNode->Inputs.size() > 0)
+        {
+            compiler.VisitPin(&outputNode->Inputs[0]);
+            colorSrcPin = compiler.GetSourcePin(&outputNode->Inputs[0]);
+        }
+        if (colorSrcPin)
+        {
+            colorExpr = compiler.GetPinVariable(colorSrcPin->ID);
+            if (compiler.GetPinType(colorSrcPin->ID) == PinType::Float)
+                colorExpr = "vec3(" + colorExpr + ")";
+        }
+
+        // Opacity (pin 5)
+        std::string opacityExpr = "v_Color.a";
+        if (outputNode->Inputs.size() > 5)
+        {
+            compiler.VisitPin(&outputNode->Inputs[5]);
+            Pin* opSrc = compiler.GetSourcePin(&outputNode->Inputs[5]);
+            if (opSrc)
+            {
+                opacityExpr = compiler.GetPinVariable(opSrc->ID);
+                if (compiler.GetPinType(opSrc->ID) != PinType::Float)
+                    opacityExpr = "(" + opacityExpr + ").r";
+            }
+        }
+
+        // ── Passo 3: filtra samplerTextures pra só os nós visitados ──────────
+        // (nós fora do caminho do grafo não precisam de uniform)
+        {
+            std::map<std::string, std::shared_ptr<Texture2D>> usedSamplers;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!compiler.m_VisitedNodes.count(node->ID.Get())) continue;
+                auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+                if (it != compiler.m_NodeSamplers.end() && samplerTextures.count(it->second))
+                    usedSamplers[it->second] = samplerTextures[it->second];
+            }
+            samplerTextures = std::move(usedSamplers);
+        }
+
+        // Vertex shader — mesmo layout do ParticleRenderer hardcoded,
+        // mas agora como string compilável pelo MaterialCompiler.
+        // Passa v_UV, v_Color e v_Age01 pro fragment.
+        result.VertexShader = R"(
+#version 460 core
+layout(location = 0) in vec3  a_Center;
+layout(location = 1) in vec2  a_Corner;
+layout(location = 2) in vec4  a_Color;
+layout(location = 3) in float a_Size;
+layout(location = 4) in float a_Rotation;
+layout(location = 5) in float a_Age01;
+layout(location = 6) in vec3  a_Velocity;
+
+uniform mat4  u_ViewProjection;
+uniform vec3  u_CameraRight;
+uniform vec3  u_CameraUp;
+uniform float u_StretchAmount;
+
+out vec2  v_UV;
+out vec4  v_Color;
+out float v_Age01;
+
+void main()
+{
+    vec3 worldPos;
+    float speed = length(a_Velocity);
+    if (u_StretchAmount > 0.0 && speed > 0.001)
+    {
+        vec3 stretchDir    = normalize(a_Velocity);
+        float stretchFactor = 1.0 + u_StretchAmount * speed;
+        worldPos = a_Center
+            + u_CameraRight * a_Corner.x * a_Size
+            + stretchDir    * a_Corner.y * a_Size * stretchFactor;
+    }
+    else
+    {
+        float c = cos(a_Rotation);
+        float s = sin(a_Rotation);
+        vec2  rc = vec2(a_Corner.x * c - a_Corner.y * s,
+                        a_Corner.x * s + a_Corner.y * c);
+        worldPos = a_Center
+            + (u_CameraRight * rc.x + u_CameraUp * rc.y) * a_Size;
+    }
+
+    gl_Position = u_ViewProjection * vec4(worldPos, 1.0);
+    v_UV     = a_Corner + vec2(0.5);
+    v_Color  = a_Color;
+    v_Age01  = a_Age01;
+}
+)";
+
+        // Fragment shader gerado do grafo
+        std::ostringstream fs;
+        fs << "#version 460 core\n";
+        fs << "in vec2  v_UV;\n";
+        fs << "in vec4  v_Color;\n";
+        fs << "in float v_Age01;\n\n";
+        fs << "uniform float u_Time;\n";
+        fs << "uniform int   u_FlipbookCols;\n";
+        fs << "uniform int   u_FlipbookRows;\n";
+        fs << "uniform float u_FlipbookCycles;\n\n";
+        fs << "layout(location = 0) out vec4 FragColor;\n\n";
+        for (auto& [name, tex] : samplerTextures)
+            fs << "uniform sampler2D " << name << ";\n";
+        fs << "\nvoid main()\n{\n";
+        fs << "    vec3 v_FragPos    = vec3(0.0);\n";
+        fs << "    vec3 v_Normal     = vec3(0.0, 0.0, 1.0);\n";
+        fs << "    vec3 N            = v_Normal;\n";
+        fs << "    vec3 v_Tangent    = vec3(1.0, 0.0, 0.0);\n";
+        fs << "    vec3 v_Bitangent  = vec3(0.0, 1.0, 0.0);\n";
+        fs << "    float v_Age01_raw = v_Age01;\n";
+        // Flipbook UV — degenera pra v_UV quando Cols=Rows=1
+        fs << "    float _fb_total  = float(u_FlipbookCols * u_FlipbookRows);\n";
+        fs << "    float _fb_frame  = mod(floor(v_Age01 * u_FlipbookCycles * _fb_total), _fb_total);\n";
+        fs << "    float _fb_col    = mod(_fb_frame, float(u_FlipbookCols));\n";
+        fs << "    float _fb_row    = floor(_fb_frame / float(u_FlipbookCols));\n";
+        fs << "    vec2  _fb_cell   = vec2(1.0 / float(u_FlipbookCols), 1.0 / float(u_FlipbookRows));\n";
+        fs << "    vec2 v_TexCoord  = v_UV * _fb_cell\n";
+        fs << "        + vec2(_fb_col, float(u_FlipbookRows - 1) - _fb_row) * _fb_cell;\n\n";
+        fs << compiler.m_FragmentCode;
+        // Falloff radial — ocorre SEMPRE pra partícula parecer
+        // circular, independentemente do material aplicado.
+        fs << "\n    float _d       = length(v_UV - vec2(0.5));\n";
+        fs << "    float _falloff = smoothstep(0.5, 0.0, _d);\n";
+        fs << "    vec3  finalColor   = " << colorExpr << ";\n";
+        fs << "    float finalOpacity = (" << opacityExpr << ") * _falloff;\n";
+        fs << "    FragColor = vec4(finalColor, finalOpacity);\n";
+        fs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.SamplerTextures = samplerTextures;
+        result.Success = true;
+        return result;
+    }
+
+    bool MaterialCompiler::CompileParticleFunctionFromFile(const std::filesystem::path& materialFilePath,
+        std::shared_ptr<Shader>& outShader,
+        std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers)
+    {
+        auto graphPath = materialFilePath;
+        graphPath.replace_extension(".axegraph");
+        if (!std::filesystem::exists(graphPath))
+        {
+            AXE_CORE_WARN("CompileParticleFunctionFromFile: grafo não encontrado em '{}'", graphPath.string());
+            return false;
+        }
+
+        std::ifstream file(graphPath);
+        if (!file.is_open())
+        {
+            AXE_CORE_WARN("CompileParticleFunctionFromFile: falha ao abrir '{}'", graphPath.string());
+            return false;
+        }
+
+        try
+        {
+            nlohmann::json j = nlohmann::json::parse(file);
+            MaterialGraph graph;
+            graph.Deserialize(j);
+
+            auto result = CompileParticleFunction(&graph);
+            if (!result.Success)
+            {
+                AXE_CORE_WARN("CompileParticleFunctionFromFile: {}", result.ErrorMessage);
+                return false;
+            }
+
+            auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+            if (!shader) return false;
+
+            outShader = shader;
+            outSamplers = result.SamplerTextures;
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            AXE_CORE_ERROR("CompileParticleFunctionFromFile: erro: {}", e.what());
+            return false;
+        }
+    }
 
     // =========================================================================
     // Percurso do grafo
@@ -1245,6 +1500,31 @@ namespace axe
             RegisterPin(node->Outputs[0].ID, "u_Time", PinType::Float);
             // Sem declaração de variável — u_Time já é um uniform global,
             // referenciá-lo direto evita uma cópia desnecessária.
+        }
+
+        // -----------------------------------------------------------------
+        // Particle Age — idade normalizada da partícula (v_Age01).
+        // 0.0 = nasceu agora, 1.0 = morreu. Só tem valores reais no
+        // domínio Particle; em outros domínios o prólogo fixa 0.0.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Particle Age")
+        {
+            RegisterPin(node->Outputs[0].ID, "v_Age01", PinType::Float);
+        }
+
+        // -----------------------------------------------------------------
+        // Particle Color — cor interpolada da partícula (v_Color, vec4).
+        // RGB = cor atual (ColorStart→ColorEnd), Alpha = opacidade.
+        // Indispensável pra combinar textura com as cores do emitter.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Particle Color")
+        {
+            if (node->Outputs.size() > 0)
+                RegisterPin(node->Outputs[0].ID, "v_Color", PinType::Vec4);
+            if (node->Outputs.size() > 1)
+                RegisterPin(node->Outputs[1].ID, "v_Color.rgb", PinType::Vec3);
+            if (node->Outputs.size() > 2)
+                RegisterPin(node->Outputs[2].ID, "v_Color.a", PinType::Float);
         }
 
         // -----------------------------------------------------------------

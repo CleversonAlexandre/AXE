@@ -41,6 +41,9 @@ namespace axe
         // Callback para abrir o editor de script
         //std::function<void(entt::entity, ScriptComponent*)> m_OnOpenScript;
         std::function<void(entt::entity, ScriptComponent*, entt::registry*)> m_OnOpenScript;
+
+        // Callback para abrir o Particle Editor a partir do Inspector
+        std::function<void(std::shared_ptr<class ParticleSystemAsset>)> m_OnOpenParticleSystem;
     private:
         void DrawTransform(Transform& transform);
         void DrawMaterial(entt::entity entity);
@@ -57,6 +60,7 @@ namespace axe
         void DrawRigidbody(entt::entity entity, entt::registry& registry);
         void DrawCollider(entt::entity entity, entt::registry& registry);
         void DrawCharacterController(entt::entity entity, entt::registry& registry);
+        void DrawParticleSystem(entt::entity entity);
 
         EditorContext* m_Context = nullptr;
 

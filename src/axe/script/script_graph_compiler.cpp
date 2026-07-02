@@ -59,7 +59,7 @@ namespace axe
         return { nullptr, nullptr };
     }
 
-    std::string ScriptGraphCompiler::ResolvePin(const Context& ctx, const ScriptPin& pin)
+    std::string ScriptGraphCompiler::ResolvePin(Context& ctx, const ScriptPin& pin)
     {
         auto [srcNode, srcPin] = FindDataSource(ctx, pin);
 
@@ -96,6 +96,10 @@ namespace axe
             return "deltaTime";
 
         // ── Input ─────────────────────────────────────────────────────────────
+
+        // Get Self — retorna a entity atual como Object (plugável em Target pins)
+        if (nodeName == "Get Self" && srcPin->Name == "Self")
+            return "m_Context.Entity";
 
         if (nodeName == "Get Action")
         {
@@ -636,7 +640,123 @@ namespace axe
 
         if (nodeName == "Get Position")
         {
+            // Diferencia: node com "Target" = Get de outra entity (novo)
+            //             node sem "Target"  = GetTransform self (antigo)
+            bool hasTarget = false;
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Target") { hasTarget = true; break; }
+
+            if (hasTarget)
+            {
+                std::string nodeId = std::to_string(srcNode->ID.Get());
+                std::string varOut = "_getPosition" + nodeId;
+
+                // Emite a declaração na primeira vez que este pin é resolvido.
+                // Usamos ctx.code.find() pra não emitir duas vezes caso o
+                // mesmo output seja usado em mais de um lugar.
+                if (ctx.code.find(varOut) == std::string::npos)
+                {
+                    std::string target = "m_Context.Entity";
+                    for (const auto& inp : srcNode->Inputs)
+                        if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+
+                    ctx.Line("glm::vec3 " + varOut + " = glm::vec3(0.f);");
+                    ctx.Line("{ auto _gt = " + target + ";");
+                    ctx.Line("  if (_gt != entt::null) {");
+                    ctx.Line("    auto* _tc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_gt);");
+                    ctx.Line("    if (_tc) " + varOut + " = _tc->Data.Position;");
+                    ctx.Line("  }");
+                    ctx.Line("}");
+                }
+                return varOut;
+            }
             if (srcPin->Name == "Position") return "GetTransform().GetPosition()";
+        }
+
+        if (nodeName == "Get Rotation")
+        {
+            bool hasTarget = false;
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Target") { hasTarget = true; break; }
+
+            if (hasTarget)
+            {
+                std::string nodeId = std::to_string(srcNode->ID.Get());
+                std::string varOut = "_getRotation" + nodeId;
+                if (ctx.code.find(varOut) == std::string::npos)
+                {
+                    std::string target = "m_Context.Entity";
+                    for (const auto& inp : srcNode->Inputs)
+                        if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+
+                    ctx.Line("glm::vec3 " + varOut + " = glm::vec3(0.f);");
+                    ctx.Line("{ auto _gt = " + target + ";");
+                    ctx.Line("  if (_gt != entt::null) {");
+                    ctx.Line("    auto* _tc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_gt);");
+                    ctx.Line("    if (_tc) " + varOut + " = _tc->Data.Rotation;");
+                    ctx.Line("  }");
+                    ctx.Line("}");
+                }
+                return varOut;
+            }
+            if (srcPin->Name == "Rotation") return "GetTransform().GetRotation()";
+        }
+
+        if (nodeName == "Get Scale")
+        {
+            bool hasTarget = false;
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Target") { hasTarget = true; break; }
+
+            if (hasTarget)
+            {
+                std::string nodeId = std::to_string(srcNode->ID.Get());
+                std::string varOut = "_getScale" + nodeId;
+                if (ctx.code.find(varOut) == std::string::npos)
+                {
+                    std::string target = "m_Context.Entity";
+                    for (const auto& inp : srcNode->Inputs)
+                        if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+
+                    ctx.Line("glm::vec3 " + varOut + " = glm::vec3(1.f);");
+                    ctx.Line("{ auto _gt = " + target + ";");
+                    ctx.Line("  if (_gt != entt::null) {");
+                    ctx.Line("    auto* _tc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_gt);");
+                    ctx.Line("    if (_tc) " + varOut + " = _tc->Data.Scale;");
+                    ctx.Line("  }");
+                    ctx.Line("}");
+                }
+                return varOut;
+            }
+            if (srcPin->Name == "Scale") return "GetTransform().GetScale()";
+        }
+
+        if (nodeName == "Get Forward Vector")
+        {
+            bool hasTarget = false;
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Target") { hasTarget = true; break; }
+
+            std::string nodeId = std::to_string(srcNode->ID.Get());
+            std::string varOut = "_fwd" + nodeId;
+            if (ctx.code.find(varOut) == std::string::npos)
+            {
+                std::string target = hasTarget ? "m_Context.Entity" : "m_Context.Entity";
+                for (const auto& inp : srcNode->Inputs)
+                    if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+
+                ctx.Line("glm::vec3 " + varOut + " = glm::vec3(0.f,0.f,1.f);");
+                ctx.Line("{ auto _ft = " + target + ";");
+                ctx.Line("  if (_ft != entt::null) {");
+                ctx.Line("    auto* _tc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_ft);");
+                ctx.Line("    if (_tc) {");
+                ctx.Line("      glm::vec3 _r = glm::radians(_tc->Data.Rotation);");
+                ctx.Line("      " + varOut + " = glm::normalize(glm::vec3(cos(_r.y)*cos(_r.x),sin(_r.x),sin(_r.y)*cos(_r.x)));");
+                ctx.Line("    }");
+                ctx.Line("  }");
+                ctx.Line("}");
+            }
+            return varOut;
         }
 
         if (nodeName == "Get Rigidbody")
@@ -671,6 +791,48 @@ namespace axe
             if (srcPin->Name == "FOV")       return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).Fov";
             if (srcPin->Name == "Near Clip") return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).NearClip";
             if (srcPin->Name == "Far Clip")  return "GetContext().ScenePtr->GetRegistry().get<axe::CameraComponent>(GetContext().Entity).FarClip";
+        }
+
+        // ── Handler genérico para Split Struct Pin em qualquer node ───────────
+        // Pins splitados têm nomes como "Position.X", "Velocity.Y", etc.
+        // Resolve extraindo o componente do Vec3 gerado/expresso pelo node.
+        {
+            const std::string& pn = srcPin->Name;
+            bool endsX = pn.size() > 2 && pn.substr(pn.size() - 2) == ".X";
+            bool endsY = pn.size() > 2 && pn.substr(pn.size() - 2) == ".Y";
+            bool endsZ = pn.size() > 2 && pn.substr(pn.size() - 2) == ".Z";
+
+            if (endsX || endsY || endsZ)
+            {
+                std::string comp = endsX ? ".x" : endsY ? ".y" : ".z";
+                std::string base = pn.substr(0, pn.size() - 2); // nome sem ".X"/".Y"/".Z"
+                std::string nodeId = std::to_string(srcNode->ID.Get());
+
+                if (nodeName == "Get Transform")
+                {
+                    if (base == "Position") return "GetTransform().GetPosition()" + comp;
+                    if (base == "Rotation") return "GetTransform().GetRotation()" + comp;
+                    if (base == "Scale")    return "GetTransform().GetScale()" + comp;
+                }
+                if (nodeName == "Get Rigidbody" && base == "Velocity")
+                    return "GetRigidbody().GetVelocity()" + comp;
+                if (nodeName == "Get Position")
+                    return "_getPosition" + nodeId + comp;
+                if (nodeName == "Get Rotation")
+                    return "_getRotation" + nodeId + comp;
+                if (nodeName == "Get Scale")
+                    return "_getScale" + nodeId + comp;
+                if (nodeName == "Get Forward Vector")
+                    return "_fwd" + nodeId + comp;
+            }
+
+            // Pins com nome simples "X"/"Y"/"Z" (variável Vec3 splitada)
+            if (pn == "X" || pn == "Y" || pn == "Z")
+            {
+                std::string comp = (pn == "X") ? ".x" : (pn == "Y") ? ".y" : ".z";
+                if (nodeName == "Get Transform")    return "GetTransform().GetPosition()" + comp;
+                if (nodeName == "Get Rigidbody")    return "GetRigidbody().GetVelocity()" + comp;
+            }
         }
 
         // Fallback
@@ -999,6 +1161,136 @@ namespace axe
 
             ctx.Line("  }");
             ctx.Line("}");
+            return;
+        }
+
+        // ── Particle System nodes ─────────────────────────────────────────────
+        // Padrão: resolve Target (entt::entity), chama método no proxy.
+        // O proxy faz try_get<ParticleSystemComponent> em runtime — seguro se
+        // a entity não tiver o componente (no-op silencioso).
+
+        else if (name == "Particle Play" || name == "Particle Stop" || name == "Particle Restart")
+        {
+            std::string target = "m_Context.Entity"; // self por padrão
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+
+            std::string method =
+                (name == "Particle Play") ? "Play()" :
+                (name == "Particle Stop") ? "Stop()" : "Restart()";
+
+            ctx.Line("{ // " + name);
+            ctx.Line("  auto _psTarget = " + target + ";");
+            ctx.Line("  if (_psTarget != entt::null)");
+            ctx.Line("  {");
+            ctx.Line("    ScriptParticleProxy{_psTarget, m_Context.ScenePtr}." + method + ";");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("  }");
+            ctx.Line("}");
+            return;
+        }
+
+        else if (name == "Particle Burst")
+        {
+            std::string target = "m_Context.Entity";
+            std::string idx = "0";
+            std::string count = "10";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Target")        target = ResolvePin(ctx, inp);
+                if (inp.Name == "Emitter Index") idx = ResolvePin(ctx, inp);
+                if (inp.Name == "Count")         count = ResolvePin(ctx, inp);
+            }
+
+            ctx.Line("{ // Particle Burst");
+            ctx.Line("  auto _psTarget = " + target + ";");
+            ctx.Line("  if (_psTarget != entt::null)");
+            ctx.Line("  {");
+            ctx.Line("    ScriptParticleProxy{_psTarget, m_Context.ScenePtr}.Burst(" + idx + ", " + count + ");");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("  }");
+            ctx.Line("}");
+            return;
+        }
+
+        // ── Transform de outras entities ──────────────────────────────────────
+        // NOTA: Get Position/Rotation/Scale/Forward são data nodes (sem Flow pins).
+        // A geração de código deles ocorre em ResolvePin, não aqui.
+        // Set Position/Rotation/Scale SÃO flow nodes (têm Flow In/Out).
+
+        else if (name == "Set Position" || name == "Set Rotation" || name == "Set Scale")
+        {
+            std::string target = "m_Context.Entity";
+            std::string value = "glm::vec3(0)";
+            std::string field = (name == "Set Position") ? "Position" :
+                (name == "Set Rotation") ? "Rotation" : "Scale";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Target")              target = ResolvePin(ctx, inp);
+                if (inp.Name == field)                 value = ResolvePin(ctx, inp);
+                if (inp.Name == "Position" || inp.Name == "Rotation" || inp.Name == "Scale")
+                    value = ResolvePin(ctx, inp);
+            }
+            ctx.Line("{ auto _st = " + target + ";");
+            ctx.Line("  if (_st != entt::null) {");
+            ctx.Line("    auto* _tc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_st);");
+            ctx.Line("    if (_tc) _tc->Data." + field + " = " + value + ";");
+            ctx.Line("  }");
+            ctx.Line("}");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        // ── Camera nodes ──────────────────────────────────────────────────────
+
+        else if (name == "Camera Shake")
+        {
+            std::string intensity = "0.5f", duration = "0.3f";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Intensity") intensity = ResolvePin(ctx, inp);
+                if (inp.Name == "Duration")  duration = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetCamera().Shake(" + intensity + ", " + duration + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Follow")
+        {
+            std::string target = "m_Context.Entity";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+            ctx.Line("GetCamera().Follow(" + target + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Stop Follow")
+        {
+            ctx.Line("GetCamera().StopFollow();");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Set Camera FOV")
+        {
+            std::string fov = "60.0f";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "FOV") fov = ResolvePin(ctx, inp);
+            ctx.Line("GetCamera().SetFOV(" + fov + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
             return;
         }
 

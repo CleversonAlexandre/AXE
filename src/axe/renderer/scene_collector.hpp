@@ -15,7 +15,8 @@ namespace axe
         // Coleta todos os dados de renderização da cena.
         // selectedEntityID: entt::entity cast para uint32_t, UINT32_MAX = nenhum
         static RenderQueue Collect(const Scene& scene,
-            uint32_t selectedEntityID = UINT32_MAX);
+            uint32_t selectedEntityID = UINT32_MAX,
+            const glm::vec3& cameraPosition = glm::vec3(0.0f));
 
     private:
         static void CollectEntity(const Scene& scene,

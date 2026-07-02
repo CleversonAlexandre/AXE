@@ -13,6 +13,7 @@
 #include "axe/scene/scene_serializer.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/project/project_manager.hpp"
 
 #include "asset/asset_picker.hpp"
 #include "editor/axe_editor/material/material_compiler.hpp"
@@ -256,6 +257,12 @@ namespace axe
 		else if (registry.any_of<PointLightComponent>(entity)) {}
 		else if (registry.any_of<MaterialComponent>(entity))
 			DrawMaterial(entity);
+		else if (registry.any_of<ParticleSystemComponent>(entity))
+		{
+			// Entity de partícula pura — não exibe slot de Material aqui;
+			// o Material do mesh (se existir) aparece só se houver MeshComponent
+			// junto. Evita mostrar um slot inútil e confuso.
+		}
 		else
 		{
 			ImGui::Separator();
@@ -308,41 +315,7 @@ namespace axe
 		}
 
 		// Particle System
-		if (auto* ps = registry.try_get<ParticleSystemComponent>(entity))
-		{
-			if (ImGui::CollapsingHeader("Particle System", ImGuiTreeNodeFlags_DefaultOpen))
-			{
-				ImGui::Checkbox("Playing", &ps->Playing);
-
-				ImGui::SeparatorText("Emissao");
-				ImGui::DragFloat("Emission Rate", &ps->EmissionRate, 1.0f, 0.0f, 5000.0f);
-				ImGui::DragInt("Max Particles", &ps->MaxParticles, 10.0f, 1, 100000);
-
-				ImGui::SeparatorText("Vida");
-				ImGui::DragFloat("Lifetime", &ps->Lifetime, 0.05f, 0.05f, 60.0f);
-				ImGui::DragFloat("Lifetime Var", &ps->LifetimeVariation, 0.01f, 0.0f, 1.0f);
-
-				ImGui::SeparatorText("Movimento");
-				ImGui::DragFloat3("Start Velocity", &ps->StartVelocity.x, 0.1f);
-				ImGui::DragFloat3("Velocity Var", &ps->VelocityVariation.x, 0.1f);
-				ImGui::DragFloat3("Gravity", &ps->Gravity.x, 0.1f);
-
-				ImGui::SeparatorText("Aparencia");
-				ImGui::ColorEdit4("Color Start", &ps->ColorStart.x);
-				ImGui::ColorEdit4("Color End", &ps->ColorEnd.x);
-				ImGui::DragFloat("Size Start", &ps->SizeStart, 0.01f, 0.0f, 100.0f);
-				ImGui::DragFloat("Size End", &ps->SizeEnd, 0.01f, 0.0f, 100.0f);
-				ImGui::DragFloat("Size Var", &ps->SizeVariation, 0.01f, 0.0f, 1.0f);
-
-				const char* blendItems[] = { "Alpha", "Additive" };
-				ImGui::Combo("Blend Mode", &ps->BlendMode, blendItems, 2);
-
-				int alive = 0;
-				for (auto& p : ps->Particles) if (p.Alive) ++alive;
-				ImGui::Spacing();
-				ImGui::Text("Vivas: %d / %d", alive, (int)ps->Particles.size());
-			}
-		}
+		DrawParticleSystem(entity);
 
 		// Botão Add Component
 		ImGui::Spacing();
@@ -699,6 +672,82 @@ namespace axe
 				DrawMaterialGraphParams(mc->MaterialAssetUUID, registry, entity);
 			else
 				DrawMaterialParams(*mc->Data);
+		}
+	}
+
+	// Particle System — referência a um ParticleSystemAsset (.axepart),
+	// mesmo modelo do Material: o componente só guarda o UUID + um cache
+	// runtime (Data); os parâmetros vivem no asset, editados no Particle
+	// Editor (duplo clique no asset browser, ou botão "Editar" abaixo).
+	void InspectorWindow::DrawParticleSystem(entt::entity entity)
+	{
+		auto& registry = m_Context->ActiveScene->GetRegistry();
+		auto* ps = registry.try_get<ParticleSystemComponent>(entity);
+		if (!ps) return;
+
+		ImGui::Separator();
+		if (!ImGui::CollapsingHeader("Particle System", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+		std::string uuid = ps->ParticleAssetUUID;
+
+		if (AssetPicker::Draw("System", uuid, { AssetType::ParticleSystem },
+			[&](const AssetRecord& record)
+			{
+				auto asset = ParticleSystemAsset::LoadFromFile(record.FilePath);
+				if (!asset) return;
+				ps->Data = asset;
+				ps->ParticleAssetUUID = record.UUID;
+				ps->EmitterRuntimes.assign(asset->Emitters.size(), ParticleEmitterRuntime{});
+			}))
+		{
+			if (uuid.empty()) { ps->Data = nullptr; ps->ParticleAssetUUID.clear(); }
+			else ps->ParticleAssetUUID = uuid;
+		}
+
+		ImGui::SameLine();
+		if (ImGui::SmallButton("New##particle_new"))
+		{
+			if (ProjectManager::Get().HasProject())
+			{
+				auto dir = ProjectManager::Get().GetCurrent().AssetsPath / "Particles";
+				auto path = dir / "NewParticleSystem.axepart";
+				int i = 1;
+				while (std::filesystem::exists(path))
+					path = dir / ("NewParticleSystem_" + std::to_string(i++) + ".axepart");
+
+				auto asset = ParticleSystemAsset::Create(path.stem().string());
+				asset->Save(path);
+				auto newUuid = AssetDatabase::Get().Register(path.string());
+				AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+				ps->Data = asset;
+				ps->ParticleAssetUUID = newUuid;
+				ps->EmitterRuntimes.assign(asset->Emitters.size(), ParticleEmitterRuntime{});
+			}
+		}
+
+		ImGui::Checkbox("Playing", &ps->Playing);
+
+		if (ps->Data && m_OnOpenParticleSystem)
+		{
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Edit##particle_edit"))
+				m_OnOpenParticleSystem(ps->Data);
+		}
+
+		if (ps->Data)
+		{
+			int alive = 0, total = 0;
+			for (auto& rt : ps->EmitterRuntimes)
+			{
+				for (auto& p : rt.Particles) if (p.Alive) ++alive;
+				total += (int)rt.Particles.size();
+			}
+			ImGui::TextDisabled("Alive: %d / %d (Max defined in asset)", alive, total);
+		}
+		else
+		{
+			ImGui::TextDisabled("No Particle System assigned.");
 		}
 	}
 

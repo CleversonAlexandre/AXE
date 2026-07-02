@@ -3,6 +3,7 @@
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
 #include "axe/material/light_material_evaluator.hpp"
+#include <algorithm>
 #include "axe/log/log.hpp"
 #include "axe/core/time.hpp"
 #include <algorithm>
@@ -13,7 +14,8 @@ namespace axe
     // idempotente (retorna na hora se já inicializada).
     static LightMaterialEvaluator s_LightMaterialEvaluator;
 
-    RenderQueue SceneCollector::Collect(const Scene& scene, uint32_t selectedEntityID)
+    RenderQueue SceneCollector::Collect(const Scene& scene, uint32_t selectedEntityID,
+        const glm::vec3& cameraPosition)
     {
         RenderQueue queue;
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
@@ -83,20 +85,93 @@ namespace axe
         for (auto entity : roots)
             CollectEntity(scene, entity, queue, selectedEntityID);
 
-        // --- Partículas — um lote por emissor, só as vivas ---
+        // --- Partículas — um lote por emissor habilitado ---
         for (auto entity : registry.view<ParticleSystemComponent>())
         {
             auto& ps = registry.get<ParticleSystemComponent>(entity);
+            if (!ps.Data) continue;
 
-            ParticleBatch batch;
-            batch.BlendMode = ps.BlendMode;
-            batch.Instances.reserve(ps.Particles.size());
-            for (auto& p : ps.Particles)
-                if (p.Alive)
-                    batch.Instances.push_back({ p.Position, p.Color, p.Size, p.Rotation });
+            for (size_t ei = 0; ei < ps.Data->Emitters.size(); ++ei)
+            {
+                const ParticleEmitterDef& def = ps.Data->Emitters[ei];
+                if (!def.Enabled) continue;
+                if (ei >= ps.EmitterRuntimes.size()) continue;
+                const ParticleEmitterRuntime& rt = ps.EmitterRuntimes[ei];
 
-            if (!batch.Instances.empty())
-                queue.ParticleBatches.push_back(std::move(batch));
+                ParticleBatch batch;
+                batch.BlendMode = def.BlendMode;
+                batch.StretchAmount = def.StretchAmount;
+                batch.FlipbookEnabled = def.FlipbookEnabled;
+                batch.FlipbookCols = def.FlipbookCols;
+                batch.FlipbookRows = def.FlipbookRows;
+                batch.FlipbookCycles = def.FlipbookCycles;
+                batch.OverrideShader = def.ParticleMaterialShader;
+                batch.OverrideSamplers = def.ParticleMaterialSamplers;
+
+                batch.Instances.reserve(rt.Particles.size());
+                for (const auto& p : rt.Particles)
+                {
+                    if (!p.Alive) continue;
+                    float age01 = (p.Lifetime > 0.0f)
+                        ? glm::clamp(p.Age / p.Lifetime, 0.0f, 1.0f) : 0.0f;
+                    batch.Instances.push_back({ p.Position, p.Color, p.Size, p.Rotation, age01, p.Velocity });
+                }
+
+                if (!batch.Instances.empty())
+                    queue.ParticleBatches.push_back(std::move(batch));
+
+                // ── Particle Light ────────────────────────────────────────
+                // Adiciona um Point Light dinâmico na posição do emitter.
+                // Intensidade escala pelo número de partículas vivas (opcional).
+                if (def.LightEnabled && !rt.Particles.empty())
+                {
+                    int alive = 0;
+                    glm::vec3 lightPos(0.f);
+
+                    // Calcula posição média das partículas vivas pra luz
+                    // acompanhar o centro real do efeito
+                    for (const auto& p : rt.Particles)
+                        if (p.Alive) { lightPos += p.Position; ++alive; }
+
+                    if (alive > 0)
+                    {
+                        lightPos /= (float)alive;
+
+                        float intensity = def.LightIntensity;
+                        if (def.LightScaleByParticles)
+                        {
+                            float ratio = glm::clamp((float)alive / (float)rt.Particles.size(), 0.f, 1.f);
+                            intensity *= ratio;
+                        }
+
+                        PointLight pl;
+                        pl.Position = lightPos;
+                        pl.Color = def.LightColor;
+                        pl.Intensity = intensity;
+                        pl.Radius = def.LightRadius;
+                        pl.Animated = def.LightFlicker;
+                        pl.AnimSpeed = def.LightFlickerSpeed;
+                        pl.AnimAmplitude = intensity * def.LightFlickerAmount;
+                        queue.PointLights.push_back(pl);
+                    }
+                }
+            }
+        }
+
+        // ── Depth Sorting — back-to-front pra BlendMode Alpha (0) ────────
+        // Additive (1) não precisa: somar luz é comutativo, a ordem não
+        // importa. Alpha precisa: o que está atrás deve ser desenhado primeiro
+        // ou o resultado fica incorreto (artefatos de transparência).
+        for (auto& b : queue.ParticleBatches)
+        {
+            if (b.BlendMode != 0) continue; // só Alpha
+            std::sort(b.Instances.begin(), b.Instances.end(),
+                [&cameraPosition](const ParticleInstance& a, const ParticleInstance& b)
+                {
+                    float da = glm::length(a.Position - cameraPosition);
+                    float db = glm::length(b.Position - cameraPosition);
+                    return da > db; // maior distância primeiro (back-to-front)
+                });
         }
 
         return queue;

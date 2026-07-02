@@ -5,11 +5,16 @@
 #include "axe/lighting/point_light.hpp"
 #include <vector>
 #include <cstdint>
+#include <memory>
+#include <map>
+#include <string>
 
 namespace axe
 {
     class Mesh;
     class Material;
+    class Shader;
+    class Texture2D;
 
     // Representa um draw call de mesh — sem saber de Scene ou entt.
     struct MeshDrawCall
@@ -27,13 +32,25 @@ namespace axe
         glm::vec4 Color{ 1.0f };
         float     Size = 1.0f;
         float     Rotation = 0.0f;
+        float     Age01 = 0.0f;
+        glm::vec3 Velocity{ 0.0f }; // pra velocity-stretch no vertex shader
     };
 
-    // Lote de partículas de um emissor (mesmo blend mode).
+    // Lote de partículas de um emissor (mesmo blend mode + mesmo material).
     struct ParticleBatch
     {
-        int BlendMode = 1;   // 0 = alpha, 1 = additive
+        int   BlendMode = 1;
+        float StretchAmount = 0.0f;
+
+        // Flipbook — passado como uniforms pro shader do material
+        bool  FlipbookEnabled = false;
+        int   FlipbookCols = 1;
+        int   FlipbookRows = 1;
+        float FlipbookCycles = 1.0f;
+
         std::vector<ParticleInstance> Instances;
+        std::shared_ptr<Shader>   OverrideShader;
+        std::map<std::string, std::shared_ptr<Texture2D>> OverrideSamplers;
     };
 
     // Fila de renderização — tudo que o SceneRenderer precisa saber

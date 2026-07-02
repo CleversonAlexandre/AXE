@@ -11,6 +11,9 @@
 
 namespace axe
 {
+    ScriptWorld::ScriptWorld() = default;
+    ScriptWorld::~ScriptWorld() = default;
+
     void ScriptWorld::OnSceneStart(Scene& scene)
     {
         auto& registry = scene.GetRegistry();
@@ -113,10 +116,9 @@ namespace axe
 
                 sc.Instance->PreUpdate(cur, prev);
 
-                // Log quando WASD pressionado — confirma que input chegou ao PreUpdate
-                //if (cur && (cur[87] || cur[65] || cur[83] || cur[68]))
-                //    AXE_CORE_INFO("ScriptWorld: WASD antes OnUpdate — W={} A={} S={} D={}",
-                //        (bool)cur[87], (bool)cur[65], (bool)cur[83], (bool)cur[68]);
+                // Injeta câmera no contexto antes do OnUpdate
+                if (m_ActiveCamera)
+                    sc.Instance->UpdateCameraInContext(m_ActiveCamera);
 
                 sc.Instance->OnUpdate(deltaTime);
 

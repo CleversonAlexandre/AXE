@@ -51,6 +51,10 @@ namespace axe
     static const MatNE s_MatAnimation[] = {
         {"Time","Time"}, {"Panner","Panner"},
     };
+    static const MatNE s_MatParticle[] = {
+        {"Particle Age",   "Particle Age"},
+        {"Particle Color", "Particle Color"},
+    };
 
     struct MatCatDef { const char* name; const MatNE* e; int n; ImVec4 col; };
     static const MatCatDef s_MatCats[] = {
@@ -60,6 +64,7 @@ namespace axe
         {"Vector",    s_MatVector,    7, {0.3f,  0.85f, 0.55f, 1}},
         {"Utility",   s_MatUtility,   7, {0.85f, 0.3f,  0.75f, 1}},
         {"Animation", s_MatAnimation, 2, {0.95f, 0.35f, 0.6f,  1}},
+        {"Particle",  s_MatParticle,  2, {0.1f,  0.75f, 0.55f, 1}},
     };
 
 
@@ -476,7 +481,7 @@ if (r)
                 if (!filtering)
                     ImGui::Separator();
 
-                for (int ci = 0; ci < 6; ci++)
+                for (int ci = 0; ci < 7; ci++)
                 {
                     auto& cat = s_MatCats[ci];
                     ImVec4 col = cat.col;

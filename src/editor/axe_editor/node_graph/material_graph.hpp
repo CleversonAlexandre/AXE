@@ -53,6 +53,8 @@ namespace axe
 		// Animação — dependem do uniform u_Time (passagem de tempo por frame)
 		Node* AddTimeNode();
 		Node* AddPannerNode();
+		Node* AddParticleAgeNode();
+		Node* AddParticleColorNode();
 
 		// Mais math/vetor/constantes
 		Node* AddMinNode();

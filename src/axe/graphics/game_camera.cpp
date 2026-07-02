@@ -1,9 +1,12 @@
 #include "game_camera.hpp"
 #include "axe/log/log.hpp"
 #include "axe/axe_window/window.hpp"
+#include "axe/scene/scene.hpp"
+#include "axe/scene/components.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <cmath>
 #include "axe/input/key_codes.hpp"
 
 namespace axe
@@ -17,14 +20,51 @@ namespace axe
         return glm::normalize(forward);
     }
 
+    void GameCamera::StartShake(float intensity, float duration)
+    {
+        m_ShakeIntensity = intensity;
+        m_ShakeDuration = glm::max(0.01f, duration);
+        m_ShakeTime = m_ShakeDuration;
+    }
+
     void GameCamera::OnUpdate(float deltaTime, Window* window)
     {
         if (!MouseCaptured || !window) return;
+
+        // Follow entity via script — atualiza o ponteiro de target a cada frame
+        if (m_FollowEntity != entt::null && m_FollowScene)
+        {
+            auto* tc = m_FollowScene->GetRegistry().try_get<TransformComponent>(m_FollowEntity);
+            if (tc)
+            {
+                m_TargetPosition = &tc->Data.Position;
+                CameraMode = Mode::ThirdPerson;
+            }
+            else
+            {
+                m_FollowEntity = entt::null;
+                m_TargetPosition = nullptr;
+            }
+        }
 
         if (CameraMode == Mode::ThirdPerson && m_TargetPosition)
             UpdateThirdPerson(deltaTime, window);
         else
             UpdateFreeFly(deltaTime, window);
+
+        // Camera Shake — aplica offset randômico que decai com o tempo
+        if (m_ShakeTime > 0.f)
+        {
+            m_ShakeTime -= deltaTime;
+            float t = glm::max(0.f, m_ShakeTime / m_ShakeDuration);
+            float mag = m_ShakeIntensity * t;
+
+            // Ruído baseado em sin com frequências altas — sem deps externas
+            float ox = std::sin(m_ShakeTime * 47.3f + 1.1f) * mag;
+            float oy = std::sin(m_ShakeTime * 31.7f + 2.3f) * mag;
+            float oz = std::sin(m_ShakeTime * 23.9f + 0.7f) * mag;
+            m_Position += glm::vec3(ox, oy, oz);
+        }
     }
 
     void GameCamera::UpdateFreeFly(float deltaTime, Window* window)

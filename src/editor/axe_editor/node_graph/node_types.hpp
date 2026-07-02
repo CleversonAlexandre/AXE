@@ -42,6 +42,7 @@ namespace axe
     {
         Surface,        // material de superfície normal (já existe)
         LightFunction,  // controla Color/Intensity de uma luz, via Emissive
+        Particle,
         DeferredDecal,  // [indisponível] decal projetado num superfície
         Volume,         // [indisponível] material volumétrico
         PostProcess,    // [indisponível] efeito de tela inteira

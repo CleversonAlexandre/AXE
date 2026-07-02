@@ -15,7 +15,8 @@ namespace axe
 		Audio,      // .wav, .mp3
 		Script,      // .lua (futuro)
 		Material,
-		GameMode     // .axegamemode
+		GameMode,    // .axegamemode
+		ParticleSystem // .axepart
 	};
 
 	// Converte extensão para tipo
@@ -28,6 +29,7 @@ namespace axe
 		if (ext == ".lua" || ext == ".axescript")           return AssetType::Script;
 		if (ext == ".axemat")                                return AssetType::Material;
 		if (ext == ".axegamemode")                           return AssetType::GameMode;
+		if (ext == ".axepart")                                return AssetType::ParticleSystem;
 		return AssetType::Unknown;
 	}
 
@@ -42,6 +44,7 @@ namespace axe
 		case AssetType::Script:		return "Script";
 		case AssetType::Material:	return "Material";
 		case AssetType::GameMode:	return "GameMode";
+		case AssetType::ParticleSystem: return "ParticleSystem";
 
 		default:					return "Unknown";
 		}
@@ -56,6 +59,7 @@ namespace axe
 		if (str == "Script")  return AssetType::Script;
 		if (str == "Material")  return AssetType::Material;
 		if (str == "GameMode")  return AssetType::GameMode;
+		if (str == "ParticleSystem") return AssetType::ParticleSystem;
 		return AssetType::Unknown;
 	}
 

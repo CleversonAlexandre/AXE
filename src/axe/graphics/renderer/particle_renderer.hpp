@@ -22,6 +22,10 @@ namespace axe
     class AXE_API ParticleRenderer
     {
     public:
+        // deltaTime acumulado — passado ao shader como u_Time.
+        // Chamado pelo SceneRenderer a cada frame antes de Render().
+        void Tick(float deltaTime) { m_Time += deltaTime; }
+
         void Render(const std::vector<ParticleBatch>& batches,
             const glm::mat4& viewProjection,
             const glm::mat4& view);
@@ -30,13 +34,14 @@ namespace axe
         void EnsureInitialized();
         void EnsureCapacity(uint32_t particleCount);
 
-        std::shared_ptr<Shader>       m_Shader;
+        std::shared_ptr<Shader>       m_DefaultShader; // fallback (sem material)
         std::shared_ptr<VertexArray>  m_VAO;
         std::shared_ptr<VertexBuffer> m_VBO;
         std::shared_ptr<IndexBuffer>  m_IBO;
 
-        uint32_t           m_Capacity = 0;   // em partículas
-        std::vector<float> m_Scratch;        // buffer CPU reaproveitado
+        uint32_t           m_Capacity = 0;
+        std::vector<float> m_Scratch;
+        float              m_Time = 0.0f; // segundos acumulados → u_Time
     };
 
 } // namespace axe

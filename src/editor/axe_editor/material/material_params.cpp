@@ -136,10 +136,11 @@ namespace axe
             };
 
         static const char* s_DomainNames[] = {
-            "Surface", "Light Function", "Deferred Decal", "Volume", "Post Process", "User Interface" };
-        static const bool s_DomainAvailable[] = { true, true, false, false, false, false };
+            "Surface", "Light Function", "Particle", "Deferred Decal", "Volume", "Post Process", "User Interface" };
+        static const bool s_DomainAvailable[] = { true, true, true, false, false, false, false };
         int domain = (int)m_Graph->Domain;
-        drawDomainCombo("Material Domain", s_DomainNames, s_DomainAvailable, 6, domain);
+        // Mapeia o enum (que tem Particle=2, DeferredDecal=3...) pra o índice do combo
+        drawDomainCombo("Material Domain", s_DomainNames, s_DomainAvailable, 7, domain);
         m_Graph->Domain = (MaterialDomain)domain;
 
         static const char* s_BlendNames[] = {
@@ -165,6 +166,14 @@ namespace axe
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f),
                 "Light Function: só o pin Emissive do Material Output\n"
                 "é usado — os outros pins ficam acinzentados no grafo.");
+        }
+
+        if (m_Graph->Domain == MaterialDomain::Particle)
+        {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f),
+                "Particle: use Emissive (color) e Opacity.\n"
+                "Vars disponíveis: v_UV, v_Color, v_Age01, u_Time.");
         }
 
         ImGui::Separator();

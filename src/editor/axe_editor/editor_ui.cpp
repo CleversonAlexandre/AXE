@@ -20,6 +20,7 @@ namespace axe
 		m_InspectorWindow.Draw();
 		m_ViewportWindow.Draw();
 		m_MaterialEditorWindow.Draw();
+		m_ParticleEditorWindow.Draw();
 
 		// Input Settings — carrega o InputConfig.json do projeto atual na
 		// primeira vez que detecta o projeto (ou troca de projeto). Evita
@@ -176,6 +177,7 @@ namespace axe
 		m_InspectorWindow.SetContext(context);
 		m_AssetBowserWindow.SetContext(context);
 		m_MaterialEditorWindow.SetContext(context);
+		m_ParticleEditorWindow.SetContext(context);
 	}
 
 	void EditorUI::SetViewportRenderer(ViewportRenderer* renderer)

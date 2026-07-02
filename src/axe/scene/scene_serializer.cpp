@@ -6,6 +6,7 @@
 #include "axe/mesh/mesh_loader.hpp"
 #include "axe/log/log.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/particles/particle_system_component.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -20,7 +21,8 @@ namespace axe
 	using json = nlohmann::json;
 
 	SceneSerializer::MaterialRecompileCallback SceneSerializer::s_MaterialRecompileCallback = nullptr;
-	SceneSerializer::LightMaterialRecompileCallback SceneSerializer::s_LightMaterialRecompileCallback = nullptr;
+	SceneSerializer::LightMaterialRecompileCallback    SceneSerializer::s_LightMaterialRecompileCallback = nullptr;
+	SceneSerializer::ParticleMaterialRecompileCallback SceneSerializer::s_ParticleMaterialRecompileCallback = nullptr;
 
 	// ══════════════════════════════════════════════════════════════════════
 	//  Serialização CANÔNICA de uma entity — fonte ÚNICA da verdade.
@@ -190,6 +192,12 @@ namespace axe
 				components["Script"]["dll_path"] = sc->DllPath;
 				components["Script"]["name"] = sc->ScriptName;
 				components["Script"]["compiled"] = sc->IsCompiled;
+			}
+
+			if (auto* c = registry.try_get<ParticleSystemComponent>(entity))
+			{
+				components["ParticleSystem"]["particle_asset_uuid"] = c->ParticleAssetUUID;
+				components["ParticleSystem"]["playing"] = c->Playing;
 			}
 
 			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
@@ -455,6 +463,45 @@ namespace axe
 				sc.ScriptName = t.value("name", "");
 				sc.IsCompiled = t.value("compiled", false);
 				registry.emplace<ScriptComponent>(entity, sc);
+			}
+
+			if (components.contains("ParticleSystem"))
+			{
+				auto& t = components["ParticleSystem"];
+				ParticleSystemComponent ps;
+				ps.ParticleAssetUUID = t.value("particle_asset_uuid", "");
+				ps.Playing = t.value("playing", true);
+
+				if (!ps.ParticleAssetUUID.empty())
+				{
+					const AssetRecord* record = AssetDatabase::Get().GetByUUID(ps.ParticleAssetUUID);
+					if (record && std::filesystem::exists(record->FilePath))
+					{
+						ps.Data = ParticleSystemAsset::LoadFromFile(record->FilePath);
+
+						// Recompila o material de partícula de cada emitter via callback.
+						// Mesmo padrão do LightMaterial — zero GL vaza pro axe.dll.
+						if (ps.Data)
+						{
+							auto cb = SceneSerializer::GetParticleMaterialRecompileCallback();
+							if (cb)
+							{
+								for (auto& emitter : ps.Data->Emitters)
+								{
+									if (emitter.ParticleMaterialUUID.empty()) continue;
+									cb(emitter.ParticleMaterialUUID,
+										emitter.ParticleMaterialShader,
+										emitter.ParticleMaterialSamplers);
+								}
+							}
+							ps.EmitterRuntimes.resize(ps.Data->Emitters.size());
+						}
+					}
+					else
+						AXE_CORE_WARN("SceneSerializer: ParticleSystem asset '{}' não encontrado.", ps.ParticleAssetUUID);
+				}
+
+				registry.emplace<ParticleSystemComponent>(entity, ps);
 			}
 		}
 	} // anonymous namespace

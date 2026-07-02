@@ -42,10 +42,18 @@ namespace axe
                 auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
                 if (geometryShader)
                     m_Material->SetGeometryShader(geometryShader);
+                else
+                {
+                    const std::string msg = "GeometryShader retornou null (erro silencioso do driver).";
+                    AXE_CORE_WARN("{}", msg);
+                    LogWarning(msg);
+                }
             }
             catch (const std::exception& e)
             {
-                AXE_CORE_WARN("GeometryShader creation failed: {}", e.what());
+                const std::string msg = std::string("GeometryShader: ") + e.what();
+                AXE_CORE_WARN("{}", msg);
+                LogError(msg);
             }
         }
         m_Material->SamplerTextures = result.SamplerTextures;
@@ -101,7 +109,15 @@ namespace axe
         }
         else LogWarning("Nenhuma cena ativa.");
 
-        LogInfo("Shader compilado com sucesso.");
+        // Só reporta sucesso completo se o geometry shader também compilou —
+        // se tiver algum [ERR] no log acima, o usuário já sabe que algo falhou.
+        bool hasErrors = false;
+        for (auto& e : m_ShaderLog)
+            if (e.level == ShaderLogEntry::Level::Error) { hasErrors = true; break; }
+        if (!hasErrors)
+            LogInfo("Shader compilado com sucesso.");
+        else
+            LogWarning("Compilação concluída com erros — verifique as mensagens acima.");
 
         if (m_ThumbnailRenderer && m_Asset)
         {
@@ -247,9 +263,18 @@ namespace axe
 
             if (!result.GeometryFragShader.empty())
             {
-                auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
-                if (geometryShader && m_Material)
-                    m_Material->SetGeometryShader(geometryShader);
+                try
+                {
+                    auto geometryShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
+                    if (geometryShader && m_Material)
+                        m_Material->SetGeometryShader(geometryShader);
+                }
+                catch (const std::exception& e)
+                {
+                    AXE_CORE_WARN("GeometryShader (preview): {}", e.what());
+                    // Preview — sem acesso ao LogError aqui (função estática),
+                    // mas o erro já aparece via LogError no CompileAndApply.
+                }
             }
         }
         catch (...) {}

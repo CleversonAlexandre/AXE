@@ -8,6 +8,7 @@
 namespace axe
 {
     class Scene;
+    class GameCamera;
 
     // Contexto injetado no script — acesso a tudo que o engine oferece
     // Ponteiros para os arrays de teclas da axe.dll
@@ -32,7 +33,22 @@ namespace axe
     {
         entt::entity        Entity = entt::null;
         Scene* ScenePtr = nullptr;
-        ScriptInputSnapshot Input;   // ponteiros, não arrays — sem cópia pesada
+        ScriptInputSnapshot Input;
+        class GameCamera* CameraPtr = nullptr; // set pelo EditorLayer em Play
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Proxy de Camera ───────────────────────────────────────────────────────
+    struct AXE_API ScriptCameraProxy
+    {
+        GameCamera* CameraPtr;
+        Scene* ScenePtr;
+
+        void Shake(float intensity, float duration);
+        void Follow(entt::entity target);
+        void StopFollow();
+        void SetFOV(float fov);
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -72,6 +88,18 @@ namespace axe
 
         void SetVelocity(const glm::vec3& vel);
         void AddForce(const glm::vec3& force);
+    };
+
+    // ── Proxy de Particle System ──────────────────────────────────────────────
+    struct AXE_API ScriptParticleProxy
+    {
+        entt::entity Entity;
+        Scene* ScenePtr;
+
+        void Play();           // liga Playing = true
+        void Stop();           // liga Playing = false
+        void Restart();        // limpa todos os pools e retoma emissão
+        void Burst(int emitterIndex, int count); // dispara N partículas num emitter específico
     };
 
     // ── Proxy de CharacterController ─────────────────────────────────────────
@@ -165,6 +193,12 @@ namespace axe
         // ── Accessors de componente para uso no código gerado ─────────────────
         ScriptTransformProxy  GetTransform();
         ScriptRigidbodyProxy  GetRigidbody();
+        ScriptParticleProxy   GetParticleSystem();
+        ScriptCameraProxy     GetCamera();
+
+        // Chamado pelo ScriptWorld antes de cada OnUpdate pra manter
+        // o CameraPtr atualizado sem recriar o contexto inteiro.
+        void UpdateCameraInContext(class GameCamera* cam) { m_Context.CameraPtr = cam; }
         ScriptCharacterProxy  GetCharacter();
         ScriptEventBusProxy   GetEventBus();
         ScriptRigidbodyProxy  GetPhysics();

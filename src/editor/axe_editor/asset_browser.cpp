@@ -3,6 +3,7 @@
 #include "axe/asset/asset_database.hpp"
 #include "axe/project/project_manager.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe/particles/particle_system_asset.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/scene/game_mode_asset.hpp"
 #include <imgui.h>
@@ -1287,6 +1288,26 @@ namespace axe
                     AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
             }
 
+            if (ImGui::MenuItem("Particle System"))
+            {
+                auto partPath = ProjectManager::Get().GetCurrent().AssetsPath
+                    / "Particles" / "NewParticleSystem.axepart";
+                int i = 1;
+                while (std::filesystem::exists(partPath))
+                    partPath = ProjectManager::Get().GetCurrent().AssetsPath
+                    / "Particles" / ("NewParticleSystem_" + std::to_string(i++) + ".axepart");
+
+                auto partAsset = ParticleSystemAsset::Create(partPath.stem().string());
+                partAsset->Save(partPath);
+                auto uuid = AssetDatabase::Get().Register(partPath.string());
+
+                auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
+                if (rec) rec->VirtualFolder = m_SelectedFolder;
+
+                if (ProjectManager::Get().HasProject())
+                    AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+            }
+
             if (ImGui::MenuItem("Game Mode"))
             {
                 if (ProjectManager::Get().HasProject())
@@ -1594,6 +1615,7 @@ namespace axe
             case AssetType::Script:   icon = icons.GetScriptForClass(record.ScriptClassType);  break;
             case AssetType::Audio:    icon = icons.GetAudio();                                  break;
             case AssetType::GameMode: icon = icons.GetScene();                                  break;
+            case AssetType::ParticleSystem: icon = icons.GetMesh(); /* TODO: ícone dedicado */ break;
             default:                  icon = icons.GetMesh();                                   break;
             }
         }
