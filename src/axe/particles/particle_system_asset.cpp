@@ -44,6 +44,13 @@ namespace axe
         j["size_end"] = e.SizeEnd;
         j["size_variation"] = e.SizeVariation;
         j["stretch_amount"] = e.StretchAmount;
+        j["is_ribbon"] = e.IsRibbon;
+        j["is_beam"] = e.IsBeam;
+        j["beam_target"] = { e.BeamTargetOffset.x, e.BeamTargetOffset.y, e.BeamTargetOffset.z };
+        j["beam_points"] = e.BeamPoints;
+        j["beam_deviation"] = e.BeamDeviation;
+        j["beam_flicker_speed"] = e.BeamFlickerSpeed;
+        j["beam_width"] = e.BeamWidth;
         j["velocity_limit"] = e.VelocityLimit;
         j["rotation_min"] = e.RotationMin;
         j["rotation_max"] = e.RotationMax;
@@ -148,6 +155,14 @@ namespace axe
         e.SizeEnd = j.value("size_end", 0.0f);
         e.SizeVariation = j.value("size_variation", 0.2f);
         e.StretchAmount = j.value("stretch_amount", 0.0f);
+        e.IsRibbon = j.value("is_ribbon", false);
+        e.IsBeam = j.value("is_beam", false);
+        if (j.contains("beam_target") && j["beam_target"].size() == 3)
+            e.BeamTargetOffset = { j["beam_target"][0], j["beam_target"][1], j["beam_target"][2] };
+        e.BeamPoints = j.value("beam_points", 24);
+        e.BeamDeviation = j.value("beam_deviation", 0.4f);
+        e.BeamFlickerSpeed = j.value("beam_flicker_speed", 10.f);
+        e.BeamWidth = j.value("beam_width", 0.04f);
         e.VelocityLimit = j.value("velocity_limit", 0.0f);
         e.RotationMin = j.value("rotation_min", 0.0f);
         e.RotationMax = j.value("rotation_max", 6.2831853f);

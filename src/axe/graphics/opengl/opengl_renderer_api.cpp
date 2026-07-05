@@ -35,6 +35,11 @@ namespace axe
 		glDrawArrays(GL_LINES, 0, vertexCount);
 	}
 
+	void OpenGLRendererAPI::DrawArraysStrip(uint32_t vertexCount)
+	{
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, vertexCount);
+	}
+
 	void OpenGLRendererAPI::SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
 	{
 		glViewport(x, y, width, height);

@@ -107,6 +107,7 @@ namespace axe
 
 
         static void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, uint32_t vertexCount);
+        static void DrawArraysStrip(uint32_t vertexCount); // GL_TRIANGLE_STRIP sem index buffer
 
 
 

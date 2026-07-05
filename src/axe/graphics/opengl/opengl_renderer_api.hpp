@@ -31,6 +31,7 @@ namespace axe
         void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) override;
         void DrawIndexedCount(uint32_t indexCount) override;
         void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, uint32_t vertexCount) override;
+        void DrawArraysStrip(uint32_t vertexCount) override;
 
         void SetPolygonMode(PolygonMode mode) override;
 

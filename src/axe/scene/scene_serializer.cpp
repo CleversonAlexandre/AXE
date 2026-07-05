@@ -129,6 +129,19 @@ namespace axe
 				components["PostProcess"]["ssao_bias"] = c->SSAO.Bias;
 				components["PostProcess"]["ssao_power"] = c->SSAO.Power;
 				components["PostProcess"]["ssao_kernel"] = c->SSAO.KernelSize;
+				// Fog
+				auto& fog = c->Settings.Fog;
+				components["PostProcess"]["fog_enabled"] = fog.Enabled;
+				components["PostProcess"]["fog_color"] = { fog.FogColor.x, fog.FogColor.y, fog.FogColor.z };
+				components["PostProcess"]["fog_density"] = fog.Density;
+				components["PostProcess"]["fog_height_base"] = fog.HeightBase;
+				components["PostProcess"]["fog_height_falloff"] = fog.HeightFalloff;
+				components["PostProcess"]["fog_scatter"] = fog.ScatterStrength;
+				components["PostProcess"]["fog_ambient"] = fog.AmbientStrength;
+				components["PostProcess"]["fog_start"] = fog.FogStart;
+				components["PostProcess"]["fog_end"] = fog.FogEnd;
+				components["PostProcess"]["fog_steps"] = fog.Steps;
+				components["PostProcess"]["fog_jitter"] = fog.StepJitter;
 			}
 
 			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
@@ -380,6 +393,20 @@ namespace axe
 				pp.SSAO.Bias = t.value("ssao_bias", 0.025f);
 				pp.SSAO.Power = t.value("ssao_power", 2.0f);
 				pp.SSAO.KernelSize = t.value("ssao_kernel", 64);
+				// Fog
+				auto& fog = pp.Settings.Fog;
+				fog.Enabled = t.value("fog_enabled", false);
+				fog.Density = t.value("fog_density", 0.04f);
+				fog.HeightBase = t.value("fog_height_base", 0.0f);
+				fog.HeightFalloff = t.value("fog_height_falloff", 0.15f);
+				fog.ScatterStrength = t.value("fog_scatter", 0.6f);
+				fog.AmbientStrength = t.value("fog_ambient", 0.15f);
+				fog.FogStart = t.value("fog_start", 2.0f);
+				fog.FogEnd = t.value("fog_end", 80.0f);
+				fog.Steps = t.value("fog_steps", 12);
+				fog.StepJitter = t.value("fog_jitter", 0.5f);
+				if (t.contains("fog_color") && t["fog_color"].size() == 3)
+					fog.FogColor = { t["fog_color"][0], t["fog_color"][1], t["fog_color"][2] };
 				registry.emplace<PostProcessComponent>(entity, pp);
 			}
 

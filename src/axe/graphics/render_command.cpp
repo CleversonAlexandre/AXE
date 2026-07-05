@@ -18,7 +18,7 @@ namespace axe
 			return;
 		}
 		s_RendererAPI->DrawIndexed(vertexArray);
-			
+
 	}
 	void RenderCommand::SetPolygonMode(RendererAPI::PolygonMode mode)
 	{
@@ -28,6 +28,11 @@ namespace axe
 	void RenderCommand::DrawLines(const std::shared_ptr<VertexArray>& vertexArray, std::uint32_t vertexCount)
 	{
 		s_RendererAPI->DrawLines(vertexArray, vertexCount);
+	}
+
+	void RenderCommand::DrawArraysStrip(uint32_t vertexCount)
+	{
+		s_RendererAPI->DrawArraysStrip(vertexCount);
 	}
 	void RenderCommand::DrawIndexedCount(uint32_t indexCount)
 	{

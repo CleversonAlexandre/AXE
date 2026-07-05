@@ -762,6 +762,23 @@ namespace axe
                 ImGui::Spacing();
                 ImGui::DragFloat("Size Variation", &e.SizeVariation, 0.01f, 0.f, 1.f);
                 ImGui::DragFloat("Stretch Amount", &e.StretchAmount, 0.05f, 0.f, 20.f);
+                ImGui::Checkbox("Ribbon / Trail", &e.IsRibbon);
+                if (e.IsRibbon)
+                    ImGui::TextDisabled("  Particles connected as continuous strip.");
+
+                ImGui::Spacing();
+                ImGui::Checkbox("Beam / Lightning", &e.IsBeam);
+                if (e.IsBeam)
+                {
+                    ImGui::TextDisabled("  Procedural ribbon from origin to target.");
+                    ImGui::Text("Target Offset");
+                    DragVec3Labeled("##beamtgt", &e.BeamTargetOffset.x, 0.1f);
+                    ImGui::DragInt("Points##beam", &e.BeamPoints, 1.f, 4, 128);
+                    ImGui::DragFloat("Deviation##beam", &e.BeamDeviation, 0.01f, 0.f, 5.f);
+                    ImGui::DragFloat("Flicker Speed##beam", &e.BeamFlickerSpeed, 0.5f, 0.f, 50.f);
+                    ImGui::DragFloat("Width##beam", &e.BeamWidth, 0.002f, 0.001f, 2.f);
+                    ImGui::TextDisabled("Color Start/End control color along the beam.");
+                }
                 const char* blends[] = { "Alpha","Additive" };
                 ImGui::Combo("Blend Mode", &e.BlendMode, blends, 2);
                 ImGui::Unindent(8);

@@ -25,7 +25,25 @@ namespace axe
         bool            Selected = false;
     };
 
-    // Uma partícula pronta pra desenhar — billboard. Sem ECS.
+    // ── Ribbon / Trail ────────────────────────────────────────────────────────
+    // Cada RibbonPoint é um nó da fita — a cauda (mais velho) vem primeiro,
+    // a cabeça (mais novo) vem por último. O RibbonRenderer conecta
+    // consecutivos como triangle strip, perpendicular ao eixo câmera→ponto.
+    struct RibbonPoint
+    {
+        glm::vec3 Position{ 0.f };
+        glm::vec4 Color{ 1.f };
+        float     Width = 0.2f;  // largura da fita neste ponto
+        float     Age01 = 0.f;   // 0=nasceu, 1=morre (pra material)
+    };
+
+    struct RibbonBatch
+    {
+        std::vector<RibbonPoint> Points;   // ordered tail → head
+        int   BlendMode = 1;
+        std::shared_ptr<Shader>   OverrideShader;
+        std::map<std::string, std::shared_ptr<Texture2D>> OverrideSamplers;
+    };
     struct ParticleInstance
     {
         glm::vec3 Position{ 0.0f };
@@ -65,7 +83,8 @@ namespace axe
         std::vector<MeshDrawCall> Meshes;
 
         // Partículas (billboards) — um lote por emissor
-        std::vector<ParticleBatch> ParticleBatches;
+        std::vector<ParticleBatch>  ParticleBatches;
+        std::vector<RibbonBatch>    RibbonBatches;
 
         // Entity selecionada — ID opaco para o outline
         // SceneRenderer não precisa saber o que é uma "entity"
@@ -79,6 +98,7 @@ namespace axe
             PointLights.clear();
             Meshes.clear();
             ParticleBatches.clear();
+            RibbonBatches.clear();
             SelectedID = UINT32_MAX;
             SelectedMesh = nullptr;
             SelectedTransform = glm::mat4(1.0f);

@@ -164,9 +164,14 @@ namespace axe
         // do InnerCutoff = 1 (intensidade máxima); entre os dois, suaviza.
         if (pl.IsSpot == 1)
         {
-            float theta = dot(-L, normalize(pl.Direction));
-            float epsilon = pl.InnerCutoff - pl.OuterCutoff;
-            float coneAtt = clamp((theta - pl.OuterCutoff) / max(epsilon, 0.0001), 0.0, 1.0);
+            // theta: 1.0 = fragmento diretamente na direção do cone,
+            //        <OuterCutoff = fora do cone.
+            float theta   = dot(-L, normalize(pl.Direction));
+            // smoothstep: 0 quando theta < OuterCutoff, 1 quando
+            // theta > InnerCutoff, transição suave entre os dois.
+            // Mais robusto que a divisão por epsilon — funciona mesmo
+            // quando Inner == Outer (corte duro).
+            float coneAtt = smoothstep(pl.OuterCutoff, pl.InnerCutoff, theta);
             att *= coneAtt;
         }
 

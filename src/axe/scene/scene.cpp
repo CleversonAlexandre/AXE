@@ -90,9 +90,12 @@ namespace axe
 	{
 		if (!m_Registry.valid(child)) return;
 
+		// Captura o transform MUNDIAL do filho ANTES de alterar a hierarquia,
+		// pra poder converter pra local após o reparent.
+		glm::mat4 childWorld = GetWorldTransform(child);
+
 		RemoveParent(child);
 
-		// Não converte transform — filho mantém posição absoluta
 		auto& childRel = m_Registry.get_or_emplace<RelationshipComponent>(child);
 		childRel.Parent = parent;
 
@@ -100,6 +103,27 @@ namespace axe
 		{
 			auto& parentRel = m_Registry.get_or_emplace<RelationshipComponent>(parent);
 			parentRel.Children.push_back(child);
+		}
+
+		// Converte o transform do filho de mundial → local (relativo ao novo pai),
+		// garantindo que ele permaneça na mesma posição visual após o reparent.
+		if (auto* tc = m_Registry.try_get<TransformComponent>(child))
+		{
+			glm::mat4 parentWorld = GetWorldTransform(parent);
+			glm::mat4 localMat = glm::inverse(parentWorld) * childWorld;
+
+			glm::vec3 skew;
+			glm::vec4 perspective;
+			glm::quat orientation;
+			glm::vec3 translation, scale;
+
+			if (glm::decompose(localMat, scale, orientation, translation, skew, perspective))
+			{
+				tc->Data.Position = translation;
+				tc->Data.Scale = scale;
+				// Converte quaternion → Euler em radianos (formato interno do engine)
+				tc->Data.Rotation = glm::eulerAngles(orientation);
+			}
 		}
 	}
 

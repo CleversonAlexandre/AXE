@@ -905,6 +905,26 @@ namespace axe
 			ImGui::SliderInt("Kernel Size", &pp.SSAO.KernelSize, 8, 64);
 			ImGui::Checkbox("Debug (mostra oclusão)", &pp.SSAO.Debug);
 		}
+
+		// ── Volumetric Fog ────────────────────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Text("Volumetric Fog");
+		ImGui::Checkbox("Fog Ativo", &pp.Settings.Fog.Enabled);
+		if (pp.Settings.Fog.Enabled)
+		{
+			ImGui::ColorEdit3("Cor do Fog", &pp.Settings.Fog.FogColor.x);
+			ImGui::DragFloat("Densidade", &pp.Settings.Fog.Density, 0.001f, 0.0f, 1.0f);
+			ImGui::DragFloat("Scatter Strength", &pp.Settings.Fog.ScatterStrength, 0.01f, 0.0f, 2.0f);
+			ImGui::DragFloat("Ambient Strength", &pp.Settings.Fog.AmbientStrength, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Fog Start", &pp.Settings.Fog.FogStart, 0.5f, 0.0f, 50.0f);
+			ImGui::DragFloat("Fog End", &pp.Settings.Fog.FogEnd, 1.0f, 1.0f, 500.0f);
+			ImGui::DragFloat("Height Base", &pp.Settings.Fog.HeightBase, 0.1f, -20.0f, 20.0f);
+			ImGui::DragFloat("Height Falloff", &pp.Settings.Fog.HeightFalloff, 0.01f, 0.0f, 2.0f);
+			ImGui::SliderInt("Ray Steps", &pp.Settings.Fog.Steps, 4, 32);
+			ImGui::DragFloat("Jitter", &pp.Settings.Fog.StepJitter, 0.01f, 0.0f, 1.0f);
+			ImGui::TextDisabled("Ponto de luz ilumina o volume (scatter).");
+		}
 	}
 
 	// ==================== Física ====================

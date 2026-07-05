@@ -10,6 +10,7 @@
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/log/log.hpp"
 #include "axe/material/material.hpp"
+#include "axe/core/time.hpp"
 #include <algorithm>
 
 namespace axe
@@ -39,6 +40,7 @@ namespace axe
             s_Last = now;
             dt = glm::clamp(dt, 0.0f, 0.1f); // clamp pra evitar salto no primeiro frame
             m_ParticleRenderer.Tick(dt);
+            m_RibbonRenderer.Tick(dt);
         }
 
         RenderShadowPass(queue, cameraPosition);
@@ -106,6 +108,9 @@ namespace axe
         // com a simulação rodando normalmente (CPU-side) por trás.
         if (!queue.ParticleBatches.empty())
             m_ParticleRenderer.Render(queue.ParticleBatches, viewProjection, view);
+
+        if (!queue.RibbonBatches.empty())
+            m_RibbonRenderer.Render(queue.RibbonBatches, viewProjection, cameraPosition);
     }
 
     // =============================================================================
@@ -212,6 +217,23 @@ namespace axe
         // depth-test occlui contra a geometria, depth-write off, blend on.
         if (!queue.ParticleBatches.empty())
             m_ParticleRenderer.Render(queue.ParticleBatches, viewProjection, view);
+        if (!queue.RibbonBatches.empty())
+            m_RibbonRenderer.Render(queue.RibbonBatches, viewProjection, cameraPosition);
+
+        // --- 4.7. Volumetric Fog (screen-space) ---
+        if (m_FogSettings.Enabled)
+        {
+            if (!m_FogPass)
+                m_FogPass = VolumetricFogPass::Create();
+            if (m_FogPass && !m_FogPass->IsInitialized())
+                m_FogPass->Initialize();
+            if (m_FogPass && m_FogPass->IsInitialized())
+            {
+                glm::mat4 invViewProj = glm::inverse(viewProjection);
+                m_FogPass->Execute(m_GBuffer, m_FogSettings, invViewProj,
+                    cameraPosition, queue.PointLights, Time::Elapsed(), width, height);
+            }
+        }
 
         // --- 5. Outline ---
         if (queue.SelectedMesh && queue.SelectedID != UINT32_MAX)

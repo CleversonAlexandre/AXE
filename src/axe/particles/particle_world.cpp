@@ -224,8 +224,13 @@ namespace axe
             {
                 if (!ps.Data) return;
 
-                const glm::vec3 origin = tr.Data.Position;
-                const glm::mat3 rot = extractRotation(tr.Data);
+                // Usa o transform MUNDIAL — partículas filhas seguem o pai
+                glm::mat4 worldMat = scene.GetWorldTransform(entt_entity);
+                const glm::vec3 origin = glm::vec3(worldMat[3]);
+                const glm::mat3 rot = glm::mat3(
+                    glm::normalize(glm::vec3(worldMat[0])),
+                    glm::normalize(glm::vec3(worldMat[1])),
+                    glm::normalize(glm::vec3(worldMat[2])));
 
                 if (ps.EmitterRuntimes.size() != ps.Data->Emitters.size())
                     ps.EmitterRuntimes.resize(ps.Data->Emitters.size());
@@ -239,6 +244,10 @@ namespace axe
                     ParticleEmitterRuntime& rt = ps.EmitterRuntimes[ei];
 
                     if (!def.Enabled) continue;
+
+                    // Beam emitters são gerados proceduralmente no SceneCollector
+                    // — não precisam de simulação de partículas.
+                    if (def.IsBeam) continue;
 
                     int cap = glm::clamp(def.MaxParticles, 1, 100000);
                     if ((int)rt.Particles.size() != cap)

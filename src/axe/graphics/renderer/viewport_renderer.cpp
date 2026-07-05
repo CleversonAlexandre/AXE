@@ -155,7 +155,10 @@ namespace axe
 					auto& pp = registry.get<PostProcessComponent>(entity);
 					m_PostProcessSettings = pp.Settings;
 					if (m_SceneRenderer)
+					{
 						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
+						m_SceneRenderer->SetFogSettings(pp.Settings.Fog);
+					}
 					break;
 				}
 			}
@@ -210,7 +213,10 @@ namespace axe
 					auto& pp = registry.get<PostProcessComponent>(entity);
 					m_PostProcessSettings = pp.Settings;
 					if (m_SceneRenderer)
+					{
 						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
+						m_SceneRenderer->SetFogSettings(pp.Settings.Fog);
+					}
 					break;
 				}
 			}
@@ -365,7 +371,12 @@ namespace axe
 
 		glm::mat4 view = m_Camera->GetViewMatrix();
 		glm::mat4 projection = m_Camera->GetProjectionMatrix();
-		glm::mat4 model = tc->Data.GetMatrix();
+
+		// Usa o transform MUNDIAL no gizmo — necessário pra entities filhas
+		// aparecerem no lugar certo no viewport.
+		glm::mat4 model = m_Scene
+			? m_Scene->GetWorldTransform(*m_SelectedEntity)
+			: tc->Data.GetMatrix();
 
 		// Snap
 		float snapValues[3] = { SnapValue, SnapValue, SnapValue };
@@ -395,11 +406,25 @@ namespace axe
 				m_GizmoWasUsing = true;
 			}
 
-			tc->Data.WorldMatrix = model;
-			tc->Data.UseWorldMatrix = true;
+			// Se a entity tem pai, converte world matrix → local space
+			// dividindo pelo transform mundial do pai.
+			glm::mat4 localModel = model;
+			if (m_Scene)
+			{
+				auto& registry = m_Scene->GetRegistry();
+				auto* rel = registry.try_get<RelationshipComponent>(*m_SelectedEntity);
+				if (rel && rel->Parent != entt::null && registry.valid(rel->Parent))
+				{
+					glm::mat4 parentWorld = m_Scene->GetWorldTransform(rel->Parent);
+					localModel = glm::inverse(parentWorld) * model;
+				}
+			}
+
+			tc->Data.WorldMatrix = localModel;
+			tc->Data.UseWorldMatrix = false; // usa Position/Rotation/Scale decompostos
 
 			glm::vec3 position, rotation, scale;
-			if (DecomposeTransform(model, position, rotation, scale))
+			if (DecomposeTransform(localModel, position, rotation, scale))
 			{
 				tc->Data.Position = position;
 				tc->Data.Rotation = rotation;

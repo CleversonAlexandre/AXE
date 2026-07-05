@@ -74,6 +74,7 @@ namespace axe
         virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;
         virtual void DrawIndexedCount(uint32_t indexCount) = 0;
         virtual void DrawLines(const std::shared_ptr<VertexArray>& vertexArray, uint32_t vertexCount) = 0;
+        virtual void DrawArraysStrip(uint32_t vertexCount) = 0;
 
         // Polygon
         virtual void SetPolygonMode(PolygonMode mode) = 0;

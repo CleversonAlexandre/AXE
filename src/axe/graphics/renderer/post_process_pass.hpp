@@ -1,5 +1,6 @@
 #pragma once
 #include "axe/core/types.hpp"
+#include "axe/renderer/volumetric_fog_pass.hpp"
 #include <memory>
 #include <cstdint>
 
@@ -16,6 +17,9 @@ namespace axe
         float BloomThreshold = 0.7f;
         float BloomIntensity = 0.5f;
         int   BloomBlurPasses = 5;
+
+        // Volumetric Fog
+        VolumetricFogSettings Fog;
     };
 
     class AXE_API PostProcessPass

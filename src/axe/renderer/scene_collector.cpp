@@ -3,7 +3,9 @@
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
 #include "axe/material/light_material_evaluator.hpp"
+#include "axe/core/time.hpp"
 #include <algorithm>
+#include <cmath>
 #include "axe/log/log.hpp"
 #include "axe/core/time.hpp"
 #include <algorithm>
@@ -53,10 +55,16 @@ namespace axe
             PointLight pl = *plc.Data;
             if (auto* tc = registry.try_get<TransformComponent>(entity))
             {
-                pl.Position = tc->Data.Position;
-                // Direção do cone vem da rotação do objeto, não de um
-                // valor digitado — rotacionar o objeto aponta a luz.
-                pl.Direction = ComputeSpotDirection(tc->Data.Rotation);
+                // Extrai posição e direção do transform MUNDIAL
+                glm::mat4 worldMat = scene.GetWorldTransform(entity);
+                pl.Position = glm::vec3(worldMat[3]); // coluna 3 = translação
+
+                if (pl.IsSpot)
+                {
+                    // Extrai eixo -Y do transform mundial = direção do spot
+                    glm::vec3 worldUp = glm::normalize(glm::vec3(worldMat[1]));
+                    pl.Direction = -worldUp;
+                }
             }
 
             // (O antigo flicker/pulso por sinf(Time) foi removido — o Light
@@ -91,6 +99,20 @@ namespace axe
             auto& ps = registry.get<ParticleSystemComponent>(entity);
             if (!ps.Data) continue;
 
+            // Extrai posição e rotação do transform MUNDIAL — necessário para
+            // beam e particle light com hierarquia pai→filho correta.
+            glm::vec3 entityOrigin(0.f);
+            glm::mat3 entityRot(1.f);
+            if (auto* tc = registry.try_get<TransformComponent>(entity))
+            {
+                glm::mat4 m = scene.GetWorldTransform(entity);
+                entityOrigin = glm::vec3(m[3]);
+                entityRot = glm::mat3(
+                    glm::normalize(glm::vec3(m[0])),
+                    glm::normalize(glm::vec3(m[1])),
+                    glm::normalize(glm::vec3(m[2])));
+            }
+
             for (size_t ei = 0; ei < ps.Data->Emitters.size(); ++ei)
             {
                 const ParticleEmitterDef& def = ps.Data->Emitters[ei];
@@ -98,63 +120,147 @@ namespace axe
                 if (ei >= ps.EmitterRuntimes.size()) continue;
                 const ParticleEmitterRuntime& rt = ps.EmitterRuntimes[ei];
 
-                ParticleBatch batch;
-                batch.BlendMode = def.BlendMode;
-                batch.StretchAmount = def.StretchAmount;
-                batch.FlipbookEnabled = def.FlipbookEnabled;
-                batch.FlipbookCols = def.FlipbookCols;
-                batch.FlipbookRows = def.FlipbookRows;
-                batch.FlipbookCycles = def.FlipbookCycles;
-                batch.OverrideShader = def.ParticleMaterialShader;
-                batch.OverrideSamplers = def.ParticleMaterialSamplers;
-
-                batch.Instances.reserve(rt.Particles.size());
-                for (const auto& p : rt.Particles)
+                // ── Beam (lightning) — ribbon procedural entre dois pontos ───
+                if (def.IsBeam)
                 {
-                    if (!p.Alive) continue;
-                    float age01 = (p.Lifetime > 0.0f)
-                        ? glm::clamp(p.Age / p.Lifetime, 0.0f, 1.0f) : 0.0f;
-                    batch.Instances.push_back({ p.Position, p.Color, p.Size, p.Rotation, age01, p.Velocity });
+                    glm::vec3 start = entityOrigin + entityRot * def.SpawnOffset;
+                    glm::vec3 end = entityOrigin + entityRot * (def.SpawnOffset + def.BeamTargetOffset);
+                    glm::vec3 dir = end - start;
+                    float     len = glm::length(dir);
+                    if (len > 0.001f)
+                    {
+                        glm::vec3 dirN = dir / len;
+                        glm::vec3 up = (std::abs(glm::dot(dirN, glm::vec3(0, 1, 0))) > 0.99f)
+                            ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+                        glm::vec3 p1 = glm::normalize(glm::cross(dirN, up));
+                        glm::vec3 p2 = glm::normalize(glm::cross(dirN, p1));
+
+                        float t_now = axe::Time::Elapsed();
+                        float seed = (float)ei * 17.3f; // seed único por emitter
+
+                        RibbonBatch rb;
+                        rb.BlendMode = def.BlendMode;
+                        rb.OverrideShader = def.ParticleMaterialShader;
+                        rb.OverrideSamplers = def.ParticleMaterialSamplers;
+                        rb.Points.reserve(def.BeamPoints + 1);
+
+                        for (int bi = 0; bi <= def.BeamPoints; ++bi)
+                        {
+                            float t = (float)bi / def.BeamPoints;
+                            glm::vec3 base = glm::mix(start, end, t);
+
+                            // sin(t*π) = 0 nos extremos, 1 no meio
+                            float env = std::sin(t * glm::pi<float>());
+                            float d1 = std::sin(t * 8.7f + t_now * def.BeamFlickerSpeed + seed)
+                                * def.BeamDeviation * env;
+                            float d2 = std::cos(t * 6.3f + t_now * def.BeamFlickerSpeed + seed + 1.5f)
+                                * def.BeamDeviation * env;
+                            // Segunda frequência para detalhe maior
+                            d1 += std::sin(t * 19.f + t_now * def.BeamFlickerSpeed * 1.7f + seed)
+                                * def.BeamDeviation * 0.35f * env;
+                            d2 += std::cos(t * 14.f + t_now * def.BeamFlickerSpeed * 1.5f + seed + 3.f)
+                                * def.BeamDeviation * 0.35f * env;
+
+                            glm::vec3 pos = base + p1 * d1 + p2 * d2;
+                            glm::vec4 col = glm::mix(def.ColorStart, def.ColorEnd, t);
+                            rb.Points.push_back({ pos, col, def.BeamWidth, t });
+                        }
+                        queue.RibbonBatches.push_back(std::move(rb));
+                    }
+                    continue; // pula coleta normal de partículas
                 }
 
-                if (!batch.Instances.empty())
-                    queue.ParticleBatches.push_back(std::move(batch));
-
-                // ── Particle Light ────────────────────────────────────────
-                // Adiciona um Point Light dinâmico na posição do emitter.
-                // Intensidade escala pelo número de partículas vivas (opcional).
-                if (def.LightEnabled && !rt.Particles.empty())
+                if (def.IsRibbon)
                 {
-                    int alive = 0;
-                    glm::vec3 lightPos(0.f);
-
-                    // Calcula posição média das partículas vivas pra luz
-                    // acompanhar o centro real do efeito
+                    // ── Ribbon: coleta pontos ordenados cauda→cabeça ──────
+                    // Filtra vivos e ordena por idade decrescente (mais velho
+                    // = cauda da fita, mais novo = cabeça).
+                    std::vector<const Particle*> alive;
+                    alive.reserve(rt.Particles.size());
                     for (const auto& p : rt.Particles)
-                        if (p.Alive) { lightPos += p.Position; ++alive; }
+                        if (p.Alive) alive.push_back(&p);
 
-                    if (alive > 0)
+                    if (alive.size() >= 2)
                     {
-                        lightPos /= (float)alive;
+                        std::sort(alive.begin(), alive.end(),
+                            [](const Particle* a, const Particle* b)
+                            { return a->Age > b->Age; }); // mais velho primeiro (cauda)
 
-                        float intensity = def.LightIntensity;
-                        if (def.LightScaleByParticles)
+                        RibbonBatch rb;
+                        rb.BlendMode = def.BlendMode;
+                        rb.OverrideShader = def.ParticleMaterialShader;
+                        rb.OverrideSamplers = def.ParticleMaterialSamplers;
+                        rb.Points.reserve(alive.size());
+
+                        for (const auto* p : alive)
                         {
-                            float ratio = glm::clamp((float)alive / (float)rt.Particles.size(), 0.f, 1.f);
-                            intensity *= ratio;
+                            float age01 = (p->Lifetime > 0.f)
+                                ? glm::clamp(p->Age / p->Lifetime, 0.f, 1.f) : 0.f;
+                            rb.Points.push_back({ p->Position, p->Color, p->Size, age01 });
                         }
-
-                        PointLight pl;
-                        pl.Position = lightPos;
-                        pl.Color = def.LightColor;
-                        pl.Intensity = intensity;
-                        pl.Radius = def.LightRadius;
-                        pl.Animated = def.LightFlicker;
-                        pl.AnimSpeed = def.LightFlickerSpeed;
-                        pl.AnimAmplitude = intensity * def.LightFlickerAmount;
-                        queue.PointLights.push_back(pl);
+                        queue.RibbonBatches.push_back(std::move(rb));
                     }
                 }
+                else
+                {
+                    ParticleBatch batch;
+                    batch.BlendMode = def.BlendMode;
+                    batch.StretchAmount = def.StretchAmount;
+                    batch.FlipbookEnabled = def.FlipbookEnabled;
+                    batch.FlipbookCols = def.FlipbookCols;
+                    batch.FlipbookRows = def.FlipbookRows;
+                    batch.FlipbookCycles = def.FlipbookCycles;
+                    batch.OverrideShader = def.ParticleMaterialShader;
+                    batch.OverrideSamplers = def.ParticleMaterialSamplers;
+
+                    batch.Instances.reserve(rt.Particles.size());
+                    for (const auto& p : rt.Particles)
+                    {
+                        if (!p.Alive) continue;
+                        float age01 = (p.Lifetime > 0.0f)
+                            ? glm::clamp(p.Age / p.Lifetime, 0.0f, 1.0f) : 0.0f;
+                        batch.Instances.push_back({ p.Position, p.Color, p.Size, p.Rotation, age01, p.Velocity });
+                    }
+
+                    if (!batch.Instances.empty())
+                        queue.ParticleBatches.push_back(std::move(batch));
+
+                    // ── Particle Light ────────────────────────────────────────
+                    // Adiciona um Point Light dinâmico na posição do emitter.
+                    // Intensidade escala pelo número de partículas vivas (opcional).
+                    if (def.LightEnabled && !rt.Particles.empty())
+                    {
+                        int alive = 0;
+                        glm::vec3 lightPos(0.f);
+
+                        // Calcula posição média das partículas vivas pra luz
+                        // acompanhar o centro real do efeito
+                        for (const auto& p : rt.Particles)
+                            if (p.Alive) { lightPos += p.Position; ++alive; }
+
+                        if (alive > 0)
+                        {
+                            lightPos /= (float)alive;
+
+                            float intensity = def.LightIntensity;
+                            if (def.LightScaleByParticles)
+                            {
+                                float ratio = glm::clamp((float)alive / (float)rt.Particles.size(), 0.f, 1.f);
+                                intensity *= ratio;
+                            }
+
+                            PointLight pl;
+                            pl.Position = lightPos;
+                            pl.Color = def.LightColor;
+                            pl.Intensity = intensity;
+                            pl.Radius = def.LightRadius;
+                            pl.Animated = def.LightFlicker;
+                            pl.AnimSpeed = def.LightFlickerSpeed;
+                            pl.AnimAmplitude = intensity * def.LightFlickerAmount;
+                            queue.PointLights.push_back(pl);
+                        }
+                    }
+                } // end else (billboard, não ribbon)
             }
         }
 
@@ -209,7 +315,8 @@ namespace axe
             MeshDrawCall dc;
             dc.Mesh = mc->Data.get();
             dc.Material = mat ? mat->Data.get() : nullptr;
-            dc.Transform = tc->Data.GetMatrix();
+            // Usa o transform MUNDIAL (herda a hierarquia de pais)
+            dc.Transform = scene.GetWorldTransform(entity);
             dc.Selected = ((uint32_t)entity == selectedEntityID);
 
             queue.Meshes.push_back(dc);

@@ -16,6 +16,8 @@
 #include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/graphics/renderer/outline_renderer.hpp"
 #include "axe/graphics/renderer/particle_renderer.hpp"
+#include "axe/graphics/renderer/ribbon_renderer.hpp"
+#include "axe/renderer/volumetric_fog_pass.hpp"
 
 namespace axe
 {
@@ -59,6 +61,7 @@ namespace axe
         }
 
         void SetSSAOSettings(const SSAOSettings& s) { m_SSAOSettings = s; }
+        void SetFogSettings(const VolumetricFogSettings& s) { m_FogSettings = s; }
         void SetTargetFramebuffer(uint32_t fboID) { m_TargetFBO = fboID; }
         uint32_t GetTargetFBO() const { return m_TargetFBO; }
         bool IsDeferredEnabled() const { return m_DeferredEnabled; }
@@ -84,8 +87,11 @@ namespace axe
         CubeRenderer    m_CubeRenderer;
         MeshRenderer    m_MeshRenderer;
         LineRenderer    m_LineRenderer;
-        OutlineRenderer m_OutlineRenderer;
+        OutlineRenderer  m_OutlineRenderer;
         ParticleRenderer m_ParticleRenderer;
+        RibbonRenderer   m_RibbonRenderer;
+        std::shared_ptr<VolumetricFogPass> m_FogPass;
+        VolumetricFogSettings m_FogSettings;
 
         std::shared_ptr<ShadowMapPass> m_ShadowPass;
         GBuffer                        m_GBuffer;

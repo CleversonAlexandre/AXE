@@ -76,6 +76,24 @@ namespace axe
         float SizeVariation = 0.2f;
         float StretchAmount = 0.0f;
 
+        // ── Ribbon / Trail ────────────────────────────────────────────────────
+        // Quando true, partículas vivas são conectadas em sequência como uma
+        // fita contínua em vez de billboards independentes.
+        // SizeStart/SizeEnd controlam a largura da fita na cabeça/cauda.
+        bool IsRibbon = false;
+
+        // ── Beam / Lightning ──────────────────────────────────────────────────
+        // Quando true, ignora simulação de partículas e gera um ribbon
+        // proceduralmente entre a origem do emitter e BeamTargetOffset.
+        // O zigue-zague é criado por dois canais de ruído seno perpendiculares
+        // ao eixo do beam, com envelope sin(t*π) que zera nos extremos.
+        bool      IsBeam = false;
+        glm::vec3 BeamTargetOffset{ 0.f, -3.f, 0.f }; // offset local relativo à origem
+        int       BeamPoints = 24;    // pontos de controle (mais = mais detalhe)
+        float     BeamDeviation = 0.4f;  // deslocamento máximo perpendicular (metros)
+        float     BeamFlickerSpeed = 10.f;  // velocidade do flicker (Hz aproximado)
+        float     BeamWidth = 0.04f; // largura do ribbon
+
         // ── Velocity Limit ────────────────────────────────────────
         float VelocityLimit = 0.0f;  // 0 = sem limite
 
