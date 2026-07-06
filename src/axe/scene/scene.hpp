@@ -37,7 +37,8 @@ namespace axe
 		entt::entity CreateFolder(const std::string& name = "Folder");
 
 		//Define pai/filho
-		void SetParent(entt::entity child, entt::entity parent);
+		void SetParent(entt::entity child, entt::entity parent,
+			bool adjustTransform = true); // false durante load de cena
 
 		//Remove de um pai
 		void RemoveParent(entt::entity child);

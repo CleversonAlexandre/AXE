@@ -13,9 +13,16 @@
 
 #include "axe/graphics/game_camera.hpp"
 #include "axe/graphics/render_command.hpp"
+#include "axe/graphics/renderer/taa_pass.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/mesh/mesh.hpp"
 #include <glm/gtc/type_ptr.hpp>
+#include <cmath>
+
+static float smoothstep(float edge0, float edge1, float x) {
+	float t = std::max(0.f, std::min(1.f, (x - edge0) / (edge1 - edge0)));
+	return t * t * (3.f - 2.f * t);
+}
 
 namespace {
 	// Shader de silhueta para drag preview — cor sólida + alpha baixo
@@ -130,6 +137,62 @@ namespace axe
 				}
 				break;
 			}
+
+			// ── Céu Procedural + Time of Day — lê do Directional Light ────────
+			// O sol É a luz direcional, então faz sentido controlar aqui.
+			for (auto le : registry.view<LightComponent>())
+			{
+				auto& lc = registry.get<LightComponent>(le);
+				if (!lc.Data) continue;
+				auto& dl = *lc.Data;
+
+				if (!dl.ProceduralSky)
+				{
+					if (m_SceneRenderer)
+						m_SceneRenderer->SetProceduralSky(false, { 0,1,0 },
+							2.5f, 0.5f, 0.02f, { 1,1,1 }, { 0.01f,0.01f,0.03f });
+					break;
+				}
+
+				// Calcula direção do sol (a partir do Time of Day ou da direção manual)
+				glm::vec3 sunDir = glm::normalize(-dl.Direction);
+
+				if (dl.TimeOfDayEnabled)
+				{
+					float dt = timeSeconds - m_LastTimeSeconds;
+					if (dt < 0.0f || dt > 0.5f) dt = 0.016f;
+
+					dl.Hour = std::fmod(dl.Hour + dt * (dl.DaySpeed / 3600.0f), 24.0f);
+
+					// Ângulo horário: 0 ao meio-dia (12h), π/2 ao pôr do sol (18h)
+					float hourAngle = (dl.Hour - 12.0f) * (3.14159f / 12.0f);
+					float latRad = dl.SunLatitude * (3.14159f / 180.0f);
+					float elevation = std::asin(std::cos(latRad) * std::cos(hourAngle));
+					float azimuth = std::atan2(std::sin(hourAngle),
+						std::cos(hourAngle) * std::sin(latRad));
+
+					sunDir = glm::normalize(glm::vec3(
+						std::cos(elevation) * std::sin(azimuth),
+						std::sin(elevation),
+						std::cos(elevation) * std::cos(azimuth)));
+
+					// Atualiza direção, cor e intensidade da luz pelo ciclo solar
+					dl.Direction = -sunDir;
+					float elev = std::max(0.0f, sunDir.y);
+					float sunsetF = smoothstep(0.0f, 0.3f, elev);
+					dl.Color = glm::mix(
+						glm::vec3(1.0f, 0.42f, 0.08f),
+						glm::vec3(1.0f, 0.93f, 0.88f), sunsetF);
+					dl.Intensity = elev * 8.0f;
+				}
+
+				if (m_SceneRenderer)
+					m_SceneRenderer->SetProceduralSky(true, sunDir,
+						dl.Turbidity, dl.CloudCoverage, dl.CloudSpeed,
+						dl.CloudColor, dl.NightColor);
+				break;
+			}
+			m_LastTimeSeconds = timeSeconds;
 		}
 
 		// 3. Binda HDR e limpa
@@ -158,6 +221,8 @@ namespace axe
 					{
 						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
 						m_SceneRenderer->SetFogSettings(pp.Settings.Fog);
+						m_TAASettings = pp.Settings.TAA;
+						m_SSRSettings = pp.Settings.SSR;
 					}
 					break;
 				}
@@ -186,13 +251,25 @@ namespace axe
 			}
 
 			if (m_SceneRenderer && m_Scene)
+			{
+				glm::mat4 proj = m_GameCamera->GetProjectionMatrix(aspect);
+				glm::mat4 view = m_GameCamera->GetViewMatrix();
+
+				// Inicializa TAA se ativo — jitter na projection antes do render
+				if (m_TAASettings.Enabled)
+				{
+					if (!m_TAAPass) { m_TAAPass = TAAPass::Create(); m_TAAPass->Initialize(width, height); }
+					m_TAAPass->BeginFrame(proj * view);
+					proj = m_SceneRenderer->BeginTAAFrame(proj, proj * view, width, height);
+				}
+
 				m_SceneRenderer->RenderScene(
 					*m_Scene,
-					m_GameCamera->GetViewMatrix(),
-					m_GameCamera->GetProjectionMatrix(aspect),
+					view, proj,
 					m_GameCamera->GetPosition(),
 					entt::null,
 					width, height);
+			}
 		}
 		else
 		{
@@ -216,6 +293,8 @@ namespace axe
 					{
 						m_SceneRenderer->SetSSAOSettings(pp.SSAO);
 						m_SceneRenderer->SetFogSettings(pp.Settings.Fog);
+						m_TAASettings = pp.Settings.TAA;
+						m_SSRSettings = pp.Settings.SSR;
 					}
 					break;
 				}
@@ -269,13 +348,82 @@ namespace axe
 
 		m_HDRFramebuffer->Unbind();
 
-		// 4. Post process
+		uint32_t finalColorID = m_HDRFramebuffer->GetColorAttachmentRendererID();
+
+		// 3.5. SSR — reflexões screen-space. Roda antes do TAA pra ser
+		// estabilizado por ele. Precisa do GBuffer (position/normal/pbr).
+		if (m_SSRSettings.Enabled && m_SceneRenderer)
+		{
+			if (!m_SSRPass)
+			{
+				m_SSRPass = SSRPass::Create();
+				m_SSRPass->Initialize(width, height);
+			}
+			else
+			{
+				m_SSRPass->Resize(width, height);
+			}
+
+			if (m_SSRPass && m_SSRPass->IsInitialized())
+			{
+				glm::mat4 proj = m_GameCamera
+					? m_GameCamera->GetProjectionMatrix((float)width / (float)height)
+					: (m_Camera ? m_Camera->GetProjectionMatrix() : glm::mat4(1.f));
+				glm::mat4 viewM = m_GameCamera
+					? m_GameCamera->GetViewMatrix()
+					: (m_Camera ? m_Camera->GetViewMatrix() : glm::mat4(1.f));
+
+				uint32_t ssrResult = m_SSRPass->Execute(
+					m_SceneRenderer->GetGBuffer(), finalColorID,
+					proj, viewM, m_SSRSettings, width, height);
+				if (ssrResult != 0) finalColorID = ssrResult;
+			}
+		}
+
+		// 4. TAA Resolve (se ativo) — entre o SSR e o post-process.
+		if (m_TAASettings.Enabled)
+		{
+			if (!m_TAAPass)
+			{
+				m_TAAPass = TAAPass::Create();
+				m_TAAPass->Initialize(width, height);
+			}
+			else
+			{
+				m_TAAPass->Resize(width, height);
+			}
+
+			if (m_TAAPass && m_TAAPass->IsInitialized() && m_SceneRenderer)
+			{
+				glm::mat4 vp = m_GameCamera
+					? m_GameCamera->GetViewMatrix()
+					: (m_Camera ? m_Camera->GetViewMatrix() : glm::mat4(1.f));
+				glm::mat4 proj = m_GameCamera
+					? m_GameCamera->GetProjectionMatrix((float)width / (float)height)
+					: (m_Camera ? m_Camera->GetProjectionMatrix() : glm::mat4(1.f));
+				glm::mat4 fullVP = proj * vp;
+				glm::mat4 invVP = glm::inverse(fullVP);
+				glm::vec2 jitter = m_TAAPass->GetCurrentJitter();
+				glm::mat4 prevVP = m_TAAPass->GetPrevViewProj();
+
+				uint32_t depthID = 0; // GBuffer depth (obtido via SceneRenderer)
+				// Acessa depth do GBuffer pelo SceneRenderer
+				if (auto* sr = m_SceneRenderer.get())
+					depthID = sr->GetGBufferDepthID();
+
+				uint32_t resolved = m_TAAPass->Execute(
+					finalColorID, depthID,
+					invVP, prevVP, jitter,
+					m_TAASettings, width, height);
+				if (resolved != 0) finalColorID = resolved;
+			}
+		}
+
+		// 5. Post process
 		framebuffer.Bind();
 		RenderCommand::SetViewport(0, 0, width, height);
 
-		m_PostProcess->Execute(
-			m_HDRFramebuffer->GetColorAttachmentRendererID(),
-			m_PostProcessSettings);
+		m_PostProcess->Execute(finalColorID, m_PostProcessSettings);
 
 		// Collider wireframes — só no modo editor
 		if (ShowColliders && m_Camera && !m_GameCamera && m_Scene)

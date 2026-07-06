@@ -142,6 +142,26 @@ namespace axe
 				components["PostProcess"]["fog_end"] = fog.FogEnd;
 				components["PostProcess"]["fog_steps"] = fog.Steps;
 				components["PostProcess"]["fog_jitter"] = fog.StepJitter;
+				// TAA
+				auto& taa = c->Settings.TAA;
+				components["PostProcess"]["taa_enabled"] = taa.Enabled;
+				components["PostProcess"]["taa_blend"] = taa.BlendFactor;
+				components["PostProcess"]["taa_sharpen"] = taa.Sharpen;
+				components["PostProcess"]["taa_sharpen_amount"] = taa.SharpenAmount;
+				components["PostProcess"]["taa_emissive_lum_min"] = taa.EmissiveLumMin;
+				components["PostProcess"]["taa_emissive_lum_max"] = taa.EmissiveLumMax;
+				components["PostProcess"]["taa_emissive_blend"] = taa.EmissiveBlendMax;
+				components["PostProcess"]["taa_temporal_sens"] = taa.TemporalSensitivity;
+				// SSR
+				auto& ssr = c->Settings.SSR;
+				components["PostProcess"]["ssr_enabled"] = ssr.Enabled;
+				components["PostProcess"]["ssr_max_distance"] = ssr.MaxDistance;
+				components["PostProcess"]["ssr_max_steps"] = ssr.MaxSteps;
+				components["PostProcess"]["ssr_binary"] = ssr.BinaryRefine;
+				components["PostProcess"]["ssr_thickness"] = ssr.Thickness;
+				components["PostProcess"]["ssr_max_rough"] = ssr.MaxRoughness;
+				components["PostProcess"]["ssr_intensity"] = ssr.Intensity;
+				components["PostProcess"]["ssr_edge_fade"] = ssr.EdgeFade;
 			}
 
 			if (auto* c = registry.try_get<RigidbodyComponent>(entity))
@@ -407,6 +427,26 @@ namespace axe
 				fog.StepJitter = t.value("fog_jitter", 0.5f);
 				if (t.contains("fog_color") && t["fog_color"].size() == 3)
 					fog.FogColor = { t["fog_color"][0], t["fog_color"][1], t["fog_color"][2] };
+				// TAA
+				auto& taa = pp.Settings.TAA;
+				taa.Enabled = t.value("taa_enabled", false);
+				taa.BlendFactor = t.value("taa_blend", 0.1f);
+				taa.Sharpen = t.value("taa_sharpen", false);
+				taa.SharpenAmount = t.value("taa_sharpen_amount", 0.3f);
+				taa.EmissiveLumMin = t.value("taa_emissive_lum_min", 0.2f);
+				taa.EmissiveLumMax = t.value("taa_emissive_lum_max", 1.2f);
+				taa.EmissiveBlendMax = t.value("taa_emissive_blend", 0.85f);
+				taa.TemporalSensitivity = t.value("taa_temporal_sens", 4.0f);
+				// SSR
+				auto& ssr = pp.Settings.SSR;
+				ssr.Enabled = t.value("ssr_enabled", false);
+				ssr.MaxDistance = t.value("ssr_max_distance", 20.0f);
+				ssr.MaxSteps = t.value("ssr_max_steps", 40);
+				ssr.BinaryRefine = t.value("ssr_binary", 5);
+				ssr.Thickness = t.value("ssr_thickness", 0.5f);
+				ssr.MaxRoughness = t.value("ssr_max_rough", 0.6f);
+				ssr.Intensity = t.value("ssr_intensity", 1.0f);
+				ssr.EdgeFade = t.value("ssr_edge_fade", 0.1f);
 				registry.emplace<PostProcessComponent>(entity, pp);
 			}
 
@@ -649,7 +689,7 @@ namespace axe
 				{
 					uint32_t oldParent = rel["parent"];
 					if (idMap.count(oldParent))
-						scene.SetParent(entity, idMap[oldParent]);
+						scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 				}
 			}
 		}
@@ -727,7 +767,7 @@ namespace axe
 					{
 						uint32_t oldParent = rel["parent"];
 						if (idMap.count(oldParent))
-							scene.SetParent(entity, idMap[oldParent]);
+							scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 					}
 				}
 			}
@@ -832,7 +872,7 @@ namespace axe
 					{
 						uint32_t oldParent = rel["parent"];
 						if (idMap.count(oldParent))
-							scene.SetParent(entity, idMap[oldParent]);
+							scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 					}
 				}
 			}

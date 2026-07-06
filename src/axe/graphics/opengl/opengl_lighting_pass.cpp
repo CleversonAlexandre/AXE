@@ -41,16 +41,23 @@ namespace axe
     uniform int       u_HasSSAO;
     uniform int       u_SSAODebug;
 
-    // Shadow
-    uniform sampler2D u_ShadowMap;
-    uniform mat4      u_LightSpaceMatrix;
-    uniform int       u_HasShadowMap;
+    // Shadow — suporta CSM (texture array) ou shadow map simples (fallback)
+    uniform sampler2DArray u_ShadowMapCSM;         // texture array com 4 cascades
+    uniform sampler2D      u_ShadowMap;            // shadow map simples (fallback)
+    uniform mat4  u_LightSpaceMatrixCSM[4];        // matrizes por cascade
+    uniform float u_CascadeSplitDepths[4];         // splits em view space (z negativo)
+    uniform int   u_CascadeCount;                  // 0 = sem CSM
+    uniform mat4  u_LightSpaceMatrix;
+    uniform int   u_HasShadowMap;
+    uniform mat4  u_View;
+    uniform float u_ShadowBias;
 
     // Luz direcional
     uniform vec3  u_LightDirection;
     uniform vec3  u_LightColor;
     uniform float u_LightIntensity;
     uniform float u_AmbientStrength;
+    uniform float u_AmbientShadowFactor; // 0=ambient bloqueado por sombra, 1=ambient livre
     uniform vec3  u_CameraPosition;
     uniform int   u_HasLight;
 
@@ -127,14 +134,56 @@ namespace axe
         return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
     }
 
+    // PCF 3x3 em uma cascade específica
+    float PCFShadow(sampler2DArray shadowArray, int cascade, vec3 projCoords, float bias)
+    {
+        float shadow = 0.0;
+        vec2 texelSize = 1.0 / textureSize(shadowArray, 0).xy;
+        for (int x = -1; x <= 1; x++)
+            for (int y = -1; y <= 1; y++)
+            {
+                float pcf = texture(shadowArray,
+                    vec3(projCoords.xy + vec2(x, y) * texelSize, float(cascade))).r;
+                shadow += projCoords.z - bias > pcf ? 1.0 : 0.0;
+            }
+        return shadow / 9.0;
+    }
+
     float ShadowCalculation(vec3 fragPos, vec3 normal, vec3 lightDir)
     {
+        // ── CSM — seleciona cascade pela profundidade view space ───────────
+        if (u_CascadeCount > 0)
+        {
+            // Converte fragPos (world) para view space para selecionar cascade por profundidade
+            vec4 fragViewPos = u_View * vec4(fragPos, 1.0);
+            float depth = abs(fragViewPos.z);
+            int cascade = u_CascadeCount - 1;
+            for (int i = 0; i < u_CascadeCount; ++i)
+            {
+                if (depth < u_CascadeSplitDepths[i])
+                {
+                    cascade = i;
+                    break;
+                }
+            }
+
+            vec4 fragPosLS  = u_LightSpaceMatrixCSM[cascade] * vec4(fragPos, 1.0);
+            vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
+            if (projCoords.z > 1.0) return 0.0;
+
+            // Bias adaptativo por cascade — cascades longe precisam de mais bias
+            float biasScale = max(1.0, float(cascade) * 0.5 + 1.0);
+            float bias = max(u_ShadowBias * biasScale * (1.0 - dot(normal, lightDir)), u_ShadowBias * biasScale);
+
+            return PCFShadow(u_ShadowMapCSM, cascade, projCoords, bias);
+        }
+
+        // ── Fallback: shadow map simples ───────────────────────────────────
         vec4 fragPosLS  = u_LightSpaceMatrix * vec4(fragPos, 1.0);
-        vec3 projCoords = fragPosLS.xyz / fragPosLS.w;
-        projCoords      = projCoords * 0.5 + 0.5;
+        vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
         if (projCoords.z > 1.0) return 0.0;
 
-        float bias = max(0.005 * (1.0 - dot(normal, lightDir)), 0.005);
+        float bias = max(u_ShadowBias * (1.0 - dot(normal, lightDir)), u_ShadowBias);
         float shadow = 0.0;
         vec2 texelSize = 1.0 / textureSize(u_ShadowMap, 0);
         for (int x = -2; x <= 2; x++)
@@ -227,7 +276,8 @@ namespace axe
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
         // --- Luz direcional ---
-        vec3 Lo = vec3(0.0);
+        vec3  Lo     = vec3(0.0);
+        float shadow = 0.0; // fora do if para ser acessível no cálculo de ambient
         if (u_HasLight == 1)
         {
             vec3 L = normalize(-u_LightDirection);
@@ -248,7 +298,6 @@ namespace axe
             float denominator = 4.0 * NdotV * NdotL + 0.0001;
             vec3  specular    = numerator / denominator;
 
-            float shadow = 0.0;
             if (u_HasShadowMap == 1)
                 shadow = ShadowCalculation(fragPos, N, L);
 
@@ -306,6 +355,11 @@ namespace axe
         }
 
         // --- Ambient / IBL --- (independente da direcional)
+        // u_AmbientShadowFactor: 0=ambient bloqueado em sombra (interiores),
+        //                        1=ambient livre (céu aberto, padrão)
+        // Quando shadow=1 (totalmente na sombra) e factor=0: ambient reduz ao mínimo.
+        float shadowedAmbient = mix(1.0 - shadow * 0.85, 1.0, u_AmbientShadowFactor);
+
         vec3 ambient;
         if (u_HasIBL == 1)
         {
@@ -320,11 +374,11 @@ namespace axe
 
             vec3 ibl = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity;
             vec3 flatAmbient = u_AmbientStrength * albedo * ao;
-            ambient = ibl + flatAmbient;
+            ambient = (ibl + flatAmbient) * shadowedAmbient;
         }
         else
         {
-            ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao;
+            ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao * shadowedAmbient;
         }
 
         vec3 color = ambient + Lo;
@@ -400,6 +454,8 @@ namespace axe
         uint32_t ssaoTextureID,
         uint32_t shadowMapID,
         const glm::mat4& lightSpaceMatrix,
+        const CascadedShadowPass* csm,
+        const glm::mat4& view,
         const glm::vec3& cameraPosition,
         const DirectionalLight* light,
         const SceneEnvironment* environment,
@@ -486,15 +542,38 @@ namespace axe
         }
         m_Shader->SetInt("u_SSAODebug", m_SSAODebug ? 1 : 0);
 
-        // Shadow — slot 5
-        if (shadowMapID != 0)
+        // Shadow — slot 5 (legacy) + slot 11 (CSM array)
+        if (csm && csm->IsInitialized())
         {
+            // CSM — texture array com todas as cascades
+            glBindTextureUnit(11, csm->GetDepthArrayID());
+            m_Shader->SetInt("u_ShadowMapCSM", 11);
+            m_Shader->SetInt("u_CascadeCount", csm->GetCascadeCount());
+
+            const auto& cascades = csm->GetCascades();
+            for (int i = 0; i < csm->GetCascadeCount(); ++i)
+            {
+                std::string matKey = "u_LightSpaceMatrixCSM[" + std::to_string(i) + "]";
+                std::string splitKey = "u_CascadeSplitDepths[" + std::to_string(i) + "]";
+                m_Shader->SetMat4(matKey.c_str(), glm::value_ptr(cascades[i].LightSpaceMatrix));
+                m_Shader->SetFloat(splitKey.c_str(), cascades[i].SplitDepth);
+            }
+            m_Shader->SetInt("u_HasShadowMap", 1);
+        }
+        else if (shadowMapID != 0)
+        {
+            // Fallback: shadow map simples
             glBindTextureUnit(5, shadowMapID);
             m_Shader->SetInt("u_ShadowMap", 5);
             m_Shader->SetMat4("u_LightSpaceMatrix", glm::value_ptr(lightSpaceMatrix));
+            m_Shader->SetInt("u_CascadeCount", 0);
             m_Shader->SetInt("u_HasShadowMap", 1);
         }
-        else m_Shader->SetInt("u_HasShadowMap", 0);
+        else
+        {
+            m_Shader->SetInt("u_HasShadowMap", 0);
+            m_Shader->SetInt("u_CascadeCount", 0);
+        }
 
         // Luz direcional
         if (light)
@@ -507,6 +586,8 @@ namespace axe
             m_Shader->SetFloat3("u_LightColor", light->Color * light->LightMaterialResult);
             m_Shader->SetFloat("u_LightIntensity", light->Intensity);
             m_Shader->SetFloat("u_AmbientStrength", light->AmbientStrength);
+            m_Shader->SetFloat("u_AmbientShadowFactor", light->AmbientShadowFactor);
+            m_Shader->SetFloat("u_ShadowBias", light->ShadowBias);
             m_Shader->SetFloat("u_IBLIntensity", light->IBLIntensity);
 
             // Cookie — slot 10. Right/Up: base ortonormal perpendicular à
@@ -532,11 +613,14 @@ namespace axe
         {
             m_Shader->SetInt("u_HasLight", 0);
             m_Shader->SetFloat("u_IBLIntensity", 1.0f);
-            m_Shader->SetFloat("u_AmbientStrength", 0.0f); // sem flat ambient sem luz
+            m_Shader->SetFloat("u_AmbientStrength", 0.0f);
+            m_Shader->SetFloat("u_AmbientShadowFactor", 1.0f);
+            m_Shader->SetFloat("u_ShadowBias", 0.005f);
             m_Shader->SetInt("u_HasDirCookie", 0);
         }
 
         m_Shader->SetFloat3("u_CameraPosition", cameraPosition);
+        m_Shader->SetMat4("u_View", glm::value_ptr(view));
 
         // IBL — slots 6, 7, 8
         if (environment && environment->HasIBL())

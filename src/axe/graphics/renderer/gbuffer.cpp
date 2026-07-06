@@ -40,8 +40,8 @@ namespace axe
     uint32_t GBuffer::GetPositionID() const { return m_Framebuffer->GetColorAttachmentRendererID(0); }
     uint32_t GBuffer::GetNormalID()   const { return m_Framebuffer->GetColorAttachmentRendererID(1); }
     uint32_t GBuffer::GetAlbedoID()   const { return m_Framebuffer->GetColorAttachmentRendererID(2); }
-    uint32_t GBuffer::GetDepthID()    const { return m_Framebuffer->GetDepthAttachmentRendererID(); }
-    uint32_t GBuffer::GetPBRID() const { return m_Framebuffer->GetColorAttachmentRendererID(3); }
+    uint32_t GBuffer::GetPBRID()      const { return m_Framebuffer->GetColorAttachmentRendererID(3); }
+    uint32_t GBuffer::GetDepthID()    const { return m_Framebuffer->GetDepthAttachmentRendererID(); }    
     uint32_t GBuffer::GetEmissiveID() const { return m_Framebuffer->GetColorAttachmentRendererID(4); }
 
     uint32_t GBuffer::GetWidth()  const { return m_Framebuffer ? m_Framebuffer->GetSpecification().Width : 0; }

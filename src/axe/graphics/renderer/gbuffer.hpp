@@ -28,12 +28,12 @@ namespace axe
 
         uint32_t GetPositionID() const; // attachment 0
         uint32_t GetNormalID()   const; // attachment 1
-        uint32_t GetAlbedoID()   const; // attachment 2
+        uint32_t GetAlbedoID()   const; // attachment 2 (rgb=albedo, a=metallic)
+        uint32_t GetPBRID()      const; // attachment 3 (r=roughness, g=ao)
         uint32_t GetDepthID()    const; // depth texture
 
         uint32_t GetWidth()  const;
-        uint32_t GetHeight() const;
-        uint32_t GetPBRID() const; // attachment 3
+        uint32_t GetHeight() const;        
         uint32_t GetEmissiveID() const; // attachment 4
 
         uint32_t GetFramebufferID() const;

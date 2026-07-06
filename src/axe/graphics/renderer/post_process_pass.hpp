@@ -1,6 +1,8 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/renderer/volumetric_fog_pass.hpp"
+#include "axe/graphics/renderer/taa_pass.hpp"
+#include "axe/graphics/renderer/ssr_pass.hpp"
 #include <memory>
 #include <cstdint>
 
@@ -17,6 +19,12 @@ namespace axe
         float BloomThreshold = 0.7f;
         float BloomIntensity = 0.5f;
         int   BloomBlurPasses = 5;
+
+        // TAA
+        TAASettings TAA;
+
+        // SSR — Screen Space Reflections
+        SSRSettings SSR;
 
         // Volumetric Fog
         VolumetricFogSettings Fog;

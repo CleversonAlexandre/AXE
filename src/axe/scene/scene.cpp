@@ -86,7 +86,7 @@ namespace axe
 		return entity;
 	}
 
-	void Scene::SetParent(entt::entity child, entt::entity parent)
+	void Scene::SetParent(entt::entity child, entt::entity parent, bool adjustTransform)
 	{
 		if (!m_Registry.valid(child)) return;
 
@@ -105,24 +105,27 @@ namespace axe
 			parentRel.Children.push_back(child);
 		}
 
-		// Converte o transform do filho de mundial → local (relativo ao novo pai),
-		// garantindo que ele permaneça na mesma posição visual após o reparent.
-		if (auto* tc = m_Registry.try_get<TransformComponent>(child))
+		// Converte apenas quando chamado pelo editor (drag-drop).
+		// Durante load de cena (adjustTransform=false), o transform já está
+		// salvo em local space — não deve ser convertido novamente.
+		if (adjustTransform)
 		{
-			glm::mat4 parentWorld = GetWorldTransform(parent);
-			glm::mat4 localMat = glm::inverse(parentWorld) * childWorld;
-
-			glm::vec3 skew;
-			glm::vec4 perspective;
-			glm::quat orientation;
-			glm::vec3 translation, scale;
-
-			if (glm::decompose(localMat, scale, orientation, translation, skew, perspective))
+			if (auto* tc = m_Registry.try_get<TransformComponent>(child))
 			{
-				tc->Data.Position = translation;
-				tc->Data.Scale = scale;
-				// Converte quaternion → Euler em radianos (formato interno do engine)
-				tc->Data.Rotation = glm::eulerAngles(orientation);
+				glm::mat4 parentWorld = GetWorldTransform(parent);
+				glm::mat4 localMat = glm::inverse(parentWorld) * childWorld;
+
+				glm::vec3 skew;
+				glm::vec4 perspective;
+				glm::quat orientation;
+				glm::vec3 translation, scale;
+
+				if (glm::decompose(localMat, scale, orientation, translation, skew, perspective))
+				{
+					tc->Data.Position = translation;
+					tc->Data.Scale = scale;
+					tc->Data.Rotation = glm::eulerAngles(orientation);
+				}
 			}
 		}
 	}

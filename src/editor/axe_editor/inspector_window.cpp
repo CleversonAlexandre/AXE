@@ -513,6 +513,8 @@ namespace axe
 		}
 		ImGui::Separator();
 		ImGui::DragFloat("Rotação Skybox", &ec.SkyboxRotation, 1.0f, -360.0f, 360.0f);
+		ImGui::TextDisabled("Céu Procedural e Time of Day estão");
+		ImGui::TextDisabled("no componente Directional Light.");
 	}
 
 	void InspectorWindow::DrawPointLight(PointLight& light, const glm::vec3& rotationEuler)
@@ -556,6 +558,18 @@ namespace axe
 		ImGui::TextDisabled("Luz Indireta");
 		ImGui::DragFloat("IBL Intensity", &light.IBLIntensity, 0.01f, 0.0f, 5.0f);
 		ImGui::DragFloat("Ambient Flat", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
+		ImGui::SliderFloat("Ambient nas Sombras", &light.AmbientShadowFactor, 0.0f, 1.0f);
+		ImGui::TextDisabled("  0=interior escuro  1=ambient livre (exterior)");
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Sombras");
+		ImGui::Checkbox("Cast Shadows", &light.CastShadows);
+		if (light.CastShadows)
+		{
+			ImGui::DragFloat("Shadow Distance", &light.ShadowDistance, 1.0f, 2.0f, 200.0f);
+			ImGui::TextDisabled("  Menor = mais preciso (indoor: 8-15, outdoor: 50-100)");
+			ImGui::DragFloat("Shadow Bias", &light.ShadowBias, 0.0001f, 0.0001f, 0.05f);
+		}
 
 		ImGui::Separator();
 		ImGui::TextDisabled("Cookie (textura projetada, com tiling)");
@@ -564,6 +578,40 @@ namespace axe
 			ImGui::DragFloat("Escala (tamanho do tile)", &light.CookieScale, 0.1f, 0.1f, 200.0f);
 
 		DrawLightMaterialSlot(light);
+
+		// ── Céu Procedural ────────────────────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Text("Céu Procedural");
+		ImGui::Checkbox("Ativar Céu Procedural##procsky", &light.ProceduralSky);
+		if (light.ProceduralSky)
+		{
+			ImGui::TextDisabled("  O sol segue a direção desta luz.");
+			ImGui::DragFloat("Turbidez", &light.Turbidity, 0.1f, 1.0f, 10.0f);
+			ImGui::TextDisabled("  1=limpo  10=poluido/nublado");
+			ImGui::DragFloat("Cobertura Nuvens", &light.CloudCoverage, 0.02f, 0.0f, 1.0f);
+			ImGui::DragFloat("Velocidade Nuvens", &light.CloudSpeed, 0.001f, 0.0f, 0.2f);
+			ImGui::ColorEdit3("Cor Nuvens", &light.CloudColor.x);
+			ImGui::ColorEdit3("Cor Noite", &light.NightColor.x);
+
+			// ── Time of Day ─────────────────────────────────────────────────
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Text("Ciclo Dia/Noite");
+			ImGui::Checkbox("Ativar Time of Day##tod", &light.TimeOfDayEnabled);
+			if (light.TimeOfDayEnabled)
+			{
+				ImGui::SliderFloat("Hora##tod", &light.Hour, 0.0f, 24.0f);
+				ImGui::DragFloat("Velocidade##tod", &light.DaySpeed, 1.0f, 0.1f, 3600.0f);
+				ImGui::TextDisabled("  1=tempo real  60=1min/seg  3600=1h/seg");
+				ImGui::DragFloat("Latitude##tod", &light.SunLatitude, 1.0f, -90.f, 90.f);
+				int h = (int)light.Hour;
+				int m = (int)((light.Hour - h) * 60.0f);
+				ImGui::Text("  Hora atual: %02d:%02d", h, m);
+				ImGui::TextDisabled("  Direcao, Cor e Intensidade sao");
+				ImGui::TextDisabled("  automaticas com Time of Day ativo.");
+			}
+		}
 	}
 
 	void InspectorWindow::DrawTransform(Transform& t)
@@ -904,6 +952,51 @@ namespace axe
 			ImGui::DragFloat("Power", &pp.SSAO.Power, 0.1f, 0.5f, 8.0f);
 			ImGui::SliderInt("Kernel Size", &pp.SSAO.KernelSize, 8, 64);
 			ImGui::Checkbox("Debug (mostra oclusão)", &pp.SSAO.Debug);
+		}
+
+		// ── TAA ──────────────────────────────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Text("TAA (Temporal Anti-Aliasing)");
+		ImGui::Checkbox("TAA Ativo", &pp.Settings.TAA.Enabled);
+		if (pp.Settings.TAA.Enabled)
+		{
+			ImGui::Separator();
+			ImGui::TextDisabled("Base");
+			ImGui::DragFloat("Blend Factor", &pp.Settings.TAA.BlendFactor, 0.005f, 0.02f, 0.5f);
+			ImGui::TextDisabled("  0.05=suave/ghost  0.15=rapido/ruido");
+
+			ImGui::Separator();
+			ImGui::TextDisabled("Emissivos / Animados");
+			ImGui::DragFloat("Lum Min", &pp.Settings.TAA.EmissiveLumMin, 0.01f, 0.0f, 1.0f);
+			ImGui::DragFloat("Lum Max", &pp.Settings.TAA.EmissiveLumMax, 0.01f, 0.1f, 3.0f);
+			ImGui::DragFloat("Blend Max Emissivo", &pp.Settings.TAA.EmissiveBlendMax, 0.01f, 0.1f, 1.0f);
+			ImGui::DragFloat("Sensib. Temporal", &pp.Settings.TAA.TemporalSensitivity, 0.1f, 0.0f, 10.0f);
+			ImGui::TextDisabled("  Lum Min/Max: range de luminancia para detectar emissivo");
+			ImGui::TextDisabled("  Blend Max: o quanto emissivos ignoram o historico");
+			ImGui::TextDisabled("  Sensib. Temporal: reatividade a mudancas de cor");
+
+			ImGui::Separator();
+			ImGui::Checkbox("Sharpening", &pp.Settings.TAA.Sharpen);
+			if (pp.Settings.TAA.Sharpen)
+				ImGui::DragFloat("Sharpen Amount", &pp.Settings.TAA.SharpenAmount, 0.05f, 0.f, 1.f);
+		}
+
+		// ── SSR — Screen Space Reflections ─────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Text("SSR (Screen Space Reflections)");
+		ImGui::Checkbox("SSR Ativo", &pp.Settings.SSR.Enabled);
+		if (pp.Settings.SSR.Enabled)
+		{
+			ImGui::DragFloat("Max Distance", &pp.Settings.SSR.MaxDistance, 0.5f, 1.f, 100.f);
+			ImGui::SliderInt("Max Steps", &pp.Settings.SSR.MaxSteps, 8, 128);
+			ImGui::SliderInt("Binary Refine", &pp.Settings.SSR.BinaryRefine, 0, 10);
+			ImGui::DragFloat("Thickness", &pp.Settings.SSR.Thickness, 0.05f, 0.05f, 5.f);
+			ImGui::DragFloat("Max Roughness", &pp.Settings.SSR.MaxRoughness, 0.02f, 0.f, 1.f);
+			ImGui::DragFloat("Intensity", &pp.Settings.SSR.Intensity, 0.05f, 0.f, 2.f);
+			ImGui::DragFloat("Edge Fade", &pp.Settings.SSR.EdgeFade, 0.01f, 0.f, 0.5f);
+			ImGui::TextDisabled("  Superficies lisas (baixa roughness) refletem a cena.");
 		}
 
 		// ── Volumetric Fog ────────────────────────────────────────────────────

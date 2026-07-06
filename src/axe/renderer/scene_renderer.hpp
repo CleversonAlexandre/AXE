@@ -7,6 +7,7 @@
 #include "axe/graphics/renderer/line_renderer.hpp"
 #include "axe/graphics/renderer/mesh_renderer.hpp"
 #include "axe/graphics/renderer/shadow_map_pass.hpp"
+#include "axe/graphics/renderer/cascaded_shadow_pass.hpp"
 #include "axe/graphics/renderer/gbuffer.hpp"
 #include "axe/graphics/renderer/geometry_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
@@ -18,6 +19,7 @@
 #include "axe/graphics/renderer/particle_renderer.hpp"
 #include "axe/graphics/renderer/ribbon_renderer.hpp"
 #include "axe/renderer/volumetric_fog_pass.hpp"
+#include "axe/graphics/renderer/taa_pass.hpp"
 
 namespace axe
 {
@@ -62,6 +64,37 @@ namespace axe
 
         void SetSSAOSettings(const SSAOSettings& s) { m_SSAOSettings = s; }
         void SetFogSettings(const VolumetricFogSettings& s) { m_FogSettings = s; }
+        void SetTAASettings(const TAASettings& s) { m_TAASettings = s; }
+
+        // Configura o céu procedural no SkyboxRenderer
+        void SetProceduralSky(bool enabled,
+            const glm::vec3& sunDir,
+            float turbidity,
+            float cloudCoverage,
+            float cloudSpeed,
+            const glm::vec3& cloudColor,
+            const glm::vec3& nightColor)
+        {
+            if (!m_SkyboxRenderer) return;
+            m_SkyboxRenderer->SetProceduralSky(enabled);
+            m_SkyboxRenderer->SetSunDirection(sunDir);
+            m_SkyboxRenderer->SetTurbidity(turbidity);
+            m_SkyboxRenderer->SetCloudCoverage(cloudCoverage);
+            m_SkyboxRenderer->SetCloudSpeed(cloudSpeed);
+            m_SkyboxRenderer->SetCloudColor(cloudColor);
+            m_SkyboxRenderer->SetNightColor(nightColor);
+        }
+        // Deve ser chamado ANTES de Render() a cada frame pra aplicar jitter.
+        // Retorna a projection matrix com jitter aplicado.
+        glm::mat4 BeginTAAFrame(const glm::mat4& projection,
+            const glm::mat4& viewProjection,
+            uint32_t width, uint32_t height);
+
+        // Acesso ao depth do GBuffer para o TAA pass no viewport renderer
+        uint32_t GetGBufferDepthID() const { return m_GBuffer.GetDepthID(); }
+
+        // Acesso ao GBuffer completo para o SSR pass
+        const GBuffer& GetGBuffer() const { return m_GBuffer; }
         void SetTargetFramebuffer(uint32_t fboID) { m_TargetFBO = fboID; }
         uint32_t GetTargetFBO() const { return m_TargetFBO; }
         bool IsDeferredEnabled() const { return m_DeferredEnabled; }
@@ -92,8 +125,12 @@ namespace axe
         RibbonRenderer   m_RibbonRenderer;
         std::shared_ptr<VolumetricFogPass> m_FogPass;
         VolumetricFogSettings m_FogSettings;
+        std::shared_ptr<TAAPass> m_TAAPass;
+        TAASettings              m_TAASettings;
 
         std::shared_ptr<ShadowMapPass> m_ShadowPass;
+        std::shared_ptr<CascadedShadowPass> m_CSMPass;
+        bool m_UseCSM = true; // usa CSM ao invés do shadow map simples
         GBuffer                        m_GBuffer;
         std::shared_ptr<GeometryPass>  m_GeometryPass;
         std::shared_ptr<SSAOPass>      m_SSAOPass;
@@ -113,7 +150,9 @@ namespace axe
 
         // Passes internos
         void RenderShadowPass(const RenderQueue& queue,
-            const glm::vec3& cameraPosition = glm::vec3(0.0f));
+            const glm::vec3& cameraPosition,
+            const glm::mat4& view,
+            const glm::mat4& projection);
         void RenderForward(const RenderQueue& queue,
             const glm::mat4& viewProjection,
             const glm::mat4& view,

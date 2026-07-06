@@ -14,6 +14,8 @@ namespace axe
             uint32_t ssaoTextureID,
             uint32_t shadowMapID,
             const glm::mat4& lightSpaceMatrix,
+            const CascadedShadowPass* csm,
+            const glm::mat4& view,
             const glm::vec3& cameraPosition,
             const DirectionalLight* light,
             const SceneEnvironment* environment,

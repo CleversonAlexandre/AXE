@@ -3,6 +3,8 @@
 #include "axe/utils/glm_config.hpp"
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/renderer/scene_renderer.hpp"
+#include "axe/graphics/renderer/taa_pass.hpp"
+#include "axe/graphics/renderer/ssr_pass.hpp"
 #include "picking_renderer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
@@ -120,8 +122,13 @@ namespace axe
 
 		std::shared_ptr<PostProcessPass>  m_PostProcess;
 		std::shared_ptr<Framebuffer>      m_HDRFramebuffer;
+		std::shared_ptr<TAAPass>          m_TAAPass;
+		TAASettings                       m_TAASettings;
+		std::shared_ptr<SSRPass>          m_SSRPass;
+		SSRSettings                       m_SSRSettings;
 		PostProcessSettings               m_PostProcessSettings;
-		bool m_PreviewMode = false;
+		bool  m_PreviewMode = false;
+		float m_LastTimeSeconds = 0.0f; // para cálculo de dt no Time of Day
 	};
 
 } // namespace axe

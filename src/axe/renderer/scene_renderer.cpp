@@ -15,8 +15,26 @@
 
 namespace axe
 {
-
     SceneRenderer::SceneRenderer() {}
+
+    glm::mat4 SceneRenderer::BeginTAAFrame(const glm::mat4& projection,
+        const glm::mat4& viewProjection,
+        uint32_t width, uint32_t height)
+    {
+        if (!m_TAASettings.Enabled) return projection;
+
+        if (!m_TAAPass) m_TAAPass = TAAPass::Create();
+        if (!m_TAAPass->IsInitialized()) m_TAAPass->Initialize(width, height);
+
+        m_TAAPass->BeginFrame(viewProjection);
+
+        // Aplica offset de jitter na coluna [2] da projection matrix
+        glm::vec2 jitter = m_TAAPass->GetCurrentJitter();
+        glm::mat4 jitteredProj = projection;
+        jitteredProj[2][0] += jitter.x * 2.f / (float)width;
+        jitteredProj[2][1] += jitter.y * 2.f / (float)height;
+        return jitteredProj;
+    }
 
     // =============================================================================
     // API principal — recebe RenderQueue já montada, sem saber nada de Scene/entt
@@ -41,9 +59,10 @@ namespace axe
             dt = glm::clamp(dt, 0.0f, 0.1f); // clamp pra evitar salto no primeiro frame
             m_ParticleRenderer.Tick(dt);
             m_RibbonRenderer.Tick(dt);
+            if (m_SkyboxRenderer) m_SkyboxRenderer->Tick(dt);
         }
 
-        RenderShadowPass(queue, cameraPosition);
+        RenderShadowPass(queue, cameraPosition, view, projection);
 
         if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
             RenderDeferred(queue, viewProjection, view, projection, cameraPosition, width, height);
@@ -56,20 +75,53 @@ namespace axe
     // =============================================================================
 
     void SceneRenderer::RenderShadowPass(const RenderQueue& queue,
-        const glm::vec3& cameraPosition)
+        const glm::vec3& cameraPosition,
+        const glm::mat4& view,
+        const glm::mat4& projection)
     {
         if (!queue.Light || !queue.Light->CastShadows) return;
 
-        if (!m_ShadowPass) m_ShadowPass = ShadowMapPass::Create();
-        if (!m_ShadowPass->IsInitialized()) m_ShadowPass->Initialize(4096);
+        if (m_UseCSM)
+        {
+            // ── Cascaded Shadow Maps ──────────────────────────────────────
+            if (!m_CSMPass) m_CSMPass = CascadedShadowPass::Create();
+            if (!m_CSMPass->IsInitialized()) m_CSMPass->Initialize(2048);
 
-        auto lsm = ShadowMapPass::CalcLightSpaceMatrix(
-            queue.Light->Direction, queue.Light->ShadowDistance, cameraPosition);
+            // Extrai near/far da projeção (assume perspective padrão)
+            // near = C/(A-1), far = C/(A+1) onde A=proj[2][2], C=proj[3][2]
+            float A = projection[2][2];
+            float B = projection[3][2];
+            float camNear = B / (A - 1.0f);
+            float camFar = B / (A + 1.0f);
+            // Limita o far das sombras pra não desperdiçar resolução
+            camFar = glm::min(camFar, queue.Light->ShadowDistance > 0.f
+                ? queue.Light->ShadowDistance : 100.0f);
 
-        m_ShadowPass->Begin(lsm);
-        for (auto& dc : queue.Meshes)
-            if (dc.Mesh) m_ShadowPass->DrawMesh(*dc.Mesh, dc.Transform);
-        m_ShadowPass->End();
+            m_CSMPass->ComputeCascades(queue.Light->Direction, view, projection,
+                camNear, camFar);
+
+            for (int c = 0; c < m_CSMPass->GetCascadeCount(); ++c)
+            {
+                m_CSMPass->Begin(c);
+                for (auto& dc : queue.Meshes)
+                    if (dc.Mesh) m_CSMPass->DrawMesh(*dc.Mesh, dc.Transform);
+                m_CSMPass->End();
+            }
+        }
+        else
+        {
+            // ── Shadow map simples (legado) ───────────────────────────────
+            if (!m_ShadowPass) m_ShadowPass = ShadowMapPass::Create();
+            if (!m_ShadowPass->IsInitialized()) m_ShadowPass->Initialize(4096);
+
+            auto lsm = ShadowMapPass::CalcLightSpaceMatrix(
+                queue.Light->Direction, queue.Light->ShadowDistance, cameraPosition);
+
+            m_ShadowPass->Begin(lsm);
+            for (auto& dc : queue.Meshes)
+                if (dc.Mesh) m_ShadowPass->DrawMesh(*dc.Mesh, dc.Transform);
+            m_ShadowPass->End();
+        }
     }
 
     // =============================================================================
@@ -161,9 +213,11 @@ namespace axe
 
         uint32_t  shadowID = m_ShadowPass ? m_ShadowPass->GetDepthMapID() : 0;
         glm::mat4 lsm = m_ShadowPass ? m_ShadowPass->GetLightSpaceMatrix() : glm::mat4(1.0f);
+        const CascadedShadowPass* csm = (m_UseCSM && m_CSMPass && m_CSMPass->IsInitialized())
+            ? m_CSMPass.get() : nullptr;
 
-        m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm,
-            cameraPosition, queue.Light, m_Environment, queue.PointLights);
+        m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm, csm,
+            view, cameraPosition, queue.Light, m_Environment, queue.PointLights);
 
         // --- 4. Skybox ---
         // O LightingPass agora preserva o depth do BlitDepth (depthMask=false).
@@ -234,6 +288,10 @@ namespace axe
                     cameraPosition, queue.PointLights, Time::Elapsed(), width, height);
             }
         }
+
+        // --- 4.8. TAA Resolve ---
+        // Integrado no ViewportRenderer que tem acesso ao HDR color attachment.
+        // SceneRenderer só aplica o jitter na projection via BeginTAAFrame().
 
         // --- 5. Outline ---
         if (queue.SelectedMesh && queue.SelectedID != UINT32_MAX)

@@ -5,6 +5,7 @@
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/scene/scene_environment.hpp"
+#include "cascaded_shadow_pass.hpp"
 #include <memory>
 #include <cstdint>
 #include <vector>
@@ -17,23 +18,19 @@ namespace axe
         virtual ~LightingPass() = default;
 
         virtual void Initialize() = 0;
-
-        // Recria SÓ o shader (não a geometria do quad) — usado pra
-        // forçar uma recompilação do zero, contornando um problema ainda
-        // não totalmente isolado onde a iluminação no modo Play só
-        // aplica certo depois de QUALQUER material ser compilado
-        // manualmente no editor. Chamado automaticamente ao entrar em
-        // Play (ver EditorLayer::EnterPlay).
         virtual void RecompileShader() {}
 
         virtual void Execute(const GBuffer& gbuffer,
             uint32_t ssaoTextureID,
             uint32_t shadowMapID,
             const glm::mat4& lightSpaceMatrix,
+            const CascadedShadowPass* csm,
+            const glm::mat4& view,
             const glm::vec3& cameraPosition,
             const DirectionalLight* light,
             const SceneEnvironment* environment,
             const std::vector<PointLight>& pointLights = {}) = 0;
+
         virtual bool IsInitialized() const = 0;
         virtual void SetSSAODebug(bool debug) {}
 
