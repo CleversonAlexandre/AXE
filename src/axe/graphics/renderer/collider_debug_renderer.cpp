@@ -321,6 +321,115 @@ namespace axe
                 }
             });
 
+        // Interior Volumes — caixa wireframe ciano. Mesma decomposição de
+        // escala do SceneCollector: a matriz do PushBox fica só com
+        // rotação+translação e a escala vira half extents, pro gizmo bater
+        // EXATAMENTE com o volume que o lighting pass usa.
+        const glm::vec4 volumeColor{ 0.2f, 0.9f, 1.0f, 0.9f };
+        registry.view<InteriorVolumeComponent>().each(
+            [&](entt::entity e, InteriorVolumeComponent& ivc)
+            {
+                if (!ivc.Data.Enabled) return;
+
+                glm::mat4 world = scene.GetWorldTransform(e);
+                glm::vec3 sc(
+                    glm::length(glm::vec3(world[0])),
+                    glm::length(glm::vec3(world[1])),
+                    glm::length(glm::vec3(world[2])));
+                sc = glm::max(sc, glm::vec3(0.0001f));
+
+                glm::mat4 rt = world;
+                rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+                rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+                rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+                // PushBox usa m_Color internamente — seta a cor do volume
+                // e restaura depois, sem mexer na assinatura existente.
+                glm::vec4 prev = m_Color;
+                m_Color = volumeColor;
+                PushBox(verts, rt, sc * 0.5f);
+                m_Color = prev;
+            });
+
+        // Probe Volumes — caixa wireframe verde-limão + (opcional) uma
+        // cruzinha em cada probe, na MESMA posição usada no bake (centro
+        // das células), pro artista ver exatamente o que foi capturado.
+        const glm::vec4 probeBoxColor{ 0.55f, 1.0f, 0.25f, 0.9f };
+        registry.view<ProbeVolumeComponent>().each(
+            [&](entt::entity e, ProbeVolumeComponent& pvc)
+            {
+                if (!pvc.Settings.Enabled) return;
+
+                glm::mat4 world = scene.GetWorldTransform(e);
+                glm::vec3 sc(
+                    glm::length(glm::vec3(world[0])),
+                    glm::length(glm::vec3(world[1])),
+                    glm::length(glm::vec3(world[2])));
+                sc = glm::max(sc, glm::vec3(0.0001f));
+
+                glm::mat4 rt = world;
+                rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+                rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+                rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+                glm::vec4 prev = m_Color;
+                m_Color = probeBoxColor;
+                PushBox(verts, rt, sc * 0.5f);
+                m_Color = prev;
+
+                if (pvc.Settings.ShowProbes)
+                {
+                    glm::ivec3 res = glm::clamp(pvc.Settings.Resolution,
+                        glm::ivec3(2), glm::ivec3(16));
+                    glm::vec3 he = sc * 0.5f;
+                    glm::vec3 step = 2.0f * he / glm::vec3(res);
+                    const float r = 0.08f; // meia-cruz
+
+                    for (int z = 0; z < res.z; z++)
+                        for (int y = 0; y < res.y; y++)
+                            for (int x = 0; x < res.x; x++)
+                            {
+                                glm::vec3 local = -he + (glm::vec3(x, y, z) + 0.5f) * step;
+                                glm::vec3 p = glm::vec3(rt * glm::vec4(local, 1.0f));
+                                PushLine(verts, p - glm::vec3(r, 0, 0), p + glm::vec3(r, 0, 0), probeBoxColor);
+                                PushLine(verts, p - glm::vec3(0, r, 0), p + glm::vec3(0, r, 0), probeBoxColor);
+                                PushLine(verts, p - glm::vec3(0, 0, r), p + glm::vec3(0, 0, r), probeBoxColor);
+                            }
+                }
+            });
+
+        // Reflection Probes — caixa wireframe magenta (influência/box
+        // projection) + cruz no ponto de captura (posição do transform)
+        const glm::vec4 reflColor{ 1.0f, 0.35f, 0.9f, 0.9f };
+        registry.view<ReflectionProbeComponent>().each(
+            [&](entt::entity e, ReflectionProbeComponent& rpc)
+            {
+                if (!rpc.Settings.Enabled) return;
+
+                glm::mat4 world = scene.GetWorldTransform(e);
+                glm::vec3 sc(
+                    glm::length(glm::vec3(world[0])),
+                    glm::length(glm::vec3(world[1])),
+                    glm::length(glm::vec3(world[2])));
+                sc = glm::max(sc, glm::vec3(0.0001f));
+
+                glm::mat4 rt = world;
+                rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+                rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+                rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+                glm::vec4 prev = m_Color;
+                m_Color = reflColor;
+                PushBox(verts, rt, sc * 0.5f);
+                m_Color = prev;
+
+                glm::vec3 p = glm::vec3(rt[3]);
+                const float r = 0.2f;
+                PushLine(verts, p - glm::vec3(r, 0, 0), p + glm::vec3(r, 0, 0), reflColor);
+                PushLine(verts, p - glm::vec3(0, r, 0), p + glm::vec3(0, r, 0), reflColor);
+                PushLine(verts, p - glm::vec3(0, 0, r), p + glm::vec3(0, 0, r), reflColor);
+            });
+
         UploadAndDraw(verts, vp);
     }
 

@@ -27,6 +27,19 @@ namespace axe
 		float AnimSpeed = 2.0f;
 		float AnimAmplitude = 0.3f;
 
+		// Sombras — OPT-IN por luz (cada luz sombreada re-renderiza a
+		// cena 6x por frame em depth-only; o artista decide onde gastar).
+		// O SceneRenderer escolhe até PointShadowPass::kMaxShadowLights
+		// (4) luzes por frame entre as marcadas, por proximidade da
+		// câmera. ShadowBias em METROS de mundo (distância linear).
+		bool  CastShadows = false;
+		float ShadowBias = 0.08f;
+
+		// Runtime only — camada do cube map array atribuída neste frame
+		// pelo SceneRenderer (-1 = sem sombra neste frame). NÃO editar,
+		// NÃO serializar.
+		int ShadowLayer = -1;
+
 		// Spot Light — quando IsSpot=true, a luz só ilumina dentro de um
 		// cone (em vez de todas as direções). InnerConeAngle é onde a luz
 		// está em intensidade máxima; entre Inner e Outer ela esmaece

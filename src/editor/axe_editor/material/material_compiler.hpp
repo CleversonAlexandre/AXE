@@ -62,6 +62,17 @@ namespace axe
         // Color/Intensity da luz — ver LightMaterialEvaluator.
         static CompiledMaterial CompileLightFunction(MaterialGraph* graph);
 
+        // Variante do CompileLightFunction pro EMISSIVE MÉDIO do bake de
+        // GI: mesmo corpo (só o pin Emissive), mas o VS espalha UVs pelo
+        // quad (em vez do UV neutro fixo) e o FS grava emissive/8 (o
+        // readback é LDR). Pin desconectado → Success=false: material sem
+        // emissive não pode virar emissive branco por fallback.
+        static CompiledMaterial CompileEmissiveAverage(MaterialGraph* graph);
+
+        // One-liner pros call sites: compila + avalia num FBO 8x8 e
+        // devolve a média (vec3(0) se o material não emite ou falhar).
+        static glm::vec3 ComputeBakedEmissive(MaterialGraph* graph);
+
         // Helper único — carrega o .axegraph correspondente a um .axemat,
         // compila como Light Function e já cria o Shader pronto. Usado
         // tanto pelo Inspector (ao attachar/trocar o material de uma luz)

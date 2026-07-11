@@ -69,6 +69,15 @@ namespace axe
 		// pass separado, depois do passe opaco/deferred, com blend
 		// habilitado e sem depth-write — ver SceneRenderer::RenderDeferred.
 		bool IsTransparent = false;
+
+		// Emissive MÉDIO do material (cor x intensidade), avaliado pelo
+		// editor no compile do grafo (MaterialCompiler::ComputeBakedEmissive:
+		// renderiza o pin Emissive num FBO 8x8 varrendo UVs e tira a média).
+		// Consumido pelo bake de GI e pela captura de reflection — probes
+		// SH L1 são ultra-low-frequency, então a MÉDIA é exatamente o que
+		// importa de uma superfície emissiva (a tela do arcade banhando a
+		// parede), não os pixels dela. vec3(0) = material não emite.
+		glm::vec3 BakedEmissive{ 0.0f };
 	private:
 		std::string m_Name;
 		std::shared_ptr<Shader> m_Shader;

@@ -1,3 +1,4 @@
+// AXE build tag: inspector_window collapsable-volume-sections v2
 #include "inspector_window.hpp"
 #include "axe/utils/glm_config.hpp"
 #include <imgui.h>
@@ -239,8 +240,51 @@ namespace axe
 		{
 			if (light->Data) DrawLight(*light->Data);
 		}
-		else if (auto* pp = registry.try_get<PostProcessComponent>(entity))
-			DrawPostProcess(*pp);
+		else if (registry.any_of<PostProcessComponent, InteriorVolumeComponent,
+			ProbeVolumeComponent, ReflectionProbeComponent>(entity))
+		{
+			// Entity de "volumes de ambiente" — pode carregar os 4
+			// componentes JUNTOS (via + Adicionar Componente), cada um na
+			// sua seção colapsável. Um só Transform serve os quatro: a
+			// caixa (Escala) é compartilhada — perfeito pro caso "uma
+			// sala". Quando o grid de GI precisar ser maior que a sala ou
+			// a captura de reflexo precisar de posição própria, crie
+			// entities separadas — os dois fluxos coexistem.
+			if (auto* pp = registry.try_get<PostProcessComponent>(entity))
+				if (ImGui::CollapsingHeader("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					// PushID por seção: as quatro repetem labels ("Ativo",
+					// "Intensidade", "Bake"...) e o ImGui identifica o
+					// widget pelo label — sem escopo de ID, só o PRIMEIRO
+					// de cada nome responde ao clique (e o "Bake" da
+					// Reflection dispararia o da Probe). O PushID torna
+					// cada seção um namespace de IDs próprio.
+					ImGui::PushID("sec_pp");
+					DrawPostProcess(*pp);
+					ImGui::PopID();
+				}
+			if (auto* iv = registry.try_get<InteriorVolumeComponent>(entity))
+				if (ImGui::CollapsingHeader("Interior Volume"))
+				{
+					ImGui::PushID("sec_interior");
+					DrawInteriorVolume(*iv);
+					ImGui::PopID();
+				}
+			if (auto* pv = registry.try_get<ProbeVolumeComponent>(entity))
+				if (ImGui::CollapsingHeader("Probe Volume (GI)"))
+				{
+					ImGui::PushID("sec_probe");
+					DrawProbeVolume(*pv);
+					ImGui::PopID();
+				}
+			if (auto* rp = registry.try_get<ReflectionProbeComponent>(entity))
+				if (ImGui::CollapsingHeader("Reflection Probe"))
+				{
+					ImGui::PushID("sec_refl");
+					DrawReflectionProbe(*rp);
+					ImGui::PopID();
+				}
+		}
 		else if (auto* ec = registry.try_get<EnvironmentComponent>(entity))
 			DrawEnvironment(*ec);
 		else if (auto* sa = registry.try_get<SpringArmComponent>(entity))
@@ -330,6 +374,10 @@ namespace axe
 
 		if (ImGui::BeginPopup("add_comp"))
 		{
+			// Os volumes de ambiente (Post Process, Interior, Probe, Refl)
+			// NÃO aparecem aqui: eles vêm juntos ao criar um "Post Process
+			// Volume" pelo menu Criar do Hierarchy — checkbox "Ativo"
+			// controla cada um. Assim a entity de ambiente é sempre uma só.
 			ImGui::TextDisabled("Fisica");
 			ImGui::Separator();
 
@@ -527,6 +575,21 @@ namespace axe
 		ImGui::DragFloat("Radius", &light.Radius, 0.1f, 0.1f, 200.0f);
 
 		ImGui::Separator();
+		ImGui::Checkbox("Cast Shadows", &light.CastShadows);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Sombra omnidirecional (6 renders de\n"
+				"profundidade por frame). Maximo de 4 luzes\n"
+				"sombreadas simultaneas — as mais proximas da\n"
+				"camera vencem. Use nas luzes que importam.");
+		if (light.CastShadows)
+		{
+			ImGui::DragFloat("Shadow Bias (m)", &light.ShadowBias, 0.005f, 0.0f, 1.0f);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Aumente se aparecer acne (listras);\n"
+					"diminua se a sombra 'descolar' do objeto.");
+		}
+		ImGui::Spacing();
+
 		ImGui::Checkbox("Spot Light (cone)", &light.IsSpot);
 		if (light.IsSpot)
 		{
@@ -920,10 +983,136 @@ namespace axe
 
 	void InspectorWindow::MarkGraphCacheDirty() { s_GraphCacheDirty = true; }
 
+	void InspectorWindow::DrawReflectionProbe(ReflectionProbeComponent& rp)
+	{
+		ImGui::TextDisabled("Cubemap local pro reflexo especular.");
+		ImGui::TextDisabled("POSICAO = ponto de captura (centro da sala);");
+		ImGui::TextDisabled("ESCALA = caixa de influencia (paredes).");
+		ImGui::Spacing();
+
+		ImGui::Checkbox("Ativo", &rp.Settings.Enabled);
+
+		const char* resNames[] = { "64", "128", "256" };
+		int resIdx = rp.Settings.Resolution >= 256 ? 2
+			: rp.Settings.Resolution >= 128 ? 1 : 0;
+		if (ImGui::Combo("Resolucao", &resIdx, resNames, 3))
+			rp.Settings.Resolution = resIdx == 2 ? 256 : resIdx == 1 ? 128 : 64;
+
+		ImGui::DragFloat("Intensidade", &rp.Settings.Intensity, 0.01f, 0.0f, 4.0f);
+		ImGui::DragFloat("Feather (m)", &rp.Settings.Feather, 0.05f, 0.01f, 10.0f);
+		ImGui::DragFloat("Bake Far Clip (m)", &rp.Settings.BakeFarClip, 1.0f, 10.0f, 1000.0f);
+
+		ImGui::Checkbox("Box Projection", &rp.Settings.BoxProjection);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Ancora o reflexo nas paredes da caixa (parallax\n"
+				"correction) em vez de 'infinitamente longe' — essencial\n"
+				"pra reflexo de interior parecer correto.");
+
+		ImGui::Spacing();
+		if (ImGui::Button("Bake", ImVec2(-1, 0)))
+			rp.BakeRequested = true;
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Captura + prefilter (rapido). Recapturado\n"
+				"automaticamente ao abrir a cena.");
+
+		if (rp.BakeRequested)
+			ImGui::TextDisabled("Captura agendada para o proximo frame...");
+		else if (rp.Capture && rp.Capture->IsValid())
+			ImGui::TextDisabled("Captura atual: %dpx", rp.Settings.Resolution);
+		else
+			ImGui::TextDisabled("Nunca capturado.");
+	}
+
+	void InspectorWindow::DrawProbeVolume(ProbeVolumeComponent& pv)
+	{
+		ImGui::TextDisabled("Grid de light probes bakeadas (SH L1).");
+		ImGui::TextDisabled("Interiores escurecem sozinhos; exteriores");
+		ImGui::TextDisabled("ganham 1 bounce do sol. ESCALA = tamanho (m).");
+		ImGui::Spacing();
+
+		ImGui::Checkbox("Ativo", &pv.Settings.Enabled);
+
+		ImGui::SliderInt3("Probes X/Y/Z", &pv.Settings.Resolution.x, 2, 16);
+		int total = pv.Settings.Resolution.x * pv.Settings.Resolution.y * pv.Settings.Resolution.z;
+		ImGui::TextDisabled("Total: %d probes (%d renders no bake)", total, total * 6);
+
+		ImGui::DragFloat("Intensidade", &pv.Settings.Intensity, 0.01f, 0.0f, 4.0f);
+		ImGui::DragFloat("Feather (m)", &pv.Settings.Feather, 0.05f, 0.01f, 10.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Transicao na borda da caixa de volta\npro IBL global do ceu.");
+		ImGui::DragFloat("Bake Far Clip (m)", &pv.Settings.BakeFarClip, 1.0f, 10.0f, 1000.0f);
+
+		ImGui::SliderInt("Bounces", &pv.Settings.Bounces, 1, 3);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("1 = sol -> parede -> probe.\n"
+				"2 = sol -> parede -> chao -> probe (luz que 'dobra\n"
+				"a esquina' e preenche cantos — GI de verdade).\n"
+				"Tempo de bake escala linear com os bounces.");
+		ImGui::Checkbox("Mostrar Probes (gizmo)", &pv.Settings.ShowProbes);
+
+		ImGui::Checkbox("Auto Bake ao Abrir Cena", &pv.Settings.AutoBakeOnLoad);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("O grid e salvo em .axeprobes junto com a cena e\n"
+				"recarregado no load — a cena abre com o GI pronto.\n"
+				"Este rebake automatico so age quando o arquivo nao\n"
+				"existe ou nao bate com as Settings. Play/Stop nunca\n"
+				"rebakeia — o grid sobrevive ao snapshot.");
+
+		ImGui::Checkbox("Ocluir Sol (Occlusion Probes)", &pv.Settings.OccludeSunlight);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Usa a visibilidade do ceu das probes (geometrica,\n"
+				"independente da hora) pra bloquear a luz DIRETA do\n"
+				"sol em interiores — sem depender de shadow map.\n"
+				"Sala fechada = sol zero em qualquer horario.");
+
+		ImGui::Spacing();
+		if (ImGui::Button("Bake", ImVec2(-1, 0)))
+			pv.BakeRequested = true;
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Renderiza a cena de cada probe (6 faces) e\n"
+				"projeta em SH. Operacao bloqueante de editor.\n"
+				"Rebakear apos mover geometria, luzes ou o volume.");
+
+		if (pv.BakeRequested)
+			ImGui::TextDisabled("Bake agendado para o proximo frame...");
+		else if (pv.Grid && pv.Grid->IsValid())
+			ImGui::TextDisabled("Bake atual: %dx%dx%d",
+				pv.Grid->Resolution.x, pv.Grid->Resolution.y, pv.Grid->Resolution.z);
+		else
+			ImGui::TextDisabled("Nunca bakeado.");
+	}
+
+	void InspectorWindow::DrawInteriorVolume(InteriorVolumeComponent& iv)
+	{
+		ImGui::TextDisabled("Bloqueia sol + ambient/IBL dentro da caixa.");
+		ImGui::TextDisabled("A ESCALA do Transform define o tamanho (m).");
+		ImGui::TextDisabled("Point Lights e particulas nao sao afetadas.");
+		ImGui::Spacing();
+
+		ImGui::Checkbox("Ativo", &iv.Data.Enabled);
+
+		ImGui::SliderFloat("Intensidade", &iv.Data.Intensity, 0.0f, 1.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("0 = sem efeito, 1 = bloqueio total da luz externa");
+
+		ImGui::DragFloat("Suavizacao da Borda (m)", &iv.Data.BlendDistance, 0.05f, 0.01f, 10.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("A luz externa 'vaza' suavemente por esta distancia\n"
+				"para dentro da caixa. Posicione a face da caixa no vao\n"
+				"da porta/janela pra transicao ficar natural.");
+
+		ImGui::Spacing();
+		ImGui::Checkbox("Bloquear Luz Direta (Sol)", &iv.Data.AffectDirect);
+		ImGui::Checkbox("Bloquear Ambient / IBL", &iv.Data.AffectAmbient);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Desmarque a Luz Direta pra deixar o sol entrar\n"
+				"pela janela (via shadow map) matando so o ambient\n"
+				"que vaza pelas paredes.");
+	}
+
 	void InspectorWindow::DrawPostProcess(PostProcessComponent& pp)
 	{
-		ImGui::Separator();
-		ImGui::Text("Post Process Volume");
+		// (título vem do CollapsingHeader da seção)
 		ImGui::Checkbox("Global", &pp.IsGlobal);
 
 		ImGui::Separator();

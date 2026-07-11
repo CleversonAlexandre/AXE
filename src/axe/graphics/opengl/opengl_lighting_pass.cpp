@@ -5,6 +5,7 @@
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/cubemap_texture.hpp"
 #include "axe/graphics/texture.hpp"
+#include "axe/graphics/texture3d.hpp"
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
 #include <algorithm>
@@ -96,14 +97,73 @@ namespace axe
         vec3  Up;
         float TanOuterAngle;
         int   CookieIndex;
+
+        // Sombra omnidirecional — camada no u_PointShadowArray
+        // (-1 = luz sem sombra neste frame) e bias em metros
+        int   ShadowLayer;
+        float ShadowBias;
     };
     uniform PointLight u_PointLights[16];
     uniform int        u_NumPointLights;
+
+    // Sombras de Point/Spot Light — cube map array R32F no unit 28: cada
+    // camada guarda a distância linear até a luz (normalizada pelo raio)
+    // vista de dentro dela. Uma textura só pra até 4 luzes sombreadas.
+    uniform samplerCubeArray u_PointShadowArray;
 
     // Cookies de Point Light — limite de 4 simultâneas na cena (texturas
     // são caras de bindar; além desse número a luz funciona normal, só
     // sem o padrão projetado)
     uniform sampler2D u_PointCookies[4];
+
+    // ── Interior Volumes ─────────────────────────────────────────────────
+    // Caixas (OBB) que bloqueiam a luz "de fora" (sol direto + ambient +
+    // IBL) para dentro de ambientes fechados — resolve o light leaking do
+    // ambient/IBL, que é aplicado em todos os pixels sem respeitar paredes.
+    // Point Lights, partículas e emissive NÃO são afetados: a iluminação
+    // interna fica a cargo delas. Máximo de 8 volumes simultâneos.
+    uniform int   u_NumInteriorVolumes;
+    uniform mat4  u_InteriorWorldToLocal[8]; // world → local da caixa (sem escala)
+    uniform vec3  u_InteriorHalfExtents[8];  // metade do tamanho mundial
+    uniform float u_InteriorIntensity[8];    // 0=sem efeito, 1=bloqueio total
+    uniform float u_InteriorBlend[8];        // transição na borda, em metros
+    uniform int   u_InteriorAffect[8];       // bit 0 = luz direta, bit 1 = ambient/IBL
+
+    // ── Light Probes (GI-lite) ───────────────────────────────────────────
+    // Grid 3D de irradiância em Spherical Harmonics L1 (4 texturas RGBA16F
+    // — SH0 rgb + visibilidade do céu no alpha; SH1 x/y/z). Dentro do
+    // volume, a irradiância das probes SUBSTITUI o IBL difuso global do
+    // céu — probes em salas fechadas só enxergaram paredes escuras no
+    // bake, então o interior escurece sozinho, sem volume manual. A
+    // interpolação trilinear entre probes é de graça (sampler3D linear).
+    // Até 2 volumes simultâneos (4 sampler3D cada — units 16-23).
+    // Sobrepostos combinam por média ponderada pelo peso do feather.
+    // Indexar sampler arrays com a variável do loop é legal: o índice é
+    // "dynamically uniform" (mesmo valor pra todos os fragments do draw).
+    uniform int       u_NumProbeVolumes;
+    uniform mat4      u_ProbeWorldToLocal[2]; // sem escala (escala → HalfExtents)
+    uniform vec3      u_ProbeHalfExtents[2];
+    uniform float     u_ProbeIntensity[2];
+    uniform float     u_ProbeFeather[2];      // transição na borda (m)
+    uniform int       u_ProbeOccludeSun[2];   // Occlusion Probes por volume
+    uniform sampler3D u_ProbeSH0[2];
+    uniform sampler3D u_ProbeSH1X[2];
+    uniform sampler3D u_ProbeSH1Y[2];
+    uniform sampler3D u_ProbeSH1Z[2];
+
+    // ── Reflection Probes ────────────────────────────────────────────────
+    // Cubemaps locais pré-filtrados (GGX, 5 mips) — units 24-27. Dentro da
+    // caixa de influência, SUBSTITUEM o reflexo do céu no especular: as SH
+    // resolvem o difuso, o cubemap resolve o reflexo mostrando as PAREDES
+    // da sala. Box projection ancora o reflexo por paralaxe.
+    uniform int         u_NumReflProbes;
+    uniform mat4        u_ReflWorldToLocal[4]; // sem escala
+    uniform vec3        u_ReflHalfExtents[4];
+    uniform vec3        u_ReflPosition[4];     // ponto de captura (mundo)
+    uniform float       u_ReflIntensity[4];
+    uniform float       u_ReflFeather[4];
+    uniform int         u_ReflBoxProj[4];
+    uniform samplerCube u_ReflCube[4];
 
     const float PI = 3.14159265359;
 
@@ -196,6 +256,170 @@ namespace axe
         return shadow / 25.0;
     }
 
+    // Quanto o fragmento está "dentro" do volume i: 0.0 fora, 1.0 bem
+    // dentro. Usa a SDF (distância assinada) da caixa — negativa dentro,
+    // positiva fora — e esmaece ao longo de BlendDistance PARA DENTRO da
+    // caixa: a face da caixa fica no vão da porta/janela e a luz externa
+    // "vaza" suavemente por BlendDistance metros pro interior.
+    float InteriorMask(vec3 fragPos, int i)
+    {
+        vec3 local = (u_InteriorWorldToLocal[i] * vec4(fragPos, 1.0)).xyz;
+        vec3 d = abs(local) - u_InteriorHalfExtents[i];
+        float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
+        return 1.0 - smoothstep(-u_InteriorBlend[i], 0.0, dist);
+    }
+
+    // Calcula quanto da luz externa sobrevive neste fragmento — separado
+    // em luz direta (sol) e ambient/IBL. Vários volumes sobrepostos
+    // combinam pelo mínimo (o mais escuro vence).
+    void InteriorFactors(vec3 fragPos, out float directFactor, out float ambientFactor)
+    {
+        directFactor  = 1.0;
+        ambientFactor = 1.0;
+        for (int i = 0; i < u_NumInteriorVolumes; i++)
+        {
+            float survive = 1.0 - InteriorMask(fragPos, i) * u_InteriorIntensity[i];
+            if ((u_InteriorAffect[i] & 1) != 0) directFactor  = min(directFactor,  survive);
+            if ((u_InteriorAffect[i] & 2) != 0) ambientFactor = min(ambientFactor, survive);
+        }
+    }
+
+    // Avalia TODOS os Probe Volumes no fragmento — peso combinado (0..1,
+    // com feather), irradiância SH L1 e visibilidade do céu como MÉDIA
+    // PONDERADA pelos pesos (sobreposições fazem crossfade natural), e a
+    // oclusão de sol por volume (Occlusion Probes). Reconstrução com a
+    // convolução cosseno padrão (A0=pi, A1=2pi/3), dividida por PI —
+    // mesma semântica do irradiance map do IBL.
+    void EvalProbeVolumes(vec3 fragPos, vec3 N,
+        out float weight, out vec3 irradiance, out float skyVis, out float sunOcc)
+    {
+        weight = 0.0; irradiance = vec3(0.0); skyVis = 1.0; sunOcc = 1.0;
+        float total = 0.0;
+        vec3  accIrr = vec3(0.0);
+        float accSky = 0.0;
+        float accOcc = 0.0;
+
+        for (int i = 0; i < u_NumProbeVolumes; i++)
+        {
+            vec3 local = (u_ProbeWorldToLocal[i] * vec4(fragPos, 1.0)).xyz;
+            vec3 d = abs(local) - u_ProbeHalfExtents[i];
+            float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
+            float w = 1.0 - smoothstep(-u_ProbeFeather[i], 0.0, dist);
+            if (w <= 0.0) continue;
+
+            // Probes nos CENTROS das células → texel centers → trilinear
+            // do sampler é a interpolação entre probes, de graça
+            vec3 uvw = clamp(local / (2.0 * u_ProbeHalfExtents[i]) + 0.5, 0.0, 1.0);
+
+            vec4 sh0  = texture(u_ProbeSH0[i],  uvw);
+            vec3 sh1x = texture(u_ProbeSH1X[i], uvw).rgb;
+            vec3 sh1y = texture(u_ProbeSH1Y[i], uvw).rgb;
+            vec3 sh1z = texture(u_ProbeSH1Z[i], uvw).rgb;
+
+            const float Y00 = 0.282095;
+            const float Y1  = 0.488603;
+            const float A0  = 3.14159265;
+            const float A1  = 2.09439510;
+
+            vec3 E = Y00 * A0 * sh0.rgb
+                   + Y1  * A1 * (sh1x * N.x + sh1y * N.y + sh1z * N.z);
+            vec3 irr = max(E, vec3(0.0)) / PI * u_ProbeIntensity[i];
+
+            // Occlusion Probes: skyVis geométrica oclui o sol direto.
+            // O x2 corrige o exterior (chão come metade do céu).
+            float occ = (u_ProbeOccludeSun[i] == 1)
+                ? min(sh0.a * 2.0, 1.0) : 1.0;
+
+            accIrr += irr * w;
+            accSky += sh0.a * w;
+            accOcc += occ * w;
+            total  += w;
+        }
+
+        if (total > 0.0)
+        {
+            irradiance = accIrr / total;
+            skyVis     = accSky / total;
+            sunOcc     = accOcc / total;
+            weight     = min(total, 1.0);
+        }
+    }
+
+    // Reflexo local — combina as Reflection Probes cuja caixa contém o
+    // fragmento (média ponderada; loop de índice dynamically uniform).
+    // Box projection: intersecta o raio refletido com a caixa em espaço
+    // LOCAL e sampleia o cubemap na direção hit→pontoDeCaptura — a
+    // inversa da rotação é a transposta da 3x3 (WorldToLocal não tem
+    // escala), então tudo custa uma mat3 extra.
+    void EvalReflectionProbes(vec3 fragPos, vec3 R, float roughness,
+        out float weight, out vec3 specular)
+    {
+        weight = 0.0; specular = vec3(0.0);
+        float total = 0.0;
+
+        for (int i = 0; i < u_NumReflProbes; i++)
+        {
+            mat3 rot = mat3(u_ReflWorldToLocal[i]);
+            vec3 lp = (u_ReflWorldToLocal[i] * vec4(fragPos, 1.0)).xyz;
+
+            vec3 d = abs(lp) - u_ReflHalfExtents[i];
+            float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
+            float w = 1.0 - smoothstep(-u_ReflFeather[i], 0.0, dist);
+            if (w <= 0.0) continue;
+
+            vec3 dir = R;
+            if (u_ReflBoxProj[i] == 1)
+            {
+                vec3 lr = rot * R;
+                // interseção raio-caixa (slab method, saída)
+                vec3 t1 = ( u_ReflHalfExtents[i] - lp) / lr;
+                vec3 t2 = (-u_ReflHalfExtents[i] - lp) / lr;
+                vec3 tmax = max(t1, t2);
+                float t = min(min(tmax.x, tmax.y), tmax.z);
+                vec3 lProbe = (u_ReflWorldToLocal[i] * vec4(u_ReflPosition[i], 1.0)).xyz;
+                dir = transpose(rot) * ((lp + lr * t) - lProbe);
+            }
+
+            // 5 mips GGX → lod máximo 4.0 (mesma escala do IBL global)
+            vec3 c = textureLod(u_ReflCube[i], dir, roughness * 4.0).rgb
+                   * u_ReflIntensity[i];
+            specular += c * w;
+            total += w;
+        }
+
+        if (total > 0.0)
+        {
+            specular /= total;
+            weight = min(total, 1.0);
+        }
+    }
+
+    // Sombra omnidirecional com PCF de 4 taps: compara a distância real
+    // do fragmento até a luz contra a gravada no cubemap (backfaces —
+    // o cull front do depth pass já empurra a superfície de comparação
+    // pra dentro do objeto, o bias só cobre o resto).
+    float PointShadow(int layer, float bias, vec3 lightPos, float radius, vec3 fragPos)
+    {
+        vec3 fragToLight = fragPos - lightPos;
+        float dist = length(fragToLight);
+        if (dist >= radius) return 0.0;
+
+        vec3 dir = normalize(fragToLight);
+        const vec3 offs[4] = vec3[](
+            vec3( 1,  1,  0), vec3(-1,  1, 0),
+            vec3( 1, -1,  0), vec3(-1, -1, 0));
+        const float diskRadius = 0.012;
+
+        float shadow = 0.0;
+        for (int k = 0; k < 4; k++)
+        {
+            float closest = texture(u_PointShadowArray,
+                vec4(dir + offs[k] * diskRadius, float(layer))).r * radius;
+            shadow += (dist - bias > closest) ? 1.0 : 0.0;
+        }
+        return shadow * 0.25;
+    }
+
     vec3 CalcPointLight(PointLight pl, vec3 fragPos, vec3 N, vec3 V,
                         vec3 albedo, float metallic, float roughness, vec3 F0)
     {
@@ -275,6 +499,22 @@ namespace axe
         vec3 V = normalize(u_CameraPosition - fragPos);
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
+        // Interior Volumes — quanto da luz externa (sol + ambient/IBL)
+        // chega neste fragmento. 1.0 = fragmento fora de qualquer volume.
+        float interiorDirect  = 1.0;
+        float interiorAmbient = 1.0;
+        if (u_NumInteriorVolumes > 0)
+            InteriorFactors(fragPos, interiorDirect, interiorAmbient);
+
+        // Light Probes — peso, irradiância, visibilidade do céu e oclusão
+        // de sol (Occlusion Probes) combinados de todos os volumes
+        float probeW = 0.0;
+        vec3  probeIrr = vec3(0.0);
+        float probeSkyVis = 1.0;
+        float probeOcc = 1.0;
+        EvalProbeVolumes(fragPos, N, probeW, probeIrr, probeSkyVis, probeOcc);
+        float probeSunOcc = mix(1.0, probeOcc, probeW);
+
         // --- Luz direcional ---
         vec3  Lo     = vec3(0.0);
         float shadow = 0.0; // fora do if para ser acessível no cálculo de ambient
@@ -311,13 +551,24 @@ namespace axe
                 dirCookieTint = texture(u_DirCookie, fract(vec2(cu, cv))).rgb;
             }
 
-            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5) * dirCookieTint;
+            // interiorDirect: dentro de um Interior Volume, o sol não
+            // entra — independente do shadow map cobrir ou não o teto.
+            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5) * dirCookieTint * interiorDirect * probeSunOcc;
         }
 
         // --- Point lights --- (independente da direcional)
         for (int i = 0; i < u_NumPointLights; i++)
         {
             vec3 contribution = CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0);
+
+            // Sombra da luz — só quando ela ganhou uma camada neste frame
+            if (u_PointLights[i].ShadowLayer >= 0)
+                contribution *= 1.0 - PointShadow(
+                    u_PointLights[i].ShadowLayer,
+                    u_PointLights[i].ShadowBias,
+                    u_PointLights[i].Position,
+                    u_PointLights[i].Radius,
+                    fragPos);
 
             // Cookie — só Spot Light com CookieIndex válido. Projeção
             // cônica (perspectiva): divide pelo cosseno do ângulo em
@@ -365,24 +616,59 @@ namespace axe
         {
             vec3 F_amb  = FresnelSchlick(max(dot(N, V), 0.0), F0);
             vec3 kD_amb = (1.0 - F_amb) * (1.0 - metallic);
+
+            // Difuso: dentro do Probe Volume, a irradiância bakeada das
+            // probes SUBSTITUI o irradiance map global do céu — é aqui que
+            // interiores escurecem sozinhos e recebem o bounce colorido
+            // do sol nas paredes.
             vec3 irradiance  = texture(u_IrradianceMap, N).rgb;
+            irradiance = mix(irradiance, probeIrr, probeW);
             vec3 diffuse_ibl = irradiance * albedo;
+
             vec3 R = reflect(-V, N);
             vec3 prefilteredColor = textureLod(u_PrefilteredMap, R, roughness * 4.0).rgb;
             vec2 brdf = texture(u_BRDFLut, vec2(max(dot(N, V), 0.0), roughness)).rg;
             vec3 specular_ibl = prefilteredColor * (F_amb * brdf.x + brdf.y);
 
+            // Especular: continua vindo do prefiltered map do céu (as
+            // probes L1 não têm detalhe angular pra reflexo), mas atenuado
+            // pela visibilidade do céu da probe — dentro de uma sala, o
+            // reflexo do céu não existe.
+            float skyAtten = mix(1.0, probeSkyVis, probeW);
+            specular_ibl *= skyAtten;
+
+            // Reflection Probes — dentro da caixa de influência, o reflexo
+            // LOCAL (paredes da sala, com box projection) substitui o do
+            // céu. A mesma aproximação de BRDF do envmap global se aplica.
+            float reflW = 0.0;
+            vec3  reflSpec = vec3(0.0);
+            EvalReflectionProbes(fragPos, R, roughness, reflW, reflSpec);
+            if (reflW > 0.0)
+            {
+                reflSpec = reflSpec * (F_amb * brdf.x + brdf.y);
+                specular_ibl = mix(specular_ibl, reflSpec, reflW);
+            }
+
             vec3 ibl = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity;
-            vec3 flatAmbient = u_AmbientStrength * albedo * ao;
+            vec3 flatAmbient = u_AmbientStrength * albedo * ao * skyAtten;
             ambient = (ibl + flatAmbient) * shadowedAmbient;
         }
         else
         {
             ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao * shadowedAmbient;
+            // Sem IBL: as probes substituem o ambient constante inteiro
+            ambient = mix(ambient, probeIrr * albedo * ao, probeW);
         }
 
+        // Interior Volumes — o ambient/IBL vem do céu; dentro de uma sala
+        // fechada ele não existe. Este é o termo que causava o leaking.
+        ambient *= interiorAmbient;
+
         vec3 color = ambient + Lo;
-        color = max(color, albedo * 0.02);
+        // O piso mínimo (2% do albedo) também é "luz de fora" — dentro de
+        // um interior ele acompanha o fator, senão a sala nunca escurece
+        // de verdade.
+        color = max(color, albedo * 0.02 * interiorAmbient);
 
         // Emissive — somado direto, sem ser afetado por luz/sombra/AO,
         // assim como no caminho forward (preview do material).
@@ -459,7 +745,11 @@ namespace axe
         const glm::vec3& cameraPosition,
         const DirectionalLight* light,
         const SceneEnvironment* environment,
-        const std::vector<PointLight>& pointLights)
+        const std::vector<PointLight>& pointLights,
+        const std::vector<InteriorVolumeData>& interiorVolumes,
+        const std::vector<ProbeVolumeData>& probeVolumes,
+        const std::vector<ReflectionProbeData>& reflectionProbes,
+        uint32_t pointShadowArrayID)
     {
         if (!m_Shader || !m_Initialized)
         {
@@ -639,10 +929,13 @@ namespace axe
         int numLights = (int)std::min(pointLights.size(), (size_t)16);
         m_Shader->SetInt("u_NumPointLights", numLights);
 
-        // Cookies de Point Light — slots 11, 12, 13, 14 (limite de 4
-        // simultâneas; a partir da 5ª, a luz funciona normal sem padrão)
+        // Cookies de Point Light — slots 12, 13, 14, 15 (limite de 4
+        // simultâneas; a partir da 5ª, a luz funciona normal sem padrão).
+        // NÃO usar o slot 11: é o do CSM (sampler2DArray) — bindar um
+        // sampler2D no mesmo unit é comportamento indefinido e quebrava
+        // a sombra em cascata sempre que uma cookie estava ativa.
         int nextCookieSlot = 0;
-        const int cookieTextureUnits[4] = { 11, 12, 13, 14 };
+        const int cookieTextureUnits[4] = { 12, 13, 14, 15 };
 
         for (int i = 0; i < numLights; i++)
         {
@@ -660,6 +953,9 @@ namespace axe
             // todos os fragmentos afetados por esta luz no frame.
             m_Shader->SetFloat(base + ".InnerCutoff", cosf(glm::radians(pl.InnerConeAngle)));
             m_Shader->SetFloat(base + ".OuterCutoff", cosf(glm::radians(pl.OuterConeAngle)));
+
+            m_Shader->SetInt(base + ".ShadowLayer", pl.ShadowLayer);
+            m_Shader->SetFloat(base + ".ShadowBias", pl.ShadowBias);
 
             // Cookie — base ortonormal (Right/Up) perpendicular à direção,
             // mesma usada no gizmo do cone, e TanOuterAngle pra normalizar
@@ -685,6 +981,86 @@ namespace axe
                 nextCookieSlot++;
             }
             m_Shader->SetInt(base + ".CookieIndex", cookieIndex);
+        }
+
+        // Interior Volumes — máximo de 8 (limite dos arrays de uniform;
+        // acima disso os volumes extras são simplesmente ignorados)
+        int numVolumes = (int)std::min(interiorVolumes.size(), (size_t)8);
+        m_Shader->SetInt("u_NumInteriorVolumes", numVolumes);
+        for (int i = 0; i < numVolumes; i++)
+        {
+            const auto& iv = interiorVolumes[i];
+            std::string idx = "[" + std::to_string(i) + "]";
+            m_Shader->SetMat4("u_InteriorWorldToLocal" + idx, glm::value_ptr(iv.WorldToLocal));
+            m_Shader->SetFloat3("u_InteriorHalfExtents" + idx, iv.HalfExtents);
+            m_Shader->SetFloat("u_InteriorIntensity" + idx, iv.Intensity);
+            m_Shader->SetFloat("u_InteriorBlend" + idx, iv.BlendDistance);
+            int affect = (iv.AffectDirect ? 1 : 0) | (iv.AffectAmbient ? 2 : 0);
+            m_Shader->SetInt("u_InteriorAffect" + idx, affect);
+        }
+
+        // Sombras de Point Light — cube map array no unit 28 (o mapa de
+        // units está no comentário logo abaixo). O uniform é setado
+        // sempre; a textura só binda quando existe — nenhum fragmento
+        // sampleia sem ShadowLayer >= 0, então unit "vazio" nunca é lido.
+        if (pointShadowArrayID != 0)
+            glBindTextureUnit(28, pointShadowArrayID);
+        m_Shader->SetInt("u_PointShadowArray", 28);
+
+        // Light Probes — 2 grids x 4 samplers (units 16-23) + Reflection
+        // Probes — 4 cubemaps (units 24-27). NOTA de texture units: o
+        // mínimo garantido pela spec é 16 por stage (0-15, já ocupados);
+        // desktop AMD/NVIDIA expõe 32 (a RX 580 inclusive), então 16-27 é
+        // seguro nos alvos do AXE. Se um dia rodar em GL de mínimo
+        // estrito, este é o primeiro lugar pra revisitar.
+        {
+            int uploaded = 0;
+            for (size_t i = 0; i < probeVolumes.size() && uploaded < 2; i++)
+            {
+                const auto& pv = probeVolumes[i];
+                if (!pv.Grid || !pv.Grid->IsValid()) continue;
+
+                std::string idx = "[" + std::to_string(uploaded) + "]";
+                int base = 16 + uploaded * 4;
+                pv.Grid->SH0->Bind(base + 0);
+                pv.Grid->SH1X->Bind(base + 1);
+                pv.Grid->SH1Y->Bind(base + 2);
+                pv.Grid->SH1Z->Bind(base + 3);
+                m_Shader->SetInt("u_ProbeSH0" + idx, base + 0);
+                m_Shader->SetInt("u_ProbeSH1X" + idx, base + 1);
+                m_Shader->SetInt("u_ProbeSH1Y" + idx, base + 2);
+                m_Shader->SetInt("u_ProbeSH1Z" + idx, base + 3);
+                m_Shader->SetMat4("u_ProbeWorldToLocal" + idx, glm::value_ptr(pv.WorldToLocal));
+                m_Shader->SetFloat3("u_ProbeHalfExtents" + idx, pv.HalfExtents);
+                m_Shader->SetFloat("u_ProbeIntensity" + idx, pv.Intensity);
+                m_Shader->SetFloat("u_ProbeFeather" + idx, std::max(pv.Feather, 0.0001f));
+                m_Shader->SetInt("u_ProbeOccludeSun" + idx, pv.OccludeSunlight ? 1 : 0);
+                uploaded++;
+            }
+            m_Shader->SetInt("u_NumProbeVolumes", uploaded);
+
+            // Reflection Probes — o GetPrefilteredID() é o id OPACO do
+            // cubemap pré-filtrado (mesmo contrato do ssaoTextureID);
+            // esta camada é OpenGL, então binda direto.
+            int rUp = 0;
+            for (size_t i = 0; i < reflectionProbes.size() && rUp < 4; i++)
+            {
+                const auto& rp = reflectionProbes[i];
+                if (!rp.Capture || !rp.Capture->IsValid()) continue;
+
+                std::string idx = "[" + std::to_string(rUp) + "]";
+                int unit = 24 + rUp;
+                glBindTextureUnit(unit, rp.Capture->GetPrefilteredID());
+                m_Shader->SetInt("u_ReflCube" + idx, unit);
+                m_Shader->SetMat4("u_ReflWorldToLocal" + idx, glm::value_ptr(rp.WorldToLocal));
+                m_Shader->SetFloat3("u_ReflHalfExtents" + idx, rp.HalfExtents);
+                m_Shader->SetFloat3("u_ReflPosition" + idx, rp.Position);
+                m_Shader->SetFloat("u_ReflIntensity" + idx, rp.Intensity);
+                m_Shader->SetFloat("u_ReflFeather" + idx, std::max(rp.Feather, 0.0001f));
+                m_Shader->SetInt("u_ReflBoxProj" + idx, rp.BoxProjection ? 1 : 0);
+                rUp++;
+            }
+            m_Shader->SetInt("u_NumReflProbes", rUp);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);

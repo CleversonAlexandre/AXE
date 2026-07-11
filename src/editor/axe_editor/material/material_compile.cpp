@@ -58,6 +58,10 @@ namespace axe
         }
         m_Material->SamplerTextures = result.SamplerTextures;
 
+        // Emissive médio pro GI — as telas/superfícies emissivas passam a
+        // banhar as probes e as reflections no próximo bake
+        m_Material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(m_Graph.get());
+
         // Usa as texturas extraídas pelo próprio compilador (AlbedoTexture/
         // NormalTexture), exatamente como o callback de recarga de cena faz
         // em SceneSerializer::SetMaterialRecompileCallback. Antes, este
@@ -288,6 +292,7 @@ namespace axe
             m_Material->SamplerTextures = result.SamplerTextures;
             m_Material->AlbedoMap = result.AlbedoTexture;
             m_Material->NormalMap = result.NormalTexture;
+            m_Material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(m_Graph.get());
             m_Material->IsTransparent = result.IsTransparent;
         }
 

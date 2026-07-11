@@ -3,6 +3,9 @@
 #include "axe/utils/glm_config.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/lighting/interior_volume.hpp"
+#include "axe/lighting/probe_volume.hpp"
+#include "axe/lighting/reflection_probe.hpp"
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -79,6 +82,24 @@ namespace axe
         const DirectionalLight* Light = nullptr;
         std::vector<PointLight> PointLights;
 
+        // Interior Volumes — caixas que bloqueiam sol + ambient/IBL em
+        // ambientes fechados (ver axe/lighting/interior_volume.hpp)
+        std::vector<InteriorVolumeData> InteriorVolumes;
+
+        // Probe Volumes (GI-lite) — até 2 volumes simultâneos (limite de
+        // texture units do lighting pass: 4 sampler3D por volume, units
+        // 16-23). Sobrepostos combinam por peso com feather.
+        std::vector<ProbeVolumeData> ProbeVolumes;
+
+        // Reflection Probes — até 4 (units 24-27), especular local.
+        std::vector<ReflectionProbeData> ReflectionProbes;
+
+        // Pedidos de bake enfileirados pelo SceneCollector (botão "Bake"
+        // no Inspector ou load de cena) — executados pelo SceneRenderer,
+        // que é quem tem o contexto gráfico.
+        std::vector<ProbeBakeRequest>      ProbeBakes;
+        std::vector<ReflectionBakeRequest> ReflectionBakes;
+
         // Meshes a renderizar
         std::vector<MeshDrawCall> Meshes;
 
@@ -96,6 +117,11 @@ namespace axe
         {
             Light = nullptr;
             PointLights.clear();
+            InteriorVolumes.clear();
+            ProbeVolumes.clear();
+            ReflectionProbes.clear();
+            ProbeBakes.clear();
+            ReflectionBakes.clear();
             Meshes.clear();
             ParticleBatches.clear();
             RibbonBatches.clear();

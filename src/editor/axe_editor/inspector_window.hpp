@@ -35,6 +35,9 @@ namespace axe
             entt::entity entity);
 
         void DrawPostProcess(PostProcessComponent& pp);
+        void DrawInteriorVolume(InteriorVolumeComponent& iv);
+        void DrawProbeVolume(ProbeVolumeComponent& pv);
+        void DrawReflectionProbe(ReflectionProbeComponent& rp);
 
         static void MarkGraphCacheDirty();
 

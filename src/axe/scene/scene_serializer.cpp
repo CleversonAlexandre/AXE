@@ -7,9 +7,11 @@
 #include "axe/log/log.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/lighting/reflection_probe.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <random>
 #include <imgui.h>
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
@@ -114,6 +116,45 @@ namespace axe
 					components["PointLight"]["cookie_uuid"] = c->Data->CookieTextureUUID;
 					components["PointLight"]["light_material_uuid"] = c->Data->LightMaterialUUID;
 				}
+			}
+
+			if (auto* c = registry.try_get<ProbeVolumeComponent>(entity))
+			{
+				auto& st = c->Settings;
+				components["ProbeVolume"]["enabled"] = st.Enabled;
+				components["ProbeVolume"]["resolution"] = { st.Resolution.x, st.Resolution.y, st.Resolution.z };
+				components["ProbeVolume"]["intensity"] = st.Intensity;
+				components["ProbeVolume"]["feather"] = st.Feather;
+				components["ProbeVolume"]["bake_far_clip"] = st.BakeFarClip;
+				components["ProbeVolume"]["show_probes"] = st.ShowProbes;
+				components["ProbeVolume"]["occlude_sunlight"] = st.OccludeSunlight;
+				components["ProbeVolume"]["bounces"] = st.Bounces;
+				components["ProbeVolume"]["auto_bake_on_load"] = st.AutoBakeOnLoad;
+				components["ProbeVolume"]["file_id"] = st.FileID;
+				// O ProbeGrid (resultado do bake) NÃO é serializado — o
+				// load dispara um rebake automático via BakeRequested.
+			}
+
+			if (auto* c = registry.try_get<ReflectionProbeComponent>(entity))
+			{
+				auto& st = c->Settings;
+				components["ReflectionProbe"]["enabled"] = st.Enabled;
+				components["ReflectionProbe"]["resolution"] = st.Resolution;
+				components["ReflectionProbe"]["intensity"] = st.Intensity;
+				components["ReflectionProbe"]["feather"] = st.Feather;
+				components["ReflectionProbe"]["box_projection"] = st.BoxProjection;
+				components["ReflectionProbe"]["bake_far_clip"] = st.BakeFarClip;
+				// O cubemap capturado NÃO é serializado — recapturar é
+				// barato (6 renders + prefilter), o load rebakeia sempre.
+			}
+
+			if (auto* c = registry.try_get<InteriorVolumeComponent>(entity))
+			{
+				components["InteriorVolume"]["enabled"] = c->Data.Enabled;
+				components["InteriorVolume"]["intensity"] = c->Data.Intensity;
+				components["InteriorVolume"]["blend_distance"] = c->Data.BlendDistance;
+				components["InteriorVolume"]["affect_direct"] = c->Data.AffectDirect;
+				components["InteriorVolume"]["affect_ambient"] = c->Data.AffectAmbient;
 			}
 
 			if (auto* c = registry.try_get<PostProcessComponent>(entity))
@@ -398,6 +439,56 @@ namespace axe
 				registry.emplace<PointLightComponent>(entity, pl);
 			}
 
+			if (components.contains("ProbeVolume"))
+			{
+				auto& t = components["ProbeVolume"];
+				ProbeVolumeComponent pv;
+				pv.Settings.Enabled = t.value("enabled", true);
+				if (t.contains("resolution") && t["resolution"].size() == 3)
+					pv.Settings.Resolution = { t["resolution"][0], t["resolution"][1], t["resolution"][2] };
+				pv.Settings.Intensity = t.value("intensity", 1.0f);
+				pv.Settings.Feather = t.value("feather", 1.0f);
+				pv.Settings.BakeFarClip = t.value("bake_far_clip", 150.0f);
+				pv.Settings.ShowProbes = t.value("show_probes", false);
+				pv.Settings.OccludeSunlight = t.value("occlude_sunlight", true);
+				pv.Settings.Bounces = t.value("bounces", 2);
+				pv.Settings.AutoBakeOnLoad = t.value("auto_bake_on_load", true);
+				pv.Settings.FileID = t.value("file_id", 0u);
+				// Rebake automático ao abrir a cena — o grid nunca é salvo.
+				// No Play/Stop, o EditorLayer restaura o grid antigo e
+				// CANCELA esta flag logo depois do Deserialize (o Stop
+				// não pode custar um bake inteiro).
+				pv.BakeRequested = pv.Settings.Enabled && pv.Settings.AutoBakeOnLoad;
+				registry.emplace<ProbeVolumeComponent>(entity, pv);
+			}
+
+			if (components.contains("ReflectionProbe"))
+			{
+				auto& t = components["ReflectionProbe"];
+				ReflectionProbeComponent rp;
+				rp.Settings.Enabled = t.value("enabled", true);
+				rp.Settings.Resolution = t.value("resolution", 128);
+				rp.Settings.Intensity = t.value("intensity", 1.0f);
+				rp.Settings.Feather = t.value("feather", 0.5f);
+				rp.Settings.BoxProjection = t.value("box_projection", true);
+				rp.Settings.BakeFarClip = t.value("bake_far_clip", 150.0f);
+				// Recaptura automática ao abrir — barato, sempre atual
+				rp.BakeRequested = rp.Settings.Enabled;
+				registry.emplace<ReflectionProbeComponent>(entity, rp);
+			}
+
+			if (components.contains("InteriorVolume"))
+			{
+				auto& t = components["InteriorVolume"];
+				InteriorVolumeComponent iv;
+				iv.Data.Enabled = t.value("enabled", true);
+				iv.Data.Intensity = t.value("intensity", 1.0f);
+				iv.Data.BlendDistance = t.value("blend_distance", 0.5f);
+				iv.Data.AffectDirect = t.value("affect_direct", true);
+				iv.Data.AffectAmbient = t.value("affect_ambient", true);
+				registry.emplace<InteriorVolumeComponent>(entity, iv);
+			}
+
 			if (components.contains("PostProcess"))
 			{
 				auto& t = components["PostProcess"];
@@ -574,10 +665,44 @@ namespace axe
 	} // anonymous namespace
 
 
+	// Path do .axeprobes irmão do .axescene: "Cena.axescene" → "Cena.axeprobes"
+	// (formato legado, um volume). Com multi-volume, cada volume usa o
+	// próprio FileID: "Cena.a1b2c3d4.axeprobes".
+	static std::filesystem::path ProbesPathFor(const std::filesystem::path& scenePath)
+	{
+		std::filesystem::path p = scenePath;
+		p.replace_extension(".axeprobes");
+		return p;
+	}
+
+	static std::filesystem::path ProbesPathFor(const std::filesystem::path& scenePath,
+		uint32_t fileID)
+	{
+		char hex[16];
+		std::snprintf(hex, sizeof(hex), "%08x", fileID);
+		std::filesystem::path p = scenePath;
+		p.replace_extension("");
+		p += std::string(".") + hex + ".axeprobes";
+		return p;
+	}
+
 	bool SceneSerializer::Serialize(const Scene& scene, const std::filesystem::path& filepath,
 		const SceneEnvironment* env)
 	{
 		auto& registry = const_cast<Scene&>(scene).GetRegistry();
+
+		// Gera FileID pros Probe Volumes que ainda não têm — PRECISA
+		// acontecer antes do dump do JSON pra o id ir junto no .axescene
+		// (o id identifica o "Cena.<id>.axeprobes" de cada volume).
+		{
+			static std::mt19937 s_Rng{ std::random_device{}() };
+			for (auto entity : registry.view<ProbeVolumeComponent>())
+			{
+				auto& pvc = registry.get<ProbeVolumeComponent>(entity);
+				while (pvc.Settings.FileID == 0)
+					pvc.Settings.FileID = (uint32_t)s_Rng();
+			}
+		}
 
 		json root;
 		root["scene"]["name"] = filepath.stem().string();
@@ -611,6 +736,33 @@ namespace axe
 
 		file << root.dump(4);
 		AXE_CORE_INFO("SceneSerializer: cena salva em '{}'", filepath.string());
+
+		// ── .axeprobes — grids de Light Probes bakeados ──────────────────
+		// Um arquivo POR VOLUME, nomeado pelo FileID persistente do volume
+		// ("Cena.<id>.axeprobes"), salvo sempre que a cena é salva com o
+		// grid válido em memória: o estado do GI acompanha o da cena.
+		// O FileID é gerado no início do Serialize (antes do dump do
+		// JSON), então aqui todo volume já tem id.
+		{
+			for (auto entity : registry.view<ProbeVolumeComponent>())
+			{
+				auto& pvc = registry.get<ProbeVolumeComponent>(entity);
+				if (pvc.Settings.FileID == 0) continue; // sem id = nunca salvo
+				auto path = ProbesPathFor(filepath, pvc.Settings.FileID);
+				if (pvc.Grid && pvc.Grid->IsValid() && pvc.Grid->HasCPUData())
+					SaveProbeGridToFile(path.string(), *pvc.Grid);
+				else
+				{
+					// volume sem grid: remove arquivo órfão de save anterior
+					std::error_code ec;
+					std::filesystem::remove(path, ec);
+				}
+			}
+			// higiene do formato legado de volume único
+			std::error_code ec;
+			std::filesystem::remove(ProbesPathFor(filepath), ec);
+		}
+
 		return true;
 	}
 
@@ -690,6 +842,49 @@ namespace axe
 					uint32_t oldParent = rel["parent"];
 					if (idMap.count(oldParent))
 						scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
+				}
+			}
+		}
+
+		// ── .axeprobes — tenta abrir a cena com o GI já pronto ──────────
+		// Para CADA volume: se existe "Cena.<FileID>.axeprobes" com a
+		// resolução das Settings, substitui o rebake automático que o
+		// load agendou — a cena abre instantânea. Resolução diferente ou
+		// arquivo ausente = rebake automático segue valendo pra esse
+		// volume. Compat: volume sem FileID (cena salva antes do multi-
+		// volume) tenta o "Cena.axeprobes" legado uma única vez.
+		{
+			auto& reg = scene.GetRegistry();
+			bool legacyTried = false;
+			for (auto entity : reg.view<ProbeVolumeComponent>())
+			{
+				auto& pvc = reg.get<ProbeVolumeComponent>(entity);
+
+				std::filesystem::path path;
+				if (pvc.Settings.FileID != 0)
+					path = ProbesPathFor(filepath, pvc.Settings.FileID);
+				else if (!legacyTried)
+				{
+					path = ProbesPathFor(filepath); // formato legado
+					legacyTried = true;
+				}
+				else continue;
+
+				auto loaded = LoadProbeGridFromFile(path.string());
+				if (loaded && loaded->IsValid()
+					&& loaded->Resolution == pvc.Settings.Resolution)
+				{
+					pvc.Grid = loaded;
+					pvc.BakeRequested = false;
+				}
+				else if (loaded)
+				{
+					AXE_CORE_INFO("SceneSerializer: '{}' com resolução "
+						"{}x{}x{} difere das Settings ({}x{}x{}) — rebake automático.",
+						path.string(),
+						loaded->Resolution.x, loaded->Resolution.y, loaded->Resolution.z,
+						pvc.Settings.Resolution.x, pvc.Settings.Resolution.y,
+						pvc.Settings.Resolution.z);
 				}
 			}
 		}

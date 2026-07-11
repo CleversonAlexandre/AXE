@@ -34,6 +34,14 @@ namespace axe
         // Avalia o shader pro frame atual e retorna a cor resultante (RGB,
         // 0..1 — vem de um framebuffer RGBA8, então é quantizado em 256
         // níveis por canal, suficiente pra flicker/cor sem serrilhado visível)
+        // Avalia o shader num grid 8x8 (o VS do shader deve espalhar UVs
+        // pelo quad — ver MaterialCompiler::CompileEmissiveAverage) e
+        // devolve a MÉDIA dos 64 texels. O shader escreve valor/8 (o FBO
+        // é LDR); esta função multiplica de volta — cobre emissive até 8x
+        // com precisão de ~0.03, de sobra pra média de GI.
+        glm::vec3 EvaluateAverage(const std::shared_ptr<Shader>& shader,
+            const std::map<std::string, std::shared_ptr<Texture2D>>& samplers);
+
         glm::vec3 Evaluate(const std::shared_ptr<Shader>& shader,
             const std::map<std::string, std::shared_ptr<Texture2D>>& samplers,
             float time, const glm::vec3& cameraPosition);
@@ -41,6 +49,7 @@ namespace axe
     private:
         std::shared_ptr<VertexArray> m_VertexArray;
         std::shared_ptr<Framebuffer> m_Framebuffer;
+        std::shared_ptr<Framebuffer> m_AvgFramebuffer; // 8x8, lazy
         bool m_Initialized = false;
     };
 

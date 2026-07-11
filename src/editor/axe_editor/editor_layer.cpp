@@ -488,6 +488,7 @@ namespace axe
                     material->AlbedoMap = result.AlbedoTexture;
                     material->NormalMap = result.NormalTexture;
                     material->IsTransparent = result.IsTransparent;
+                    material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(&graph);
                 }
                 catch (...) {}
             });
@@ -1139,6 +1140,27 @@ namespace axe
 
         if (!m_SceneSnapshot.empty())
         {
+            // Preserva os grids de Light Probes através do Play/Stop.
+            // O restore do snapshot recria as entities do zero, e o
+            // rebake automático do load custava ~20s a CADA Stop
+            // (22k renders no grid denso). O grid é resultado puro de
+            // bake — não é estado de gameplay — então reaproveitá-lo é
+            // seguro: qualquer mudança de cena feita durante o Play é
+            // descartada pelo snapshot de qualquer jeito, logo a
+            // geometria que o grid representa é exatamente a restaurada.
+            std::vector<std::shared_ptr<ProbeGrid>> savedGrids;
+            std::vector<std::shared_ptr<ReflectionCapture>> savedCaptures;
+            if (m_Scene)
+            {
+                auto& reg = m_Scene->GetRegistry();
+                for (auto e : reg.view<ProbeVolumeComponent>())
+                    savedGrids.push_back(reg.get<ProbeVolumeComponent>(e).Grid);
+                // Mesma lógica pras Reflection Probes — captura é barata,
+                // mas gratuita é melhor ainda
+                for (auto e : reg.view<ReflectionProbeComponent>())
+                    savedCaptures.push_back(reg.get<ReflectionProbeComponent>(e).Capture);
+            }
+
             m_Scene = std::make_unique<Scene>();
             m_Context.ActiveScene = m_Scene.get();
             m_Context.SelectedEntity = entt::null;
@@ -1146,6 +1168,39 @@ namespace axe
             m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
             SceneSerializer::DeserializeFromString(m_SceneSnapshot, *m_Scene);
             m_SceneSnapshot.clear();
+
+            // Devolve os grids (mesma ordem de iteração — exato pro caso
+            // MVP de 1 volume) e CANCELA o rebake automático que o
+            // Deserialize agendou. Stop volta a ser instantâneo.
+            {
+                auto& reg = m_Scene->GetRegistry();
+                size_t i = 0;
+                for (auto e : reg.view<ProbeVolumeComponent>())
+                {
+                    if (i >= savedGrids.size()) break;
+                    auto& pvc = reg.get<ProbeVolumeComponent>(e);
+                    if (savedGrids[i] && savedGrids[i]->IsValid())
+                    {
+                        pvc.Grid = savedGrids[i];
+                        pvc.BakeRequested = false;
+                    }
+                    ++i;
+                }
+
+                size_t j = 0;
+                for (auto e : reg.view<ReflectionProbeComponent>())
+                {
+                    if (j >= savedCaptures.size()) break;
+                    auto& rpc = reg.get<ReflectionProbeComponent>(e);
+                    if (savedCaptures[j] && savedCaptures[j]->IsValid())
+                    {
+                        rpc.Capture = savedCaptures[j];
+                        rpc.BakeRequested = false;
+                    }
+                    ++j;
+                }
+            }
+
             EnsureEnvironmentComponent();
             m_CommandHistory.Clear();
             if (m_EditorUI) m_EditorUI->GetHierarchy()->SetContext(&m_Context);

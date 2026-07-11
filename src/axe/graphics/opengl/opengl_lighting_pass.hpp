@@ -19,7 +19,11 @@ namespace axe
             const glm::vec3& cameraPosition,
             const DirectionalLight* light,
             const SceneEnvironment* environment,
-            const std::vector<PointLight>& pointLights = {}) override;
+            const std::vector<PointLight>& pointLights = {},
+            const std::vector<InteriorVolumeData>& interiorVolumes = {},
+            const std::vector<ProbeVolumeData>& probeVolumes = {},
+            const std::vector<ReflectionProbeData>& reflectionProbes = {},
+            uint32_t pointShadowArrayID = 0) override;
 
         bool IsInitialized() const override { return m_Initialized; }
         void SetSSAODebug(bool debug) { m_SSAODebug = debug; }

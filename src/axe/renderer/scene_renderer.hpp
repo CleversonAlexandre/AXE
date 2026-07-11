@@ -9,6 +9,8 @@
 #include "axe/graphics/renderer/shadow_map_pass.hpp"
 #include "axe/graphics/renderer/cascaded_shadow_pass.hpp"
 #include "axe/graphics/renderer/gbuffer.hpp"
+#include "axe/graphics/renderer/probe_bake_pass.hpp"
+#include "axe/graphics/renderer/point_shadow_pass.hpp"
 #include "axe/graphics/renderer/geometry_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 #include "axe/graphics/renderer/lighting_pass.hpp"
@@ -135,6 +137,14 @@ namespace axe
         std::shared_ptr<GeometryPass>  m_GeometryPass;
         std::shared_ptr<SSAOPass>      m_SSAOPass;
         std::shared_ptr<LightingPass>  m_LightingPass;
+
+        // Bake de Light Probes — criado sob demanda (lazy) no primeiro
+        // pedido de bake; a maioria das cenas nunca aloca os recursos.
+        std::shared_ptr<ProbeBakePass> m_ProbeBakePass;
+
+        // Sombras de Point/Spot Light — lazy: só aloca o cube map array
+        // quando a primeira luz com CastShadows aparece na cena.
+        std::shared_ptr<PointShadowPass> m_PointShadowPass;
 
         SSAOSettings            m_SSAOSettings;
         const SceneEnvironment* m_Environment = nullptr;

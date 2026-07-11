@@ -108,4 +108,72 @@ namespace axe
         return color;
     }
 
+    glm::vec3 LightMaterialEvaluator::EvaluateAverage(
+        const std::shared_ptr<Shader>& shader,
+        const std::map<std::string, std::shared_ptr<Texture2D>>& samplers)
+    {
+        if (!m_Initialized || !shader || !m_VertexArray)
+            return glm::vec3(0.0f);
+
+        constexpr uint32_t kRes = 8;
+
+        if (!m_AvgFramebuffer)
+        {
+            FramebufferSpecification spec;
+            spec.Width = kRes;
+            spec.Height = kRes;
+            spec.Attachments = { FramebufferTextureFormat::RGBA8 };
+            m_AvgFramebuffer = Framebuffer::Create(spec);
+        }
+        if (!m_AvgFramebuffer) return glm::vec3(0.0f);
+
+        // Mesmo protocolo de save/restore do Evaluate() — quem clobbera
+        // estado, restaura estado
+        uint32_t previousFBO = RenderCommand::GetBoundFramebuffer();
+        RendererAPI::Viewport previousViewport = RenderCommand::GetViewport();
+
+        m_AvgFramebuffer->Bind();
+        RenderCommand::SetViewport(0, 0, kRes, kRes);
+        RenderCommand::SetDepthTest(false);
+        RenderCommand::SetBlend(false);
+
+        shader->Bind();
+        shader->SetFloat("u_Time", 0.0f); // média é atemporal
+        shader->SetFloat3("u_CameraPosition", glm::vec3(0.0f));
+
+        int unit = 0;
+        for (auto& [name, tex] : samplers)
+        {
+            if (!tex) continue;
+            tex->Bind(unit);
+            shader->SetInt(name, unit);
+            unit++;
+        }
+
+        m_VertexArray->Bind();
+        RenderCommand::DrawIndexed(m_VertexArray);
+        m_VertexArray->Unbind();
+        shader->Unbind();
+
+        // Média dos 64 texels — o shader gravou emissive/8, desfazemos
+        // a escala aqui (readback LDR virando range 0..8)
+        glm::vec3 sum(0.0f);
+        for (uint32_t y = 0; y < kRes; y++)
+            for (uint32_t x = 0; x < kRes; x++)
+            {
+                uint32_t packed = m_AvgFramebuffer->ReadPixel(x, y);
+                sum += glm::vec3(
+                    (packed & 0xFF) / 255.0f,
+                    ((packed >> 8) & 0xFF) / 255.0f,
+                    ((packed >> 16) & 0xFF) / 255.0f);
+            }
+
+        RenderCommand::BindFramebuffer(previousFBO);
+        RenderCommand::SetViewport(previousViewport.x, previousViewport.y,
+            previousViewport.width, previousViewport.height);
+        RenderCommand::SetDepthTest(true);
+
+        return (sum / float(kRes * kRes)) * 8.0f;
+    }
+
 } // namespace axe

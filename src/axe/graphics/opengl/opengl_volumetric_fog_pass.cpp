@@ -4,6 +4,7 @@
 #include "axe/graphics/vertex_array.hpp"
 #include "axe/graphics/render_command.hpp"
 #include "axe/graphics/renderer/gbuffer.hpp"
+#include "axe/graphics/texture3d.hpp"
 #include "axe/log/log.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
@@ -54,6 +55,26 @@ uniform int   u_LightIsSpot[8];
 uniform vec3  u_LightDir[8];      // direção do cone (normalizada)
 uniform float u_LightOuterCut[8]; // cos(OuterConeAngle), pré-calculado
 
+// ── Interiores/Probes — bloqueio de luz externa no fog ─────────────────
+// O termo ambiente do fog (u_FogColor * u_AmbientStrength) representa a
+// luz do CÉU espalhada no volume — dentro de uma sala fechada ela não
+// existe. Sem este bloqueio, o fog interno brilhava com a "névoa do
+// exterior", o último vazamento de luz externa em interiores. As point
+// lights do fog NÃO são afetadas: fog interno iluminado pelas luzes da
+// sala é exatamente o comportamento desejado.
+uniform int   u_NumInteriorVolumes;
+uniform mat4  u_InteriorWorldToLocal[8];
+uniform vec3  u_InteriorHalfExtents[8];
+uniform float u_InteriorIntensity[8];
+uniform float u_InteriorBlend[8];
+uniform int   u_InteriorAffect[8]; // bit 1 = ambient (mesmo pacote do lighting)
+
+uniform int       u_NumProbeVolumes;      // até 2 (mesmo limite do lighting)
+uniform mat4      u_ProbeWorldToLocal[2];
+uniform vec3      u_ProbeHalfExtents[2];
+uniform float     u_ProbeFeather[2];
+uniform sampler3D u_ProbeSH0[2]; // .a = visibilidade do céu (geométrica)
+
 vec3 ReconstructWorld(vec2 uv, float d)
 {
     vec4 ndc = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
@@ -70,6 +91,46 @@ float LightAttenuation(float dist, float radius)
 {
     float d = dist / max(radius, 0.001);
     return max(0.0, 1.0 - d * d);
+}
+
+// Quanto da luz EXTERNA (céu) sobrevive neste ponto do volume — combina
+// Interior Volumes (SDF de caixa, mesma matemática do lighting pass) e a
+// visibilidade do céu das probes. 1.0 ao ar livre, 0.0 no fundo de uma
+// sala fechada. Custa 1 SDF por volume + 1 sample 3D por passo do ray
+// march — barato (12 passos default).
+float ExternalLightFactor(vec3 pos)
+{
+    float f = 1.0;
+
+    for (int i = 0; i < u_NumInteriorVolumes; ++i)
+    {
+        if ((u_InteriorAffect[i] & 2) == 0) continue;
+        vec3 local = (u_InteriorWorldToLocal[i] * vec4(pos, 1.0)).xyz;
+        vec3 d = abs(local) - u_InteriorHalfExtents[i];
+        float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
+        float inside = 1.0 - smoothstep(-u_InteriorBlend[i], 0.0, dist);
+        f = min(f, 1.0 - inside * u_InteriorIntensity[i]);
+    }
+
+    // Loop de índice dynamically uniform (bound é uniform) — indexar o
+    // array de sampler assim é legal no GL 4.6
+    for (int i = 0; i < u_NumProbeVolumes; ++i)
+    {
+        vec3 local = (u_ProbeWorldToLocal[i] * vec4(pos, 1.0)).xyz;
+        vec3 d = abs(local) - u_ProbeHalfExtents[i];
+        float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
+        float w = 1.0 - smoothstep(-u_ProbeFeather[i], 0.0, dist);
+        if (w > 0.0)
+        {
+            vec3 uvw = clamp(local / (2.0 * u_ProbeHalfExtents[i]) + 0.5, 0.0, 1.0);
+            float skyVis = texture(u_ProbeSH0[i], uvw).a;
+            // Mesmo remap x2 da oclusão de sol: exterior em chão plano
+            // enxerga ~50% do céu (o chão come o hemisfério de baixo)
+            f = min(f, mix(1.0, min(skyVis * 2.0, 1.0), w));
+        }
+    }
+
+    return f;
 }
 
 void main()
@@ -105,8 +166,10 @@ void main()
         float stepTrans    = exp(-localDensity * stepSize);
         float stepWeight   = transmittance * (1.0 - stepTrans);
 
-        // Ambient fog
-        fogAccum += u_FogColor * u_AmbientStrength * stepWeight;
+        // Ambient fog — atenuado pela luz externa disponível NESTE ponto
+        // do raio: o godray/névoa do céu morre ao cruzar a porta da sala,
+        // por amostra, exatamente como a luz de superfície faz por pixel.
+        fogAccum += u_FogColor * u_AmbientStrength * stepWeight * ExternalLightFactor(pos);
 
         // Inscattering das point lights
         for (int li = 0; li < u_NumLights && li < 8; ++li)
@@ -201,7 +264,9 @@ void main()
         const std::vector<PointLight>& pointLights,
         float                        time,
         uint32_t                     width,
-        uint32_t                     height)
+        uint32_t                     height,
+        const std::vector<InteriorVolumeData>& interiorVolumes,
+        const std::vector<ProbeVolumeData>& probeVolumes)
     {
         if (!m_Shader || !m_QuadVAO) return;
 
@@ -246,6 +311,40 @@ void main()
             {
                 m_Shader->SetInt(("u_LightIsSpot[" + std::to_string(i) + "]").c_str(), 0);
             }
+        }
+
+        // Interiores — mesmos dados do lighting pass, mesma SDF
+        int numVolumes = (int)std::min(interiorVolumes.size(), (size_t)8);
+        m_Shader->SetInt("u_NumInteriorVolumes", numVolumes);
+        for (int i = 0; i < numVolumes; ++i)
+        {
+            const auto& iv = interiorVolumes[i];
+            std::string idx = "[" + std::to_string(i) + "]";
+            m_Shader->SetMat4("u_InteriorWorldToLocal" + idx, glm::value_ptr(iv.WorldToLocal));
+            m_Shader->SetFloat3("u_InteriorHalfExtents" + idx, iv.HalfExtents);
+            m_Shader->SetFloat("u_InteriorIntensity" + idx, iv.Intensity);
+            m_Shader->SetFloat("u_InteriorBlend" + idx, iv.BlendDistance);
+            int affect = (iv.AffectDirect ? 1 : 0) | (iv.AffectAmbient ? 2 : 0);
+            m_Shader->SetInt("u_InteriorAffect" + idx, affect);
+        }
+
+        // Probe skyVis — só a SH0 (o alpha) de cada volume, nos units
+        // 2-3 (0=cena, 1=depth). Mesmo limite de 2 volumes do lighting.
+        {
+            int uploaded = 0;
+            for (size_t i = 0; i < probeVolumes.size() && uploaded < 2; i++)
+            {
+                const auto& pv = probeVolumes[i];
+                if (!pv.Grid || !pv.Grid->IsValid()) continue;
+                std::string idx = "[" + std::to_string(uploaded) + "]";
+                pv.Grid->SH0->Bind(2 + uploaded);
+                m_Shader->SetInt("u_ProbeSH0" + idx, 2 + uploaded);
+                m_Shader->SetMat4("u_ProbeWorldToLocal" + idx, glm::value_ptr(pv.WorldToLocal));
+                m_Shader->SetFloat3("u_ProbeHalfExtents" + idx, pv.HalfExtents);
+                m_Shader->SetFloat("u_ProbeFeather" + idx, std::max(pv.Feather, 0.0001f));
+                uploaded++;
+            }
+            m_Shader->SetInt("u_NumProbeVolumes", uploaded);
         }
 
         glActiveTexture(GL_TEXTURE0);

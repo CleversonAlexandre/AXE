@@ -4,6 +4,9 @@
 #include "gbuffer.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/lighting/interior_volume.hpp"
+#include "axe/lighting/probe_volume.hpp"
+#include "axe/lighting/reflection_probe.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "cascaded_shadow_pass.hpp"
 #include <memory>
@@ -29,7 +32,11 @@ namespace axe
             const glm::vec3& cameraPosition,
             const DirectionalLight* light,
             const SceneEnvironment* environment,
-            const std::vector<PointLight>& pointLights = {}) = 0;
+            const std::vector<PointLight>& pointLights = {},
+            const std::vector<InteriorVolumeData>& interiorVolumes = {},
+            const std::vector<ProbeVolumeData>& probeVolumes = {},
+            const std::vector<ReflectionProbeData>& reflectionProbes = {},
+            uint32_t pointShadowArrayID = 0) = 0;
 
         virtual bool IsInitialized() const = 0;
         virtual void SetSSAODebug(bool debug) {}

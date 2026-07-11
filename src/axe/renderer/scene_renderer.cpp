@@ -12,6 +12,7 @@
 #include "axe/material/material.hpp"
 #include "axe/core/time.hpp"
 #include <algorithm>
+#include <limits>
 
 namespace axe
 {
@@ -148,6 +149,7 @@ namespace axe
             RenderCommand::SetCullFace(true);
         }
 
+
         m_MeshRenderer.Begin(viewProjection, cameraPosition);
         for (auto& dc : queue.Meshes)
             if (dc.Mesh) m_MeshRenderer.DrawMesh(*dc.Mesh, dc.Transform, dc.Material, queue.Light,
@@ -176,6 +178,127 @@ namespace axe
         const glm::vec3& cameraPosition,
         uint32_t width, uint32_t height)
     {
+        // --- Probe bake on demand ---
+        // Pedido enfileirado pelo SceneCollector (botão "Bake" ou load de
+        // cena). Executa AQUI porque o SceneRenderer é quem tem o contexto
+        // gráfico — operação offline, bloqueante, aceitável no editor.
+        // Escrever via Target é seguro: não há mudança estrutural no
+        // registry entre o Collect e o Render do mesmo frame (mesma
+        // garantia dos ponteiros de Mesh/Material da queue).
+        if (!queue.ProbeBakes.empty() || !queue.ReflectionBakes.empty())
+        {
+            if (!m_ProbeBakePass)
+            {
+                m_ProbeBakePass = ProbeBakePass::Create();
+                m_ProbeBakePass->Initialize();
+            }
+            if (m_ProbeBakePass->IsInitialized())
+            {
+                // GI volumes primeiro — os reflection probes capturados
+                // logo abaixo podem usar o grid recém-bakeado como
+                // ambiente, ficando consistentes no mesmo frame.
+                for (const auto& req : queue.ProbeBakes)
+                    if (req.Target)
+                        *req.Target = m_ProbeBakePass->Bake(queue, m_Environment, req);
+
+                for (const auto& req : queue.ReflectionBakes)
+                    if (req.Target)
+                    {
+                        // Ambiente da captura = o grid de GI mais próximo
+                        // do PONTO DE CAPTURA (não o primeiro da lista) —
+                        // com multi-volume, a probe da sala B deve refletir
+                        // com o GI da sala B.
+                        const ProbeVolumeData* gi = nullptr;
+                        float best = std::numeric_limits<float>::max();
+                        for (const auto& pv : queue.ProbeVolumes)
+                        {
+                            glm::vec3 local = glm::vec3(pv.WorldToLocal * glm::vec4(req.Position, 1.0f));
+                            glm::vec3 d = glm::abs(local) - pv.HalfExtents;
+                            float dist = glm::length(glm::max(d, glm::vec3(0.0f)))
+                                + glm::min(glm::max(d.x, glm::max(d.y, d.z)), 0.0f);
+                            if (dist < best) { best = dist; gi = &pv; }
+                        }
+                        *req.Target = m_ProbeBakePass->CaptureReflection(
+                            queue, m_Environment, req, gi);
+                    }
+            }
+        }
+
+        // --- Seleção de volumes por proximidade da câmera ---
+        // Uma cena de mundo aberto pode ter DEZENAS de volumes (um por
+        // sala/área); o shader recebe poucos por frame (2 grids de GI,
+        // 4 reflections, 8 interiores). A regra de seleção é a mesma dos
+        // grandes engines: volumes que CONTÊM a câmera primeiro (SDF
+        // negativa), depois os mais próximos. Cópias locais são baratas
+        // (mat4 + shared_ptr por volume) e a queue permanece const.
+        auto boxDistance = [&](const glm::mat4& worldToLocal, const glm::vec3& he)
+            {
+                glm::vec3 local = glm::vec3(worldToLocal * glm::vec4(cameraPosition, 1.0f));
+                glm::vec3 d = glm::abs(local) - he;
+                return glm::length(glm::max(d, glm::vec3(0.0f)))
+                    + glm::min(glm::max(d.x, glm::max(d.y, d.z)), 0.0f);
+            };
+
+        auto probeSel = queue.ProbeVolumes;
+        std::stable_sort(probeSel.begin(), probeSel.end(),
+            [&](const ProbeVolumeData& a, const ProbeVolumeData& b)
+            { return boxDistance(a.WorldToLocal, a.HalfExtents)
+            < boxDistance(b.WorldToLocal, b.HalfExtents); });
+
+        auto reflSel = queue.ReflectionProbes;
+        std::stable_sort(reflSel.begin(), reflSel.end(),
+            [&](const ReflectionProbeData& a, const ReflectionProbeData& b)
+            { return boxDistance(a.WorldToLocal, a.HalfExtents)
+            < boxDistance(b.WorldToLocal, b.HalfExtents); });
+
+        auto interiorSel = queue.InteriorVolumes;
+        std::stable_sort(interiorSel.begin(), interiorSel.end(),
+            [&](const InteriorVolumeData& a, const InteriorVolumeData& b)
+            { return boxDistance(a.WorldToLocal, a.HalfExtents)
+            < boxDistance(b.WorldToLocal, b.HalfExtents); });
+
+        // --- Sombras de Point/Spot Light ---
+        // Entre as luzes marcadas com CastShadows, as
+        // PointShadowPass::kMaxShadowLights (4) mais próximas da câmera
+        // ganham uma camada do cube map array e re-renderizam a cena em
+        // profundidade (6 faces, depth-only). A cópia local carrega o
+        // ShadowLayer atribuído até o lighting — a queue permanece const.
+        auto lightsSel = queue.PointLights;
+        uint32_t pointShadowID = 0;
+        {
+            std::vector<size_t> candidates;
+            for (size_t i = 0; i < lightsSel.size(); i++)
+                if (lightsSel[i].CastShadows) candidates.push_back(i);
+
+            std::stable_sort(candidates.begin(), candidates.end(),
+                [&](size_t a, size_t b)
+                {
+                    float da = glm::distance(lightsSel[a].Position, cameraPosition) - lightsSel[a].Radius;
+                    float db = glm::distance(lightsSel[b].Position, cameraPosition) - lightsSel[b].Radius;
+                    return da < db;
+                });
+
+            int layer = 0;
+            for (size_t idx : candidates)
+            {
+                if (layer >= PointShadowPass::kMaxShadowLights) break;
+
+                if (!m_PointShadowPass)
+                {
+                    m_PointShadowPass = PointShadowPass::Create();
+                    m_PointShadowPass->Initialize(512);
+                }
+                if (!m_PointShadowPass->IsInitialized()) break;
+
+                m_PointShadowPass->RenderLightShadow(queue, layer,
+                    lightsSel[idx].Position, lightsSel[idx].Radius);
+                lightsSel[idx].ShadowLayer = layer++;
+            }
+
+            if (m_PointShadowPass && m_PointShadowPass->IsInitialized() && layer > 0)
+                pointShadowID = m_PointShadowPass->GetTextureID();
+        }
+
         // --- Resize ---
         if (width != m_Width || height != m_Height)
         {
@@ -217,7 +340,9 @@ namespace axe
             ? m_CSMPass.get() : nullptr;
 
         m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm, csm,
-            view, cameraPosition, queue.Light, m_Environment, queue.PointLights);
+            view, cameraPosition, queue.Light, m_Environment, lightsSel,
+            interiorSel,
+            probeSel, reflSel, pointShadowID);
 
         // --- 4. Skybox ---
         // O LightingPass agora preserva o depth do BlitDepth (depthMask=false).
@@ -285,7 +410,9 @@ namespace axe
             {
                 glm::mat4 invViewProj = glm::inverse(viewProjection);
                 m_FogPass->Execute(m_GBuffer, m_FogSettings, invViewProj,
-                    cameraPosition, queue.PointLights, Time::Elapsed(), width, height);
+                    cameraPosition, lightsSel, Time::Elapsed(), width, height,
+                    interiorSel,
+                    probeSel);
             }
         }
 
@@ -407,7 +534,7 @@ namespace axe
         std::function<void(entt::entity)> renderDepth = [&](entt::entity entity)
             {
                 if (!registry.valid(entity)) return;
-                if (registry.any_of<LightComponent, PostProcessComponent, FolderComponent>(entity)) return;
+                if (registry.any_of<LightComponent, PostProcessComponent, InteriorVolumeComponent, ProbeVolumeComponent, FolderComponent>(entity)) return;
                 auto* tc = registry.try_get<TransformComponent>(entity);
                 auto* mc = registry.try_get<MeshComponent>(entity);
                 if (mc && mc->Data && tc) m_ShadowPass->DrawMesh(*mc->Data, tc->Data.GetMatrix());
@@ -424,7 +551,7 @@ namespace axe
     {
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
         if (!registry.valid(entity)) return;
-        if (registry.any_of<PostProcessComponent, LightComponent>(entity)) return;
+        if (registry.any_of<PostProcessComponent, InteriorVolumeComponent, ProbeVolumeComponent, LightComponent>(entity)) return;
         if (registry.any_of<FolderComponent>(entity))
         {
             auto* rel = registry.try_get<RelationshipComponent>(entity);
@@ -453,7 +580,7 @@ namespace axe
     {
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
         if (!registry.valid(entity)) return;
-        if (registry.any_of<PostProcessComponent, LightComponent, FolderComponent>(entity)) return;
+        if (registry.any_of<PostProcessComponent, InteriorVolumeComponent, ProbeVolumeComponent, LightComponent, FolderComponent>(entity)) return;
 
         auto* tc = registry.try_get<TransformComponent>(entity);
         auto* mc = registry.try_get<MeshComponent>(entity);

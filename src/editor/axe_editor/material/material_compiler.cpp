@@ -1,4 +1,5 @@
 #include "material_compiler.hpp"
+#include "axe/material/light_material_evaluator.hpp"
 #include "axe/log/log.hpp"
 #include <sstream>
 #include <iomanip>
@@ -575,6 +576,111 @@ namespace axe
         result.SamplerTextures = samplerTextures;
         result.Success = true;
         return result;
+    }
+
+    CompiledMaterial MaterialCompiler::CompileEmissiveAverage(MaterialGraph* graph)
+    {
+        MaterialCompiler compiler(graph);
+        CompiledMaterial result;
+
+        Node* outputNode = nullptr;
+        for (auto& node : graph->GetNodes())
+            if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+        if (!outputNode || outputNode->Inputs.size() <= 4)
+        {
+            result.ErrorMessage = "Material Output sem pin Emissive";
+            return result;
+        }
+
+        compiler.VisitPin(&outputNode->Inputs[4]);
+        Pin* emissiveSrc = compiler.GetSourcePin(&outputNode->Inputs[4]);
+
+        // DIFERENTE do CompileLightFunction: pin desconectado aqui NÃO
+        // vira vec3(1) — o material simplesmente não emite (Success=false
+        // e o caller escreve vec3(0) no BakedEmissive).
+        if (!emissiveSrc)
+        {
+            result.ErrorMessage = "sem emissive";
+            return result;
+        }
+
+        std::string emissive = compiler.GetPinVariable(emissiveSrc->ID);
+        if (compiler.GetPinType(emissiveSrc->ID) == PinType::Float)
+            emissive = "vec3(" + emissive + ")";
+
+        std::map<std::string, std::shared_ptr<Texture2D>> samplerTextures;
+        {
+            int slot = 0;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!compiler.m_VisitedNodes.count(node->ID.Get())) continue;
+                if (!node->Value.TextureVal) continue;
+                std::string samplerName = "u_LightTex_" + std::to_string(slot++);
+                compiler.m_NodeSamplers[node->ID.Get()] = samplerName;
+                samplerTextures[samplerName] = node->Value.TextureVal;
+            }
+        }
+
+        // VS espalha UVs pelo quad — cada texel do FBO 8x8 avalia o
+        // grafo num UV diferente; a média dos 64 vira o BakedEmissive
+        result.VertexShader = R"(
+        #version 460 core
+        layout(location = 0) in vec3 a_Position;
+        out vec2 vAvgUV;
+        void main()
+        {
+            vAvgUV = a_Position.xy * 0.5 + 0.5;
+            gl_Position = vec4(a_Position.xy, 0.0, 1.0);
+        }
+    )";
+
+        std::ostringstream fs;
+        fs << "#version 460 core\n";
+        fs << "in vec2 vAvgUV;\n";
+        fs << "out vec4 FragColor;\n\n";
+        fs << "uniform float u_Time;\n";
+        fs << "uniform vec3  u_CameraPosition;\n\n";
+        for (auto& [samplerName, tex] : samplerTextures)
+            fs << "uniform sampler2D " << samplerName << ";\n";
+        fs << "\n";
+        fs << "void main()\n{\n";
+        fs << "    vec3 v_FragPos = vec3(0.0);\n";
+        fs << "    vec3 v_Normal = vec3(0.0, 1.0, 0.0);\n";
+        fs << "    vec3 N = v_Normal;\n";
+        fs << "    vec2 v_TexCoord = vAvgUV; // <- UV VARIA pelo quad (media real)\n";
+        fs << "    vec3 v_Tangent = vec3(1.0, 0.0, 0.0);\n";
+        fs << "    vec3 v_Bitangent = vec3(0.0, 0.0, 1.0);\n";
+        fs << "    float v_Age01 = 0.0;\n";
+        fs << "    vec4  v_Color  = vec4(1.0);\n\n";
+        fs << compiler.m_FragmentCode;
+        fs << "\n    vec3 finalColor = " << emissive << ";\n";
+        fs << "    // /8: o readback e LDR; o EvaluateAverage multiplica de volta\n";
+        fs << "    FragColor = vec4(finalColor / 8.0, 1.0);\n";
+        fs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.SamplerTextures = samplerTextures;
+        result.Success = true;
+        return result;
+    }
+
+    glm::vec3 MaterialCompiler::ComputeBakedEmissive(MaterialGraph* graph)
+    {
+        if (!graph) return glm::vec3(0.0f);
+
+        auto avg = CompileEmissiveAverage(graph);
+        if (!avg.Success) return glm::vec3(0.0f); // sem emissive = não emite
+
+        std::shared_ptr<Shader> shader;
+        try { shader = Shader::Create(avg.VertexShader, avg.FragmentShader); }
+        catch (...) { return glm::vec3(0.0f); }
+        if (!shader) return glm::vec3(0.0f);
+
+        static LightMaterialEvaluator s_AvgEvaluator;
+        s_AvgEvaluator.Initialize();
+        return s_AvgEvaluator.EvaluateAverage(shader, avg.SamplerTextures);
     }
 
     bool MaterialCompiler::CompileLightFunctionFromFile(const std::filesystem::path& materialFilePath,

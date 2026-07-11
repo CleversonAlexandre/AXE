@@ -39,6 +39,15 @@ namespace axe
 
         std::shared_ptr<Shader> m_Shader;
         uint32_t m_FBO = 0;
+
+        // Estado salvo pelo Begin() e restaurado pelo End() — mesmo padrão
+        // do OpenGLShadowMapPass. Sem isso, o End() deixava FBO 0 bindado
+        // e o viewport em 2048x2048: no deferred o Geometry Pass mascarava
+        // (rebinda o G-Buffer logo depois), mas no FORWARD as meshes iam
+        // parar no backbuffer — foi o bug que apagou TODOS os previews
+        // (material, particle, script e thumbnail) de uma vez.
+        int m_SavedFBO = 0;
+        int m_SavedViewport[4] = { 0, 0, 0, 0 };
         uint32_t m_DepthArrayTex = 0; // GL_TEXTURE_2D_ARRAY com AXE_SHADOW_CASCADES layers
         uint32_t m_Resolution = 2048;
         bool     m_Initialized = false;

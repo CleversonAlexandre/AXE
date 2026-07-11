@@ -149,6 +149,11 @@ void main() {}
 
     void OpenGLCascadedShadowPass::Begin(int cascadeIndex)
     {
+        // Salva o alvo atual pra devolver no End() — quem clobbera estado,
+        // restaura estado (ver comentário no .hpp)
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &m_SavedFBO);
+        glGetIntegerv(GL_VIEWPORT, m_SavedViewport);
+
         glBindFramebuffer(GL_FRAMEBUFFER, m_FBO);
         // Anexa a layer específica do texture array
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
@@ -175,7 +180,9 @@ void main() {}
     void OpenGLCascadedShadowPass::End()
     {
         glCullFace(GL_BACK);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)m_SavedFBO);
+        glViewport(m_SavedViewport[0], m_SavedViewport[1],
+            m_SavedViewport[2], m_SavedViewport[3]);
     }
 
 } // namespace axe

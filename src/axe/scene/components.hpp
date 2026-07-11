@@ -5,6 +5,9 @@
 #include "axe/material/material.hpp"
 #include "axe/lighting/directional_light.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/lighting/interior_volume.hpp"
+#include "axe/lighting/probe_volume.hpp"
+#include "axe/lighting/reflection_probe.hpp"
 #include "axe/physics/physics_components.hpp"
 #include <memory>
 #include <string>
@@ -70,6 +73,44 @@ namespace axe
 		PostProcessSettings Settings;
 		SSAOSettings        SSAO;
 		bool IsGlobal = true;
+	};
+
+	// Interior Volume — caixa que bloqueia sol + ambient/IBL em ambientes
+	// fechados. O tamanho da caixa vem da ESCALA do Transform da entity.
+	// Ver comentário completo em axe/lighting/interior_volume.hpp.
+	struct InteriorVolumeComponent
+	{
+		InteriorVolume Data;
+	};
+
+	// Reflection Probe — cubemap local pré-filtrado pro especular.
+	// Ver comentário completo em axe/lighting/reflection_probe.hpp.
+	struct ReflectionProbeComponent
+	{
+		ReflectionProbeSettings Settings;
+
+		// Resultado da captura — runtime only, nunca serializado (barato
+		// de recapturar: o load da cena rebakeia via BakeRequested).
+		std::shared_ptr<ReflectionCapture> Capture;
+
+		bool BakeRequested = false;
+	};
+
+	// Probe Volume (Light Probes / GI-lite) — grid de irradiância SH L1
+	// bakeada. Ver comentário completo em axe/lighting/probe_volume.hpp.
+	struct ProbeVolumeComponent
+	{
+		ProbeVolumeSettings Settings;
+
+		// Resultado do bake — runtime only, NUNCA serializado (o load da
+		// cena dispara um rebake automático via BakeRequested).
+		std::shared_ptr<ProbeGrid> Grid;
+
+		// Setado pelo Inspector (botão "Bake") ou pelo load da cena;
+		// consumido (e resetado) pelo SceneCollector, que enfileira um
+		// ProbeBakeRequest na RenderQueue — o editor nunca fala com o
+		// renderer diretamente.
+		bool BakeRequested = false;
 	};
 
 	// Câmera de jogo

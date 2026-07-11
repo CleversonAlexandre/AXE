@@ -26,7 +26,9 @@ namespace axe
             const std::vector<PointLight>& pointLights,
             float                        time,
             uint32_t                     width,
-            uint32_t                     height) override;
+            uint32_t                     height,
+            const std::vector<InteriorVolumeData>& interiorVolumes,
+            const std::vector<ProbeVolumeData>& probeVolumes) override;
 
     private:
         void EnsureSceneColorTex(uint32_t width, uint32_t height);

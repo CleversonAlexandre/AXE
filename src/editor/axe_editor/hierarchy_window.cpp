@@ -1,3 +1,4 @@
+// AXE build tag: hierarchy_window unified-post-process-volume v2
 #include "hierarchy_window.hpp"
 #include "axe/scene/scene_objects.hpp"
 #include "axe/scene/components.hpp"
@@ -107,7 +108,10 @@ namespace axe
         std::shared_ptr<Texture2D> icon;
 
         bool isPointLight = registry.any_of<PointLightComponent>(entity);
-        bool isPostProcess = registry.any_of<PostProcessComponent>(entity);
+        bool isPostProcess = registry.any_of<PostProcessComponent>(entity)
+            || registry.any_of<InteriorVolumeComponent>(entity)
+            || registry.any_of<ProbeVolumeComponent>(entity)
+            || registry.any_of<ReflectionProbeComponent>(entity); // reusam o ícone
         bool isEnvironment = registry.any_of<EnvironmentComponent>(entity);
         bool isMesh = registry.any_of<MeshComponent>(entity);
 
@@ -250,6 +254,8 @@ namespace axe
 
             if (ImGui::MenuItem("Post Process Volume"))
                 CreatePostProcess();
+
+
 
             ImGui::EndMenu();
         }
@@ -485,12 +491,34 @@ namespace axe
 
     void HierarchyWindow::CreatePostProcess()
     {
+        // O Post Process Volume é a entity unificada de ambiente: carrega
+        // também Interior Volume, Probe Volume (GI) e Reflection Probe —
+        // cada um numa seção colapsável do Inspector. Os três nascem
+        // DESATIVADOS (checkbox "Ativo") pra criação de um post process
+        // global não escurecer nada por acidente; ative o que for usar.
+        // A ESCALA do Transform é a caixa compartilhada dos volumes.
         auto* scene = m_Context->ActiveScene;
         auto  entity = scene->CreateEntity("Post Process Volume");
         auto& registry = scene->GetRegistry();
+
         registry.emplace<PostProcessComponent>(entity);
+
+        auto& iv = registry.emplace<InteriorVolumeComponent>(entity);
+        iv.Data.Enabled = false;
+        auto& pv = registry.emplace<ProbeVolumeComponent>(entity);
+        pv.Settings.Enabled = false;
+        auto& rp = registry.emplace<ReflectionProbeComponent>(entity);
+        rp.Settings.Enabled = false;
+
+        if (auto* tc = registry.try_get<TransformComponent>(entity))
+            tc->Data.Scale = { 10.0f, 4.0f, 10.0f };
+
         m_Context->Select(entity);
-        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Post Process");
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Post Process Volume");
     }
+
+
+
+
 
 } // namespace axe

@@ -1,6 +1,7 @@
 #include "scene_collector.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/lighting/point_light.hpp"
+#include "axe/lighting/reflection_probe.hpp"
 #include "axe/particles/particle_system_component.hpp"
 #include "axe/material/light_material_evaluator.hpp"
 #include "axe/core/time.hpp"
@@ -86,6 +87,134 @@ namespace axe
             }
 
             queue.PointLights.push_back(pl);
+        }
+
+        // --- Interior Volumes — caixa vem do transform MUNDIAL ---
+        for (auto entity : registry.view<InteriorVolumeComponent>())
+        {
+            auto& ivc = registry.get<InteriorVolumeComponent>(entity);
+            if (!ivc.Data.Enabled || ivc.Data.Intensity <= 0.0f) continue;
+
+            glm::mat4 world = scene.GetWorldTransform(entity);
+
+            // Decompõe a escala (comprimento das colunas) e a remove da
+            // matriz — a WorldToLocal fica só rotação+translação, e a
+            // escala vira HalfExtents. Assim o BlendDistance do shader
+            // fica em metros de mundo, uniforme em todos os eixos, mesmo
+            // com caixas bem não-cúbicas (ex: corredor 20x3x2).
+            glm::vec3 sc(
+                glm::length(glm::vec3(world[0])),
+                glm::length(glm::vec3(world[1])),
+                glm::length(glm::vec3(world[2])));
+            sc = glm::max(sc, glm::vec3(0.0001f));
+
+            glm::mat4 rt = world;
+            rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+            rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+            rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+            InteriorVolumeData data;
+            data.WorldToLocal = glm::inverse(rt);
+            data.HalfExtents = sc * 0.5f; // Scale = tamanho TOTAL da caixa
+            data.Intensity = glm::clamp(ivc.Data.Intensity, 0.0f, 1.0f);
+            data.BlendDistance = glm::max(ivc.Data.BlendDistance, 0.0001f);
+            data.AffectDirect = ivc.Data.AffectDirect;
+            data.AffectAmbient = ivc.Data.AffectAmbient;
+            queue.InteriorVolumes.push_back(data);
+        }
+
+        // --- Probe Volumes (GI-lite) — até 2 volumes simultâneos ---
+        // (limite dos texture units do lighting pass: 4 sampler3D por
+        // volume, units 16-23; volumes extras são ignorados com aviso no
+        // primeiro frame em que aparecem)
+        for (auto entity : registry.view<ProbeVolumeComponent>())
+        {
+            auto& pvc = registry.get<ProbeVolumeComponent>(entity);
+            if (!pvc.Settings.Enabled) continue;
+
+            glm::mat4 world = scene.GetWorldTransform(entity);
+            glm::vec3 sc(
+                glm::length(glm::vec3(world[0])),
+                glm::length(glm::vec3(world[1])),
+                glm::length(glm::vec3(world[2])));
+            sc = glm::max(sc, glm::vec3(0.0001f));
+
+            glm::mat4 rt = world;
+            rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+            rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+            rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+            if (pvc.BakeRequested)
+            {
+                pvc.BakeRequested = false;
+                ProbeBakeRequest req;
+                req.LocalToWorld = rt;
+                req.HalfExtents = sc * 0.5f;
+                req.Resolution = pvc.Settings.Resolution;
+                req.FarClip = pvc.Settings.BakeFarClip;
+                req.Bounces = pvc.Settings.Bounces;
+                req.Target = &pvc.Grid;
+                queue.ProbeBakes.push_back(req);
+            }
+
+            if (queue.ProbeVolumes.size() >= 2) continue; // bake ainda roda
+
+            if (pvc.Grid && pvc.Grid->IsValid())
+            {
+                ProbeVolumeData data;
+                data.WorldToLocal = glm::inverse(rt);
+                data.HalfExtents = sc * 0.5f;
+                data.Intensity = pvc.Settings.Intensity;
+                data.Feather = glm::max(pvc.Settings.Feather, 0.0001f);
+                data.OccludeSunlight = pvc.Settings.OccludeSunlight;
+                data.Grid = pvc.Grid; // shared_ptr — mantém vivo no frame
+                queue.ProbeVolumes.push_back(data);
+            }
+        }
+
+        // --- Reflection Probes — até 4 simultâneas (units 24-27) ---
+        for (auto entity : registry.view<ReflectionProbeComponent>())
+        {
+            auto& rpc = registry.get<ReflectionProbeComponent>(entity);
+            if (!rpc.Settings.Enabled) continue;
+
+            glm::mat4 world = scene.GetWorldTransform(entity);
+            glm::vec3 sc(
+                glm::length(glm::vec3(world[0])),
+                glm::length(glm::vec3(world[1])),
+                glm::length(glm::vec3(world[2])));
+            sc = glm::max(sc, glm::vec3(0.0001f));
+
+            glm::mat4 rt = world;
+            rt[0] = glm::vec4(glm::vec3(world[0]) / sc.x, 0.0f);
+            rt[1] = glm::vec4(glm::vec3(world[1]) / sc.y, 0.0f);
+            rt[2] = glm::vec4(glm::vec3(world[2]) / sc.z, 0.0f);
+
+            if (rpc.BakeRequested)
+            {
+                rpc.BakeRequested = false;
+                ReflectionBakeRequest req;
+                req.Position = glm::vec3(rt[3]); // ponto de captura = posição
+                req.Resolution = glm::clamp(rpc.Settings.Resolution, 32, 512);
+                req.FarClip = rpc.Settings.BakeFarClip;
+                req.Target = &rpc.Capture;
+                queue.ReflectionBakes.push_back(req);
+            }
+
+            if (queue.ReflectionProbes.size() >= 4) continue;
+
+            if (rpc.Capture && rpc.Capture->IsValid())
+            {
+                ReflectionProbeData data;
+                data.WorldToLocal = glm::inverse(rt);
+                data.HalfExtents = sc * 0.5f;
+                data.Position = glm::vec3(world[3]);
+                data.Intensity = rpc.Settings.Intensity;
+                data.Feather = glm::max(rpc.Settings.Feather, 0.0001f);
+                data.BoxProjection = rpc.Settings.BoxProjection;
+                data.Capture = rpc.Capture;
+                queue.ReflectionProbes.push_back(data);
+            }
         }
 
         // --- Meshes — percorre a hierarquia de raiz ---
@@ -293,6 +422,9 @@ namespace axe
 
         // Ignora entidades que não contribuem para o render de mesh
         if (registry.any_of<PostProcessComponent>(entity)) return;
+        if (registry.any_of<InteriorVolumeComponent>(entity)) return;
+        if (registry.any_of<ProbeVolumeComponent>(entity)) return;
+        if (registry.any_of<ReflectionProbeComponent>(entity)) return;
         if (registry.any_of<LightComponent>(entity))       return;
         if (registry.any_of<PointLightComponent>(entity))  return;
 
