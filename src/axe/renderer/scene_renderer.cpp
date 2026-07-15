@@ -41,13 +41,102 @@ namespace axe
     // API principal — recebe RenderQueue já montada, sem saber nada de Scene/entt
     // =============================================================================
 
-    void SceneRenderer::Render(const RenderQueue& queue,
+    // =============================================================================
+    // Skin Cache — o coração do sistema de animação no renderer.
+    //
+    // Roda ANTES de qualquer pass. Para cada personagem:
+    //   1. pega (ou cria) os buffers de GPU daquela entidade
+    //   2. sobe a palette de bones deste frame
+    //   3. despacha o compute, que escreve os vértices deformados
+    //   4. empurra um MeshDrawCall NORMAL apontando pra mesh deformada
+    //
+    // Depois do passo 4, o personagem é indistinguível de uma parede pro
+    // resto do renderer. Sombra, G-Buffer, forward, outline e picking o
+    // pegam de graça, sem shader novo e sem o MaterialCompiler mudar.
+    // =============================================================================
+    void SceneRenderer::ResolveSkinnedMeshes(RenderQueue& queue)
+    {
+        if (queue.SkinnedMeshes.empty())
+            return;
+
+        if (!m_SkinningPass)
+            m_SkinningPass = SkinningPass::Create();
+
+        const bool computeOK = m_SkinningPass->IsInitialized() || m_SkinningPass->Initialize();
+
+        for (const auto& sdc : queue.SkinnedMeshes)
+        {
+            if (!sdc.Mesh)
+                continue;
+
+            auto it = m_SkinCache.find(sdc.InstanceID);
+            if (it == m_SkinCache.end() || it->second->GetSource() != sdc.Mesh)
+            {
+                // Entidade nova, ou trocou de asset em runtime — realoca.
+                auto shared = std::const_pointer_cast<SkinnedMesh>(
+                    sdc.Mesh->shared_from_this());
+
+                it = m_SkinCache.insert_or_assign(sdc.InstanceID,
+                    std::make_shared<SkinnedMeshInstance>(shared)).first;
+            }
+
+            auto& instance = it->second;
+
+            const bool hasPalette = sdc.BonePalette && !sdc.BonePalette->empty();
+
+            if (computeOK && hasPalette)
+            {
+                instance->UploadPalette(*sdc.BonePalette);
+
+                m_SkinningPass->Execute(*sdc.Mesh,
+                    *instance->GetBoneBuffer(),
+                    *instance->GetOutputBuffer(),
+                    instance->GetVertexCount());
+            }
+            else if (!instance->HasPalette())
+            {
+                // Sem compute (GPU velha) ou sem palette ainda: o buffer de
+                // saída está com lixo. Pular o draw call é melhor do que
+                // desenhar triângulos aleatórios pela cena.
+                continue;
+            }
+
+            MeshDrawCall dc;
+            dc.Mesh = &instance->GetDeformedMesh();
+            dc.Material = sdc.Material;
+            dc.Transform = sdc.Transform;
+            dc.Selected = sdc.Selected;
+
+            queue.Meshes.push_back(dc);
+
+            // Outline: registrado SÓ agora, com a mesh já deformada. Se
+            // fosse registrado no SceneCollector, o contorno seguiria a
+            // T-pose enquanto o corpo anima.
+            if (dc.Selected)
+            {
+                queue.SelectedID = sdc.InstanceID;
+                queue.SelectedMesh = dc.Mesh;
+                queue.SelectedTransform = dc.Transform;
+            }
+        }
+
+        // UMA barreira pra todos os personagens — ver SkinningPass::Flush.
+        // Depois disto, os vértices deformados estão visíveis pros draws.
+        if (computeOK)
+            m_SkinningPass->Flush();
+    }
+
+    void SceneRenderer::Render(RenderQueue& queue,
         const glm::mat4& viewProjection,
         const glm::mat4& view,
         const glm::mat4& projection,
         const glm::vec3& cameraPosition,
         uint32_t width, uint32_t height)
     {
+        // PRIMEIRA COISA do frame: deformar os personagens. Tudo abaixo
+        // depende de queue.Meshes já conter as meshes skinned resolvidas.
+        ResolveSkinnedMeshes(queue);
+
         // Acumula tempo pra u_Time no shader de material de partícula.
         // std::chrono aqui é só pra não precisar invadir a assinatura de
         // Render() com um parâmetro extra — zero dependência de GL.
@@ -435,6 +524,28 @@ namespace axe
             m_OutlineRenderer.DrawOutline(*queue.SelectedMesh, queue.SelectedTransform,
                 { 1.0f, 0.0f, 0.0f, 1.0f }, 1.03f);
             m_OutlineRenderer.End();
+        }
+
+        // ── Linhas de debug (esqueleto) ──────────────────────────────────
+        //
+        // Por ULTIMO e com o depth test DESLIGADO: os ossos ficam DENTRO da
+        // malha, entao com depth test eles seriam ocluidos pela propria pele
+        // e voce nao veria nada. Desenhar por cima e o comportamento certo
+        // pra uma ferramenta de diagnostico.
+        if (!queue.DebugLines.empty())
+        {
+            RenderCommand::SetDepthTest(false);
+            RenderCommand::SetDepthWrite(false);
+            RenderCommand::SetColorWrite(true);
+            RenderCommand::SetCullFace(false);
+            RenderCommand::SetStencilTest(false);
+
+            m_LineRenderer.Begin(viewProjection);
+
+            for (const auto& l : queue.DebugLines)
+                m_LineRenderer.DrawLine(l.A, l.B, l.Color);
+
+            m_LineRenderer.End();
         }
 
         RenderCommand::ResetState();

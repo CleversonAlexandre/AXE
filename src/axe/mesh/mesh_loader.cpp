@@ -5,6 +5,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <filesystem>
 #include <unordered_map>
 
 namespace axe
@@ -102,9 +103,38 @@ namespace axe
 			aiProcess_CalcTangentSpace
 		);
 
-		if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+		// Mesmo bug que o SkeletalMeshLoader tinha: o Assimp marca
+		// AI_SCENE_FLAGS_INCOMPLETE em QUALQUER cena sem malha — e isso nao e
+		// um erro, entao GetErrorString() volta VAZIO. Tratar isso como falha
+		// produz "falhou, motivo: (nada)", e o usuario vai caçar arquivo
+		// corrompido, importer faltando, DLL errada... com o arquivo perfeito.
+		if (!scene || !scene->mRootNode)
 		{
-			AXE_CORE_ERROR("MeshLoader: falha ao carregar '{}': {}", filepath, importer.GetErrorString());
+			const char* err = importer.GetErrorString();
+
+			AXE_CORE_ERROR("MeshLoader: falha ao carregar '{}': {}", filepath,
+				(err && *err) ? err : "(o Assimp nao devolveu mensagem de erro)");
+
+			// JSON mandado pro Assimp: um asset do engine (.axeskel, .axeanim)
+			// chegou aqui por engano. O "unexpected colon" e o dois-pontos do
+			// proprio JSON.
+			const std::string ext = std::filesystem::path(filepath).extension().string();
+
+			if (ext == ".axeskel" || ext == ".axeanim" || ext == ".axemat")
+			{
+				AXE_CORE_ERROR("  -> '{}' e um ASSET DO ENGINE (JSON), nao um modelo. "
+					"Alguma entidade da cena aponta pra ele como se fosse mesh — "
+					"apague essa entidade e recrie arrastando o asset certo.", ext);
+			}
+
+			return {};
+		}
+
+		if (scene->mNumMeshes == 0 && scene->mNumAnimations > 0)
+		{
+			AXE_CORE_ERROR("MeshLoader: '{}' nao contem malha — e um arquivo SO DE ANIMACAO "
+				"({} clipe(s)). Use 'Importar animacao...' no Inspector do personagem, "
+				"nao o Asset Browser.", filepath, scene->mNumAnimations);
 			return {};
 		}
 

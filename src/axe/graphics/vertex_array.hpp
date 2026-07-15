@@ -11,7 +11,15 @@ namespace axe
 		Float,
 		Float2,
 		Float3,
-		Float4
+		Float4,
+
+		// Tipos inteiros — enviados ao shader via glVertexAttribIPointer
+		// (NÃO glVertexAttribPointer, que converteria para float e
+		// corromperia os índices). Usados pelos BoneIDs do SkinnedVertex.
+		Int,
+		Int2,
+		Int3,
+		Int4
 	};
 
 	struct BufferElement
@@ -21,7 +29,7 @@ namespace axe
 		std::uint32_t Offset;
 		bool Normalized;
 
-		
+
 		BufferElement(ShaderDataType type, std::uint32_t size, bool normalized = false)
 			: Type(type), Size(size), Offset(0), Normalized(normalized)
 		{}

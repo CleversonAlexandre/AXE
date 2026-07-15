@@ -1,4 +1,6 @@
 #include "asset_browser.hpp"
+#include "axe/animation/skeletal_mesh_asset.hpp"
+#include "axe/animation/anim_graph_asset.hpp"
 #include "axe/log/log.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/project/project_manager.hpp"
@@ -18,9 +20,9 @@ namespace axe
 {
 
     static const std::vector<std::string> s_SupportedExtensions = {
-        ".gltf", ".glb", ".obj",
+        ".gltf", ".glb", ".obj", ".fbx", ".dae",   // .fbx: formato da Mixamo
         ".png", ".jpg", ".jpeg",
-        ".axemat", ".axescene"
+        ".axemat", ".axescene", ".axeskel", ".axeanim"   // .axeskel: personagem | .axeanim: state machine
     };
 
 
@@ -718,8 +720,20 @@ namespace axe
 
     // ==================== Draw ====================
 
+    // Carimbo de versao. Aparece UMA vez, no primeiro Draw.
+    //
+    // Serve pra responder, sem adivinhacao, a pergunta que custou varios
+    // ciclos de compilacao: "este build tem o codigo novo ou nao?"
+    static bool s_VersionLogged = false;
+
     void AssetBrowser::Draw()
     {
+        if (!s_VersionLogged)
+        {
+            s_VersionLogged = true;
+            AXE_EDITOR_INFO("AssetBrowser [build M5]: 'Criar AnimGraph' e rotulos com extensao ATIVOS.");
+        }
+
         if (!ImGui::Begin("Asset Browser")) { ImGui::End(); return; }
 
         DrawToolbar();
@@ -1226,6 +1240,117 @@ namespace axe
         if (ImGui::MenuItem("Open in Explorer"))
             OpenInExplorer(record.FilePath);
 
+        // ── Importar personagem animado ──────────────────────────────────
+        //
+        // So aparece em arquivos de MALHA (fbx/gltf/dae/obj). O .fbx e uma
+        // FONTE, nao um asset: este item gera o .axeskel ao lado dele, que e
+        // o asset de verdade — e e o .axeskel que voce arrasta pra cena.
+        // ── Criar AnimGraph a partir de um personagem ────────────────────
+        //
+        // Nasce a partir do .axeskel, e nao do nada, porque um AnimGraph SEM
+        // esqueleto e inutil: o editor nao teria a lista de clipes pra
+        // oferecer nos estados. O vinculo e gravado no .axeanim.
+        // Chaveado pela EXTENSAO, e nao por record.Type.
+        //
+        // record.Type e estado DERIVADO, guardado no AssetDatabase e
+        // persistido em disco. Se o banco tiver sido salvo por um build
+        // antigo, o Type pode estar velho — e o item simplesmente nao
+        // aparece, sem erro nenhum. A extensao do arquivo e a verdade.
+        if (record.FilePath.extension() == ".axeskel")
+        {
+            ImGui::Separator();
+
+            if (ImGui::MenuItem("Criar AnimGraph"))
+            {
+                auto graph = AnimGraphAsset::Create(record.Name, record.UUID);
+
+                std::filesystem::path out = record.FilePath;
+                out.replace_extension(".axeanim");
+
+                if (graph->Save(out))
+                {
+                    const std::string newUuid = AssetDatabase::Get().Register(out);
+
+                    if (auto* newRec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(newUuid)))
+                        newRec->VirtualFolder = record.VirtualFolder;
+
+                    if (ProjectManager::Get().HasProject())
+                        AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+                    AXE_EDITOR_INFO("AnimGraph '{}' criado. Duplo-clique para abrir o editor.", record.Name);
+                }
+            }
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cria uma state machine (.axeanim) ligada a este personagem.");
+        }
+
+        if (record.Type == AssetType::Mesh)
+        {
+            ImGui::Separator();
+
+            if (ImGui::MenuItem("Importar como Skeletal Mesh"))
+            {
+                auto asset = SkeletalMeshAsset::Create(record.Name, record.FilePath);
+
+                // Resolve JA: e aqui que descobrimos se o arquivo tem bones.
+                // Falhar agora, com uma mensagem clara, e muito melhor do que
+                // criar um .axeskel quebrado que so vai dar errado quando o
+                // usuario arrastar pra cena.
+                if (!asset->Resolve())
+                {
+                    AXE_EDITOR_ERROR("'{}' nao tem esqueleto — nao e um personagem animado. "
+                        "Use como mesh estatica.", record.Name);
+                }
+                else
+                {
+                    std::filesystem::path out = record.FilePath;
+                    out.replace_extension(".axeskel");
+
+                    if (asset->Save(out))
+                    {
+                        const std::string newUuid = AssetDatabase::Get().Register(out);
+
+                        // ── A PASTA VIRTUAL ──────────────────────────────
+                        //
+                        // A grade do browser filtra por `record.VirtualFolder`,
+                        // NAO pelo caminho fisico do arquivo. E o Register()
+                        // nao preenche esse campo — quem preenche e o browser,
+                        // no fluxo normal de import.
+                        //
+                        // Sem isto, o .axeskel existe no disco, tem UUID, esta
+                        // no banco... e some da grade, porque cai na pasta
+                        // virtual RAIZ enquanto o usuario olha a pasta do
+                        // personagem. O asset esta la — so num lugar onde
+                        // ninguem vai procurar.
+                        //
+                        // Herda a pasta do FBX de origem: o .axeskel nasce ao
+                        // lado dele no disco, entao tem que nascer ao lado dele
+                        // na grade tambem.
+                        if (auto* newRec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(newUuid)))
+                            newRec->VirtualFolder = record.VirtualFolder;
+
+                        if (ProjectManager::Get().HasProject())
+                            AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+                        AXE_EDITOR_INFO("Skeletal Mesh '{}' criado: {} bones, {} clipe(s) embutido(s). "
+                            "Arraste o .axeskel (nao o .fbx) para a cena.",
+                            record.Name,
+                            asset->GetSkeleton()->GetBoneCount(),
+                            asset->GetClips().size());
+                    }
+                }
+            }
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Gera um asset .axeskel a partir deste arquivo.\n"
+                    "Depois, arraste o .axeskel para a cena e importe\n"
+                    "as animacoes pelo Inspector.");
+            }
+        }
+
         ImGui::Separator();
 
         if (ImGui::MenuItem("Rename", "F2"))
@@ -1670,6 +1795,10 @@ namespace axe
             }
             else
             {
+                AXE_EDITOR_INFO("AssetBrowser: duplo-clique em '{}' (tipo {}, arquivo {}).",
+                    record.Name, AssetTypeToString(record.Type),
+                    record.FilePath.filename().string());
+
                 if (m_InstantiateCallback) m_InstantiateCallback(record.UUID);
                 if (m_AssetOpenCallback)   m_AssetOpenCallback(record);
             }
@@ -1752,7 +1881,23 @@ namespace axe
         }
         else
         {
-            auto lines = WrapNameToLines(record.Name, totalW - 2.0f, kMaxNameLines);
+            // O nome exibido inclui a EXTENSAO para assets do engine.
+            //
+            // Um personagem gera tres arquivos com o MESMO nome:
+            //   Y Bot (1).fbx      (fonte)
+            //   Y Bot (1).axeskel  (o personagem)
+            //   Y Bot (1).axeanim  (a state machine)
+            //
+            // Com o mesmo icone e o mesmo rotulo, e impossivel saber qual e
+            // qual — e voce arrasta/clica no errado sem perceber.
+            std::string displayName = record.Name;
+
+            const std::string recExt = record.FilePath.extension().string();
+
+            if (recExt == ".axeskel" || recExt == ".axeanim")
+                displayName += recExt;
+
+            auto lines = WrapNameToLines(displayName, totalW - 2.0f, kMaxNameLines);
             ImU32 textColor = selected ? IM_COL32(140, 190, 255, 255) :
                 hovered ? IM_COL32(140, 180, 255, 255) :
                 IM_COL32(200, 200, 200, 255);

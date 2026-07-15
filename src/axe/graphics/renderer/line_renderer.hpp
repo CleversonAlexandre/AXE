@@ -19,7 +19,9 @@ namespace axe
 		void DrawBoundingBox(const glm::mat4& model, const glm::vec4& color);
 		void End();
 
-	private:
+		// Era privado (so DrawBoundingBox usava). Agora e publico porque o
+		// debug de esqueleto desenha linha a linha — e IK, sockets e hitboxes
+		// vao querer o mesmo.
 		void DrawLine(const glm::vec3& a, const glm::vec3& b, const glm::vec4& color);
 
 	private:

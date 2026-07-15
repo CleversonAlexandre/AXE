@@ -61,6 +61,31 @@ namespace axe
 			if (auto* c = registry.try_get<MeshComponent>(entity))
 				components["Mesh"]["uuid"] = c->AssetUUID;
 
+			// So o UUID do .axeskel vai pro arquivo de cena. A malha, o
+			// esqueleto e os clipes sao reconstruidos a partir do asset ao
+			// carregar — e por isso que o asset precisa existir: sem ele, nao
+			// haveria o que serializar alem de um caminho de FBX solto.
+			if (auto* c = registry.try_get<SkeletalMeshComponent>(entity))
+			{
+				// Se o AssetUUID nao for um UUID de verdade (entidade criada por
+				// um caminho antigo que gravava o PATH do fbx aqui), a cena
+				// grava lixo e o load nao acha nada. Melhor gritar na hora de
+				// SALVAR — quando ainda da pra consertar — do que descobrir no
+				// proximo boot, com o personagem ja perdido.
+				if (!c->Asset || c->AssetUUID.empty())
+				{
+					AXE_CORE_ERROR("SceneSerializer: a entidade tem SkeletalMesh mas NAO esta ligada a um "
+						"asset .axeskel (AssetUUID='{}'). Ela NAO sera restaurada ao reabrir a cena. "
+						"Arraste o .axeskel do Asset Browser para a cena.", c->AssetUUID);
+				}
+
+				components["SkeletalMesh"]["uuid"] = c->AssetUUID;
+				components["SkeletalMesh"]["anim_graph"] = c->GraphAssetUUID;
+				components["SkeletalMesh"]["clip"] = c->CurrentClip;
+				components["SkeletalMesh"]["blend_time"] = c->BlendTime;
+				components["SkeletalMesh"]["show_skeleton"] = c->ShowSkeleton;
+			}
+
 			if (auto* c = registry.try_get<MaterialComponent>(entity))
 			{
 				if (c->Data)
@@ -315,20 +340,159 @@ namespace axe
 				c.Data.Scale = { t["scale"][0],    t["scale"][1],    t["scale"][2] };
 			}
 
+			if (components.contains("SkeletalMesh"))
+			{
+				const auto& j = components["SkeletalMesh"];
+
+				const std::string uuid = j.value("uuid", std::string{});
+
+				// UUID VAZIO — a entidade tem SkeletalMeshComponent mas nunca
+				// foi ligada a um asset .axeskel.
+				//
+				// Acontece com entidades criadas por caminhos que nao geram
+				// asset (o menu antigo "Criar > Skeletal Mesh", por exemplo).
+				// O componente e gravado, mas nao ha o que recarregar — e o
+				// personagem some ao reabrir a cena, sem nenhuma pista.
+				const AssetRecord* record = uuid.empty()
+					? nullptr
+					: AssetDatabase::Get().GetByUUID(uuid);
+
+				if (uuid.empty())
+				{
+					// A entidade tem SkeletalMeshComponent mas nunca foi ligada
+					// a um asset .axeskel. Acontece com entidades criadas por
+					// caminhos que nao geram asset (o menu antigo
+					// "Criar > Skeletal Mesh"). O componente e gravado, mas nao
+					// ha o que recarregar — e o personagem some ao reabrir a
+					// cena, sem nenhuma pista.
+					AXE_CORE_ERROR("SceneSerializer: a entidade tem SkeletalMesh mas o AssetUUID esta VAZIO. "
+						"Ela nao veio de um asset .axeskel — arraste o .axeskel do Asset Browser "
+						"para a cena e salve de novo.");
+				}
+				else if (record && std::filesystem::exists(record->FilePath))
+				{
+					auto asset = SkeletalMeshAsset::LoadFromFile(record->FilePath);
+
+					if (asset && asset->Resolve())
+					{
+						auto& sk = registry.emplace<SkeletalMeshComponent>(entity);
+						sk.Asset = asset;
+						sk.AssetUUID = uuid;
+						sk.Data = asset->GetMesh();
+						sk.Clips = asset->GetClips();
+
+						// AnimGraph (opcional). Resolvido contra ESTE esqueleto —
+						// e o que religa os clipes que o grafo referencia por nome.
+						const std::string graphUuid = j.value("anim_graph", std::string{});
+
+						if (!graphUuid.empty())
+						{
+							if (const AssetRecord* gr = AssetDatabase::Get().GetByUUID(graphUuid))
+							{
+								auto ga = AnimGraphAsset::LoadFromFile(gr->FilePath);
+
+								if (ga && ga->Resolve(*asset))
+								{
+									sk.GraphAsset = ga;
+									sk.GraphAssetUUID = graphUuid;
+									sk.GraphInstance.SetAsset(ga);
+								}
+							}
+							else
+							{
+								AXE_CORE_ERROR("SceneSerializer: AnimGraph de UUID '{}' nao encontrado — "
+									"o personagem vai cair no clipe unico.", graphUuid);
+							}
+						}
+
+						sk.CurrentClip = j.value("clip", -1);
+						sk.BlendTime = j.value("blend_time", 0.2f);
+						sk.ShowSkeleton = j.value("show_skeleton", false);
+
+						// O clipe salvo pode nao existir mais (o usuario
+						// removeu a animacao do asset). Cair na bind pose e
+						// melhor do que indexar fora do vetor.
+						if (sk.CurrentClip >= (int)sk.Clips.size())
+							sk.CurrentClip = sk.Clips.empty() ? -1 : 0;
+					}
+				}
+				else if (!record)
+				{
+					AXE_CORE_ERROR("SceneSerializer: o asset .axeskel de UUID '{}' nao esta no AssetDatabase. "
+						"O arquivo foi movido/apagado, ou esta fora da pasta Assets do projeto?", uuid);
+				}
+				else
+				{
+					AXE_CORE_ERROR("SceneSerializer: o .axeskel existe no banco ('{}') mas o arquivo sumiu do disco.",
+						record->FilePath.string());
+				}
+			}
+
 			if (components.contains("Mesh"))
 			{
 				std::string uuid = components["Mesh"]["uuid"];
-				auto& mc = registry.emplace<MeshComponent>(entity);
-				mc.AssetUUID = uuid;
+
 				if (MeshFactory::IsPrimitive(uuid))
+				{
+					auto& mc = registry.emplace<MeshComponent>(entity);
+					mc.AssetUUID = uuid;
 					mc.Data = MeshFactory::CreateByUUID(uuid);
+				}
 				else
 				{
 					const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-					if (record && std::filesystem::exists(record->FilePath))
+
+					// ── MeshComponent apontando pra um ASSET DO ENGINE ────
+					//
+					// Entidade podre: um MeshComponent cujo asset e um
+					// .axeskel/.axeanim (JSON). Nasceu de um bug ja corrigido
+					// — arrastar um .axeskel caía no fallback de mesh estatica
+					// — mas o caminho ficou GRAVADO na cena, e toda abertura
+					// mandava JSON pro Assimp.
+					//
+					// Nao adianta so gritar: sem o NOME da entidade, o usuario
+					// nao sabe qual apagar. Entao nomeamos a culpada E nao
+					// criamos o componente — a cena se cura ao ser salva de
+					// novo.
+					// Pela EXTENSAO, nao por record->Type — um asset registrado
+					// por build antigo tem Type velho no .axemeta, e a guarda
+					// por Type deixaria o JSON passar pro MeshLoader (o erro
+					// "No suitable reader found" / "unexpected colon").
+					const std::string engineExt = record
+						? record->FilePath.extension().string() : std::string{};
+
+					const bool engineAsset =
+						engineExt == ".axeskel" ||
+						engineExt == ".axeanim" ||
+						engineExt == ".axemat";
+
+					if (engineAsset)
+					{
+						const std::string entityName =
+							registry.all_of<NameComponent>(entity)
+							? registry.get<NameComponent>(entity).Name
+							: std::string("(sem nome)");
+
+						AXE_CORE_ERROR("SceneSerializer: a entidade '{}' tem um MeshComponent apontando "
+							"para '{}', que e um asset do engine ({}) e nao um modelo. "
+							"O componente foi IGNORADO.",
+							entityName, record->Name, AssetTypeToString(record->Type));
+
+						AXE_CORE_ERROR("  -> Se for um personagem, apague a entidade '{}' e arraste o "
+							".axeskel de novo. Salvar a cena remove o lixo.", entityName);
+					}
+					else if (record && std::filesystem::exists(record->FilePath))
+					{
+						auto& mc = registry.emplace<MeshComponent>(entity);
+						mc.AssetUUID = uuid;
 						mc.Data = MeshLoader::Load(record->FilePath.string()).MeshData;
+					}
 					else
+					{
+						auto& mc = registry.emplace<MeshComponent>(entity);
+						mc.AssetUUID = uuid;
 						AXE_CORE_WARN("SceneSerializer: asset '{}' não encontrado.", uuid);
+					}
 				}
 			}
 

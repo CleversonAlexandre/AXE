@@ -22,6 +22,7 @@ namespace axe
 
         // Criação
         void CreateObject(const std::string& name, const std::string& primitiveUUID);
+
     private:
         void DrawNode(entt::entity entity);
         void DrawContextMenuEmpty();

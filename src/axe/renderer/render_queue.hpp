@@ -18,6 +18,7 @@ namespace axe
     class Material;
     class Shader;
     class Texture2D;
+    class SkinnedMesh;
 
     // Representa um draw call de mesh — sem saber de Scene ou entt.
     struct MeshDrawCall
@@ -26,6 +27,38 @@ namespace axe
         const Material* Material = nullptr;
         glm::mat4       Transform{ 1.0f };
         bool            Selected = false;
+    };
+
+    // Personagem animado, ANTES do skin cache rodar.
+    //
+    // Não é um draw call de verdade: é um PEDIDO de skinning. O
+    // SceneRenderer roda o compute em cima disto e depois empurra um
+    // MeshDrawCall normal (com a mesh já deformada) pra queue.Meshes — que
+    // é onde todos os passes leem. Por isso nenhum pass precisa conhecer
+    // SkinnedDrawCall.
+    struct SkinnedDrawCall
+    {
+        const SkinnedMesh* Mesh = nullptr;
+        const Material* Material = nullptr;
+        glm::mat4       Transform{ 1.0f };
+        bool            Selected = false;
+
+        // Palette calculada pelo AnimationWorld neste frame.
+        const std::vector<glm::mat4>* BonePalette = nullptr;
+
+        // ID opaco da entidade — chave do cache de buffers de GPU no
+        // SceneRenderer. Mesmo padrão do SelectedID: o renderer não sabe o
+        // que é uma entity, só usa o número como chave estável.
+        uint32_t InstanceID = UINT32_MAX;
+    };
+
+    // Linha de debug em espaco de MUNDO. Hoje so o esqueleto usa, mas e
+    // generico de proposito — IK, sockets e hitboxes vao querer o mesmo.
+    struct DebugLine
+    {
+        glm::vec3 A{ 0.0f };
+        glm::vec3 B{ 0.0f };
+        glm::vec4 Color{ 1.0f };
     };
 
     // ── Ribbon / Trail ────────────────────────────────────────────────────────
@@ -103,6 +136,13 @@ namespace axe
         // Meshes a renderizar
         std::vector<MeshDrawCall> Meshes;
 
+        // Personagens animados. O SceneRenderer os converte em MeshDrawCall
+        // (via skin cache) e os ADICIONA em Meshes acima, antes dos passes.
+        std::vector<SkinnedDrawCall> SkinnedMeshes;
+
+        // Desenhadas por ultimo, por cima de tudo.
+        std::vector<DebugLine> DebugLines;
+
         // Partículas (billboards) — um lote por emissor
         std::vector<ParticleBatch>  ParticleBatches;
         std::vector<RibbonBatch>    RibbonBatches;
@@ -123,6 +163,8 @@ namespace axe
             ProbeBakes.clear();
             ReflectionBakes.clear();
             Meshes.clear();
+            SkinnedMeshes.clear();
+            DebugLines.clear();
             ParticleBatches.clear();
             RibbonBatches.clear();
             SelectedID = UINT32_MAX;

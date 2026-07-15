@@ -38,7 +38,21 @@ namespace axe
         {"Send Event","SendEvent"},{"Print String","PrintString"},{"Destroy Entity","DestroyEntity"},
         {"Is Valid","IsValid"},{"Get Self","GetSelf"},
         {"Particle Play","ParticlePlay"},{"Particle Stop","ParticleStop"},
-        {"Particle Restart","ParticleRestart"},{"Particle Burst","ParticleBurst"} };
+        {"Particle Restart","ParticleRestart"},{"Particle Burst","ParticleBurst"},
+
+        // ── Animação (AnimGraph) ──────────────────────────────────────────────
+        //
+        // Ficam nas Acoes GERAIS, e nao presos a um componente declarado.
+        //
+        // Motivo pratico: o pawn que dirige a animacao raramente e o mesmo
+        // objeto que TEM o SkeletalMeshComponent — e, se fossem gated por
+        // componente, o no simplesmente nao apareceria no menu e voce ficaria
+        // procurando um bug que nao existe.
+        //
+        // Escrever num personagem sem AnimGraph e no-op silencioso, entao nao
+        // ha risco.
+        {"Set Anim Float","SetAnimFloat"},{"Set Anim Bool","SetAnimBool"},
+        {"Anim Trigger","SetAnimTrigger"},{"Get Anim State","GetAnimState"} };
     static const NE sTr[] = {
         {"Get Position","GetOtherPosition"},{"Set Position","SetOtherPosition"},
         {"Get Rotation","GetOtherRotation"},{"Set Rotation","SetOtherRotation"},
@@ -71,7 +85,12 @@ namespace axe
     struct CatDef { const char* name; const NE* e; int n; ImVec4 col; };
     static const CatDef s_Cats[] = {
         {"Events",        sEv,   5,  {0.85f,0.3f,0.2f,  1}},
-        {"Actions",       sAc,  11,  {0.2f, 0.7f,0.45f, 1}},
+        // 16 = 12 originais + 4 de animacao.
+        //
+        // NOTA: estava 11 com 12 entradas no array — o "Particle Burst" nunca
+        // aparecia no menu. Contagem hardcoded e um convite a esse tipo de bug
+        // silencioso; o ideal seria std::size(sAc).
+        {"Actions",       sAc,  16,  {0.2f, 0.7f,0.45f, 1}},
         {"Transform",     sTr,   7,  {0.9f, 0.65f,0.2f, 1}},
         {"Camera",        sCam,  4,  {0.3f, 0.7f,0.95f, 1}},
         {"Logic",         sLo,   8,  {0.8f, 0.6f,0.1f,  1}},

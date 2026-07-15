@@ -46,6 +46,10 @@
 
 #include "material_thumbnail_renderer.hpp"
 
+#include "axe/animation/animation_world.hpp"
+
+#include "axe/scene/scene_snapshot.hpp"
+
 namespace axe
 {
     class EditorLayer : public Layer
@@ -67,7 +71,12 @@ namespace axe
         // ── Cena ──────────────────────────────────────────────────────────────
         std::unique_ptr<Scene>  m_Scene;
         std::string             m_CurrentScenePath;
-        std::string             m_SceneSnapshot;
+        // Snapshot de Play/Stop — CLONE DE MEMORIA, nao JSON.
+        //
+        // Antes era uma std::string com a cena serializada. O round-trip por
+        // JSON descartava em silencio tudo que o SceneSerializer nao
+        // conhecesse — e o dado perdido era o da EDICAO, feito antes do Play.
+        SceneSnapshot           m_SceneSnapshot;
         bool                    m_SceneLoaded = false;
         SceneEnvironment        m_Environment;
 
@@ -82,6 +91,10 @@ namespace axe
         PhysicsWorld  m_PhysicsWorld;
         ScriptWorld   m_ScriptWorld;
         ParticleWorld m_ParticleWorld;
+
+        // Avança o tempo dos clipes e recalcula as palettes de bone.
+        // Sem estado próprio — tudo vive nos SkeletalMeshComponent.
+        AnimationWorld m_AnimationWorld;
         entt::entity  m_PlayerEntity = entt::null;
 
         // ── Câmera de jogo ────────────────────────────────────────────────────
@@ -101,6 +114,17 @@ namespace axe
         void HandleSceneInput();
         void HandleViewportCameraInput();
         void EnsureEnvironmentComponent();
+
+        // Cria a entidade do personagem a partir de um asset .axeskel.
+        //
+        // Existe como METODO, e nao inline nos callbacks, porque ha DOIS
+        // caminhos que instanciam asset: o duplo-clique no Asset Browser e o
+        // arrasto pra viewport. Eles sao lambdas separadas, e eu havia
+        // implementado o SkeletalMesh so em uma — o arrasto caía no fallback
+        // de mesh estatica e mandava o .axeskel (JSON) pro Assimp.
+        //
+        // Com um metodo unico, os dois caminhos nao podem mais divergir.
+        void SpawnSkeletalMesh(const AssetRecord& record, const std::string& uuid);
         void SaveScene();
         void LoadScene();
         void EnterPlay();

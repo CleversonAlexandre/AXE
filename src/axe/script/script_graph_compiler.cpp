@@ -638,6 +638,12 @@ namespace axe
             if (srcPin->Name == "Scale")    return "GetTransform().GetScale()";
         }
 
+        // No PURO: nao tem flow, so devolve uma expressao. Util pra logica que
+        // depende do que o personagem esta FAZENDO — ex: nao deixar pular no
+        // meio de um ataque.
+        if (nodeName == "Get Anim State")
+            return "GetAnim().GetCurrentState()";
+
         if (nodeName == "Get Position")
         {
             // Diferencia: node com "Target" = Get de outra entity (novo)
@@ -959,6 +965,38 @@ namespace axe
         }
 
         // ── Eventos / IO ──────────────────────────────────────────────────────
+
+        // ── Animação (AnimGraph) ──────────────────────────────────────────────
+        else if (name == "Set Anim Float")
+        {
+            std::string param = "\"Speed\"", val = "0.0f";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Parametro") param = ResolvePin(ctx, inp);
+                else if (inp.Name == "Valor") val = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetAnim().SetFloat(" + param + ", " + val + ");");
+        }
+
+        else if (name == "Set Anim Bool")
+        {
+            std::string param = "\"IsGrounded\"", val = "false";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Parametro") param = ResolvePin(ctx, inp);
+                else if (inp.Name == "Valor") val = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetAnim().SetBool(" + param + ", " + val + ");");
+        }
+
+        else if (name == "Anim Trigger")
+        {
+            std::string param = "\"Attack\"";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Parametro") param = ResolvePin(ctx, inp);
+
+            ctx.Line("GetAnim().SetTrigger(" + param + ");");
+        }
 
         else if (name == "Send Event")
         {
@@ -1673,7 +1711,8 @@ namespace axe
         // Get Character Ctrl não emitem código de ação — são resolvidos via
         // ResolvePin quando conectados a um input de dados. Chegamos aqui só se
         // alguém conectar o Flow Out deles, o que não faz sentido; ignoramos.
-        else if (name == "Get Transform" || name == "Get Position" ||
+        else if (name == "Get Anim State" ||
+            name == "Get Transform" || name == "Get Position" ||
             name == "Get Rigidbody" || name == "Get Collider" ||
             name == "Get Character Ctrl")
         {

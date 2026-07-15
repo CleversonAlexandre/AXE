@@ -1,5 +1,9 @@
 // AXE build tag: inspector_window collapsable-volume-sections v2
 #include "inspector_window.hpp"
+#include "file_dialog.hpp"
+#include "axe/animation/skeletal_mesh_loader.hpp"
+#include "axe/animation/skeletal_mesh_asset.hpp"
+#include "axe/animation/anim_graph_asset.hpp"
 #include "axe/utils/glm_config.hpp"
 #include <imgui.h>
 #include <cstdint>
@@ -360,6 +364,250 @@ namespace axe
 
 		// Particle System
 		DrawParticleSystem(entity);
+
+		// ─────────────────────────────────────────────────────────────────
+		// Skeletal Mesh
+		// ─────────────────────────────────────────────────────────────────
+		if (auto* sk = registry.try_get<SkeletalMeshComponent>(entity))
+		{
+			if (ImGui::CollapsingHeader("Skeletal Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				const Skeleton* skeleton = sk->GetSkeleton();
+
+				// ── ENTIDADE ORFA ────────────────────────────────────────
+				//
+				// Sem Asset, este personagem existe SO EM MEMORIA: ele
+				// funciona no editor, anima, tudo certo — e some pra sempre
+				// ao reabrir a cena, porque nao ha .axeskel pra recarregar.
+				//
+				// Antes, nada na tela dizia isso. O usuario salvava, confiava,
+				// e perdia o trabalho no proximo boot. Agora o estado quebrado
+				// e VISIVEL.
+				if (!sk->Asset)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+					ImGui::TextWrapped("SEM ASSET — este personagem NAO sera salvo na cena.");
+					ImGui::PopStyleColor();
+
+					ImGui::TextWrapped("Arraste o .axeskel do Asset Browser para a cena "
+						"e apague esta entidade.");
+
+					ImGui::Spacing();
+				}
+				else
+				{
+					ImGui::TextDisabled("Asset: %s", sk->Asset->GetName().c_str());
+				}
+
+				ImGui::Text("Ossos: %d", skeleton ? (int)skeleton->GetBoneCount() : 0);
+
+				ImGui::Checkbox("Mostrar esqueleto", &sk->ShowSkeleton);
+
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip(
+						"Desenha os ossos como linhas.\n\n"
+						"Ossos certos + malha explodida = bug no skinning.\n"
+						"Ossos ja tortos = bug no import/hierarquia.");
+				}
+
+				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
+
+				// ── AnimGraph ────────────────────────────────────────────
+				//
+				// Com um grafo atribuido, o clipe/blend space abaixo sao
+				// IGNORADOS: quem manda passa a ser a state machine, e o
+				// gameplay so escreve parametros. Dizer isso na tela evita a
+				// confusao de "troquei o clipe e nao mudou nada".
+				ImGui::TextDisabled("AnimGraph");
+
+				if (sk->GraphAsset)
+				{
+					ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", sk->GraphAsset->GetName().c_str());
+					ImGui::TextWrapped("A state machine controla a animacao. O clipe abaixo e ignorado.");
+
+					if (ImGui::Button("Remover AnimGraph", ImVec2(-1, 0)))
+					{
+						sk->GraphAsset.reset();
+						sk->GraphAssetUUID.clear();
+						sk->GraphInstance.SetAsset(nullptr);   // solta a copia dos nos
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("(nenhum) — arraste um .axeanim aqui");
+				}
+
+				// Alvo de drop: aceita o mesmo payload do Asset Browser.
+				ImGui::InvisibleButton("##animgraph_drop", ImVec2(-1, 24));
+
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+					{
+						const std::string uuid = (const char*)pl->Data;
+						const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+
+						// Pela EXTENSAO, e nao por rec->Type.
+						//
+						// rec->Type vem do .axemeta gravado — e um .axeanim
+						// registrado por um build antigo (antes de AssetType::
+						// AnimGraph existir) tem Type "Unknown" ou "Mesh" ali.
+						// Chavear por Type faria o drop no slot de AnimGraph
+						// FALHAR silenciosamente, e cair no alvo de mesh abaixo,
+						// que grava o UUID num MeshComponent. A extensao do
+						// arquivo no disco e a verdade.
+						const bool isAnimGraph = rec &&
+							rec->FilePath.extension() == ".axeanim";
+
+						if (isAnimGraph && sk->Asset)
+						{
+							auto ga = AnimGraphAsset::LoadFromFile(rec->FilePath);
+
+							// Resolve CONTRA O ESQUELETO DESTA ENTIDADE.
+							//
+							// O .axeanim guarda os clipes por NOME. Resolver
+							// contra o personagem certo e o que religa os
+							// nomes aos clipes de verdade — e o que permite
+							// reusar o mesmo grafo em varios personagens que
+							// compartilhem a nomenclatura.
+							if (ga && ga->Resolve(*sk->Asset))
+							{
+								sk->GraphAsset = ga;
+								sk->GraphAssetUUID = uuid;
+
+								// Clona o grafo pra ESTA entidade. Sem isto o
+								// personagem so comecaria a animar no proximo
+								// frame do AnimationWorld — e o preview do
+								// editor mostraria bind pose ate la.
+								sk->GraphInstance.SetAsset(ga);
+							}
+						}
+					}
+					ImGui::EndDragDropTarget();
+				}
+
+				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
+
+				// ── Animações ────────────────────────────────────────────
+				ImGui::TextDisabled("Animacoes (%d)", (int)sk->Clips.size());
+
+				const bool hasAsset = (sk->Asset != nullptr);
+
+				if (!hasAsset)
+					ImGui::BeginDisabled();
+
+				if (ImGui::Button("Importar animacao...", ImVec2(-1, 0)))
+				{
+					const auto path = FileDialog::Open(
+						"Animacao\0*.fbx;*.gltf;*.glb;*.dae\0Todos\0*.*\0",
+						"Importar clipe de animacao");
+
+					if (!path.empty() && sk->Asset)
+					{
+						// Escreve no ASSET, nao no componente.
+						//
+						// E essa diferenca que faz a animacao PERSISTIR: o
+						// .axeskel guarda a lista de arquivos, entao ao
+						// reabrir o projeto (ou arrastar o mesmo personagem de
+						// novo) os clipes ja vem juntos. Se so mexessemos no
+						// componente, tudo se perderia ao fechar o editor.
+						const int added = sk->Asset->AddAnimation(path);
+
+						if (added > 0)
+						{
+							sk->Asset->Save();
+
+							// Recopia do asset — ele e a fonte de verdade.
+							sk->Clips = sk->Asset->GetClips();
+
+							if (sk->CurrentClip < 0 && !sk->Clips.empty())
+								sk->CurrentClip = 0;
+						}
+					}
+				}
+
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip(hasAsset
+						? "Aceita FBX so com as curvas (Mixamo: 'Without Skin').\nFica salvo no .axeskel."
+						: "Sem asset .axeskel. Importe o personagem pelo Asset Browser\n"
+						"(botao direito no FBX > Importar como Skeletal Mesh).");
+				}
+
+				if (!hasAsset)
+					ImGui::EndDisabled();
+
+				if (!sk->Clips.empty())
+				{
+					// Dropdown de clipe.
+					const int count = (int)sk->Clips.size();
+					const char* currentName =
+						(sk->CurrentClip >= 0 && sk->CurrentClip < count && sk->Clips[sk->CurrentClip])
+						? sk->Clips[sk->CurrentClip]->GetName().c_str()
+						: "(bind pose)";
+
+					if (ImGui::BeginCombo("Clipe", currentName))
+					{
+						if (ImGui::Selectable("(bind pose)", sk->CurrentClip < 0))
+							sk->CurrentClip = -1;
+
+						for (int i = 0; i < count; ++i)
+						{
+							if (!sk->Clips[i])
+								continue;
+
+							const bool selected = (sk->CurrentClip == i);
+							if (ImGui::Selectable(sk->Clips[i]->GetName().c_str(), selected))
+								sk->CurrentClip = i;
+
+							if (selected)
+								ImGui::SetItemDefaultFocus();
+						}
+
+						ImGui::EndCombo();
+					}
+
+					ImGui::SliderFloat("Blend (s)", &sk->BlendTime, 0.0f, 1.0f, "%.2f");
+
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("Duracao do crossfade ao trocar de clipe. 0 = corte seco.");
+
+					// ── Controles de reproducao ──────────────────────────
+					const bool playing = sk->Player.Playing;
+
+					if (ImGui::Button(playing ? "Pausar" : "Tocar", ImVec2(90, 0)))
+						sk->Player.Playing = !playing;
+
+					ImGui::SameLine();
+
+					if (ImGui::Button("Reiniciar", ImVec2(90, 0)))
+						sk->Player.SetTime(0.0f);
+
+					ImGui::SliderFloat("Velocidade", &sk->Player.PlayRate, -2.0f, 2.0f, "%.2fx");
+
+					// Scrub. O AnimationWorld reavalia a pose mesmo fora do
+					// Play, entao arrastar isto mexe o personagem no editor —
+					// que e exatamente o que voce quer pra conferir um import.
+					if (sk->CurrentClip >= 0 && sk->CurrentClip < count && sk->Clips[sk->CurrentClip])
+					{
+						float t = sk->Player.GetTime();
+						const float dur = sk->Clips[sk->CurrentClip]->GetDuration();
+
+						if (ImGui::SliderFloat("Tempo", &t, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2fs"))
+							sk->Player.SetTime(t);
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("Nenhum clipe. Renderizando em bind pose (T-pose).");
+				}
+			}
+		}
 
 		// Botão Add Component
 		ImGui::Spacing();

@@ -12,6 +12,8 @@
 #include "axe/graphics/renderer/probe_bake_pass.hpp"
 #include "axe/graphics/renderer/point_shadow_pass.hpp"
 #include "axe/graphics/renderer/geometry_pass.hpp"
+#include "axe/graphics/renderer/skinning_pass.hpp"
+#include "axe/animation/skinned_mesh_instance.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 #include "axe/graphics/renderer/lighting_pass.hpp"
 #include "axe/lighting/directional_light.hpp"
@@ -22,6 +24,7 @@
 #include "axe/graphics/renderer/ribbon_renderer.hpp"
 #include "axe/renderer/volumetric_fog_pass.hpp"
 #include "axe/graphics/renderer/taa_pass.hpp"
+#include <unordered_map>
 
 namespace axe
 {
@@ -31,7 +34,11 @@ namespace axe
         SceneRenderer();
 
         // --- API principal: recebe RenderQueue já montada ---
-        void Render(const RenderQueue& queue,
+        //
+        // NÃO-CONST de propósito: o skin cache roda aqui dentro e ADICIONA
+        // os personagens deformados em queue.Meshes, pra que todos os
+        // passes seguintes os tratem como mesh estática comum.
+        void Render(RenderQueue& queue,
             const glm::mat4& viewProjection,
             const glm::mat4& view,
             const glm::mat4& projection,
@@ -119,6 +126,18 @@ namespace axe
         void SetEnvironment(const SceneEnvironment* env, bool dummy) {} // overload compat
 
     private:
+        // ── Skin Cache ────────────────────────────────────────────────────
+        // Roda o compute de skinning em cada SkinnedDrawCall e injeta o
+        // resultado em queue.Meshes como MeshDrawCall normal.
+        void ResolveSkinnedMeshes(RenderQueue& queue);
+
+        std::shared_ptr<SkinningPass> m_SkinningPass;
+
+        // Buffers de GPU por personagem, chaveados pelo ID da entidade.
+        // Persiste entre frames: realocar o VBO de saída todo frame seria
+        // um stall de driver garantido.
+        std::unordered_map<uint32_t, std::shared_ptr<SkinnedMeshInstance>> m_SkinCache;
+
         CubeRenderer    m_CubeRenderer;
         MeshRenderer    m_MeshRenderer;
         LineRenderer    m_LineRenderer;

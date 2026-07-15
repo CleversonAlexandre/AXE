@@ -140,6 +140,11 @@ namespace axe
         return ScriptRigidbodyProxy{ m_Context.Entity, m_Context.ScenePtr };
     }
 
+    ScriptAnimProxy ScriptBase::GetAnim()
+    {
+        return ScriptAnimProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
     ScriptParticleProxy ScriptBase::GetParticleSystem()
     {
         return ScriptParticleProxy{ m_Context.Entity, m_Context.ScenePtr };
@@ -479,6 +484,72 @@ namespace axe
         }
 
         m_Context.ScenePtr->DestroyEntity(target);
+    }
+
+
+    // ── ScriptAnimProxy ───────────────────────────────────────────────────────
+    //
+    // Todos escrevem no blackboard do AnimGraphInstance. Se a entidade nao tem
+    // SkeletalMeshComponent, sao no-op silenciosos DE PROPOSITO: um script
+    // generico (um pawn que serve pra personagem e pra caixa) nao deveria
+    // explodir por escrever "Speed" numa entidade sem animacao.
+    namespace
+    {
+        AnimParameters* AnimParams(Scene* scene, entt::entity e)
+        {
+            if (!scene) return nullptr;
+
+            auto* sk = scene->GetRegistry().try_get<SkeletalMeshComponent>(e);
+            if (!sk) return nullptr;
+
+            return &sk->GraphInstance.Params;
+        }
+    }
+
+    void ScriptAnimProxy::SetFloat(const std::string& name, float value)
+    {
+        if (auto* p = AnimParams(ScenePtr, Entity)) p->SetFloat(name, value);
+    }
+
+    void ScriptAnimProxy::SetInt(const std::string& name, int value)
+    {
+        if (auto* p = AnimParams(ScenePtr, Entity)) p->SetInt(name, value);
+    }
+
+    void ScriptAnimProxy::SetBool(const std::string& name, bool value)
+    {
+        if (auto* p = AnimParams(ScenePtr, Entity)) p->SetBool(name, value);
+    }
+
+    void ScriptAnimProxy::SetTrigger(const std::string& name)
+    {
+        if (auto* p = AnimParams(ScenePtr, Entity)) p->SetTrigger(name);
+    }
+
+    float ScriptAnimProxy::GetFloat(const std::string& name) const
+    {
+        auto* p = AnimParams(ScenePtr, Entity);
+        return p ? p->GetFloat(name) : 0.0f;
+    }
+
+    bool ScriptAnimProxy::GetBool(const std::string& name) const
+    {
+        auto* p = AnimParams(ScenePtr, Entity);
+        return p ? p->GetBool(name) : false;
+    }
+
+    std::string ScriptAnimProxy::GetCurrentState() const
+    {
+        if (!ScenePtr) return {};
+
+        auto* sk = ScenePtr->GetRegistry().try_get<SkeletalMeshComponent>(Entity);
+        if (!sk) return {};
+
+        // A instancia sabe responder sozinha. Antes isto vasculhava o grafo
+        // aqui fora — e com o pose graph a pergunta "qual estado?" deixou de
+        // ter resposta unica (pode haver varias maquinas de estados). Quem
+        // decide o que responder e o runtime, nao o chamador.
+        return sk->GraphInstance.GetCurrentStateName();
     }
 
 } // namespace axe

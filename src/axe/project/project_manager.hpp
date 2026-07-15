@@ -37,7 +37,17 @@ namespace axe
 
 		bool HasStartScene() const;
 		void SaveProject();
-		
+
+		// Marca uma cena como a cena de abertura do projeto.
+		//
+		// Guarda o caminho RELATIVO a RootPath — gravar absoluto
+		// ("C:/Users/...") funcionaria so nesta maquina e quebraria o projeto
+		// em qualquer outra. Salva o .axeproj na hora.
+		//
+		// Chamado sempre que uma cena e aberta ou salva: a ultima cena com
+		// que voce trabalhou passa a ser a que abre sozinha no proximo boot.
+		void SetStartScene(const std::filesystem::path& sceneAbsolutePath);
+
 
 		std::filesystem::path GetStartScenePath() const
 		{

@@ -442,7 +442,73 @@ namespace axe
         auto* mc = registry.try_get<MeshComponent>(entity);
         auto* mat = registry.try_get<MaterialComponent>(entity);
 
-        if (mc && mc->Data && tc)
+        auto* sk = registry.try_get<SkeletalMeshComponent>(entity);
+
+        // Personagem animado. Vai pra fila de skinning, NÃO pra queue.Meshes
+        // — o SceneRenderer roda o compute e só então empurra o draw call
+        // (já deformado) pra lá.
+        //
+        // Note que o outline/seleção NÃO é registrado aqui: a mesh deformada
+        // ainda não existe neste ponto do frame. Quem registra é o
+        // SceneRenderer, depois do skin cache — senão o outline desenharia
+        // o contorno da T-pose por cima do personagem animado.
+        if (sk && sk->Data && tc)
+        {
+            SkinnedDrawCall sdc;
+            sdc.Mesh = sk->Data.get();
+            sdc.Material = mat ? mat->Data.get() : nullptr;
+            sdc.Transform = scene.GetWorldTransform(entity);
+            sdc.Selected = ((uint32_t)entity == selectedEntityID);
+            sdc.BonePalette = &sk->BonePalette;
+            sdc.InstanceID = (uint32_t)entity;
+
+            queue.SkinnedMeshes.push_back(sdc);
+
+            // ── Debug do esqueleto ───────────────────────────────────────
+            if (sk->ShowSkeleton && !sk->BoneGlobals.empty())
+            {
+                const Skeleton* skeleton = sk->GetSkeleton();
+                const glm::mat4& gInv = skeleton->GetGlobalInverseTransform();
+
+                // Posicao do osso no MUNDO.
+                //
+                // Nao basta pegar BoneGlobals[i][3]: os vertices da malha
+                // vivem no espaco em que `globalInverse * global` os coloca
+                // (e por isso que a bind pose da identidade). Aplicar o mesmo
+                // globalInverse aqui e o que faz as linhas caírem EM CIMA da
+                // malha em vez de rotacionadas 90 graus ou 100x maiores —
+                // exatamente o erro que o esqueleto de debug deveria pegar.
+                auto bonePos = [&](int i) -> glm::vec3
+                    {
+                        const glm::mat4 m = sdc.Transform * gInv * sk->BoneGlobals[i];
+                        return glm::vec3(m[3]);
+                    };
+
+                const auto& bones = skeleton->GetBones();
+
+                for (std::size_t i = 0; i < bones.size() && i < sk->BoneGlobals.size(); ++i)
+                {
+                    const int parent = bones[i].ParentIndex;
+                    if (parent < 0)
+                        continue;   // raiz nao tem osso pai pra ligar
+
+                    DebugLine line;
+                    line.A = bonePos(parent);
+                    line.B = bonePos((int)i);
+
+                    // Verde = osso com vertices atrelados.
+                    // Amarelo = no de hierarquia puro (ex: "Armature" do
+                    // Blender). Distinguir ajuda: um rig cheio de amarelo
+                    // costuma significar que os nomes dos ossos nao bateram.
+                    line.Color = bones[i].InverseBindPose == glm::mat4(1.0f)
+                        ? glm::vec4(1.0f, 0.9f, 0.2f, 1.0f)
+                        : glm::vec4(0.2f, 1.0f, 0.4f, 1.0f);
+
+                    queue.DebugLines.push_back(line);
+                }
+            }
+        }
+        else if (mc && mc->Data && tc)
         {
             MeshDrawCall dc;
             dc.Mesh = mc->Data.get();

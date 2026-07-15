@@ -8,11 +8,18 @@ namespace axe
 	{
 	public:
 		OpenGLVertexBuffer(const void* data, std::uint32_t size);
+
+		// Buffer vazio e dinâmico — destino do Skin Cache.
+		explicit OpenGLVertexBuffer(std::uint32_t size);
+
 		~OpenGLVertexBuffer() override;
 
 		void Bind() const override;
 		void Unbind() const override;
-		void SetData(const void* data, std::uint32_t size);
+		void SetData(const void* data, std::uint32_t size) override;
+
+		std::uint32_t GetRendererID() const override { return m_RendererID; }
+		void BindAsStorage(std::uint32_t binding) const override;
 
 	private:
 		unsigned int m_RendererID = 0;

@@ -1,5 +1,8 @@
 // AXE build tag: hierarchy_window unified-post-process-volume v2
 #include "hierarchy_window.hpp"
+#include "file_dialog.hpp"
+#include "axe/animation/skeletal_mesh_loader.hpp"
+#include "axe/log/log.hpp"
 #include "axe/scene/scene_objects.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/scene/scene_serializer.hpp"

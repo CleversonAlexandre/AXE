@@ -1,4 +1,6 @@
 #include "editor_layer.hpp"
+#include "axe/animation/skeletal_mesh_asset.hpp"
+#include "axe/animation/anim_graph_asset.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -54,6 +56,11 @@ namespace axe
                 SceneSerializer::Deserialize(path, *m_Scene, &m_Environment);
                 m_CurrentScenePath = path;
                 EnsureEnvironmentComponent();
+
+                // A ultima cena aberta passa a ser a cena de abertura do
+                // projeto — no proximo boot ela sobe sozinha, sem file dialog.
+                ProjectManager::Get().SetStartScene(path);
+
                 AXE_EDITOR_INFO("Cena aberta: {}", path);
             };
 
@@ -88,6 +95,10 @@ namespace axe
                 }
                 SceneSerializer::Serialize(*m_Scene, savePath, &m_Environment);
                 m_CurrentScenePath = savePath;
+
+                // Salvou = e nela que voce esta trabalhando. Vira a cena de
+                // abertura do projeto.
+                ProjectManager::Get().SetStartScene(savePath);
                 AXE_EDITOR_INFO("Cena salva em: {}", savePath);
             };
 
@@ -263,6 +274,53 @@ namespace axe
                     return;
                 }
 
+                if (record->FilePath.extension() == ".axeskel")
+                {
+                    SpawnSkeletalMesh(*record, uuid);
+                    return;
+                }
+
+                // AnimGraph nao vira entidade — ABRE O EDITOR.
+                //
+                // E um asset de comportamento, nao de cena.
+                if (record->FilePath.extension() == ".axeanim")
+                {
+                    AXE_EDITOR_INFO("AnimGraph: abrindo '{}'...", record->Name);
+
+                    auto graphAsset = AnimGraphAsset::LoadFromFile(record->FilePath);
+
+                    if (!graphAsset)
+                    {
+                        AXE_EDITOR_ERROR("AnimGraph: falha ao ler '{}'. Arquivo corrompido?",
+                            record->FilePath.string());
+                        return;
+                    }
+
+                    // Resolve contra o esqueleto que o .axeanim referencia —
+                    // e o que da ao editor a lista de clipes.
+                    std::shared_ptr<SkeletalMeshAsset> skel;
+
+                    if (const AssetRecord* skelRec =
+                        AssetDatabase::Get().GetByUUID(graphAsset->GetSkeletonUUID()))
+                    {
+                        skel = SkeletalMeshAsset::LoadFromFile(skelRec->FilePath);
+                        if (skel && skel->Resolve())
+                            graphAsset->Resolve(*skel);
+                    }
+                    else
+                    {
+                        AXE_EDITOR_ERROR("AnimGraph '{}': o esqueleto (.axeskel) referenciado nao foi "
+                            "encontrado. O editor abre, mas sem lista de clipes.", record->Name);
+                    }
+
+                    m_EditorUI->m_AnimGraphWindow.OpenForAsset(graphAsset, skel);
+
+                    AXE_EDITOR_INFO("AnimGraph: janela aberta (IsOpen={}, esqueleto={}).",
+                        m_EditorUI->m_AnimGraphWindow.IsOpen(),
+                        skel ? "ok" : "AUSENTE");
+                    return;
+                }
+
                 if (record->Type == AssetType::Script)
                 {
                     InstantiateScriptAsset(record->FilePath, uuid);
@@ -359,6 +417,53 @@ namespace axe
                     return;
                 }
 
+                // Personagem animado.
+                //
+                // TEM que vir antes do fallback abaixo: sem este branch, o
+                // .axeskel (que e JSON) caía no MeshLoader, que tentava
+                // parsea-lo como FBX e morria com
+                // "FBX-Tokenize ... unexpected colon" — os dois-pontos do
+                // proprio JSON.
+                if (record->FilePath.extension() == ".axeskel")
+                {
+                    SpawnSkeletalMesh(*record, uuid);
+                    return;
+                }
+
+                // ── .axeanim ARRASTADO PRA VIEWPORT ───────────────────────
+                //
+                // Um AnimGraph nao vira entidade — ele nao tem geometria. Voce
+                // o ATRIBUI a um personagem, pelo Inspector. Entao arrastar um
+                // .axeanim aqui deve ABRIR O EDITOR, igual ao duplo-clique.
+                //
+                // Sem este branch, o .axeanim caía no fallback abaixo e ia pro
+                // MeshLoader, que tentava le-lo como modelo:
+                //   "No suitable reader found for the file format".
+                //
+                // Chaveado por EXTENSAO, e nao por record->Type: um .axeanim
+                // registrado por build antigo tem Type velho no .axemeta, e o
+                // branch por Type falharia silenciosamente — a mesma armadilha
+                // que ja mordeu o slot do Inspector.
+                if (record->FilePath.extension() == ".axeanim")
+                {
+                    auto graphAsset = AnimGraphAsset::LoadFromFile(record->FilePath);
+                    if (!graphAsset) return;
+
+                    std::shared_ptr<SkeletalMeshAsset> skel;
+
+                    if (const AssetRecord* skelRec =
+                        AssetDatabase::Get().GetByUUID(graphAsset->GetSkeletonUUID()))
+                    {
+                        skel = SkeletalMeshAsset::LoadFromFile(skelRec->FilePath);
+                        if (skel && skel->Resolve())
+                            graphAsset->Resolve(*skel);
+                    }
+
+                    m_EditorUI->m_AnimGraphWindow.OpenForAsset(graphAsset, skel);
+                    return;
+                }
+
+                // Fallback: qualquer outra coisa vira mesh estatica.
                 LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
                 if (!asset.MeshData) return;
                 auto entity = m_Scene->CreateEntity(record->Name);
@@ -395,6 +500,13 @@ namespace axe
                     }
                     else if (record->Type == AssetType::Mesh)
                         ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
+                    else if (record->Type == AssetType::SkeletalMesh)
+                    {
+                        // Sem isto, arrastar um .axeskel nao mostrava fantasma
+                        // nenhum — e a falta de feedback visual e exatamente o
+                        // que faz o usuario achar que "nao da pra arrastar".
+                        ghostMesh = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cylinder);
+                    }
 
                     if (ghostMesh && m_ViewportRenderer->m_Camera)
                     {
@@ -525,6 +637,7 @@ namespace axe
         m_EditorUI->m_MaterialEditorWindow.Initialize();
         m_EditorUI->m_ParticleEditorWindow.Initialize();
         m_EditorUI->m_ScriptGraphWindow.Initialize();
+        m_EditorUI->m_AnimGraphWindow.Initialize();
         m_EditorUI->m_ScriptGraphWindow.SetInspectorWindow(&m_EditorUI->m_InspectorWindow);
 
         // ── Script editor callbacks ───────────────────────────────────────────
@@ -574,8 +687,14 @@ namespace axe
             m_SceneLoaded = true;
             if (ProjectManager::Get().HasStartScene())
             {
+                // &m_Environment estava FALTANDO aqui (o caminho da cena
+                // default logo abaixo sempre passou). Sem ele, abrir o projeto
+                // pela cena de abertura perdia o environment silenciosamente —
+                // e so por esse caminho, o que tornava o bug confuso.
                 SceneSerializer::Deserialize(
-                    ProjectManager::Get().GetStartScenePath().string(), *m_Scene);
+                    ProjectManager::Get().GetStartScenePath().string(), *m_Scene, &m_Environment);
+
+                m_CurrentScenePath = ProjectManager::Get().GetStartScenePath().string();
             }
             else
             {
@@ -617,6 +736,16 @@ namespace axe
             if (m_ViewportRenderer && m_ViewportRenderer->m_Camera)
                 camPos = m_ViewportRenderer->m_Camera->GetPosition();
             m_ParticleWorld.OnUpdate(*m_Scene, deltaTime, inPlay, camPos);
+
+            // Animação tem que rodar ANTES do render: o SceneCollector lê a
+            // BonePalette que este update acabou de escrever. Se rodasse
+            // depois, o personagem ficaria sempre um frame atrasado — o que
+            // aparece como "tremida" sutil em movimento rápido.
+            //
+            // Em Edit (inPlay == false) o tempo não avança, mas a palette
+            // continua sendo calculada: é o que mostra o personagem na
+            // bind pose em vez de colapsado na origem.
+            m_AnimationWorld.OnUpdate(*m_Scene, deltaTime, inPlay);
         }
 
         // Preview do Particle Editor tem sua própria ParticleWorld/cena —
@@ -686,6 +815,9 @@ namespace axe
             if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
                 m_EditorUI->m_ScriptGraphWindow.RenderPreview();
 
+            if (m_EditorUI->m_AnimGraphWindow.IsOpen())
+                m_EditorUI->m_AnimGraphWindow.RenderPreview();
+
             m_EditorUI->Draw();
 
             if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
@@ -693,6 +825,14 @@ namespace axe
                 m_EditorUI->m_ScriptGraphWindow.SetActiveScene(m_Scene.get());
                 m_EditorUI->m_ScriptGraphWindow.Draw();
             }
+
+            // FORA do if acima — de proposito.
+            //
+            // Estava dentro, e a janela do AnimGraph so aparecia quando o
+            // Script Editor tambem estivesse aberto. O duplo-clique
+            // funcionava, o asset carregava, m_Open virava true... e ninguem
+            // desenhava. O proprio Draw() ja checa IsOpen().
+            m_EditorUI->m_AnimGraphWindow.Draw();
 
             // ── On-screen messages (Print String) ────────────────────────────
             if (m_EditorState != EditorState::Edit)
@@ -902,6 +1042,42 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    void EditorLayer::SpawnSkeletalMesh(const AssetRecord& record, const std::string& uuid)
+    {
+        auto asset = SkeletalMeshAsset::LoadFromFile(record.FilePath);
+
+        if (!asset || !asset->Resolve())
+        {
+            AXE_EDITOR_ERROR("Falha ao abrir o Skeletal Mesh '{}'. Veja o console.", record.Name);
+            return;
+        }
+
+        auto& registry = m_Scene->GetRegistry();
+        auto entity = m_Scene->CreateEntity(record.Name);
+
+        auto& sk = registry.emplace<SkeletalMeshComponent>(entity);
+
+        // O Asset e a fonte de verdade — e o que faz o personagem sobreviver
+        // ao salvar/reabrir a cena. Sem ele, a entidade e orfa.
+        sk.Asset = asset;
+        sk.AssetUUID = uuid;
+
+        sk.Data = asset->GetMesh();
+        sk.Clips = asset->GetClips();
+        sk.CurrentClip = asset->GetClips().empty() ? -1 : 0;
+
+        // Esqueleto visivel no primeiro spawn: e a forma mais rapida de ver,
+        // de cara, se o rig entrou certo.
+        sk.ShowSkeleton = true;
+
+        m_Context.Select(entity);
+
+        AXE_EDITOR_INFO("Personagem '{}' na cena: {} bones, {} clipe(s).",
+            record.Name,
+            asset->GetSkeleton()->GetBoneCount(),
+            asset->GetClips().size());
+    }
+
     void EditorLayer::EnsureEnvironmentComponent()
     {
         if (!m_Scene) return;
@@ -981,7 +1157,9 @@ namespace axe
     {
         if (m_EditorState != EditorState::Edit) return;
 
-        m_SceneSnapshot = SceneSerializer::SerializeToString(*m_Scene);
+        // Clone de memoria. Nada passa por JSON, nada e perdido — nem o
+        // ProbeGrid, nem a pose de um personagem, nem o runtime de um emissor.
+        m_SceneSnapshot.Capture(*m_Scene);
 
         // ── Conecta callbacks do Jolt ao ScriptWorld ──────────────────────────
         // Feito ANTES de OnSceneStart para que os bodies já criados sejam cobertos.
@@ -1138,68 +1316,27 @@ namespace axe
         // Libera o cursor ao parar o Play — via abstração Window, sem GLFW cru.
         EditorApp::Get().GetWindow().CaptureCursor(false);
 
-        if (!m_SceneSnapshot.empty())
+        if (!m_SceneSnapshot.IsEmpty())
         {
-            // Preserva os grids de Light Probes através do Play/Stop.
-            // O restore do snapshot recria as entities do zero, e o
-            // rebake automático do load custava ~20s a CADA Stop
-            // (22k renders no grid denso). O grid é resultado puro de
-            // bake — não é estado de gameplay — então reaproveitá-lo é
-            // seguro: qualquer mudança de cena feita durante o Play é
-            // descartada pelo snapshot de qualquer jeito, logo a
-            // geometria que o grid representa é exatamente a restaurada.
-            std::vector<std::shared_ptr<ProbeGrid>> savedGrids;
-            std::vector<std::shared_ptr<ReflectionCapture>> savedCaptures;
-            if (m_Scene)
-            {
-                auto& reg = m_Scene->GetRegistry();
-                for (auto e : reg.view<ProbeVolumeComponent>())
-                    savedGrids.push_back(reg.get<ProbeVolumeComponent>(e).Grid);
-                // Mesma lógica pras Reflection Probes — captura é barata,
-                // mas gratuita é melhor ainda
-                for (auto e : reg.view<ReflectionProbeComponent>())
-                    savedCaptures.push_back(reg.get<ReflectionProbeComponent>(e).Capture);
-            }
+            // A Scene NAO e recriada — so o registry dela e reposto. Os
+            // ponteiros do viewport e do contexto continuam validos, e nao ha
+            // nada pra reconectar.
+            //
+            // Sumiu daqui o hack que preservava ProbeGrid e ReflectionCapture
+            // atraves do Play/Stop: eram shared_ptr que o JSON nao conseguia
+            // carregar, e sem o hack o rebake custava ~20s a CADA Stop. O
+            // clone de memoria copia shared_ptr como shared_ptr — o problema
+            // deixou de existir, em vez de ser contornado.
+            const entt::entity previouslySelected = m_Context.SelectedEntity;
 
-            m_Scene = std::make_unique<Scene>();
-            m_Context.ActiveScene = m_Scene.get();
-            m_Context.SelectedEntity = entt::null;
-            m_ViewportRenderer->SetScene(m_Scene.get());
-            m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
-            SceneSerializer::DeserializeFromString(m_SceneSnapshot, *m_Scene);
-            m_SceneSnapshot.clear();
+            m_SceneSnapshot.Restore(*m_Scene);
+            m_SceneSnapshot.Clear();
 
-            // Devolve os grids (mesma ordem de iteração — exato pro caso
-            // MVP de 1 volume) e CANCELA o rebake automático que o
-            // Deserialize agendou. Stop volta a ser instantâneo.
-            {
-                auto& reg = m_Scene->GetRegistry();
-                size_t i = 0;
-                for (auto e : reg.view<ProbeVolumeComponent>())
-                {
-                    if (i >= savedGrids.size()) break;
-                    auto& pvc = reg.get<ProbeVolumeComponent>(e);
-                    if (savedGrids[i] && savedGrids[i]->IsValid())
-                    {
-                        pvc.Grid = savedGrids[i];
-                        pvc.BakeRequested = false;
-                    }
-                    ++i;
-                }
-
-                size_t j = 0;
-                for (auto e : reg.view<ReflectionProbeComponent>())
-                {
-                    if (j >= savedCaptures.size()) break;
-                    auto& rpc = reg.get<ReflectionProbeComponent>(e);
-                    if (savedCaptures[j] && savedCaptures[j]->IsValid())
-                    {
-                        rpc.Capture = savedCaptures[j];
-                        rpc.BakeRequested = false;
-                    }
-                    ++j;
-                }
-            }
+            // Os IDs sao preservados pelo restore, entao a selecao sobrevive.
+            m_Context.SelectedEntity =
+                m_Scene->GetRegistry().valid(previouslySelected)
+                ? previouslySelected
+                : entt::null;
 
             EnsureEnvironmentComponent();
             m_CommandHistory.Clear();

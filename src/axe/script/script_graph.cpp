@@ -723,6 +723,67 @@ namespace axe
             return node;
         }
 
+        // ── Animação (AnimGraph) ──────────────────────────────────────────────
+        //
+        // Estes nós são a ÚNICA porta entre o gameplay e a animação. O script
+        // não conhece estados nem clipes — escreve valores, e o AnimGraph
+        // decide. É o que permite reeditar a state machine inteira sem tocar
+        // no script.
+        if (t == "SetAnimFloat")
+        {
+            auto node = makeNode(baseId, "Set Anim Float", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            {
+                ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
+                name.DefaultString = "Speed";
+                node->Inputs.push_back(name);
+            }
+            {
+                ScriptPin val(m_NextId++, "Valor", ScriptPinType::Float, ed::PinKind::Input);
+                val.DefaultFloat = 0.0f;
+                node->Inputs.push_back(val);
+            }
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetAnimBool")
+        {
+            auto node = makeNode(baseId, "Set Anim Bool", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            {
+                ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
+                name.DefaultString = "IsGrounded";
+                node->Inputs.push_back(name);
+            }
+            node->Inputs.emplace_back(m_NextId++, "Valor", ScriptPinType::Bool, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "SetAnimTrigger")
+        {
+            // Trigger é PULSO, não flag: dispara uma vez e é consumido pela
+            // transição que o usou. Por isso não tem pino de valor — não
+            // existe "desligar" um trigger, e o script não precisa lembrar
+            // de fazê-lo no frame seguinte.
+            auto node = makeNode(baseId, "Anim Trigger", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            {
+                ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
+                name.DefaultString = "Attack";
+                node->Inputs.push_back(name);
+            }
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "GetAnimState")
+        {
+            // Estado atual como string. Serve pra lógica que depende do que o
+            // personagem está FAZENDO — ex: não deixar pular durante o ataque.
+            auto node = makeNode(baseId, "Get Anim State", ScriptNodeCategory::Action);
+            node->Outputs.emplace_back(m_NextId++, "Estado", ScriptPinType::String, ed::PinKind::Output);
+            return node;
+        }
+
         // ── SpringArm ─────────────────────────────────────────────────────────
         if (t == "GetSpringArm")
         {

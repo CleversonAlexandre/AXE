@@ -218,6 +218,31 @@ namespace axe
 		}
 	}
 
+	void ProjectManager::SetStartScene(const std::filesystem::path& sceneAbsolutePath)
+	{
+		if (!m_CurrentProject || sceneAbsolutePath.empty())
+			return;
+
+		std::error_code ec;
+		std::filesystem::path rel =
+			std::filesystem::relative(sceneAbsolutePath, m_CurrentProject->RootPath, ec);
+
+		// Cena fora da arvore do projeto (outro drive, pasta avulsa): guardar
+		// o relativo daria "../../..". Nesse caso o absoluto e o mal menor —
+		// funciona aqui, e o HasStartScene() valida a existencia no boot.
+		const std::string value = (ec || rel.empty())
+			? sceneAbsolutePath.generic_string()
+			: rel.generic_string();
+
+		if (m_CurrentProject->StartScene == value)
+			return;   // nada mudou, nao reescreve o .axeproj
+
+		m_CurrentProject->StartScene = value;
+		SaveProject();
+
+		AXE_CORE_INFO("ProjectManager: cena de abertura definida como '{}'.", value);
+	}
+
 	bool ProjectManager::HasStartScene() const
 	{
 		if (!m_CurrentProject) return false;

@@ -55,6 +55,29 @@ namespace axe
 			json j = json::parse(file);
 			out.UUID = j.value("uuid", "");
 			out.Type = AssetTypeFromString(j.value("type", "Unknown"));
+
+			// ── A EXTENSAO TEM A PALAVRA FINAL SOBRE O TIPO ──────────────────
+			//
+			// O Type gravado no .axemeta pode estar velho: um .axeanim
+			// registrado antes de AssetType::AnimGraph existir tem "Unknown" ou
+			// "Mesh" aqui. Confiar nesse valor faz o engine tratar o JSON como
+			// modelo e manda-lo pro Assimp ("No suitable reader found").
+			//
+			// A extensao do arquivo no disco nao mente. Quando ela discorda do
+			// meta, ela vence — e isso conserta os assets antigos sozinho, sem o
+			// usuario ter que reimportar nada.
+			{
+				// metaPath e "<asset>.axemeta"; tirar o .axemeta devolve o
+				// caminho do asset, e dele a extensao real. (out.FilePath so e
+				// preenchido mais abaixo, entao nao da pra usa-lo aqui.)
+				std::filesystem::path assetPath = metaPath;
+				assetPath.replace_extension();   // remove ".axemeta"
+
+				const AssetType byExt = AssetTypeFromExtension(assetPath.extension().string());
+
+				if (byExt != AssetType::Unknown && byExt != out.Type)
+					out.Type = byExt;
+			}
 			out.Name = j.value("name", "");
 			out.ScriptClassType = j.value("script_class_type", "");
 

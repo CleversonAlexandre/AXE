@@ -2,11 +2,11 @@
 #include "hierarchy_window.hpp"
 #include "viewport_window.hpp"
 #include "inspector_window.hpp"
-#include "editor_ui.hpp"
 #include "asset_browser.hpp"
 #include "editor_context.hpp"
 #include "editor/axe_editor/material/material_editor_window.hpp"
 #include "editor/axe_editor/particles/particle_editor_window.hpp"
+#include "animation/anim_graph_window.hpp"
 #include "editor/axe_editor/input/input_settings_window.hpp"
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
@@ -28,6 +28,7 @@ namespace axe
         MaterialEditorWindow m_MaterialEditorWindow;
         ParticleEditorWindow m_ParticleEditorWindow;
         ScriptGraphWindow    m_ScriptGraphWindow;
+        AnimGraphWindow      m_AnimGraphWindow;
         InputSettingsWindow  m_InputSettingsWindow;
 
         // Callbacks conectados pelo EditorLayer

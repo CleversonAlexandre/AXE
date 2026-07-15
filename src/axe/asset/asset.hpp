@@ -16,13 +16,18 @@ namespace axe
 		Script,      // .lua (futuro)
 		Material,
 		GameMode,    // .axegamemode
-		ParticleSystem // .axepart
+		ParticleSystem, // .axepart
+		SkeletalMesh,   // .axeskel — personagem animado (aponta pro FBX + lista de animacoes)
+		AnimGraph       // .axeanim — state machine de animacao
 	};
 
 	// Converte extensão para tipo
 	static AssetType AssetTypeFromExtension(const std::string& ext)
 	{
-		if (ext == ".obj" || ext == ".gltf" || ext == ".glb")return AssetType::Mesh;
+		// .fbx e .dae entram como Mesh: sao FONTES. Clicar com o direito
+		// num deles oferece "Importar como Skeletal Mesh", que gera o .axeskel.
+		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" ||
+			ext == ".fbx" || ext == ".dae")                  return AssetType::Mesh;
 		if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")return AssetType::Texture;
 		if (ext == ".axescene")                              return AssetType::Scene;
 		if (ext == ".wav" || ext == ".mp3")                  return AssetType::Audio;
@@ -30,6 +35,8 @@ namespace axe
 		if (ext == ".axemat")                                return AssetType::Material;
 		if (ext == ".axegamemode")                           return AssetType::GameMode;
 		if (ext == ".axepart")                                return AssetType::ParticleSystem;
+		if (ext == ".axeskel")                                return AssetType::SkeletalMesh;
+		if (ext == ".axeanim")                                return AssetType::AnimGraph;
 		return AssetType::Unknown;
 	}
 
@@ -45,6 +52,8 @@ namespace axe
 		case AssetType::Material:	return "Material";
 		case AssetType::GameMode:	return "GameMode";
 		case AssetType::ParticleSystem: return "ParticleSystem";
+		case AssetType::SkeletalMesh:   return "SkeletalMesh";
+		case AssetType::AnimGraph:      return "AnimGraph";
 
 		default:					return "Unknown";
 		}

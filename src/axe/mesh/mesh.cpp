@@ -39,4 +39,12 @@ namespace axe
 		m_Vertices = vertices;
 		m_Indices = indices;
 	}
+
+	Mesh::Mesh(const std::shared_ptr<VertexArray>& vertexArray, std::uint32_t indexCount)
+		: m_VertexArray(vertexArray), m_IndexCount(indexCount)
+	{
+		// Sem m_VertexBuffer/m_IndexBuffer próprios: o VAO recebido já os
+		// referencia e os mantém vivos. Sem m_Vertices/m_Indices: os dados
+		// nunca estiveram na CPU.
+	}
 }

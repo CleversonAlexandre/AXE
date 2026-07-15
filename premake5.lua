@@ -13,7 +13,22 @@ workspace "axe"
 outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
 filter "action:vs*"
-    buildoptions { "/utf-8" }
+    -- /bigobj — eleva o limite de seções do arquivo .obj (COFF), que por
+    -- padrão é ~65.000.
+    --
+    -- Não é otimização nem workaround de bug: é um formato de .obj mais
+    -- largo. Zero custo em runtime, zero mudança no binário final — só o
+    -- objeto intermediário passa a caber.
+    --
+    -- Ficou necessário porque `components.hpp` é um hub incluído por dezenas
+    -- de TUs, carregando EnTT + glm + ImGui + Jolt, e o sistema de animação
+    -- (Pose / AnimationPlayer / BlendSpace1D) somou instanciações de template
+    -- suficientes pra estourar o teto.
+    --
+    -- Qualquer projeto que usa EnTT a sério acaba precisando disso. É o
+    -- caminho recomendado pela própria Microsoft (a mensagem do C1128 diz
+    -- literalmente "compile with /bigobj").
+    buildoptions { "/utf-8", "/bigobj" }
 
 IncludeDir = {}
 IncludeDir["simdjson"] = "src/vendor/simdjson/singleheader"

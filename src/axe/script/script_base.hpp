@@ -90,6 +90,39 @@ namespace axe
         void AddForce(const glm::vec3& force);
     };
 
+    // ── Proxy de Animação (AnimGraph) ─────────────────────────────────────────
+    //
+    // A ÚNICA porta entre o gameplay e a animação.
+    //
+    // O script NÃO conhece estados, clipes nem transições — ele só escreve
+    // valores: "Speed = 320", "IsGrounded = false", dispara "Attack". O
+    // AnimGraph decide o resto.
+    //
+    // É essa separação que permite reeditar a máquina de estados inteira, no
+    // editor de nós, sem tocar numa linha de script. Se o script chamasse
+    // Play("run") direto, a lógica de animação estaria espalhada pelo
+    // gameplay — e é exatamente o que o AnimGraph existe pra evitar.
+    struct AXE_API ScriptAnimProxy
+    {
+        entt::entity Entity;
+        Scene* ScenePtr;
+
+        void SetFloat(const std::string& name, float value);
+        void SetInt(const std::string& name, int value);
+        void SetBool(const std::string& name, bool value);
+
+        // Pulso, não flag. Disparado uma vez, consumido pela transição que o
+        // usou. O script NÃO precisa lembrar de desligar no frame seguinte.
+        void SetTrigger(const std::string& name);
+
+        float GetFloat(const std::string& name) const;
+        bool  GetBool(const std::string& name) const;
+
+        // Nome do estado atual — útil pra debug e pra lógica que depende do
+        // que o personagem está fazendo (ex: não pular durante um ataque).
+        std::string GetCurrentState() const;
+    };
+
     // ── Proxy de Particle System ──────────────────────────────────────────────
     struct AXE_API ScriptParticleProxy
     {
@@ -193,6 +226,7 @@ namespace axe
         // ── Accessors de componente para uso no código gerado ─────────────────
         ScriptTransformProxy  GetTransform();
         ScriptRigidbodyProxy  GetRigidbody();
+        ScriptAnimProxy       GetAnim();
         ScriptParticleProxy   GetParticleSystem();
         ScriptCameraProxy     GetCamera();
 
