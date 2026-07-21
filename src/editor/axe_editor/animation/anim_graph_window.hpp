@@ -141,6 +141,14 @@ namespace axe
 		static constexpr int kAnyStateNode = 0x00900;
 		static constexpr int kAnyStateOut = 0x00901;
 
+		// Entry (estilo Unreal): um no fixo de onde UMA seta sai e aponta o
+		// estado inicial. Arrastar Entry -> estado troca o EntryState. O link
+		// e sempre desenhado e nao pode ser apagado — sem entrada, a maquina
+		// nao sabe onde comecar.
+		static constexpr int kEntryNode = 0x00800;
+		static constexpr int kEntryOut = 0x00801;
+		static constexpr int kEntryLink = 0x00902;
+
 		// Decodifica um pino de volta em (nó, índice, é-dado?).
 		static bool DecodePin(int pinId, int& outNode, int& outPin, bool& outIsData, bool& outIsOutput);
 
@@ -162,11 +170,36 @@ namespace axe
 		bool m_NeedsContextReset = false;
 		bool m_PositionsLoaded = false;
 
+		// Painel de parametros (estilo UE): selecao + renomeio inline.
+		int  m_SelectedParam = -1;
+		int  m_RenamingParam = -1;
+		char m_RenameBuf[64] = {};
+
 		int m_SelectedNode = -1;         // no canvas de grafo
 		int m_SelectedState = -1;        // no canvas de máquina
 		int m_SelectedTransition = -1;
 
+		// Any State e OPCIONAL: escondido por padrao (na Unreal ele nem
+		// existe). Aparece por escolha no menu de contexto — ou a forca,
+		// quando ja existem transicoes partindo dele (senao elas ficariam
+		// sem origem visivel).
+		bool m_ShowAnyState = false;
+
 		bool m_Dirty = false;
+
+		// ── Sincronia editor -> preview ──────────────────────────────────────
+		//
+		// O preview roda um CLONE do grafo (GraphInstance::SetAsset clona).
+		// Sem isto, toda edicao — escolher um clipe, criar um estado — ficava
+		// so no asset, e o clone continuava tocando o grafo VELHO: personagem
+		// em T-pose pra sempre. MarkEdited() carimba a edicao; o
+		// SyncPreviewCharacter re-clona quando o carimbo muda (com um respiro
+		// de ~0.3s pra nao resetar a animacao a cada tick de um DragFloat).
+		int    m_EditSerial = 0;
+		int    m_PreviewSyncedSerial = 0;
+		double m_LastEditTime = 0.0;
+
+		void MarkEdited();
 
 		// ── Preview 3D ───────────────────────────────────────────────────────
 		//

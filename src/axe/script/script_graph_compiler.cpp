@@ -5,6 +5,44 @@
 
 namespace axe
 {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  Nome de pino/funcao -> IDENTIFICADOR C++ valido
+    //
+    //  Nomes na UI sao texto livre pro humano: "Backward/Forward", "Left/Right",
+    //  "Velocidade (m/s)". Emitidos crus no C++ gerado, a barra virava operador
+    //  de divisao e o compilador cuspia "syntax error: missing ',' before '/'"
+    //  seguido de "'Forward': undeclared identifier" — erros que nao dizem nada
+    //  sobre a causa real (o nome que o usuario escolheu).
+    //
+    //  Regra: tudo que nao for [A-Za-z0-9_] vira '_'; se comecar com digito,
+    //  ganha '_' na frente. Deterministico, entao a assinatura, a chamada e o
+    //  corpo produzem SEMPRE o mesmo identificador.
+    // ═══════════════════════════════════════════════════════════════════════
+    static std::string SanitizeIdent(const std::string& raw)
+    {
+        if (raw.empty())
+            return "_unnamed";
+
+        std::string out;
+        out.reserve(raw.size());
+
+        for (unsigned char ch : raw)
+        {
+            const bool ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+
+            out += ok ? (char)ch : '_';
+        }
+
+        if (out[0] >= '0' && out[0] <= '9')
+            out.insert(out.begin(), '_');
+
+        return out;
+    }
+
+
+
     // ─── Helpers internos ─────────────────────────────────────────────────────
 
     const ScriptNode* ScriptGraphCompiler::FindNextFlowNode(
@@ -216,7 +254,10 @@ namespace axe
             // assinatura do método gerado (ver Generate()) — o pin de saída
             // do Entry e o parâmetro do método compartilham o nome de
             // propósito, não precisa de variável intermediária.
-            return srcPin->Name;
+            //
+            // SanitizeIdent aqui e na assinatura: o mesmo nome de UI tem que
+            // produzir o mesmo identificador nos dois lugares.
+            return SanitizeIdent(srcPin->Name);
 
         if (srcNode->Category == ScriptNodeCategory::Function && nodeName != "Function Entry")
         {
@@ -230,6 +271,32 @@ namespace axe
                 for (auto& f : *ctx.functions) if (f.Name == srcNode->StringValue) { func = &f; break; }
             if (func)
             {
+                // A chamada ja rodou neste corpo? Se nao, o no que estamos
+                // gerando consome um resultado que ainda nao existe — quase
+                // sempre porque o no de fluxo esta ANTES do "Call" na cadeia
+                // de execucao, mas puxa dados dele. Sem este guard, o C++
+                // sai com "_callResN undeclared identifier" e o autor fica
+                // sem pista do que fazer.
+                if (!ctx.emittedCalls.count((int)srcNode->ID.Get()))
+                {
+                    AXE_CORE_ERROR("Script: a saida '{}' da funcao '{}' esta sendo usada ANTES da chamada acontecer no fluxo. "
+                        "Ligue o Flow para chamar a funcao primeiro, e so depois o no que consome o resultado.",
+                        srcPin->Name, srcNode->StringValue);
+
+                    // Valor neutro pelo TIPO do pino: o C++ continua valido e
+                    // o autor le a mensagem acima em vez de um C2065.
+                    switch (srcPin->Type)
+                    {
+                    case ScriptPinType::Float:  return "0.0f";
+                    case ScriptPinType::Int:    return "0";
+                    case ScriptPinType::Bool:   return "false";
+                    case ScriptPinType::String: return "\"\"";
+                    case ScriptPinType::Vec3:   return "glm::vec3(0.f)";
+                    case ScriptPinType::Object: return "entt::null";
+                    default:                    return "{}";
+                    }
+                }
+
                 std::string sid = std::to_string((int)srcNode->ID.Get());
                 if (func->Outputs.size() == 1)
                     return "_callRes" + sid;
@@ -521,7 +588,7 @@ namespace axe
 
         if (nodeName == "Get Variable" || nodeName == "Set Variable")
         {
-            std::string base = "m_" + (srcNode->StringValue.empty() ? "var" : srcNode->StringValue);
+            std::string base = "m_" + SanitizeIdent(srcNode->StringValue.empty() ? "var" : srcNode->StringValue);
             if (srcPin->Name == "X") return base + ".x";
             if (srcPin->Name == "Y") return base + ".y";
             if (srcPin->Name == "Z") return base + ".z";
@@ -1037,7 +1104,7 @@ namespace axe
         }
         else if (name == "Set Variable")
         {
-            std::string varName = "m_" + (node->StringValue.empty() ? "var" : node->StringValue);
+            std::string varName = "m_" + SanitizeIdent(node->StringValue.empty() ? "var" : node->StringValue);
 
             // Descobre o tipo da variável para gerar o literal correto
             ScriptVarType varType = ScriptVarType::Float;
@@ -1632,7 +1699,7 @@ namespace axe
                         std::string expr = "{}";
                         for (auto& inp : node->Inputs)
                             if (inp.Name == outParam.Name) { expr = ResolvePin(ctx, inp); break; }
-                        ctx.Line(outParam.Name + " = " + expr + ";");
+                        ctx.Line(SanitizeIdent(outParam.Name) + " = " + expr + ";");
                     }
                     ctx.Line("return;");
                 }
@@ -1668,7 +1735,9 @@ namespace axe
                     argExprs.push_back(expr);
                 }
 
-                std::string call = func->Name + "(";
+                ctx.emittedCalls.insert((int)node->ID.Get());
+
+                std::string call = SanitizeIdent(func->Name) + "(";
                 for (size_t i = 0; i < argExprs.size(); i++)
                 {
                     if (i > 0) call += ", ";
@@ -1833,6 +1902,7 @@ namespace axe
 
         // ── Header ────────────────────────────────────────────────────────────
         ctx.code += "// Gerado automaticamente pelo AXE Script Editor — nao edite manualmente\n";
+        ctx.code += "// [IDENT_SANITIZE_V2] nomes sanitizados + guard de leitura antecipada de output\n";
         ctx.code += "#pragma once\n";
         ctx.code += "#include \"axe/script/script_base.hpp\"\n";
         ctx.code += "#include \"axe/utils/glm_config.hpp\"\n";
@@ -1925,7 +1995,7 @@ namespace axe
                         defaultVal = "0.0f";
                         break;
                     }
-                    ctx.code += "    " + typeName + " m_" + v.Name + " = " + defaultVal + ";\n";
+                    ctx.code += "    " + typeName + " m_" + SanitizeIdent(v.Name) + " = " + defaultVal + ";\n";
                 }
                 ctx.code += "\n";
             }
@@ -1937,7 +2007,7 @@ namespace axe
                     if ((node->Name == "Get Variable" || node->Name == "Set Variable")
                         && !node->StringValue.empty())
                     {
-                        std::string var = "m_" + node->StringValue;
+                        std::string var = "m_" + SanitizeIdent(node->StringValue);
                         bool found = false;
                         for (auto& v : variables) if (v == var) { found = true; break; }
                         if (!found) variables.push_back(var);
@@ -2082,11 +2152,13 @@ namespace axe
                 if (func.Outputs.size() == 1) sig = CppTypeNameFor(func.Outputs[0].Type) + " ";
                 else sig = "void "; // 0 outputs, ou 2+ (saem por referência)
 
-                sig += func.Name + "(";
+                sig += SanitizeIdent(func.Name) + "(";
                 std::vector<std::string> params;
-                for (auto& in : func.Inputs) params.push_back(CppTypeNameFor(in.Type) + " " + in.Name);
+                for (auto& in : func.Inputs)
+                    params.push_back(CppTypeNameFor(in.Type) + " " + SanitizeIdent(in.Name));
                 if (func.Outputs.size() >= 2)
-                    for (auto& out : func.Outputs) params.push_back(CppTypeNameFor(out.Type) + "& " + out.Name);
+                    for (auto& out : func.Outputs)
+                        params.push_back(CppTypeNameFor(out.Type) + "& " + SanitizeIdent(out.Name));
                 for (size_t i = 0; i < params.size(); i++)
                 {
                     if (i > 0) sig += ", ";

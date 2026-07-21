@@ -263,6 +263,11 @@ namespace axe
 				components["CharacterController"]["step_height"] = c->StepHeight;
 				components["CharacterController"]["max_speed"] = c->MaxSpeed;
 				components["CharacterController"]["jump_force"] = c->JumpForce;
+				components["CharacterController"]["orient_to_movement"] = c->OrientRotationToMovement;
+				components["CharacterController"]["rotation_rate"] = c->RotationRate;
+				components["CharacterController"]["show_debug"] = c->ShowDebug;
+				components["CharacterController"]["capsule_offset"] =
+				{ c->CapsuleOffset.x, c->CapsuleOffset.y, c->CapsuleOffset.z };
 			}
 
 			if (auto* c = registry.try_get<CameraComponent>(entity))
@@ -746,6 +751,17 @@ namespace axe
 				cc.StepHeight = t.value("step_height", 0.3f);
 				cc.MaxSpeed = t.value("max_speed", 5.0f);
 				cc.JumpForce = t.value("jump_force", 5.0f);
+				cc.OrientRotationToMovement = t.value("orient_to_movement", false);
+				cc.RotationRate = t.value("rotation_rate", 720.0f);
+				cc.ShowDebug = t.value("show_debug", true);
+
+				if (t.contains("capsule_offset") && t["capsule_offset"].is_array()
+					&& t["capsule_offset"].size() == 3)
+				{
+					cc.CapsuleOffset = { t["capsule_offset"][0].get<float>(),
+										 t["capsule_offset"][1].get<float>(),
+										 t["capsule_offset"][2].get<float>() };
+				}
 				registry.emplace<CharacterControllerComponent>(entity, cc);
 			}
 

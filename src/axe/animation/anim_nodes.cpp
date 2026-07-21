@@ -15,6 +15,11 @@ namespace axe
 		if (!Clip)
 			return;
 
+		// Antes de avancar: m_Time SEMPRE sai deste Update dentro de
+		// [0, dur], entao o valor de entrada ja e o "tempo de clipe"
+		// anterior — a referencia pro cruzamento de notifies.
+		const float prevW = m_Time;
+
 		if (ctx.AdvanceTime)
 			m_Time += ctx.DeltaTime * PlayRate;
 
@@ -36,6 +41,22 @@ namespace axe
 			}
 
 			m_Normalized = m_Time / dur;
+
+			// ── Notifies cruzados neste passo ────────────────────────────
+			if (ctx.NotifySink && ctx.AdvanceTime && !Clip->Notifies.empty())
+			{
+				const float nowW = m_Time;
+
+				for (const auto& n : Clip->Notifies)
+				{
+					const bool hit = (nowW >= prevW)
+						? (n.Time > prevW && n.Time <= nowW)
+						: (n.Time > prevW || n.Time <= nowW);   // deu a volta
+
+					if (hit)
+						ctx.NotifySink->push_back(n);
+				}
+			}
 		}
 		else
 		{

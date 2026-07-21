@@ -92,8 +92,39 @@ namespace axe
         float MaxSpeed = 5.0f;
         float JumpForce = 5.0f;
 
+        // ── Orientar pela direcao do movimento ────────────────────────────
+        //
+        // O "Orient Rotation to Movement" da Unreal: o personagem GIRA para
+        // onde anda, e a animacao pode ser sempre a de caminhar PRA FRENTE.
+        // Sem isto, andar pra esquerda toca a animacao de frente enquanto o
+        // corpo desliza de lado.
+        //
+        // Mora no controller (e nao no grafo de script) porque e regra de
+        // locomocao: todo personagem e NPC quer a mesma coisa, e ninguem
+        // deveria reescrever atan2 em cada Blueprint.
+        bool  OrientRotationToMovement = false;
+        float RotationRate = 720.0f;   // graus por segundo (0 = instantaneo)
+
+        // Wireframe da capsula na viewport — sem isto, ajustar Height/Radius
+        // e adivinhacao: nao da pra ver onde a capsula esta em relacao ao
+        // personagem.
+        bool ShowDebug = true;
+
+        // Deslocamento da CAPSULA em relacao a origem do personagem (pes).
+        // Y ja recebe meia altura automaticamente; isto e o ajuste FINO por
+        // cima disso — util quando o pivo do modelo nao esta exatamente
+        // entre os pes, ou pra encaixar a capsula num personagem agachado.
+        // Em METROS, como Height/Radius (a escala do transform nao entra).
+        glm::vec3 CapsuleOffset{ 0.0f, 0.0f, 0.0f };
+
         // Runtime
         glm::vec3 Velocity = {};
+
+        // Yaw alvo em RADIANOS, escrito pelo Move() quando ha direcao.
+        // Valido so quando HasDesiredYaw — parado, o personagem mantem a
+        // ultima orientacao em vez de voltar pra frente.
+        float DesiredYaw = 0.0f;
+        bool  HasDesiredYaw = false;
         bool      IsGrounded = false;
         bool      WantsJump = false;
         uint32_t  CharacterID = 0;

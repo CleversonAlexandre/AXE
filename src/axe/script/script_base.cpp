@@ -34,6 +34,7 @@
 #include "axe/physics/jolt_config.hpp"
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <cmath>
 
 namespace axe
 {
@@ -410,6 +411,21 @@ namespace axe
         if (!cc) return;
         cc->Velocity.x = direction.x * speed;
         cc->Velocity.z = direction.z * speed;
+
+        // Direcao do movimento -> yaw alvo. So com input de verdade: soltar
+        // as teclas nao pode fazer o personagem girar pra frente sozinho.
+        if (cc->OrientRotationToMovement)
+        {
+            const float lenSq = direction.x * direction.x + direction.z * direction.z;
+
+            if (lenSq > 1e-6f)
+            {
+                // atan2(x, z): yaw 0 olhando +Z, crescendo pra +X — a mesma
+                // convencao do Transform (rotacao Y em radianos).
+                cc->DesiredYaw = std::atan2(direction.x, direction.z);
+                cc->HasDesiredYaw = true;
+            }
+        }
     }
 
     void ScriptCharacterProxy::Jump(float force)

@@ -4,7 +4,11 @@
 
 #include <imgui_internal.h>   // DockBuilder — so pro layout padrao, uma vez
 
+#include <utilities/widgets.h>   // ax::Widgets::Icon — mesmo pino do Material/Script
+#include <utilities/drawing.h>
+
 #include <algorithm>
+#include <cctype>
 #include <set>
 #include <cstdio>
 
@@ -47,182 +51,95 @@ namespace axe
 		return { ImVec4(0.50f, 0.32f, 0.42f, 1.0f), "BLEND" };
 	}
 
-	// Um pino desenhado como CIRCULO, na cor do tipo.
-	//
-	// Preenchido = tem algo ligado. Vazado = livre.
-	//
-	// Isso responde, sem clicar em nada, a pergunta que mais se faz olhando um
-	// grafo: "esse pino esta conectado ou eu esqueci?"
-	static void DrawPinCircle(const ImVec4& color, bool filled)
-	{
-		const float r = 5.0f;
-		ImDrawList* dl = ImGui::GetWindowDrawList();
-		const ImVec2 p = ImGui::GetCursorScreenPos();
-		const ImVec2 c(p.x + r + 1.0f, p.y + ImGui::GetTextLineHeight() * 0.5f);
-
-		const ImU32 col = ImGui::ColorConvertFloat4ToU32(color);
-
-		if (filled)
-			dl->AddCircleFilled(c, r, col, 12);
-		else
-			dl->AddCircle(c, r, col, 12, 1.8f);
-
-		ImGui::Dummy(ImVec2(r * 2.0f + 4.0f, ImGui::GetTextLineHeight()));
-	}
-
-
 	// ═════════════════════════════════════════════════════════════════════════
-	//  DESENHO DOS NOS
+	//  DESENHO DOS NOS — ANIMGRAPH_STYLE_V2
 	//
-	//  Tres coisas separam um no "de engine" de um no bonito, e nenhuma e
-	//  decorativa:
+	//  Mesmo padrao visual do Material/Script editor (utilities/widgets.h):
+	//  header colorido pintado no draw list, corpo escuro do proprio
+	//  node-editor, pinos com ax::Widgets::Icon.
 	//
-	//   1. BARRA DE TITULO COLORIDA — voce identifica o TIPO do no de relance,
-	//      sem ler. Num grafo com 20 nos, isso e a diferenca entre navegar e
-	//      procurar.
-	//   2. CANTOS ARREDONDADOS E PADDING — o olho separa os nos do fundo.
-	//   3. PINOS COMO ICONE, nao como texto ("*" e "o" eram um remendo). Um
-	//      circulo CHEIO = ligado; VAZIO = solto. Voce ve o que falta conectar
-	//      sem clicar em nada.
+	//  A versao anterior (StyledNode) pintava o fundo com ChannelsSplit DENTRO
+	//  de ed::BeginNode — e o imgui-node-editor ja usa channel splitting
+	//  internamente ali. O conflito engolia o fundo/header customizado e
+	//  sobrava so o card minimo. Por isso ela foi removida: o caminho correto
+	//  (e o que os outros dois editores ja usavam) e deixar o node-editor
+	//  pintar corpo/borda e desenhar SO o header por cima, via
+	//  GetWindowDrawList, dentro do proprio no.
 	// ═════════════════════════════════════════════════════════════════════════
 
-	// Desenha um pino como circulo (dado) ou triangulo (pose), cheio se ligado.
+	static constexpr float kPinIconSize = 18.0f;
+
+	// Pino no estilo Blueprint: SETA (Flow) para pose — o fluxo principal —
+	// e CIRCULO para dado. Cheio = ligado, vazado = livre. Forma + cor:
+	// legivel ate pra quem nao distingue as cores.
 	static void DrawPinIcon(const ImVec4& color, bool connected, bool isPose)
 	{
-		const float sz = ImGui::GetTextLineHeight();
-		const ImVec2 p = ImGui::GetCursorScreenPos();
-		ImDrawList* dl = ImGui::GetWindowDrawList();
-
-		const ImU32 col = ImGui::ColorConvertFloat4ToU32(color);
-		const ImVec2 c(p.x + sz * 0.5f, p.y + sz * 0.5f);
-		const float r = sz * 0.32f;
-
-		if (isPose)
-		{
-			// Triangulo: a POSE e o fluxo principal. Distinguir por FORMA, e nao
-			// so por cor, mantem o grafo legivel pra quem nao distingue as cores.
-			const ImVec2 a(c.x - r, c.y - r);
-			const ImVec2 b(c.x - r, c.y + r);
-			const ImVec2 d(c.x + r, c.y);
-
-			if (connected) dl->AddTriangleFilled(a, b, d, col);
-			else           dl->AddTriangle(a, b, d, col, 1.6f);
-		}
-		else
-		{
-			if (connected) dl->AddCircleFilled(c, r, col, 12);
-			else           dl->AddCircle(c, r, col, 12, 1.6f);
-		}
-
-		ImGui::Dummy(ImVec2(sz, sz));
+		ax::Widgets::Icon(
+			ImVec2(kPinIconSize, kPinIconSize),
+			isPose ? ax::Drawing::IconType::Flow : ax::Drawing::IconType::Circle,
+			connected, color, ImVec4(0.09f, 0.09f, 0.11f, 1.0f));
 	}
 
-	// Barra de titulo colorida.
-	//
-	// O imgui-node-editor nao tem title-bar nativo. O truque: `ed::GetNodeSize`
-	// devolve o tamanho do no do frame ANTERIOR — usamos isso pra saber a
-	// largura, pintamos um retangulo arredondado, e escrevemos o titulo POR CIMA
-	// (dentro de um no, a ordem de desenho e a ordem de submissao).
-	//
-	// No primeiro frame o no ainda nao tem tamanho, entao usamos um minimo. O
-	// header "aparece" no frame seguinte, e ninguem percebe.
-	// ── NO ESTILIZADO (draw list, canal duplo) ───────────────────────────────
-	//
-	// O imgui-node-editor desenha o fundo do no pra gente, mas chapado. Pra ter
-	// o visual da Unreal — header colorido de ponta a ponta, corpo escuro, tudo
-	// arredondado — a gente pinta POR CIMA do fundo dele, no draw list.
-	//
-	// O truque e o ChannelsSplit: canal 1 = conteudo (por cima), canal 0 =
-	// nossos retangulos (por baixo). Desenhamos o conteudo, medimos o retangulo
-	// REAL que ele ocupou, e so entao pintamos o header e o corpo atras —
-	// no MESMO frame. E o que elimina o "pulo" de largura que voce viu: nada
-	// aqui depende do tamanho do frame anterior.
-
-	struct StyledNode
+	// Largura do card: adaptativa ao texto, com um minimo confortavel.
+	static float NodeWidthFor(const char* title, const char* subtitle)
 	{
-		ImVec2 HeaderMin;
-		ImVec4 Accent;
-		float  HeaderBottom = 0.0f;
-		bool   Active = false;
-	};
+		float w = ImGui::CalcTextSize(title).x;
+		if (subtitle && *subtitle)
+			w = std::max(w, ImGui::CalcTextSize(subtitle).x);
+		return std::max(170.0f, w + 32.0f);
+	}
 
-	static StyledNode s_Node;
-
-	static void BeginStyledNode(const ImVec4& accent, const char* title, const char* subtitle)
+	// Barra de titulo: retangulo com gradiente vertical e cantos superiores
+	// arredondados, pintado no draw list da janela ANTES do conteudo (dentro
+	// de um no, ordem de submissao = ordem de desenho, entao o texto fica por
+	// cima). Avanca o cursor para o corpo.
+	static void DrawNodeHeader(const char* title, const char* subtitle,
+		const ImVec4& accent, float width)
 	{
-		s_Node.Accent = accent;
-		s_Node.Active = true;
-
 		ImDrawList* dl = ImGui::GetWindowDrawList();
-		dl->ChannelsSplit(2);
-		dl->ChannelsSetCurrent(1);   // conteudo vai no canal de cima
 
-		s_Node.HeaderMin = ImGui::GetCursorScreenPos();
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		const float  lineH = ImGui::GetTextLineHeight();
+		const bool   hasSub = (subtitle && *subtitle);
+		const float  headerH = lineH + (hasSub ? lineH + 3.0f : 0.0f) + 8.0f;
 
-		// Titulo em branco, negrito visual (o ImGui nao tem bold, entao o
-		// contraste do header ja cumpre o papel).
+		// Paleta ja vem escura e dessaturada (estilo Unreal); o gradiente so
+		// da um leve volume, sem virar neon.
+		const ImU32 top = ImGui::ColorConvertFloat4ToU32(
+			ImVec4(accent.x * 1.00f, accent.y * 1.00f, accent.z * 1.00f, 1.0f));
+		const ImU32 bot = ImGui::ColorConvertFloat4ToU32(
+			ImVec4(accent.x * 0.58f, accent.y * 0.58f, accent.z * 0.58f, 1.0f));
+
+		// Tampa arredondada no topo (acompanha o canto do card) + gradiente
+		// reto SO abaixo dela — assim nenhum pixel quadrado vaza o canto.
+		dl->AddRectFilled(p, ImVec2(p.x + width, p.y + 5.0f),
+			top, 5.0f, ImDrawFlags_RoundCornersTop);
+		dl->AddRectFilledMultiColor(ImVec2(p.x, p.y + 5.0f),
+			ImVec2(p.x + width, p.y + headerH),
+			top, top, bot, bot);
+		dl->AddLine(ImVec2(p.x, p.y + headerH), ImVec2(p.x + width, p.y + headerH),
+			ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, 0.45f)), 1.0f);
+
+		ImGui::SetCursorScreenPos(ImVec2(p.x + 10.0f, p.y + 4.0f));
 		ImGui::TextUnformatted(title);
 
-		if (subtitle && *subtitle)
-			ImGui::TextDisabled("%s", subtitle);
+		if (hasSub)
+		{
+			ImGui::SetCursorScreenPos(ImVec2(p.x + 10.0f, p.y + 4.0f + lineH + 2.0f));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 0.55f));
+			ImGui::TextUnformatted(subtitle);
+			ImGui::PopStyleColor();
+		}
 
-		s_Node.HeaderBottom = ImGui::GetCursorScreenPos().y + 2.0f;
-
-		ImGui::Dummy(ImVec2(0.0f, 6.0f));
+		ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + headerH));
+		ImGui::Dummy(ImVec2(width, 6.0f));
 	}
 
-	static void EndStyledNode()
+	void AnimGraphWindow::MarkEdited()
 	{
-		if (!s_Node.Active)
-			return;
-
-		s_Node.Active = false;
-
-		ImDrawList* dl = ImGui::GetWindowDrawList();
-
-		// Agora o conteudo ja foi submetido: o item rect do no e conhecido.
-		const ImVec2 nodeMin = ImGui::GetItemRectMin();
-		const ImVec2 nodeMax = ImGui::GetItemRectMax();
-
-		// Uma folga, pro fundo cobrir o padding do node-editor.
-		const float pad = 8.0f;
-		const ImVec2 bgMin(nodeMin.x - pad, nodeMin.y - pad);
-		const ImVec2 bgMax(nodeMax.x + pad, nodeMax.y + pad);
-
-		dl->ChannelsSetCurrent(0);   // fundo vai no canal de baixo
-
-		const float rounding = 7.0f;
-		const ImVec4& a = s_Node.Accent;
-
-		// Corpo: escuro, quase opaco.
-		dl->AddRectFilled(bgMin, bgMax,
-			ImGui::ColorConvertFloat4ToU32(ImVec4(0.11f, 0.11f, 0.13f, 0.97f)),
-			rounding);
-
-		// Header: faixa colorida no topo, com gradiente e cantos superiores
-		// arredondados (os de baixo retos, pra encostar no corpo).
-		const float headerH = s_Node.HeaderBottom - bgMin.y + pad;
-		const ImVec2 hMax(bgMax.x, bgMin.y + headerH);
-
-		const ImU32 top = ImGui::ColorConvertFloat4ToU32(ImVec4(a.x * 1.2f, a.y * 1.2f, a.z * 1.2f, 0.95f));
-		const ImU32 bot = ImGui::ColorConvertFloat4ToU32(ImVec4(a.x * 0.75f, a.y * 0.75f, a.z * 0.75f, 0.95f));
-
-		dl->AddRectFilledMultiColor(bgMin, hMax, top, top, bot, bot);
-
-		// Reforca so os cantos de cima arredondados por cima do gradiente.
-		dl->AddRectFilled(bgMin, ImVec2(hMax.x, bgMin.y + rounding),
-			top, rounding, ImDrawFlags_RoundCornersTop);
-
-		// Borda fina na cor do accent, no no inteiro.
-		dl->AddRect(bgMin, bgMax,
-			ImGui::ColorConvertFloat4ToU32(ImVec4(a.x, a.y, a.z, 0.9f)),
-			rounding, 0, 1.5f);
-
-		// Linha divisoria header/corpo.
-		dl->AddLine(ImVec2(bgMin.x, hMax.y), ImVec2(bgMax.x, hMax.y),
-			ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, 0.35f)), 1.0f);
-
-		dl->ChannelsMerge();
+		m_Dirty = true;
+		++m_EditSerial;
+		m_LastEditTime = ImGui::GetTime();
 	}
 
 	void AnimGraphWindow::Initialize()
@@ -243,6 +160,11 @@ namespace axe
 	void AnimGraphWindow::OpenForAsset(const std::shared_ptr<AnimGraphAsset>& asset,
 		const std::shared_ptr<SkeletalMeshAsset>& skeleton)
 	{
+		// Carimbo de versao. Se esta linha aparecer no console ao abrir o
+		// editor, os arquivos do ANIMGRAPH_UX_V6 estao em uso (cena segue o
+		// grafo ao salvar; drop de FBX vira Clip Player; .axeskel revincula).
+		AXE_EDITOR_INFO("AnimGraph editor — ANIMGRAPH_UX_V6");
+
 		m_Asset = asset;
 		m_Skeleton = skeleton;
 		m_Open = true;
@@ -329,6 +251,12 @@ namespace axe
 		if (m_Asset->Save())
 		{
 			m_Dirty = false;
+
+			// Avisa as instancias (personagens na CENA) que o grafo mudou —
+			// cada uma re-clona no proximo Update. E o "compilar" do nosso
+			// Anim Blueprint: salvou, a cena acompanha.
+			m_Asset->BumpVersion();
+
 			AXE_EDITOR_INFO("AnimGraph '{}' salvo.", m_Asset->GetName());
 		}
 	}
@@ -499,72 +427,217 @@ namespace axe
 
 	void AnimGraphWindow::DrawParametersPanel()
 	{
+		// ── Painel estilo "My Blueprint > Variables" da Unreal ───────────────
+		//
+		// Linha = pilula colorida do tipo + nome + tipo a direita. A LINHA
+		// INTEIRA e arrastavel pro grafo. Clique seleciona; duplo-clique
+		// renomeia; o default do selecionado aparece embaixo — em vez de
+		// cada linha carregar combo + botao + campo, que era o formulario
+		// entulhado de antes.
 		ImGui::TextUnformatted("Parametros");
+		ImGui::SameLine();
+		ImGui::TextDisabled("(arraste para o grafo)");
 		ImGui::Separator();
-		ImGui::TextWrapped("O gameplay escreve. Os nos leem.");
 		ImGui::Spacing();
 
 		auto& params = m_Asset->GetParameters();
 
+		auto pillColor = [](AnimParamType t) -> ImVec4
+			{
+				switch (t)
+				{
+				case AnimParamType::Float:   return ImVec4(0.38f, 0.75f, 0.36f, 1.0f);
+				case AnimParamType::Int:     return ImVec4(0.25f, 0.65f, 0.85f, 1.0f);
+				case AnimParamType::Bool:    return ImVec4(0.80f, 0.28f, 0.28f, 1.0f);
+				case AnimParamType::Trigger: return ImVec4(0.85f, 0.55f, 0.20f, 1.0f);
+				}
+				return ImVec4(1, 1, 1, 1);
+			};
+
+		auto typeName = [](AnimParamType t) -> const char*
+			{
+				switch (t)
+				{
+				case AnimParamType::Float:   return "Float";
+				case AnimParamType::Int:     return "Int";
+				case AnimParamType::Bool:    return "Bool";
+				case AnimParamType::Trigger: return "Trigger";
+				}
+				return "?";
+			};
+
 		int removeIdx = -1;
+		const float rowH = ImGui::GetTextLineHeight() + 8.0f;
 
 		for (std::size_t i = 0; i < params.size(); ++i)
 		{
 			ImGui::PushID((int)i);
 
-			char buf[64];
-			std::snprintf(buf, sizeof(buf), "%s", params[i].Name.c_str());
-
-			ImGui::SetNextItemWidth(96.0f);
-			if (ImGui::InputText("##n", buf, sizeof(buf))) { params[i].Name = buf; m_Dirty = true; }
-
-			ImGui::SameLine();
-
-			const char* kinds[] = { "Float", "Int", "Bool", "Trig" };
-			int kind = (int)params[i].Type;
-
-			ImGui::SetNextItemWidth(56.0f);
-			if (ImGui::Combo("##t", &kind, kinds, 4)) { params[i].Type = (AnimParamType)kind; m_Dirty = true; }
-
-			ImGui::SameLine();
-			if (ImGui::SmallButton("x")) removeIdx = (int)i;
-
-			// O DEFAULT importa mais do que parece: se "Speed" comeca em 0 mas o
-			// personagem spawna correndo, o grafo passa um frame no estado errado
-			// — e voce ve um piscar de idle.
-			switch (params[i].Type)
+			// ── Modo renomeio ────────────────────────────────────────────────
+			if (m_RenamingParam == (int)i)
 			{
-			case AnimParamType::Float:
 				ImGui::SetNextItemWidth(-1);
-				if (ImGui::DragFloat("##d", &params[i].DefaultF, 0.5f)) m_Dirty = true;
-				break;
-			case AnimParamType::Int:
-				ImGui::SetNextItemWidth(-1);
-				if (ImGui::DragInt("##d", &params[i].DefaultI)) m_Dirty = true;
-				break;
-			case AnimParamType::Bool:
-				if (ImGui::Checkbox("default", &params[i].DefaultB)) m_Dirty = true;
-				break;
-			case AnimParamType::Trigger:
-				// Trigger nao tem default: um pulso armado no frame 1 dispararia a
-				// transicao sozinho, sem ninguem ter apertado nada.
-				ImGui::TextDisabled("(pulso)");
-				break;
+
+				const bool firstFrame = (m_RenameBuf[0] == '\0');
+
+				if (firstFrame)
+				{
+					std::snprintf(m_RenameBuf, sizeof(m_RenameBuf), "%s", params[i].Name.c_str());
+
+					// SO no primeiro frame: chamar todo frame rouba o foco
+					// eternamente e o clique-fora nunca consegue confirmar.
+					ImGui::SetKeyboardFocusHere();
+				}
+
+				const bool done = ImGui::InputText("##ren", m_RenameBuf, sizeof(m_RenameBuf),
+					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+				if (done || ImGui::IsItemDeactivated())
+				{
+					if (m_RenameBuf[0] != '\0' && params[i].Name != m_RenameBuf)
+					{
+						params[i].Name = m_RenameBuf;
+						MarkEdited();
+					}
+
+					m_RenamingParam = -1;
+					m_RenameBuf[0] = '\0';
+				}
+
+				ImGui::PopID();
+				continue;
 			}
 
-			ImGui::Separator();
+			// ── Linha normal ─────────────────────────────────────────────────
+			const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+			const float  rowW = ImGui::GetContentRegionAvail().x;
+
+			if (ImGui::Selectable("##row", m_SelectedParam == (int)i,
+				ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, rowH)))
+			{
+				m_SelectedParam = (int)i;
+
+				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+				{
+					m_RenamingParam = (int)i;
+					m_RenameBuf[0] = '\0';
+				}
+			}
+
+			// A linha inteira e a fonte do arrasto, como na Unreal.
+			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
+			{
+				const int idx = (int)i;
+				ImGui::SetDragDropPayload("ANIM_PARAM", &idx, sizeof(int));
+				ImGui::Text("Get %s", params[i].Name.c_str());
+				ImGui::EndDragDropSource();
+			}
+
+			if (ImGui::BeginPopupContextItem("param_ctx"))
+			{
+				m_SelectedParam = (int)i;
+
+				if (ImGui::MenuItem("Renomear"))
+				{
+					m_RenamingParam = (int)i;
+					m_RenameBuf[0] = '\0';
+				}
+
+				if (ImGui::MenuItem("Excluir"))
+					removeIdx = (int)i;
+
+				ImGui::EndPopup();
+			}
+
+			// Desenho por cima do Selectable: pilula + nome + tipo a direita.
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+
+			const float  midY = rowMin.y + rowH * 0.5f;
+			const ImVec4 col = pillColor(params[i].Type);
+
+			dl->AddRectFilled(
+				ImVec2(rowMin.x + 4.0f, midY - 4.5f),
+				ImVec2(rowMin.x + 20.0f, midY + 4.5f),
+				ImGui::ColorConvertFloat4ToU32(col), 4.5f);
+
+			dl->AddText(ImVec2(rowMin.x + 27.0f, midY - ImGui::GetTextLineHeight() * 0.5f),
+				ImGui::GetColorU32(ImGuiCol_Text), params[i].Name.c_str());
+
+			const char* tn = typeName(params[i].Type);
+			const float tw = ImGui::CalcTextSize(tn).x;
+
+			dl->AddText(ImVec2(rowMin.x + rowW - tw - 6.0f, midY - ImGui::GetTextLineHeight() * 0.5f),
+				ImGui::GetColorU32(ImGuiCol_TextDisabled), tn);
+
 			ImGui::PopID();
 		}
-
-		if (removeIdx >= 0) { params.erase(params.begin() + removeIdx); m_Dirty = true; }
 
 		if (ImGui::Button("+ Parametro", ImVec2(-1, 0)))
 		{
 			AnimParamDecl d;
-			d.Name = "Novo";
+			d.Name = "NovoParam";
 			d.Type = AnimParamType::Float;
 			params.push_back(d);
-			m_Dirty = true;
+
+			m_SelectedParam = (int)params.size() - 1;
+			m_RenamingParam = m_SelectedParam;   // ja nasce renomeando
+			m_RenameBuf[0] = '\0';
+			MarkEdited();
+		}
+
+		// ── Detalhes do parametro selecionado ────────────────────────────────
+		//
+		// Tipo e default moram AQUI, nao em cada linha — o mesmo desenho da
+		// Unreal (selecionar a variavel abre os detalhes dela).
+		if (m_SelectedParam >= 0 && m_SelectedParam < (int)params.size())
+		{
+			auto& p = params[m_SelectedParam];
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+
+			ImGui::TextDisabled("%s", p.Name.c_str());
+
+			const char* kinds[] = { "Float", "Int", "Bool", "Trigger" };
+			int kind = (int)p.Type;
+
+			ImGui::SetNextItemWidth(-1);
+			if (ImGui::Combo("##t", &kind, kinds, 4)) { p.Type = (AnimParamType)kind; MarkEdited(); }
+
+			// O DEFAULT importa mais do que parece: se "Speed" comeca em 0 mas
+			// o personagem spawna correndo, o grafo passa um frame no estado
+			// errado — e voce ve um piscar de idle.
+			switch (p.Type)
+			{
+			case AnimParamType::Float:
+				ImGui::SetNextItemWidth(-1);
+				if (ImGui::DragFloat("##d", &p.DefaultF, 0.5f)) MarkEdited();
+				break;
+			case AnimParamType::Int:
+				ImGui::SetNextItemWidth(-1);
+				if (ImGui::DragInt("##d", &p.DefaultI)) MarkEdited();
+				break;
+			case AnimParamType::Bool:
+				if (ImGui::Checkbox("default", &p.DefaultB)) MarkEdited();
+				break;
+			case AnimParamType::Trigger:
+				// Trigger nao tem default: um pulso armado no frame 1
+				// dispararia a transicao sozinho, sem ninguem ter apertado.
+				ImGui::TextDisabled("(pulso)");
+				break;
+			}
+		}
+
+		if (removeIdx >= 0)
+		{
+			params.erase(params.begin() + removeIdx);
+
+			if (m_SelectedParam == removeIdx) m_SelectedParam = -1;
+			else if (m_SelectedParam > removeIdx) --m_SelectedParam;
+
+			m_RenamingParam = -1;
+			MarkEdited();
 		}
 	}
 
@@ -586,43 +659,221 @@ namespace axe
 		bool wantDropNode = false;
 		std::string dropUuid;
 
-		if (ImGui::BeginDragDropTarget())
+		// Parametro arrastado do painel — vira um no Get, como arrastar uma
+		// variavel no Blueprint da Unreal.
+		int dropParamIdx = -1;
+
+		// ImGui::BeginDragDropTarget() "normal" se prende ao ULTIMO ITEM
+		// desenhado — que aqui era qualquer coisa, menos o canvas. O alvo
+		// nunca existia de verdade, e nada podia ser solto no grafo. O
+		// TargetCustom recebe o RETANGULO do canvas explicitamente.
 		{
-			if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+			const ImVec2 cmin = ImGui::GetCursorScreenPos();
+			const ImVec2 avail = ImGui::GetContentRegionAvail();
+			const ImRect canvasRect(cmin,
+				ImVec2(cmin.x + avail.x, cmin.y + avail.y));
+
+			if (ImGui::BeginDragDropTargetCustom(canvasRect,
+				ImGui::GetID("anim_canvas_drop")))
 			{
-				wantDropNode = true;
-				dropUuid = std::string((const char*)pl->Data);
+				if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("ASSET_UUID"))
+				{
+					wantDropNode = true;
+					dropUuid = std::string((const char*)pl->Data);
+				}
+
+				if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("ANIM_PARAM"))
+					dropParamIdx = *(const int*)pl->Data;
+
+				ImGui::EndDragDropTarget();
 			}
-			ImGui::EndDragDropTarget();
 		}
 
 		ed::SetCurrentEditor(m_EdCtx);
 		ed::Begin("PoseGraph");
 
-		// Cria o no do drop, se houve.
-		if (wantDropNode && m_Skeleton)
+		// Trata o drop, se houve.
+		if (wantDropNode && m_Asset)
 		{
 			const AssetRecord* rec = AssetDatabase::Get().GetByUUID(dropUuid);
 
-			// So .axeskel: e o unico asset que carrega clipes. Arrastar outra
-			// coisa (textura, material) num grafo de animacao nao faz sentido.
-			if (rec && rec->FilePath.extension() == ".axeskel")
+			std::string ext = rec ? rec->FilePath.extension().string() : std::string{};
+			std::transform(ext.begin(), ext.end(), ext.begin(),
+				[](unsigned char ch) { return (char)std::tolower(ch); });
+
+			const bool isAnimFile =
+				(ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".dae");
+
+			// ── .axeskel num grafo ORFAO: (re)vincula o esqueleto ───────────
+			//
+			// Acontece quando o .axeskel referenciado foi apagado e recriado
+			// (UUID novo) — o grafo abre com "Sem esqueleto". Arrastar o
+			// .axeskel novo pro canvas conserta o vinculo na hora.
+			if (rec && ext == ".axeskel" && !m_Skeleton)
 			{
-				auto cp = CreateAnimNode("ClipPlayer");
-				cp->Title = "Clip Player";
+				auto skel = SkeletalMeshAsset::LoadFromFile(rec->FilePath);
 
+				if (skel && skel->Resolve())
+				{
+					m_Skeleton = skel;
+					m_Asset->SetSkeletonUUID(dropUuid);
+					m_Asset->Resolve(*skel);
+					MarkEdited();
+
+					AXE_EDITOR_INFO("AnimGraph '{}' vinculado ao esqueleto '{}' ({} clipe(s)). Salve para persistir.",
+						m_Asset->GetName(), skel->GetName(), skel->GetClips().size());
+				}
+				else
+				{
+					AXE_EDITOR_ERROR("Nao consegui resolver o esqueleto '{}'.", rec->Name);
+				}
+			}
+			// ── Arquivo de ANIMACAO (o fluxo "arrasta o idle pro grafo") ────
+			//
+			// Importa os clipes pro .axeskel (mesmo caminho do botao Importar
+			// do Inspector) e ja cria um Clip Player com o primeiro take
+			// pronto pra ligar — como arrastar uma AnimSequence na Unreal.
+			else if (rec && isAnimFile && m_Skeleton)
+			{
+				const int before = (int)m_Skeleton->GetClips().size();
+				const int added = m_Skeleton->AddAnimation(rec->FilePath);
+
+				if (added > 0)
+				{
+					m_Skeleton->Save();
+
+					const auto& clips = m_Skeleton->GetClips();
+					const auto& firstNew = clips[before];
+
+					auto node = CreateAnimNode("ClipPlayer");
+					node->Title = firstNew->GetName();
+
+					if (auto* cp = dynamic_cast<AnimNode_ClipPlayer*>(node.get()))
+					{
+						cp->ClipName = firstNew->GetName();
+						cp->Clip = firstNew;
+					}
+
+					const ImVec2 c = ed::ScreenToCanvas(ImGui::GetMousePos());
+					node->EditorX = c.x;
+					node->EditorY = c.y;
+
+					const int id = graph.AddNode(std::move(node));
+					ed::SetNodePosition(id, c);
+
+					m_SelectedNode = id;
+					MarkEdited();
+
+					if (added > 1)
+						AXE_EDITOR_INFO("'{}': {} takes importados — os demais estao no combo de clipes.",
+							rec->Name, added);
+				}
+				else
+				{
+					AXE_EDITOR_WARN("'{}' nao trouxe nenhum clipe compativel com o esqueleto.", rec->Name);
+				}
+			}
+			else if (rec && isAnimFile && !m_Skeleton)
+			{
+				AXE_EDITOR_WARN("O grafo esta sem esqueleto — arraste o .axeskel do personagem pro canvas primeiro.");
+			}
+			// ── .axeskel com esqueleto ja vinculado: fluxo de clipe ─────────
+			else if (rec && ext == ".axeskel" && m_Skeleton)
+			{
 				const ImVec2 c = ed::ScreenToCanvas(ImGui::GetMousePos());
-				cp->EditorX = c.x;
-				cp->EditorY = c.y;
 
-				const int id = graph.AddNode(std::move(cp));
-				ed::SetNodePosition(id, c);
+				// Caiu EM CIMA de um player existente? Entao e atribuicao, nao
+				// criacao: seleciona o no e o painel Detalhes vira o lugar de
+				// escolher o clipe — em vez de nascer um segundo player por cima.
+				AnimNode* hit = nullptr;
 
-				m_SelectedNode = id;
-				m_Dirty = true;
+				for (const auto& n : graph.GetNodes())
+				{
+					const ImVec2 p = ed::GetNodePosition(n->Id);
+					const ImVec2 s = ed::GetNodeSize(n->Id);
 
-				AXE_EDITOR_INFO("Clip Player criado a partir de '{}'. Escolha o clipe no painel Detalhes.",
-					rec->Name);
+					if (c.x >= p.x && c.x <= p.x + s.x &&
+						c.y >= p.y && c.y <= p.y + s.y)
+					{
+						hit = n.get();
+						break;
+					}
+				}
+
+				const bool hitPlayer = hit &&
+					(dynamic_cast<AnimNode_ClipPlayer*>(hit) != nullptr ||
+						dynamic_cast<AnimNode_BlendSpacePlayer*>(hit) != nullptr);
+
+				if (hitPlayer)
+				{
+					m_SelectedNode = hit->Id;
+
+					AXE_EDITOR_INFO("'{}' solto sobre '{}': escolha o clipe no painel Detalhes.",
+						rec->Name, hit->Title.empty() ? hit->TypeName() : hit->Title);
+				}
+				else
+				{
+					auto cp = CreateAnimNode("ClipPlayer");
+					cp->Title = "Clip Player";
+					cp->EditorX = c.x;
+					cp->EditorY = c.y;
+
+					const int id = graph.AddNode(std::move(cp));
+					ed::SetNodePosition(id, c);
+
+					m_SelectedNode = id;
+					MarkEdited();
+
+					AXE_EDITOR_INFO("Clip Player criado a partir de '{}'. Escolha o clipe no painel Detalhes.",
+						rec->Name);
+				}
+			}
+		}
+
+		// Cria o no de PARAMETRO do drop, se houve — o Get ja nasce com o nome
+		// e o titulo do parametro, pronto pra ligar.
+		if (dropParamIdx >= 0 && m_Asset)
+		{
+			auto& params = m_Asset->GetParameters();
+
+			if (dropParamIdx < (int)params.size())
+			{
+				const auto& p = params[dropParamIdx];
+
+				const char* type = nullptr;
+
+				switch (p.Type)
+				{
+				case AnimParamType::Float: type = "GetFloat"; break;
+				case AnimParamType::Bool:  type = "GetBool";  break;
+				default: break;   // Int/Trigger ainda nao tem no Get
+				}
+
+				if (type)
+				{
+					auto node = CreateAnimNode(type);
+					node->Title = p.Name;
+
+					if (auto* gf = dynamic_cast<AnimNode_GetFloat*>(node.get()))
+						gf->Parameter = p.Name;
+					else if (auto* gb = dynamic_cast<AnimNode_GetBool*>(node.get()))
+						gb->Parameter = p.Name;
+
+					const ImVec2 c = ed::ScreenToCanvas(ImGui::GetMousePos());
+					node->EditorX = c.x;
+					node->EditorY = c.y;
+
+					const int id = graph.AddNode(std::move(node));
+					ed::SetNodePosition(id, c);
+
+					m_SelectedNode = id;
+					MarkEdited();
+				}
+				else
+				{
+					AXE_EDITOR_WARN("Parametro '{}' e {}: ainda nao existe no Get para este tipo.",
+						p.Name, p.Type == AnimParamType::Int ? "Int" : "Trigger");
+				}
 			}
 		}
 
@@ -638,107 +889,174 @@ namespace axe
 
 		// ── Nos ──────────────────────────────────────────────────────────────
 		//
-		// Estilo: cantos arredondados, borda colorida por TIPO, e barra de
-		// titulo. A cor nao e decoracao — num grafo com 20 nos, identificar o
-		// tipo de relance e a diferenca entre navegar e procurar.
-		// O fundo/borda/cantos agora sao desenhados pelo StyledNode. Aqui a
-		// gente zera os do node-editor e so mantem o PADDING — generoso, pra o
-		// conteudo respirar dentro do card.
-		ed::PushStyleVar(ed::StyleVar_NodeRounding, 7.0f);
-		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 0.0f);
-		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(12.0f, 10.0f, 12.0f, 10.0f));
+		// ANIMGRAPH_STYLE_V2 — layout em duas colunas, como no Material/Script
+		// editor: entradas na esquerda, a saida na direita da PRIMEIRA linha.
+		// Header colorido por TIPO — a cor nao e decoracao: num grafo com 20
+		// nos, identificar o tipo de relance e a diferenca entre navegar e
+		// procurar.
+		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0, 0, 0, 5));
+		ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0f);
+		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
 
 		for (const auto& n : nodes)
 		{
 			const bool isOutput = (n->Id == graph.GetOutputNode());
 			const bool isSm = (dynamic_cast<AnimNode_StateMachine*>(n.get()) != nullptr);
 			const bool isValue = (n->OutputType() != AnimPinType::Pose);
+			const bool isPlayer =
+				(dynamic_cast<AnimNode_ClipPlayer*>(n.get()) != nullptr) ||
+				(dynamic_cast<AnimNode_BlendSpacePlayer*>(n.get()) != nullptr);
 
-			ImVec4 accent{ 0.35f, 0.42f, 0.55f, 1.0f };   // fontes de pose
+			// Paleta estilo Unreal: escura, dessaturada, e a COR MORA SO NO
+			// HEADER — o corpo e a borda sao neutros em todos os nos. E o que
+			// separa "editor profissional" de "arvore de natal".
+			ImVec4 accent{ 0.20f, 0.21f, 0.24f, 1.0f };   // blends e afins: cinza
 			const char* sub = nullptr;
 
-			if (isOutput) { accent = ImVec4(0.62f, 0.45f, 0.12f, 1.0f); sub = "AnimGraph"; }
-			else if (isSm) { accent = ImVec4(0.42f, 0.26f, 0.62f, 1.0f); sub = "State Machine  (duplo-clique)"; }
-			else if (isValue) { accent = ImVec4(0.22f, 0.48f, 0.20f, 1.0f); sub = "Variavel"; }
+			if (isOutput) { accent = ImVec4(0.27f, 0.21f, 0.13f, 1.0f); sub = "AnimGraph"; }
+			else if (isSm) { accent = ImVec4(0.20f, 0.23f, 0.33f, 1.0f); sub = "State Machine  (duplo-clique)"; }
+			else if (isValue) { accent = ImVec4(0.13f, 0.29f, 0.16f, 1.0f); sub = "Variavel"; }
+			else if (isPlayer) { accent = ImVec4(0.14f, 0.30f, 0.21f, 1.0f); }   // player: verde UE
 
-			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-			ed::PushStyleColor(ed::StyleColor_NodeBorder, accent);
+			const std::string title = n->Title.empty() ? n->TypeName() : n->Title;
+
+			// Largura do card: o maior entre titulo/subtitulo E o conteudo das
+			// duas colunas (pinos da esquerda + saida da direita). Sem a
+			// segunda parte, um pino de nome comprido com campo inline
+			// invadiria a coluna da saida.
+			float leftW = 0.0f;
+
+			for (int i = 0; i < n->InputCount(); ++i)
+				leftW = std::max(leftW,
+					kPinIconSize + 4.0f + ImGui::CalcTextSize(n->InputName(i)).x);
+
+			for (const auto& d : n->DataInputs)
+			{
+				float wRow = kPinIconSize + 4.0f + ImGui::CalcTextSize(d.Name.c_str()).x;
+				if (!d.Link)
+					wRow += (d.Type == AnimPinType::Bool)
+					? ImGui::GetFrameHeight() + 8.0f
+					: 56.0f + 8.0f;
+				leftW = std::max(leftW, wRow);
+			}
+
+			const float outW = isOutput ? 0.0f
+				: ImGui::CalcTextSize(n->OutputType() == AnimPinType::Pose ? "OutPose" : "Out").x
+				+ kPinIconSize + 6.0f;
+
+			const float nodeWidth = std::max(
+				NodeWidthFor(title.c_str(), sub),
+				leftW + outW + 32.0f);
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
 
 			ed::BeginNode(n->Id);
 
-			const std::string title = n->Title.empty() ? n->TypeName() : n->Title;
-			BeginStyledNode(accent, title.c_str(), sub);
+			DrawNodeHeader(title.c_str(), sub, accent, nodeWidth);
 
-			// ── Pinos de POSE (entrada) ──────────────────────────────────────
+			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+
+			// ── Coluna esquerda: entradas ────────────────────────────────────
+			ImGui::BeginGroup();
+
+			// Pinos de POSE. Icone CHEIO = ligado, VAZIO = solto — voce ve o
+			// que falta conectar sem clicar em nada.
 			for (int i = 0; i < n->InputCount(); ++i)
 			{
 				ed::BeginPin(PoseInPin(n->Id, i), ed::PinKind::Input);
+				ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
 
-				// Icone CHEIO = ligado, VAZIO = solto. Voce ve o que falta
-				// conectar sem clicar em nada.
+				ImGui::BeginGroup();
 				DrawPinIcon(kPoseColor, n->Inputs[i] != nullptr, true);
-
 				ImGui::SameLine();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
 				ImGui::TextUnformatted(n->InputName(i));
+				ImGui::EndGroup();
+
 				ed::EndPin();
 			}
 
-			// ── Pinos de DADO (entrada) ──────────────────────────────────────
+			// Pinos de DADO. Desconectado = valor inline editavel ao lado do
+			// nome (como digitar direto no pino, na Unreal). Conectado = so o
+			// nome; o icone cheio ja diz que quem manda e o link.
 			for (std::size_t i = 0; i < n->DataInputs.size(); ++i)
 			{
 				auto& d = n->DataInputs[i];
 				const ImVec4 col = ColorFor(d.Type);
 
 				ed::BeginPin(DataInPin(n->Id, (int)i), ed::PinKind::Input);
+				ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+
+				ImGui::BeginGroup();
 				DrawPinIcon(col, d.Link != nullptr, false);
 				ImGui::SameLine();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
 				ImGui::TextUnformatted(d.Name.c_str());
+				ImGui::EndGroup();
+
 				ed::EndPin();
 
-				ImGui::SameLine();
-
-				if (d.Link)
+				if (!d.Link)
 				{
-					// Ligado: o inline nao vale. Dizer isso evita a pergunta
-					// "por que mudar esse numero nao faz nada?".
-					ImGui::TextDisabled("(ligado)");
-				}
-				else
-				{
+					ImGui::SameLine();
 					ImGui::PushID((int)(n->Id * 32 + i));
-					ImGui::SetNextItemWidth(64.0f);
 
 					if (d.Type == AnimPinType::Bool)
 					{
-						if (ImGui::Checkbox("##b", &d.InlineBool)) m_Dirty = true;
+						if (ImGui::Checkbox("##b", &d.InlineBool)) MarkEdited();
 					}
 					else
 					{
-						if (ImGui::DragFloat("##f", &d.InlineFloat, 0.5f)) m_Dirty = true;
+						ImGui::SetNextItemWidth(56.0f);
+						if (ImGui::DragFloat("##f", &d.InlineFloat, 0.5f, 0.0f, 0.0f, "%.2f"))
+							MarkEdited();
 					}
 
 					ImGui::PopID();
 				}
 			}
 
-			// ── Pino de SAIDA ────────────────────────────────────────────────
+			ImGui::EndGroup();
+
+			// ── Coluna direita: a SAIDA, na primeira linha ───────────────────
 			//
-			// Um so: todo no produz exatamente um valor. Um no com duas saidas
-			// seria dois nos.
+			// Um so pino: todo no produz exatamente um valor. Um no com duas
+			// saidas seria dois nos.
 			if (!isOutput)
 			{
 				const bool poseOut = (n->OutputType() == AnimPinType::Pose);
+				const char* outName = poseOut ? "OutPose" : "Out";
 
-				ImGui::Spacing();
+				const float contentW = ImGui::CalcTextSize(outName).x + kPinIconSize + 6.0f;
+
+				ImGui::SetCursorScreenPos(ImVec2(
+					bodyStart.x + nodeWidth - contentW - 8.0f, bodyStart.y));
 
 				ed::BeginPin(OutPin(n->Id), ed::PinKind::Output);
-				ImGui::TextUnformatted(poseOut ? "Pose" : "Valor");
+				ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+
+				ImGui::BeginGroup();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+				ImGui::TextUnformatted(outName);
 				ImGui::SameLine();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
 				DrawPinIcon(ColorFor(n->OutputType()), true, poseOut);
+				ImGui::EndGroup();
+
 				ed::EndPin();
 			}
 
-			EndStyledNode();
+			// Garante a largura minima do card mesmo com pouco conteudo.
+			ImGui::Dummy(ImVec2(nodeWidth, 1.0f));
+
 			ed::EndNode();
 			ed::PopStyleColor(2);
 		}
@@ -817,7 +1135,7 @@ namespace axe
 				else if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
 				{
 					graph.AddLink(nA, nB, pB, dB ? AnimLinkKind::Data : AnimLinkKind::Pose);
-					m_Dirty = true;
+					MarkEdited();
 				}
 			}
 		}
@@ -839,7 +1157,7 @@ namespace axe
 						const AnimLink l = ls[idx];
 						graph.RemoveLinksTo(l.ToNode, l.ToPin, l.Kind);
 						graph.Resolve();
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 			}
@@ -861,7 +1179,7 @@ namespace axe
 				{
 					graph.RemoveNode(id);
 					m_SelectedNode = -1;
-					m_Dirty = true;
+					MarkEdited();
 				}
 			}
 		}
@@ -928,7 +1246,7 @@ namespace axe
 			{
 				n->EditorX = pos.x;
 				n->EditorY = pos.y;
-				m_Dirty = true;
+				MarkEdited();
 			}
 		}
 
@@ -984,7 +1302,7 @@ namespace axe
 					const int id = graph.AddNode(std::move(node));
 
 					ed::SetNodePosition(id, canvas);
-					m_Dirty = true;
+					MarkEdited();
 				}
 			};
 
@@ -1018,79 +1336,193 @@ namespace axe
 			for (std::size_t i = 0; i < sm.States.size(); ++i)
 				ed::SetNodePosition(StateNode((int)i), ImVec2(sm.States[i].EditorX, sm.States[i].EditorY));
 
-			ed::SetNodePosition(kAnyStateNode, ImVec2(40.0f, 40.0f));
+			ed::SetNodePosition(kEntryNode, ImVec2(40.0f, 160.0f));
+			ed::SetNodePosition(kAnyStateNode, ImVec2(40.0f, 20.0f));
 			m_PositionsLoaded = true;
 		}
 
-		// O fundo/borda/cantos agora sao desenhados pelo StyledNode. Aqui a
-		// gente zera os do node-editor e so mantem o PADDING — generoso, pra o
-		// conteudo respirar dentro do card.
-		ed::PushStyleVar(ed::StyleVar_NodeRounding, 7.0f);
-		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 0.0f);
-		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(12.0f, 10.0f, 12.0f, 10.0f));
+		// ANIMGRAPH_STYLE_V2 — mesmo card do grafo de poses: corpo escuro e
+		// borda do proprio node-editor, header pintado por cima.
+		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0, 0, 0, 5));
+		ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0f);
+		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
 
-		// ── Any State ────────────────────────────────────────────────────────
+		// ── Entry (estilo Unreal) ────────────────────────────────────────────
+		//
+		// A primeira pergunta de quem abre uma maquina de estados e "onde o
+		// personagem comeca?". A resposta e uma SETA, nao uma cor: o Entry
+		// aponta o estado inicial, e arrastar dele pra outro estado troca a
+		// entrada.
+		{
+			const ImVec4 entryAccent{ 0.14f, 0.30f, 0.19f, 1.0f };
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+
+			ed::BeginNode(kEntryNode);
+
+			const float w = NodeWidthFor("Entry", nullptr) - 60.0f;   // card curto
+
+			DrawNodeHeader("Entry", nullptr, entryAccent, w);
+
+			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+			const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
+
+			ImGui::SetCursorScreenPos(ImVec2(
+				bodyStart.x + w - contentW - 8.0f, bodyStart.y));
+
+			ed::BeginPin(kEntryOut, ed::PinKind::Output);
+			ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+			ed::PinPivotSize(ImVec2(0, 0));
+
+			ImGui::BeginGroup();
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+			ImGui::TextUnformatted("Sai");
+			ImGui::SameLine();
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+			DrawPinIcon(kPoseColor, true, true);
+			ImGui::EndGroup();
+
+			ed::EndPin();
+
+			ImGui::Dummy(ImVec2(w, 1.0f));
+
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
+
+		// ── Any State (OPCIONAL) ─────────────────────────────────────────────
 		//
 		// Sem ele voce teria que arrastar uma seta de TODOS os estados ate
-		// "Morrer" e "Levar dano". Um grafo real viraria uma teia ilegivel.
-		const ImVec4 anyAccent{ 0.72f, 0.50f, 0.16f, 1.0f };
+		// "Morrer" e "Levar dano". Mas ele so aparece se voce PEDIR (menu de
+		// contexto) ou se ja existem transicoes partindo dele — por padrao o
+		// canvas e limpo, como na Unreal.
+		bool hasAnyTransitions = false;
 
-		ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-		ed::PushStyleColor(ed::StyleColor_NodeBorder, anyAccent);
+		for (const auto& tr : sm.Transitions)
+			if (tr.From < 0) { hasAnyTransitions = true; break; }
 
-		ed::BeginNode(kAnyStateNode);
-		BeginStyledNode(anyAccent, "Any State", "dispara de qualquer estado");
+		const bool drawAnyState = m_ShowAnyState || hasAnyTransitions;
 
-		ed::BeginPin(kAnyStateOut, ed::PinKind::Output);
-		ImGui::TextUnformatted("Sai");
-		ImGui::SameLine();
-		DrawPinIcon(kPoseColor, true, true);
-		ed::EndPin();
+		const ImVec4 anyAccent{ 0.38f, 0.28f, 0.11f, 1.0f };
 
-		EndStyledNode();
-		ed::EndNode();
-		ed::PopStyleColor(2);
+		if (drawAnyState)
+		{
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+
+			ed::BeginNode(kAnyStateNode);
+			{
+				const char* anySub = "dispara de qualquer estado";
+				const float w = NodeWidthFor("Any State", anySub);
+
+				DrawNodeHeader("Any State", anySub, anyAccent, w);
+
+				const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+				const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
+
+				ImGui::SetCursorScreenPos(ImVec2(
+					bodyStart.x + w - contentW - 8.0f, bodyStart.y));
+
+				ed::BeginPin(kAnyStateOut, ed::PinKind::Output);
+				ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+
+				ImGui::BeginGroup();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+				ImGui::TextUnformatted("Sai");
+				ImGui::SameLine();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+				DrawPinIcon(kPoseColor, true, true);
+				ImGui::EndGroup();
+
+				ed::EndPin();
+
+				ImGui::Dummy(ImVec2(w, 1.0f));
+			}
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
 
 		// ── Estados ──────────────────────────────────────────────────────────
 		for (std::size_t i = 0; i < sm.States.size(); ++i)
 		{
 			auto& st = sm.States[i];
-			const bool isEntry = ((int)i == sm.EntryState);
 
-			// O estado de ENTRADA em verde. E a primeira pergunta que alguem faz
-			// ao abrir uma maquina de estados: onde o personagem comeca?
-			const ImVec4 accent = isEntry
-				? ImVec4(0.18f, 0.55f, 0.28f, 1.0f)
-				: ImVec4(0.35f, 0.42f, 0.55f, 1.0f);
+			// Quem diz onde o personagem comeca e a SETA do Entry, como na
+			// Unreal — nao uma cor especial no estado.
+			const ImVec4 accent{ 0.21f, 0.22f, 0.26f, 1.0f };   // cinza UE
+			const char* sub = "sub-grafo (duplo-clique)";
 
-			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-			ed::PushStyleColor(ed::StyleColor_NodeBorder, accent);
+			const float w = NodeWidthFor(st.Name.c_str(), sub);
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
 
 			ed::BeginNode(StateNode((int)i));
 
-			BeginStyledNode(accent, st.Name.c_str(),
-				isEntry ? "ENTRADA  -  sub-grafo (duplo-clique)" : "sub-grafo (duplo-clique)");
+			DrawNodeHeader(st.Name.c_str(), sub, accent, w);
 
+			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+
+			// Entra (esquerda)
 			ed::BeginPin(StateIn((int)i), ed::PinKind::Input);
+			ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
+			ed::PinPivotSize(ImVec2(0, 0));
+
+			ImGui::BeginGroup();
 			DrawPinIcon(kPoseColor, true, true);
 			ImGui::SameLine();
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
 			ImGui::TextUnformatted("Entra");
+			ImGui::EndGroup();
+
 			ed::EndPin();
 
-			ImGui::SameLine(0.0f, 24.0f);
+			// Sai (direita, mesma linha)
+			{
+				const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
 
-			ed::BeginPin(StateOut((int)i), ed::PinKind::Output);
-			ImGui::TextUnformatted("Sai");
-			ImGui::SameLine();
-			DrawPinIcon(kPoseColor, true, true);
-			ed::EndPin();
+				ImGui::SetCursorScreenPos(ImVec2(
+					bodyStart.x + w - contentW - 8.0f, bodyStart.y));
 
-			EndStyledNode();
+				ed::BeginPin(StateOut((int)i), ed::PinKind::Output);
+				ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+
+				ImGui::BeginGroup();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+				ImGui::TextUnformatted("Sai");
+				ImGui::SameLine();
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+					- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+				DrawPinIcon(kPoseColor, true, true);
+				ImGui::EndGroup();
+
+				ed::EndPin();
+			}
+
+			ImGui::Dummy(ImVec2(w, 1.0f));
+
 			ed::EndNode();
 			ed::PopStyleColor(2);
 		}
 
 		ed::PopStyleVar(3);
+
+		// ── Link do Entry ────────────────────────────────────────────────────
+		//
+		// Sempre desenhado (grosso, verde): e a resposta visual de "onde
+		// comeca". Nao e uma transicao — mora fora de sm.Transitions.
+		if (sm.EntryState >= 0 && sm.EntryState < (int)sm.States.size())
+			ed::Link(kEntryLink, kEntryOut, StateIn(sm.EntryState),
+				ImVec4(0.30f, 0.75f, 0.40f, 1.0f), 2.5f);
 
 		// ── Transicoes ───────────────────────────────────────────────────────
 		for (std::size_t t = 0; t < sm.Transitions.size(); ++t)
@@ -1131,25 +1563,44 @@ namespace axe
 
 				if (ib >= 0x11000 && ib < 0x21000)          to = ib - 0x11000;
 
-				// Auto-transicao sem exit time trava o personagem no frame 0 pra
-				// sempre. Quase sempre e engano de arrasto.
-				const bool valid = (from != -2) && (to >= 0) && (from != to);
-
-				if (!valid)
+				// Arrastar do ENTRY nao cria transicao: REAPONTA a entrada.
+				if (ia == kEntryOut)
 				{
-					ed::RejectNewItem(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), 2.0f);
+					if (to >= 0)
+					{
+						if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
+						{
+							sm.EntryState = to;
+							MarkEdited();
+						}
+					}
+					else
+					{
+						ed::RejectNewItem(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), 2.0f);
+					}
 				}
-				else if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
+				else
 				{
-					AnimTransition tr;
-					tr.From = from;
-					tr.To = to;
-					tr.Duration = 0.2f;
+					// Auto-transicao sem exit time trava o personagem no frame 0
+					// pra sempre. Quase sempre e engano de arrasto.
+					const bool valid = (from != -2) && (to >= 0) && (from != to);
 
-					sm.Transitions.push_back(tr);
-					m_SelectedTransition = (int)sm.Transitions.size() - 1;
-					m_SelectedState = -1;
-					m_Dirty = true;
+					if (!valid)
+					{
+						ed::RejectNewItem(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), 2.0f);
+					}
+					else if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
+					{
+						AnimTransition tr;
+						tr.From = from;
+						tr.To = to;
+						tr.Duration = 0.2f;
+
+						sm.Transitions.push_back(tr);
+						m_SelectedTransition = (int)sm.Transitions.size() - 1;
+						m_SelectedState = -1;
+						MarkEdited();
+					}
 				}
 			}
 		}
@@ -1161,6 +1612,14 @@ namespace axe
 			ed::LinkId lid;
 			while (ed::QueryDeletedLink(&lid))
 			{
+				// O link do Entry nao se apaga: sem entrada, a maquina nao sabe
+				// onde comecar. Pra mudar, arraste do Entry pra outro estado.
+				if ((int)lid.Get() == kEntryLink)
+				{
+					ed::RejectDeletedItem();
+					continue;
+				}
+
 				if (ed::AcceptDeletedItem())
 				{
 					const int idx = (int)lid.Get() - 0x41000;
@@ -1169,7 +1628,7 @@ namespace axe
 					{
 						sm.Transitions.erase(sm.Transitions.begin() + idx);
 						m_SelectedTransition = -1;
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 			}
@@ -1179,9 +1638,9 @@ namespace axe
 			{
 				const int id = (int)nid.Get();
 
-				if (id == kAnyStateNode)
+				if (id == kAnyStateNode || id == kEntryNode)
 				{
-					ed::RejectDeletedItem();   // nao e um estado
+					ed::RejectDeletedItem();   // nao sao estados
 					continue;
 				}
 
@@ -1221,7 +1680,7 @@ namespace axe
 				m_SelectedState = -1;
 				m_SelectedTransition = -1;
 				m_PositionsLoaded = false;   // os indices mudaram
-				m_Dirty = true;
+				MarkEdited();
 			}
 		}
 		ed::EndDelete();
@@ -1237,6 +1696,26 @@ namespace axe
 
 		if (ImGui::BeginPopup("add_state"))
 		{
+			// Any State e opt-in. Com transicoes partindo dele, esconder
+			// deixaria links sem origem — dai o item trava ligado.
+			{
+				bool anyVisible = false;
+				bool anyLocked = false;
+
+				for (const auto& tr : sm.Transitions)
+					if (tr.From < 0) { anyLocked = true; break; }
+
+				anyVisible = m_ShowAnyState || anyLocked;
+
+				if (ImGui::MenuItem("Any State", nullptr, anyVisible, !anyLocked))
+					m_ShowAnyState = !anyVisible;
+
+				if (anyLocked && ImGui::IsItemHovered())
+					ImGui::SetTooltip("Ha transicoes partindo do Any State.\nApague-as para poder esconde-lo.");
+
+				ImGui::Separator();
+			}
+
 			if (ImGui::MenuItem("Novo Estado"))
 			{
 				AnimSmState st;
@@ -1287,7 +1766,7 @@ namespace axe
 				m_SelectedState = newIdx;
 				m_SelectedTransition = -1;
 
-				m_Dirty = true;
+				MarkEdited();
 			}
 
 			ImGui::EndPopup();
@@ -1347,7 +1826,7 @@ namespace axe
 			{
 				sm.States[i].EditorX = pos.x;
 				sm.States[i].EditorY = pos.y;
-				m_Dirty = true;
+				MarkEdited();
 			}
 		}
 
@@ -1429,7 +1908,7 @@ namespace axe
 		if (ImGui::InputText("Titulo", title, sizeof(title)))
 		{
 			node.Title = title;
-			m_Dirty = true;
+			MarkEdited();
 		}
 
 		ImGui::Spacing();
@@ -1445,7 +1924,7 @@ namespace axe
 				{
 					cp->ClipName.clear();
 					cp->Clip.reset();
-					m_Dirty = true;
+					MarkEdited();
 				}
 
 				if (m_Skeleton)
@@ -1467,7 +1946,7 @@ namespace axe
 						{
 							cp->ClipName = name;
 							cp->Clip = c;      // resolve na hora: o preview responde ja
-							m_Dirty = true;
+							MarkEdited();
 						}
 					}
 				}
@@ -1478,8 +1957,8 @@ namespace axe
 			if (!m_Skeleton)
 				ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Sem esqueleto - nao ha clipes.");
 
-			if (ImGui::DragFloat("Velocidade", &cp->PlayRate, 0.05f, -3.0f, 3.0f, "%.2fx")) m_Dirty = true;
-			if (ImGui::Checkbox("Loop", &cp->Loop)) m_Dirty = true;
+			if (ImGui::DragFloat("Velocidade", &cp->PlayRate, 0.05f, -3.0f, 3.0f, "%.2fx")) MarkEdited();
+			if (ImGui::Checkbox("Loop", &cp->Loop)) MarkEdited();
 			return;
 		}
 
@@ -1490,7 +1969,7 @@ namespace axe
 				"'Speed' - ligue um no de variavel nele.");
 			ImGui::Spacing();
 
-			if (ImGui::DragFloat("Velocidade", &bs->PlayRate, 0.05f, 0.0f, 3.0f, "%.2fx")) m_Dirty = true;
+			if (ImGui::DragFloat("Velocidade", &bs->PlayRate, 0.05f, 0.0f, 3.0f, "%.2fx")) MarkEdited();
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Amostras");
@@ -1505,7 +1984,7 @@ namespace axe
 				ImGui::SameLine(150.0f);
 
 				ImGui::SetNextItemWidth(70.0f);
-				if (ImGui::DragFloat("##v", &bs->Samples[i].second, 1.0f)) m_Dirty = true;
+				if (ImGui::DragFloat("##v", &bs->Samples[i].second, 1.0f)) MarkEdited();
 
 				ImGui::SameLine();
 				if (ImGui::SmallButton("x")) removeIdx = (int)i;
@@ -1516,7 +1995,7 @@ namespace axe
 			if (removeIdx >= 0)
 			{
 				bs->Samples.erase(bs->Samples.begin() + removeIdx);
-				m_Dirty = true;
+				MarkEdited();
 			}
 
 			if (m_Skeleton && ImGui::BeginCombo("+ amostra", "adicionar..."))
@@ -1531,7 +2010,7 @@ namespace axe
 					if (ImGui::Selectable(c->GetName().c_str()))
 					{
 						bs->Samples.push_back({ c->GetName(), 0.0f });
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 
@@ -1561,7 +2040,7 @@ namespace axe
 					{
 						gf->Parameter = p.Name;
 						gf->Title = p.Name;
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 
@@ -1583,7 +2062,7 @@ namespace axe
 					{
 						gb->Parameter = p.Name;
 						gb->Title = p.Name;
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 
@@ -1596,14 +2075,14 @@ namespace axe
 		if (auto* bf = dynamic_cast<AnimNode_BlendByFloat*>(&node))
 		{
 			ImGui::TextWrapped("Alpha = Min -> pose A.  Alpha = Max -> pose B.");
-			if (ImGui::DragFloat("Min", &bf->MinValue, 0.5f)) m_Dirty = true;
-			if (ImGui::DragFloat("Max", &bf->MaxValue, 0.5f)) m_Dirty = true;
+			if (ImGui::DragFloat("Min", &bf->MinValue, 0.5f)) MarkEdited();
+			if (ImGui::DragFloat("Max", &bf->MaxValue, 0.5f)) MarkEdited();
 			return;
 		}
 
 		if (auto* bb = dynamic_cast<AnimNode_BlendByBool*>(&node))
 		{
-			if (ImGui::DragFloat("Blend Time", &bb->BlendTime, 0.01f, 0.0f, 2.0f, "%.2fs")) m_Dirty = true;
+			if (ImGui::DragFloat("Blend Time", &bb->BlendTime, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
 
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("0 = corte seco. Um bool que faz a pose saltar e o\n"
@@ -1624,13 +2103,13 @@ namespace axe
 			{
 				lb->RootBone = bone;
 				lb->Reset();       // forca reconstruir a mascara
-				m_Dirty = true;
+				MarkEdited();
 			}
 
 			if (ImGui::DragInt("Feather", &lb->FeatherBones, 0.1f, 0, 8))
 			{
 				lb->Reset();
-				m_Dirty = true;
+				MarkEdited();
 			}
 
 			if (ImGui::IsItemHovered())
@@ -1649,7 +2128,7 @@ namespace axe
 					{
 						lb->RootBone = b.Name;
 						lb->Reset();
-						m_Dirty = true;
+						MarkEdited();
 					}
 				}
 
@@ -1687,7 +2166,7 @@ namespace axe
 		if (ImGui::InputText("Nome", name, sizeof(name)))
 		{
 			st.Name = name;
-			m_Dirty = true;
+			MarkEdited();
 		}
 
 		if (sm.EntryState == index)
@@ -1697,7 +2176,7 @@ namespace axe
 		else if (ImGui::Button("Tornar estado de entrada", ImVec2(-1, 0)))
 		{
 			sm.EntryState = index;
-			m_Dirty = true;
+			MarkEdited();
 		}
 
 		ImGui::Spacing();
@@ -1725,16 +2204,16 @@ namespace axe
 		ImGui::Text("%s  ->  %s", fromName, toName);
 		ImGui::Spacing();
 
-		if (ImGui::DragFloat("Duracao", &tr.Duration, 0.01f, 0.0f, 2.0f, "%.2fs")) m_Dirty = true;
+		if (ImGui::DragFloat("Duracao", &tr.Duration, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Crossfade. 0 = corte seco.");
 
-		if (ImGui::DragInt("Prioridade", &tr.Priority, 0.1f, 0, 100)) m_Dirty = true;
+		if (ImGui::DragInt("Prioridade", &tr.Priority, 0.1f, 0, 100)) MarkEdited();
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("Se duas transicoes valem no mesmo frame,\na de maior prioridade vence.");
 
 		ImGui::Spacing();
 
-		if (ImGui::Checkbox("Exit Time", &tr.HasExitTime)) m_Dirty = true;
+		if (ImGui::Checkbox("Exit Time", &tr.HasExitTime)) MarkEdited();
 
 		if (ImGui::IsItemHovered())
 		{
@@ -1747,7 +2226,7 @@ namespace axe
 
 		if (tr.HasExitTime)
 		{
-			if (ImGui::SliderFloat("##exit", &tr.ExitTime, 0.0f, 1.0f, "%.2f do ciclo")) m_Dirty = true;
+			if (ImGui::SliderFloat("##exit", &tr.ExitTime, 0.0f, 1.0f, "%.2f do ciclo")) MarkEdited();
 		}
 
 		if (tr.From < 0)
@@ -1756,7 +2235,7 @@ namespace axe
 			ImGui::TextDisabled("Any State ignora exit time - dano e morte");
 			ImGui::TextDisabled("precisam interromper na hora.");
 
-			if (ImGui::Checkbox("Pode redisparar no proprio estado", &tr.CanRetriggerSelf)) m_Dirty = true;
+			if (ImGui::Checkbox("Pode redisparar no proprio estado", &tr.CanRetriggerSelf)) MarkEdited();
 		}
 
 		ImGui::Spacing();
@@ -1798,7 +2277,7 @@ namespace axe
 					if (p.Type == AnimParamType::Trigger)   cond.Op = AnimCompare::TriggerSet;
 					else if (p.Type == AnimParamType::Bool) cond.Op = AnimCompare::IsTrue;
 
-					m_Dirty = true;
+					MarkEdited();
 				}
 
 				ImGui::EndCombo();
@@ -1810,13 +2289,13 @@ namespace axe
 			int op = (int)cond.Op;
 
 			ImGui::SetNextItemWidth(78.0f);
-			if (ImGui::Combo("##o", &op, ops, 9)) { cond.Op = (AnimCompare)op; m_Dirty = true; }
+			if (ImGui::Combo("##o", &op, ops, 9)) { cond.Op = (AnimCompare)op; MarkEdited(); }
 
 			if (cond.Op <= AnimCompare::NotEqual)
 			{
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(60.0f);
-				if (ImGui::DragFloat("##v", &cond.Value, 0.5f)) m_Dirty = true;
+				if (ImGui::DragFloat("##v", &cond.Value, 0.5f)) MarkEdited();
 			}
 
 			ImGui::SameLine();
@@ -1828,7 +2307,7 @@ namespace axe
 		if (removeCond >= 0)
 		{
 			tr.Conditions.erase(tr.Conditions.begin() + removeCond);
-			m_Dirty = true;
+			MarkEdited();
 		}
 
 		if (ImGui::Button("+ Condicao", ImVec2(-1, 0)))
@@ -1837,7 +2316,7 @@ namespace axe
 			if (!params.empty()) c.Parameter = params[0].Name;
 
 			tr.Conditions.push_back(c);
-			m_Dirty = true;
+			MarkEdited();
 		}
 	}
 

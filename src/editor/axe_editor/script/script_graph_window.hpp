@@ -18,6 +18,10 @@
 #include <vector>
 #include <sstream>
 #include <entt/entt.hpp>
+#include "axe/animation/animation_world.hpp"
+
+#include <filesystem>
+#include <functional>
 
 namespace ed = ax::NodeEditor;
 
@@ -45,6 +49,17 @@ namespace axe
         bool CanUndo() const { return m_History.CanUndo(); }
         bool CanRedo() const { return m_History.CanRedo(); }
         void RenderPreview();
+
+        // Avisa o editor que o script foi SALVO/COMPILADO, pra propagar os
+        // componentes pras instancias que ja estao na cena.
+        using ScriptSavedCallback = std::function<void(const std::filesystem::path&)>;
+        void SetScriptSavedCallback(ScriptSavedCallback cb) { m_ScriptSavedCallback = cb; }
+
+        // O arquivo deste script foi renomeado no Asset Browser: adota o
+        // caminho e o nome novos (ver AssetBrowser::OnAssetRenamed).
+        void HandleAssetRenamed(const std::filesystem::path& oldPath,
+            const std::filesystem::path& newPath,
+            const std::string& newName);
         void Shutdown();
 
         void OpenForEntity(entt::entity entity, ScriptComponent* comp,
@@ -133,6 +148,16 @@ namespace axe
         std::shared_ptr<Framebuffer>       m_PreviewFramebuffer;
         std::unique_ptr<Scene>             m_PreviewScene;
         std::unique_ptr<SceneEnvironment>  m_PreviewEnvironment;
+
+        // Anima o personagem do preview quando o script tem um componente
+        // SkeletalMesh — sem isto o Y Bot apareceria congelado na bind pose.
+        std::unique_ptr<AnimationWorld>    m_PreviewAnim;
+
+        // Qual asset ja teve o transform raiz aplicado no preview (ponteiro
+        // como identidade — nao desreferenciado).
+        const void* m_RootTransformAppliedFor = nullptr;
+
+        ScriptSavedCallback m_ScriptSavedCallback;
         entt::entity                       m_PreviewEntity = entt::null;
         ImVec2                             m_PreviewSize = { 0, 0 };
         bool                               m_PreviewHovered = false;

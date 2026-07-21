@@ -15,6 +15,8 @@ namespace axe
         json j;
         j["type"] = Type;
         j["asset_uuid"] = AssetUUID;
+        j["anim_graph_uuid"] = AnimGraphUUID;
+        j["show_skeleton"] = ShowSkeleton;
 
         // Transform local
         j["pos"] = { PosX, PosY, PosZ };
@@ -50,6 +52,11 @@ namespace axe
         j["cc_step_height"] = CCStepHeight;
         j["cc_max_speed"] = CCMaxSpeed;
         j["cc_jump_force"] = CCJumpForce;
+        j["cc_orient_to_movement"] = CCOrientToMovement;
+        j["cc_rotation_rate"] = CCRotationRate;
+        j["cc_gravity"] = CCGravity;   // faltava: editar a gravidade nao persistia
+        j["cc_show_debug"] = CCShowDebug;
+        j["cc_offset"] = { CCOffsetX, CCOffsetY, CCOffsetZ };
 
         // SpringArm
         j["sa_length"] = SALength;
@@ -76,6 +83,8 @@ namespace axe
     {
         Type = j.value("type", "Mesh");
         AssetUUID = j.value("asset_uuid", "");
+        AnimGraphUUID = j.value("anim_graph_uuid", "");
+        ShowSkeleton = j.value("show_skeleton", false);
 
         // Transform local
         if (j.contains("pos") && j["pos"].size() == 3)
@@ -127,6 +136,17 @@ namespace axe
         CCStepHeight = j.value("cc_step_height", 0.3f);
         CCMaxSpeed = j.value("cc_max_speed", 5.f);
         CCJumpForce = j.value("cc_jump_force", 5.f);
+        CCOrientToMovement = j.value("cc_orient_to_movement", false);
+        CCRotationRate = j.value("cc_rotation_rate", 720.f);
+        CCGravity = j.value("cc_gravity", CCGravity);
+        CCShowDebug = j.value("cc_show_debug", true);
+
+        if (j.contains("cc_offset") && j["cc_offset"].is_array() && j["cc_offset"].size() == 3)
+        {
+            CCOffsetX = j["cc_offset"][0].get<float>();
+            CCOffsetY = j["cc_offset"][1].get<float>();
+            CCOffsetZ = j["cc_offset"][2].get<float>();
+        }
 
         // SpringArm
         SALength = j.value("sa_length", 300.0f);
@@ -191,8 +211,26 @@ namespace axe
 
     void ScriptAsset::RemoveComponent(int index)
     {
-        if (index >= 0 && index < (int)m_Components.size())
-            m_Components.erase(m_Components.begin() + index);
+        if (index < 0 || index >= (int)m_Components.size())
+            return;
+
+        m_Components.erase(m_Components.begin() + index);
+
+        // ── Reajuste dos ParentIndex ─────────────────────────────────────
+        //
+        // ParentIndex guarda o INDICE do pai no vector. Ao apagar um
+        // componente, todos os indices depois dele deslocam — e quem nao
+        // reajusta passa a apontar para o vizinho errado. Era isso que
+        // fazia a Camera "pular" pra dentro do Material: ela apontava para
+        // o indice que o SpringArm ocupava ANTES da remocao.
+        //
+        // Filho do removido volta a ser raiz (-1); quem apontava depois
+        // dele anda uma casa pra tras.
+        for (auto& c : m_Components)
+        {
+            if (c.ParentIndex == index)      c.ParentIndex = -1;
+            else if (c.ParentIndex > index)  --c.ParentIndex;
+        }
     }
 
     ScriptFunction* ScriptAsset::AddFunction(const std::string& name)
@@ -223,6 +261,14 @@ namespace axe
         root["class_type"] = ScriptClassTypeToString(m_ClassType);
         root["dll_path"] = DllPath;
         root["compiled"] = IsCompiled;
+
+        // Transform RAIZ (painel Object do Script Editor) — antes so existia
+        // na entidade do preview e sumia no Save.
+        root["root_transform"] = {
+            {"pos",   { RootPosX,   RootPosY,   RootPosZ   }},
+            {"rot",   { RootRotX,   RootRotY,   RootRotZ   }},
+            {"scale", { RootScaleX, RootScaleY, RootScaleZ }},
+        };
 
         json comps = json::array();
         for (auto& c : m_Components) comps.push_back(c.Serialize());
@@ -271,6 +317,25 @@ namespace axe
         m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
         DllPath = root.value("dll_path", "");
         IsCompiled = root.value("compiled", false);
+
+        if (root.contains("root_transform"))
+        {
+            const auto& rt = root["root_transform"];
+
+            auto rd3 = [&rt](const char* key, float& a, float& b, float& c)
+                {
+                    if (rt.contains(key) && rt[key].is_array() && rt[key].size() == 3)
+                    {
+                        a = rt[key][0].get<float>();
+                        b = rt[key][1].get<float>();
+                        c = rt[key][2].get<float>();
+                    }
+                };
+
+            rd3("pos", RootPosX, RootPosY, RootPosZ);
+            rd3("rot", RootRotX, RootRotY, RootRotZ);
+            rd3("scale", RootScaleX, RootScaleY, RootScaleZ);
+        }
 
         m_Components.clear();
         if (root.contains("components") && root["components"].is_array())
@@ -327,14 +392,54 @@ namespace axe
         return true;
     }
 
+    // Resumo legivel dos componentes — usado no log de Save/Load para
+    // responder de olho no console as duas perguntas que codigo nenhum
+    // responde daqui: "gravou no arquivo QUE EU acho?" e "gravou o VALOR
+    // que eu acabei de marcar?".
+    static std::string DescribeComponents(const std::vector<ScriptComponentDef>& comps)
+    {
+        std::string out;
+
+        for (const auto& c : comps)
+        {
+            if (!out.empty()) out += ", ";
+
+            out += c.Type;
+
+            if (c.Type == "CharacterController")
+                out += "(orient=" + std::string(c.CCOrientToMovement ? "1" : "0")
+                + " rate=" + std::to_string((int)c.CCRotationRate) + ")";
+            else if (c.Type == "SkeletalMesh")
+                out += "(skel=" + (c.AssetUUID.empty() ? std::string("-") : c.AssetUUID.substr(0, 8))
+                + " graph=" + (c.AnimGraphUUID.empty() ? std::string("-") : c.AnimGraphUUID.substr(0, 8)) + ")";
+        }
+
+        return out.empty() ? "(nenhum)" : out;
+    }
+
     bool ScriptAsset::Save(const std::filesystem::path& filepath)
     {
         m_FilePath = filepath;
+
+        {
+            std::error_code ec;
+            AXE_CORE_INFO("[SCRIPT_IO_V1] Save -> {} | {}",
+                std::filesystem::absolute(filepath, ec).lexically_normal().string(),
+                DescribeComponents(m_Components));
+        }
         json root;
         root["name"] = m_Name;
         root["class_type"] = ScriptClassTypeToString(m_ClassType);
         root["dll_path"] = DllPath;
         root["compiled"] = IsCompiled;
+
+        // Transform RAIZ (painel Object do Script Editor) — antes so existia
+        // na entidade do preview e sumia no Save.
+        root["root_transform"] = {
+            {"pos",   { RootPosX,   RootPosY,   RootPosZ   }},
+            {"rot",   { RootRotX,   RootRotY,   RootRotZ   }},
+            {"scale", { RootScaleX, RootScaleY, RootScaleZ }},
+        };
 
         json comps = json::array();
         for (auto& c : m_Components) comps.push_back(c.Serialize());
@@ -403,6 +508,25 @@ namespace axe
         DllPath = root.value("dll_path", "");
         IsCompiled = root.value("compiled", false);
 
+        if (root.contains("root_transform"))
+        {
+            const auto& rt = root["root_transform"];
+
+            auto rd3 = [&rt](const char* key, float& a, float& b, float& c)
+                {
+                    if (rt.contains(key) && rt[key].is_array() && rt[key].size() == 3)
+                    {
+                        a = rt[key][0].get<float>();
+                        b = rt[key][1].get<float>();
+                        c = rt[key][2].get<float>();
+                    }
+                };
+
+            rd3("pos", RootPosX, RootPosY, RootPosZ);
+            rd3("rot", RootRotX, RootRotY, RootRotZ);
+            rd3("scale", RootScaleX, RootScaleY, RootScaleZ);
+        }
+
         m_Components.clear();
         if (root.contains("components") && root["components"].is_array())
             for (auto& jc : root["components"])
@@ -457,6 +581,13 @@ namespace axe
 
         if (root.contains("graph"))
             m_Graph->Deserialize(root["graph"]);
+
+        {
+            std::error_code ec;
+            AXE_CORE_INFO("[SCRIPT_IO_V1] Load <- {} | {}",
+                std::filesystem::absolute(filepath, ec).lexically_normal().string(),
+                DescribeComponents(m_Components));
+        }
 
         return true;
     }

@@ -35,10 +35,20 @@ namespace axe
 		void Rotate(const glm::vec2& delta);
 		void Pan(const glm::vec2& delta);
 		void Zoom(float delta);
-		
+
+		// Enquadra a camera de uma vez: ponto focal + distancia. Usado pelos
+		// previews pra enquadrar o conteudo (ex.: o personagem do AnimGraph)
+		// sem depender do usuario orbitar ate achar.
+		void SetView(const glm::vec3& focalPoint, float distance)
+		{
+			m_FocalPoint = focalPoint;
+			m_Distance = distance;
+			UpdateView();
+		}
+
 		void UpdateView();
 
-	
+
 		glm::mat4 m_ViewMatrix{ 1.0f };
 		float GetViewportWidth()  const { return m_ViewportWidth; }
 		float GetViewportHeight() const { return m_ViewportHeight; }
@@ -46,13 +56,13 @@ namespace axe
 		glm::vec3 GetForwardDirection() const;
 
 	private:
-		
+
 
 		glm::vec3 CalculatePosition() const;
 
 		glm::vec3 GetUpDirection() const;
 		glm::vec3 GetRightDirection() const;
-		
+
 
 		glm::quat GetOrientation() const;
 
@@ -64,11 +74,11 @@ namespace axe
 		float RotationSpeed() const;
 		float ZoomSpeed() const;
 
-		
-		
+
+
 
 	private:
-		
+
 
 		glm::vec3 m_Position{ 0.0f, 0.0f, 3.0f };
 		glm::vec3 m_FocalPoint{ 0.0f, 0.0f, 0.0f };

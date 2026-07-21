@@ -125,6 +125,16 @@ namespace axe
         //
         // Com um metodo unico, os dois caminhos nao podem mais divergir.
         void SpawnSkeletalMesh(const AssetRecord& record, const std::string& uuid);
+
+        // Reaplica os componentes de um .axescript em TODAS as instancias
+        // dele que ja estao na cena — o "compilar Blueprint" da Unreal.
+        // Devolve quantas entidades foram atualizadas.
+        int SyncScriptInstances(const std::filesystem::path& scriptPath);
+
+        // FBX/DAE/GLTF de animacao -> abre o Animation Editor no clipe.
+        // Chamado por TODOS os caminhos de abrir/instanciar asset.
+        // true = abriu (o chamador deve retornar).
+        bool TryOpenAnimationFile(const AssetRecord& record);
         void SaveScene();
         void LoadScene();
         void EnterPlay();

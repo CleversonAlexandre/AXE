@@ -1,9 +1,30 @@
 #include "asset_picker.hpp"
 #include "axe/log/log.hpp"
 #include <imgui.h>
+#include <algorithm>
+#include <cctype>
 
 namespace axe
 {
+
+    namespace
+    {
+        // Tipo EFETIVO de um asset: derivado da extensao no disco, com o
+        // Type persistido so como ultimo recurso. Records antigos guardam
+        // tipos que ja nao valem (ex.: .axeskel registrado antes do tipo
+        // SkeletalMesh existir), e o filtro os descartaria silenciosamente.
+        AssetType EffectiveAssetType(const AssetRecord& rec)
+        {
+            std::string ext = rec.FilePath.extension().string();
+
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                [](unsigned char ch) { return (char)std::tolower(ch); });
+
+            const AssetType byExt = AssetTypeFromExtension(ext);
+
+            return (byExt != AssetType::Unknown) ? byExt : rec.Type;
+        }
+    }
     char AssetPicker::s_SearchBuffer[256] = {};
     bool AssetPicker::s_ModalOpen = false;
     std::string AssetPicker::s_ActiveLabel;
@@ -97,7 +118,7 @@ namespace axe
                 if (rec)
                 {
                     bool ok = filter.empty();
-                    for (auto t : filter) if (rec->Type == t) { ok = true; break; }
+                    for (auto t : filter) if (EffectiveAssetType(*rec) == t) { ok = true; break; }
                     if (ok) { uuid = dropped; if (onSelect) onSelect(*rec); changed = true; }
                 }
             }
@@ -133,7 +154,7 @@ namespace axe
                 if (rec)
                 {
                     bool ok = filter.empty();
-                    for (auto t : filter) if (rec->Type == t) { ok = true; break; }
+                    for (auto t : filter) if (EffectiveAssetType(*rec) == t) { ok = true; break; }
                     if (ok) { uuid = dropped; if (onSelect) onSelect(*rec); changed = true; }
                 }
             }
@@ -229,7 +250,7 @@ namespace axe
                 {
                     bool typeOk = false;
                     for (auto t : filter)
-                        if (record.Type == t) { typeOk = true; break; }
+                        if (EffectiveAssetType(record) == t) { typeOk = true; break; }
                     if (!typeOk) continue;
                 }
 
@@ -249,7 +270,7 @@ namespace axe
                 ImVec2 previewSize(32.0f, 32.0f);
                 std::shared_ptr<Texture2D> preview;
 
-                if (record.Type == AssetType::Texture)
+                if (EffectiveAssetType(record) == AssetType::Texture)
                 {
                     if (s_TextureCache.find(assetUUID) == s_TextureCache.end())
                     {

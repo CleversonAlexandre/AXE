@@ -25,6 +25,15 @@ namespace axe
         using ScriptOpenCallback = std::function<void(const std::string& uuid)>;
         using MaterialDropCallback = std::function<void(const std::string& uuid)>;
 
+        // Arquivo renomeado: editores abertos precisam saber (o caminho que
+        // eles seguram acabou de deixar de existir).
+        using AssetRenamedCallback = std::function<void(
+            const std::filesystem::path& oldPath,
+            const std::filesystem::path& newPath,
+            const std::string& newName)>;
+
+
+
         AssetBrowser() = default;
 
         void SetContext(EditorContext* context) { m_Context = context; }
@@ -33,9 +42,14 @@ namespace axe
         void SetAssetOpenCallback(AssetOpenCallback cb) { m_AssetOpenCallback = cb; }
         void SetScriptOpenCallback(ScriptOpenCallback cb) { m_OnOpenScript = cb; }
         void SetMaterialDropCallback(MaterialDropCallback cb) { m_MaterialDropCallback = cb; }
+        void SetAssetRenamedCallback(AssetRenamedCallback cb) { m_AssetRenamedCallback = cb; }
         void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
 
         void OnFileDrop(const std::string& filepath);
+
+        // Navega ate o asset e o seleciona — o "Browse to Asset" da Unreal.
+        // Usado pelo botao Find do Animation Editor (notify -> asset).
+        void RevealAsset(const std::string& uuid);
         void Draw();
         void Update();
         void SaveFolders(const std::filesystem::path& projectRoot);
@@ -93,6 +107,7 @@ namespace axe
         AssetOpenCallback   m_AssetOpenCallback;
         ScriptOpenCallback  m_OnOpenScript;
         MaterialDropCallback m_MaterialDropCallback;
+        AssetRenamedCallback m_AssetRenamedCallback;
 
         std::string m_SelectedFolder = "";   // path completo da pasta selecionada
         float       m_IconSize = 64.0f;

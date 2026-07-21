@@ -64,6 +64,16 @@ namespace axe
 		AnimPoseGraph& GetRoot() { return m_Root; }
 		const AnimPoseGraph& GetRoot() const { return m_Root; }
 
+		// ── Versao ───────────────────────────────────────────────────────────
+		//
+		// Toda AnimGraphInstance roda um CLONE do grafo — e um clone nao ve
+		// edicoes feitas no asset depois dele. Este contador e o aviso: o
+		// editor da um Bump ao SALVAR, e cada instancia (personagens na cena)
+		// percebe no proximo Update e re-clona sozinha. Sem isto, o Y Bot da
+		// cena tocava eternamente a versao do grafo de quando foi criado.
+		int  GetVersion() const { return m_Version; }
+		void BumpVersion() { ++m_Version; }
+
 		std::vector<AnimParamDecl>& GetParameters() { return m_Parameters; }
 		const std::vector<AnimParamDecl>& GetParameters() const { return m_Parameters; }
 
@@ -86,6 +96,7 @@ namespace axe
 
 		std::vector<AnimParamDecl> m_Parameters;
 		AnimPoseGraph              m_Root;
+		int                        m_Version = 0;
 	};
 
 } // namespace axe

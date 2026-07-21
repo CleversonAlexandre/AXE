@@ -303,19 +303,30 @@ namespace axe
 		else if (auto* folder = registry.try_get<FolderComponent>(entity))
 			DrawFolder(*folder);
 		else if (registry.any_of<PointLightComponent>(entity)) {}
-		else if (registry.any_of<MaterialComponent>(entity))
-			DrawMaterial(entity);
 		else if (registry.any_of<ParticleSystemComponent>(entity))
 		{
 			// Entity de partícula pura — não exibe slot de Material aqui;
 			// o Material do mesh (se existir) aparece só se houver MeshComponent
 			// junto. Evita mostrar um slot inútil e confuso.
 		}
-		else
+		else if (!registry.any_of<MaterialComponent>(entity))
 		{
+			// Sem material ainda: mostra o slot vazio para poder atribuir um.
 			ImGui::Separator();
 			DrawMaterial(entity);
 		}
+
+		// ── Material: FORA da cadeia else-if ─────────────────────────────
+		//
+		// O painel vivia como mais um "else if" de uma cadeia que comeca em
+		// SpringArm/Camera/Folder. Bastava a entidade ter um SpringArm (todo
+		// personagem com camera tem) para o primeiro ramo vencer e o Material
+		// NUNCA ser desenhado — o componente existia (o menu Adicionar dizia
+		// "ja adicionado") mas ficava invisivel e ineditavel no Inspector.
+		//
+		// Material e ortogonal aos outros componentes: quem tem, mostra.
+		if (registry.any_of<MaterialComponent>(entity))
+			DrawMaterial(entity);
 
 		if (auto* plc = registry.try_get<PointLightComponent>(entity))
 			if (plc->Data)
@@ -426,7 +437,7 @@ namespace axe
 				if (sk->GraphAsset)
 				{
 					ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", sk->GraphAsset->GetName().c_str());
-					ImGui::TextWrapped("A state machine controla a animacao. O clipe abaixo e ignorado.");
+					ImGui::TextWrapped("O AnimGraph controla a animacao deste personagem.");
 
 					if (ImGui::Button("Remover AnimGraph", ImVec2(-1, 0)))
 					{
@@ -542,7 +553,66 @@ namespace axe
 				if (!hasAsset)
 					ImGui::EndDisabled();
 
-				if (!sk->Clips.empty())
+				// ── Entradas importadas, com remocao ─────────────────────
+				//
+				// Cada linha = um ARQUIVO registrado no .axeskel. O "x"
+				// desimporta: a entrada sai, os clipes daquele arquivo somem
+				// do combo, e os sufixos anti-colisao reassentam. E a
+				// ferramenta de limpeza pras duplicatas acumuladas.
+				if (hasAsset)
+				{
+					int removeEntry = -1;
+					const auto& entries = sk->Asset->GetAnimations();
+
+					for (std::size_t e = 0; e < entries.size(); ++e)
+					{
+						ImGui::PushID((int)e + 9000);
+
+						if (ImGui::SmallButton("x"))
+							removeEntry = (int)e;
+
+						if (ImGui::IsItemHovered())
+							ImGui::SetTooltip("Remove esta entrada e os clipes dela.\nO arquivo de origem NAO e apagado.");
+
+						ImGui::SameLine();
+
+						const std::string& nm = entries[e].Name.empty()
+							? entries[e].SourceFile.filename().string()
+							: entries[e].Name;
+
+						ImGui::TextUnformatted(nm.c_str());
+						ImGui::SameLine();
+						ImGui::TextDisabled("(%s)", entries[e].SourceFile.filename().string().c_str());
+
+						ImGui::PopID();
+					}
+
+					if (removeEntry >= 0)
+					{
+						if (sk->Asset->RemoveAnimation((std::size_t)removeEntry))
+						{
+							sk->Asset->Save();
+
+							// Recopia do asset — ele e a fonte de verdade.
+							sk->Clips = sk->Asset->GetClips();
+
+							if (sk->CurrentClip >= (int)sk->Clips.size())
+								sk->CurrentClip = sk->Clips.empty() ? -1 : 0;
+						}
+					}
+				}
+
+				// Com AnimGraph no personagem, o player manual abaixo nao
+				// tem funcao: a state machine decide o que toca, e dois
+				// donos da mesma animacao so geram confusao ("mudei o
+				// clipe e nada aconteceu"). O Importar acima CONTINUA
+				// visivel — clipes novos entram no .axeskel e viram
+				// opcoes pros nos do grafo.
+				if (sk->GraphAsset)
+				{
+					ImGui::TextDisabled("Reproducao controlada pelo AnimGraph.");
+				}
+				else if (!sk->Clips.empty())
 				{
 					// Dropdown de clipe.
 					const int count = (int)sk->Clips.size();
@@ -1580,6 +1650,25 @@ namespace axe
 		ImGui::DragFloat("Step Height", &cc->StepHeight, 0.01f, 0.0f, 1.0f);
 		ImGui::DragFloat("Max Speed", &cc->MaxSpeed, 0.1f, 0.0f, 50.0f);
 		ImGui::DragFloat("Jump Force", &cc->JumpForce, 0.1f, 0.0f, 50.0f);
+
+		ImGui::DragFloat3("Capsule Offset", &cc->CapsuleOffset.x, 0.01f);
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Move a capsula sem mover o personagem.\nEm metros; Y ja parte de meia altura.");
+
+		ImGui::Checkbox("Debug Wireframe", &cc->ShowDebug);
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Desenha a capsula usada pela fisica.\nA base dela fica nos PES do personagem.");
+
+		ImGui::Checkbox("Orient Rotation To Movement", &cc->OrientRotationToMovement);
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("O personagem gira para a direcao em que anda.\n"
+				"A animacao de caminhar pra frente passa a servir\npara todas as direcoes.");
+
+		if (cc->OrientRotationToMovement)
+			ImGui::DragFloat("Rotation Rate", &cc->RotationRate, 10.0f, 0.0f, 2000.0f, "%.0f deg/s");
 
 		if (cc->IsCreated)
 		{

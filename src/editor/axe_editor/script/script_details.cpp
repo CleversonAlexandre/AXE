@@ -14,6 +14,8 @@
 #include "editor/axe_editor/material/material_compiler.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/animation/skeletal_mesh_asset.hpp"
+#include "axe/animation/anim_graph_asset.hpp"
 #include "editor/axe_editor/asset/asset_picker.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 #include "editor/axe_editor/editor_icon_library.hpp"
@@ -90,7 +92,86 @@ namespace axe
         if (!m_PreviewScene) return;
         auto& reg = m_PreviewScene->GetRegistry();
 
-        if (def.Type == "Mesh")
+        // ── SkeletalMesh: personagem animado (.axeskel + .axeanim) ──────────
+        //
+        // Aqui moram DOIS assets, de proposito separados: o esqueleto e o
+        // grafo. E este painel e o unico lugar do editor onde da pra VER os
+        // parametros que o grafo expoe — sem isso, escrever "Speed" num no de
+        // script e adivinhacao (e um typo silencioso quebra a transicao).
+        if (def.Type == "SkeletalMesh")
+        {
+            bool changed = false;
+
+            if (AssetPicker::Draw("Skeletal Mesh", def.AssetUUID,
+                { AssetType::SkeletalMesh }, [](const AssetRecord&) {}))
+                changed = true;
+
+            if (AssetPicker::Draw("Anim Graph", def.AnimGraphUUID,
+                { AssetType::AnimGraph }, [](const AssetRecord&) {}))
+                changed = true;
+
+            if (ImGui::Checkbox("Mostrar esqueleto", &def.ShowSkeleton))
+                changed = true;
+
+            // ── Parametros do AnimGraph ─────────────────────────────────────
+            //
+            // Lidos do .axeanim escolhido: sao os nomes EXATOS que os nos
+            // "Set Anim Float/Bool/Trigger" precisam receber. Clicar copia.
+            if (!def.AnimGraphUUID.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Parametros do grafo");
+                ImGui::Separator();
+
+                const AssetRecord* grec = AssetDatabase::Get().GetByUUID(def.AnimGraphUUID);
+
+                if (auto graph = grec ? AnimGraphAsset::LoadFromFile(grec->FilePath) : nullptr)
+                {
+                    const auto& params = graph->GetParameters();
+
+                    if (params.empty())
+                    {
+                        ImGui::TextWrapped("Este grafo nao expoe parametros. Crie-os no AnimGraph (painel Parametros).");
+                    }
+                    else
+                    {
+                        for (const auto& p : params)
+                        {
+                            const char* tname =
+                                p.Type == AnimParamType::Float ? "Float" :
+                                p.Type == AnimParamType::Int ? "Int" :
+                                p.Type == AnimParamType::Bool ? "Bool" : "Trigger";
+
+                            ImGui::PushID(p.Name.c_str());
+
+                            if (ImGui::SmallButton("copiar"))
+                                ImGui::SetClipboardText(p.Name.c_str());
+
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Copia o nome exato pra colar no no\n'Set Anim %s' do grafo de script.", tname);
+
+                            ImGui::SameLine();
+                            ImGui::Text("%s", p.Name.c_str());
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("(%s)", tname);
+
+                            ImGui::PopID();
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::TextWrapped("Use 'Set Anim Float/Bool' + 'Anim Trigger' no grafo de script para alimentar estes parametros.");
+                    }
+                }
+                else
+                {
+                    ImGui::TextDisabled("Nao consegui abrir o .axeanim.");
+                }
+            }
+
+            if (changed)
+                SyncComponentsToPreview();
+        }
+        else if (def.Type == "Mesh")
         {
             static const char* prims[] = { "Sphere","Cube","Cylinder","Plane" };
             static const char* primUUIDs[] = {
@@ -217,6 +298,35 @@ namespace axe
             ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f);
             ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f);
             ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f);
+
+            {
+                float off[3] = { def.CCOffsetX, def.CCOffsetY, def.CCOffsetZ };
+
+                if (ImGui::DragFloat3("Capsule Offset", off, 0.01f))
+                {
+                    def.CCOffsetX = off[0];
+                    def.CCOffsetY = off[1];
+                    def.CCOffsetZ = off[2];
+                }
+
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Move a CAPSULA sem mover o personagem.\nEm metros; Y ja parte de meia altura.");
+            }
+
+            ImGui::Checkbox("Debug Wireframe", &def.CCShowDebug);
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Desenha a capsula da fisica na viewport.\nA base dela fica nos PES do personagem.");
+
+            ImGui::Checkbox("Orient Rotation To Movement", &def.CCOrientToMovement);
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("O personagem GIRA para a direcao em que anda.\n"
+                    "Com isto, a animacao de caminhar PRA FRENTE serve para\n"
+                    "todas as direcoes — nao precisa de clipes laterais.");
+
+            if (def.CCOrientToMovement)
+                ImGui::DragFloat("Rotation Rate", &def.CCRotationRate, 10.f, 0.f, 2000.f, "%.0f deg/s");
         }
         else if (def.Type == "SpringArm")
         {
@@ -588,12 +698,38 @@ namespace axe
                         }
                         changed = true;
                     }
-                    if (changed) { tc->Data.UseWorldMatrix = false; tc->Data.WorldMatrix = tc->Data.GetMatrix(); }
+                    if (changed)
+                    {
+                        tc->Data.UseWorldMatrix = false;
+                        tc->Data.WorldMatrix = tc->Data.GetMatrix();
+
+                        // Persiste no ASSET: este transform e autoria (a
+                        // escala do personagem Mixamo, por exemplo), nao
+                        // estado do preview. Sem isto ele sumia no Save e
+                        // nunca chegava na cena.
+                        if (m_ScriptAsset)
+                        {
+                            m_ScriptAsset->RootPosX = tc->Data.Position.x;
+                            m_ScriptAsset->RootPosY = tc->Data.Position.y;
+                            m_ScriptAsset->RootPosZ = tc->Data.Position.z;
+
+                            const glm::vec3 deg = glm::degrees(tc->Data.Rotation);
+                            m_ScriptAsset->RootRotX = deg.x;
+                            m_ScriptAsset->RootRotY = deg.y;
+                            m_ScriptAsset->RootRotZ = deg.z;
+
+                            m_ScriptAsset->RootScaleX = tc->Data.Scale.x;
+                            m_ScriptAsset->RootScaleY = tc->Data.Scale.y;
+                            m_ScriptAsset->RootScaleZ = tc->Data.Scale.z;
+                        }
+                    }
                 }
 
                 // Componentes do ScriptAsset
                 if (m_ScriptAsset)
                 {
+                    ImGui::TextDisabled("Botao direito = mover para dentro  |  ^ = tirar de dentro");
+
                     auto& comps = m_ScriptAsset->GetComponents();
                     for (int i = 0; i < (int)comps.size(); i++)
                     {
@@ -922,6 +1058,7 @@ namespace axe
                 struct CE { const char* name; const char* type; const char* desc; ImVec4 col; };
                 static const CE comps[] = {
                     {"Mesh",           "Mesh",                "Malha 3D do objeto",        {0.6f,0.9f,1.f,1}},
+                    {"Skeletal Mesh",  "SkeletalMesh",        "Personagem animado (.axeskel + .axeanim)", {0.5f,0.85f,0.7f,1}},
                     {"Material",       "Material",            "Material PBR",               {1.f,0.7f,0.4f,1}},
                     {"Rigidbody",      "Rigidbody",           "Fisica dinamica",            {0.3f,0.7f,1.f,1}},
                     {"Collider",       "Collider",            "Colisao (Box/Sphere/Capsule)",{0.3f,1.f,0.5f,1}},
@@ -1057,8 +1194,16 @@ namespace axe
                         m_SelectedCompIndex = i;
                     ImGui::PopStyleColor(3);
 
-                    // Drag para graph — vinculado ao Selectable acima (nome do componente)
-                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                    // Drag para graph — vinculado ao Selectable acima (nome do
+                    // componente).
+                    //
+                    // COM CTRL, este source e PULADO de proposito: o ImGui so
+                    // aceita UM DragDropSource por item, e o primeiro submetido
+                    // vence. Como este vinha antes, ele engolia o gesto e o
+                    // reparent (mais abaixo) nunca disparava — era por isso que
+                    // Ctrl+arrastar nao movia componente nenhum.
+                    if (!ImGui::GetIO().KeyCtrl
+                        && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
                         std::string node;
                         if (def.Type == "Rigidbody")                             node = "GetRigidbody";
@@ -1077,23 +1222,99 @@ namespace axe
                         ImGui::EndDragDropSource();
                     }
 
-                    // Drop — reparentar Camera → SpringArm (mesmo item: o Selectable)
-                    if (def.Type == "SpringArm" && ImGui::BeginDragDropTarget())
+                    // ── Reparentar: QUALQUER componente em QUALQUER outro ──
+                    //
+                    // Antes so a Camera podia ser arrastada e so o SpringArm
+                    // aceitava — o que deixava qualquer outro arranjo preso
+                    // do jeito que nasceu.
+                    if (ImGui::BeginDragDropTarget())
                     {
                         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_REPARENT"))
                         {
-                            int childIdx = *(const int*)p->Data;
-                            if (childIdx != i && childIdx < (int)comps.size())
+                            const int childIdx = *(const int*)p->Data;
+
+                            // Proibe ciclo: nao da pra ser filho de si mesmo
+                            // nem de um descendente seu (a arvore viraria um
+                            // anel e o desenho recursivo entraria em loop).
+                            bool cycle = (childIdx == i);
+
+                            for (int p2 = comps[i].ParentIndex; p2 >= 0 && !cycle; )
+                            {
+                                if (p2 == childIdx) cycle = true;
+                                else p2 = comps[p2].ParentIndex;
+                            }
+
+                            if (!cycle && childIdx < (int)comps.size())
                                 comps[childIdx].ParentIndex = i;
                         }
+
                         ImGui::EndDragDropTarget();
                     }
-                    if (def.Type == "Camera" && ImGui::GetIO().KeyCtrl
+
+                    // Ctrl+arrastar = reparentar. O Ctrl separa este gesto do
+                    // arrasto para o GRAFO, que usa o mesmo item.
+                    if (ImGui::GetIO().KeyCtrl
                         && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
                         ImGui::SetDragDropPayload("COMP_REPARENT", &i, sizeof(int));
-                        ImGui::TextUnformatted("Ctrl+Drag Camera → SpringArm");
+                        ImGui::Text("Mover %s para dentro de...", def.Type.c_str());
                         ImGui::EndDragDropSource();
+                    }
+
+                    // ── Menu de contexto: mover para dentro de... ─────────
+                    //
+                    // O arrasto (Ctrl) e escorregadio: depende de o ImGui
+                    // ceder o gesto e de acertar o alvo. Este menu faz a
+                    // MESMA coisa com dois cliques e sempre funciona — e
+                    // mostra explicitamente quais alvos sao validos.
+                    if (ImGui::BeginPopupContextItem("comp_ctx"))
+                    {
+                        if (ImGui::BeginMenu("Mover para dentro de"))
+                        {
+                            for (int t = 0; t < (int)comps.size(); ++t)
+                            {
+                                if (t == i)
+                                    continue;
+
+                                // Nao pode virar filho de um descendente seu.
+                                bool cycle = false;
+
+                                for (int p2 = comps[t].ParentIndex; p2 >= 0 && !cycle; )
+                                {
+                                    if (p2 == i) cycle = true;
+                                    else p2 = comps[p2].ParentIndex;
+                                }
+
+                                if (cycle)
+                                    continue;
+
+                                if (ImGui::MenuItem(comps[t].Type.c_str()))
+                                    comps[i].ParentIndex = t;
+                            }
+
+                            ImGui::EndMenu();
+                        }
+
+                        if (ImGui::MenuItem("Tirar de dentro (raiz)", nullptr, false,
+                            def.ParentIndex >= 0))
+                            def.ParentIndex = -1;
+
+                        ImGui::EndPopup();
+                    }
+
+                    // Desparentar: com o pai definido por INDICE, arrastar de
+                    // volta pra raiz nao tem alvo natural — um botao resolve
+                    // e e mais descobrivel que qualquer gesto.
+                    if (def.ParentIndex >= 0)
+                    {
+                        ImGui::SameLine();
+
+                        if (ImGui::SmallButton("^"))
+                            def.ParentIndex = -1;
+
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Tirar de dentro de '%s' (volta a ser raiz)",
+                                comps[def.ParentIndex].Type.c_str());
                     }
 
                     ImGui::EndGroup();

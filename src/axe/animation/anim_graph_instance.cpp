@@ -27,6 +27,8 @@ namespace axe
 		// um piscar de idle.
 		asset->SeedParameters(Params);
 
+		m_AssetVersion = asset->GetVersion();
+
 		m_Graph.Reset();
 	}
 
@@ -35,7 +37,22 @@ namespace axe
 		if (!m_Asset)
 			return;
 
+		// O asset foi salvo com edicoes novas? Re-clona ANTES de avaliar.
+		// E isto que faz o personagem da CENA acompanhar o editor: sem o
+		// re-clone, ele tocaria pra sempre o grafo de quando o componente
+		// foi criado. Custo: um clone por save — nada por frame.
+		//
+		// Nota: SetAsset re-semeia os parametros com os defaults. Gameplay
+		// que escreve por frame nem percebe; um valor setado UMA vez ha
+		// minutos volta ao default — comportamento igual ao da Unreal ao
+		// recompilar um Anim Blueprint.
+		if (m_AssetVersion != m_Asset->GetVersion())
+			SetAsset(m_Asset);
+
+		m_FiredNotifies.clear();
+
 		AnimEvalContext ctx;
+		ctx.NotifySink = &m_FiredNotifies;
 		ctx.Skel = &skeleton;
 		ctx.Params = &Params;
 		ctx.DeltaTime = deltaTime;

@@ -220,6 +220,37 @@ namespace axe
 			clip->SetLooping(true);
 
 			int discarded = 0;
+			int recovered = 0;
+			std::vector<std::string> discardedNames;
+
+			// ── Fallback de casamento por SUFIXO ──────────────────────────
+			//
+			// FBX de fontes diferentes (mesmo do proprio Mixamo) troca o
+			// prefixo de namespace dos ossos: "mixamorig:Hips" num arquivo,
+			// "mixamorig1:Hips" ou "Armature|mixamorig:Hips" no outro. O
+			// casamento exato descarta TODOS esses canais — e o resultado e
+			// aquela animacao que "pega so em parte dos ossos".
+			//
+			// A saida e a mesma dos engines grandes: se o nome exato falhar,
+			// casar pelo sufixo apos o ultimo ':' ou '|'. Sufixo ambiguo
+			// (dois ossos terminando igual) fica de fora — ai e melhor
+			// descartar do que animar o osso errado.
+			auto tailOf = [](const std::string& s) -> std::string
+				{
+					const std::size_t p = s.find_last_of(":|");
+					return (p == std::string::npos) ? s : s.substr(p + 1);
+				};
+
+			std::unordered_map<std::string, int> bySuffix;
+
+			for (std::size_t b = 0; b < skeleton.GetBones().size(); ++b)
+			{
+				const std::string tail = tailOf(skeleton.GetBones()[b].Name);
+				auto it = bySuffix.find(tail);
+
+				if (it == bySuffix.end()) bySuffix[tail] = (int)b;
+				else                      it->second = -2;   // ambiguo
+			}
 
 			for (unsigned int c = 0; c < anim->mNumChannels; ++c)
 			{
@@ -227,10 +258,23 @@ namespace axe
 
 				// Casamento por NOME. É isto que permite um clipe vindo de
 				// outro arquivo (idle.fbx) tocar neste esqueleto.
-				const int boneIndex = skeleton.FindBone(ch->mNodeName.C_Str());
+				int boneIndex = skeleton.FindBone(ch->mNodeName.C_Str());
+
+				if (boneIndex < 0)
+				{
+					auto it = bySuffix.find(tailOf(ch->mNodeName.C_Str()));
+
+					if (it != bySuffix.end() && it->second >= 0)
+					{
+						boneIndex = it->second;
+						++recovered;
+					}
+				}
+
 				if (boneIndex < 0)
 				{
 					++discarded;
+					discardedNames.push_back(ch->mNodeName.C_Str());
 					continue;
 				}
 
@@ -267,10 +311,71 @@ namespace axe
 				clip->AddChannel(channel);
 			}
 
+			if (recovered > 0)
+			{
+				AXE_CORE_INFO("SkeletalMeshLoader: clipe '{}' — {} canal(is) casado(s) por sufixo (prefixos de namespace diferentes).",
+					clip->GetName(), recovered);
+			}
+
 			if (discarded > 0)
 			{
-				AXE_CORE_WARN("SkeletalMeshLoader: clipe '{}' — {} canal(is) descartado(s) (bone ausente no esqueleto).",
-					clip->GetName(), discarded);
+				// Separa o LIXO DE EXPORT (containers e pontas de cadeia, que
+				// nao deformam vertice nenhum) dos nomes SUSPEITOS (osso de
+				// verdade ausente do esqueleto — ai a animacao fica parcial e
+				// merece um warning de verdade).
+				//
+				// Ponta de cadeia: termina em "_End", ou termina em numero N
+				// e o esqueleto TEM o mesmo nome com N-1 (LeftHandThumb4 e
+				// ponta porque LeftHandThumb3 existe).
+				auto isHarmless = [&](const std::string& full) -> bool
+					{
+						const std::string t = tailOf(full);
+
+						if (t == "Armature" || t == "RootNode" || t == "Scene")
+							return true;
+
+						if (t.size() > 4 && t.compare(t.size() - 4, 4, "_End") == 0)
+							return true;
+
+						if (!t.empty() && t.back() > '1' && t.back() <= '9')
+						{
+							std::string prev = t;
+							prev.back() = char(prev.back() - 1);
+
+							if (bySuffix.count(prev))
+								return true;
+						}
+
+						return false;
+					};
+
+				std::string suspicious;
+				int suspiciousCount = 0;
+
+				for (const auto& dn : discardedNames)
+				{
+					if (isHarmless(dn))
+						continue;
+
+					if (suspiciousCount < 20)
+					{
+						if (suspiciousCount) suspicious += ", ";
+						suspicious += dn;
+					}
+
+					++suspiciousCount;
+				}
+
+				if (suspiciousCount == 0)
+				{
+					AXE_CORE_INFO("SkeletalMeshLoader: clipe '{}' — {} canal(is) de nos terminais/containers ignorado(s) (nao deformam a malha).",
+						clip->GetName(), discarded);
+				}
+				else
+				{
+					AXE_CORE_WARN("SkeletalMeshLoader: clipe '{}' — {} de {} canal(is) descartado(s) (bone ausente no esqueleto): {}",
+						clip->GetName(), suspiciousCount, (int)anim->mNumChannels, suspicious);
+				}
 			}
 
 			return clip;

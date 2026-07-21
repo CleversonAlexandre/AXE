@@ -243,6 +243,18 @@ namespace axe
         SaveIfProject();
     }
 
+    void AssetBrowser::RevealAsset(const std::string& uuid)
+    {
+        const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+
+        if (!rec)
+            return;
+
+        m_SelectedFolder = rec->VirtualFolder;
+        m_SelectedUUID = uuid;
+        m_SearchBuffer[0] = '\0';   // busca ativa esconderia o asset revelado
+    }
+
     void AssetBrowser::OnFileDrop(const std::string& filepath)
     {
         if (!IsSupported(filepath)) return;
@@ -383,7 +395,55 @@ namespace axe
             // (ver comentário em AssetDatabase::UpdatePath — sem isso o caminho
             // antigo fica "fantasma" registrado e pode ser reaproveitado por um
             // asset novo, corrompendo este registro).
+            const std::filesystem::path oldPath = record.FilePath;
+
             AssetDatabase::Get().UpdatePath(record.UUID, newPath, newName);
+
+            // Editores abertos com este arquivo seguram o caminho ANTIGO —
+            // avisa antes que algum deles salve e recrie o arquivo velho.
+            if (m_AssetRenamedCallback)
+                m_AssetRenamedCallback(oldPath, newPath, newName);
+
+            // Assets que guardam o PRÓPRIO nome dentro do JSON (separado do
+            // nome do arquivo) precisam do campo atualizado no rename — senão
+            // o editor continua exibindo o nome antigo e as duas verdades
+            // divergem. Mesmo caso do .axemat logo abaixo.
+            //
+            // .axescript: o nome vira o nome da CLASSE gerada na compilação,
+            // então deixar velho não é só cosmético — bagunça de verdade.
+            {
+                const std::string ext = newPath.extension().string();
+
+                if (ext == ".axescript" || ext == ".axeanim" ||
+                    ext == ".axeskel" || ext == ".axepart")
+                {
+                    try
+                    {
+                        std::ifstream in(newPath);
+
+                        if (in.is_open())
+                        {
+                            nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+                            in.close();
+
+                            if (!j.is_discarded() && j.contains("name"))
+                            {
+                                j["name"] = newName;
+
+                                std::ofstream out(newPath);
+
+                                if (out.is_open())
+                                    out << j.dump(4);
+                            }
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        AXE_CORE_WARN("Rename: nao consegui atualizar o nome dentro de '{}': {}",
+                            newPath.string(), e.what());
+                    }
+                }
+            }
 
             // Materiais guardam o próprio nome dentro do JSON do .axemat
             // (separado do nome do arquivo). Sem isso, o Material Editor

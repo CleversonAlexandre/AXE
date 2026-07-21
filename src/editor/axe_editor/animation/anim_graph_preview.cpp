@@ -89,11 +89,23 @@ namespace axe
 		if (!m_PreviewScene || !m_Skeleton)
 			return;
 
-		// Ja esta sincronizado com este asset? Nao refaz — recriar o componente
-		// resetaria o tempo da animacao a cada frame, e o personagem ficaria
-		// congelado no frame 0.
-		if (m_PreviewAssetInScene == m_Asset)
+		// Ja esta sincronizado com este asset E sem edicao nova? Nao refaz —
+		// recriar o componente a cada frame resetaria o tempo da animacao, e o
+		// personagem ficaria congelado no frame 0.
+		//
+		// Mas quando o grafo FOI editado (clipe escolhido, estado criado,
+		// link ligado), re-clonar e obrigatorio: o clone do preview nao ve o
+		// asset — sem isto, voce seta o idle_2 e o personagem segue em T-pose.
+		// O respiro de 0.3s evita resetar a animacao a cada tick de um
+		// DragFloat sendo arrastado.
+		const bool sameAsset = (m_PreviewAssetInScene == m_Asset);
+		const bool edited = (m_PreviewSyncedSerial != m_EditSerial);
+		const bool settled = (ImGui::GetTime() - m_LastEditTime) > 0.3;
+
+		if (sameAsset && (!edited || !settled))
 			return;
+
+		m_PreviewSyncedSerial = m_EditSerial;
 
 		auto& reg = m_PreviewScene->GetRegistry();
 
@@ -112,10 +124,61 @@ namespace axe
 		sk.GraphAsset = m_Asset;
 		sk.GraphInstance.SetAsset(m_Asset);   // clona o grafo pra esta instancia
 
+		// ── Enquadramento ────────────────────────────────────────────────────
+		//
+		// Assets do Mixamo (e FBX em geral) costumam vir em CENTIMETROS: o
+		// Y Bot tem ~180 unidades de altura. Sem normalizar, a camera do
+		// preview (distancia ~1.5) nasce DENTRO do personagem — o "gigante"
+		// que aparecia na tela.
+		//
+		// Medimos a bind pose e escalamos a ENTIDADE do preview para uma
+		// altura alva de ~1.8. So o preview: o asset e a cena do jogo ficam
+		// intocados.
+		if (const auto& mesh = m_Skeleton->GetMesh())
+		{
+			const auto& verts = mesh->GetVertices();
+
+			if (!verts.empty())
+			{
+				glm::vec3 mn = verts[0].Position;
+				glm::vec3 mx = verts[0].Position;
+
+				for (const auto& v : verts)
+				{
+					mn = glm::min(mn, v.Position);
+					mx = glm::max(mx, v.Position);
+				}
+
+				const float height = mx.y - mn.y;
+
+				// So no PRIMEIRO sync deste asset: re-enquadrar a cada edicao
+				// roubaria a camera que o usuario acabou de orbitar.
+				if (height > 0.0001f && !sameAsset)
+				{
+					constexpr float kTargetHeight = 1.8f;
+					const float s = kTargetHeight / height;
+
+					auto* tcp = reg.try_get<TransformComponent>(m_PreviewEntity);
+					auto& tc = tcp ? *tcp : reg.emplace<TransformComponent>(m_PreviewEntity);
+					tc.Data.Scale = glm::vec3(s);
+					// Pes no chao: sobe a entidade pelo minimo escalado.
+					tc.Data.Position = glm::vec3(0.0f, -mn.y * s, 0.0f);
+
+					// Camera olhando o peito, a uma distancia que enquadra o
+					// corpo inteiro com folga.
+					if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+						m_PreviewRenderer->m_Camera->SetView(
+							glm::vec3(0.0f, kTargetHeight * 0.5f, 0.0f),
+							kTargetHeight * 1.9f);
+				}
+			}
+		}
+
 		m_PreviewAssetInScene = m_Asset;
 
-		AXE_EDITOR_INFO("AnimGraph preview: personagem '{}' carregado ({} clipe(s)).",
-			m_Skeleton->GetName(), m_Skeleton->GetClips().size());
+		if (!sameAsset)
+			AXE_EDITOR_INFO("AnimGraph preview: personagem '{}' carregado ({} clipe(s)).",
+				m_Skeleton->GetName(), m_Skeleton->GetClips().size());
 	}
 
 	void AnimGraphWindow::RenderPreview()

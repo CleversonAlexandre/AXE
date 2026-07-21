@@ -44,6 +44,41 @@ namespace axe
 		}
 	};
 
+	// ── Notify ───────────────────────────────────────────────────────────────
+	//
+	// Um marcador num INSTANTE do clipe: "aqui o pe toca o chao", "aqui a
+	// janela de dano abre". O runtime dispara quando o tempo do clipe cruza
+	// Time; quem reage decide o que fazer (som, particula, script via
+	// EventBus). O clipe so marca O QUANDO — nunca executa nada.
+	struct AXE_API AnimNotify
+	{
+		enum class Kind : int { Event = 0, Sound = 1, Particle = 2 };
+
+		float       Time = 0.0f;      // segundos, dentro de [0, Duration]
+		std::string Name;             // nome do evento ("FootStep_L", "AttackOpen")
+		Kind        Type = Kind::Event;
+
+		// UUID do asset (som/particula) escolhido no AssetPicker — o mesmo
+		// jeito que o resto do engine referencia assets. Vazio para Event.
+		std::string Payload;
+
+		// Em qual TRACK da timeline este notify mora (0-based). Tracks sao
+		// organizacao de autoria, como na Unreal: passos numa, VFX noutra —
+		// o runtime dispara todas igual.
+		int Track = 0;
+
+		// ── Ancoragem e transform (Sound/Particle), como na Unreal ───────
+		std::string Socket;                      // osso de ancoragem ("" = origem do personagem)
+		glm::vec3   LocationOffset{ 0.0f };
+		glm::vec3   RotationOffset{ 0.0f };      // graus
+		glm::vec3   Scale{ 1.0f };
+		bool        Attached = true;             // segue o osso vs solta no mundo
+
+		// Cor do losango na timeline. Nasce com a cor do TIPO e o usuario
+		// pode personalizar — igual ao Notify Color da Unreal.
+		glm::vec3   Color{ 0.47f, 0.75f, 1.0f };
+	};
+
 	class AXE_API AnimationClip
 	{
 	public:
@@ -73,6 +108,20 @@ namespace axe
 		// Aplica loop ou clamp em `time` de acordo com m_Looping.
 		// Devolve um tempo sempre dentro de [0, Duration].
 		float WrapTime(float timeSeconds) const;
+
+		// ── Propriedades de autoria (editadas no Animation Editor) ────────
+		//
+		// Publicas de proposito: sao dados de autoria persistidos no
+		// .axeskel (clip_meta), nao estado de runtime. RateScale e RootMotion
+		// ainda nao sao consumidos pelo sampler — entram com o disparo de
+		// notifies no runtime (proxima etapa); o editor ja os grava.
+		float RateScale = 1.0f;
+		bool  RootMotion = false;
+
+		std::vector<AnimNotify> Notifies;   // mantidas ordenadas por Time
+
+		// Quantas tracks a timeline deste clipe mostra (>=1).
+		int NotifyTrackCount = 1;
 
 	private:
 		std::string              m_Name;

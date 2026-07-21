@@ -9,6 +9,7 @@
 #include "axe/log/log.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/component_wise.hpp>
+#include "axe/physics/physics_components.hpp"
 
 namespace axe
 {
@@ -235,6 +236,36 @@ namespace axe
                     break;
                 }
                 }
+            });
+
+        // ── Cápsula do CharacterController ───────────────────────────────
+        //
+        // Mesma cápsula que a física usa: origem nos PÉS (transform), corpo
+        // subindo Height. Desenhada aqui para que ajustar Height/Radius no
+        // Inspector seja um ato visual, e não tentativa e erro no Play.
+        registry.view<CharacterControllerComponent, TransformComponent>().each(
+            [&](entt::entity e, CharacterControllerComponent& cc, TransformComponent& tc)
+            {
+                if (!cc.ShowDebug) return;
+
+                glm::mat4 model = glm::mat4(1.0f);
+                model = glm::translate(model, tc.Data.Position);
+                model = glm::rotate(model, tc.Data.Rotation.y, glm::vec3(0, 1, 0));
+
+                // A cápsula da física fica meia altura ACIMA da origem (ver
+                // PhysicsWorld::CreateCharacter) — o desenho segue a mesma
+                // regra, senão o wireframe mentiria sobre onde ela está.
+                model = glm::translate(model, glm::vec3(
+                    cc.CapsuleOffset.x,
+                    cc.Height * 0.5f + cc.CapsuleOffset.y,
+                    cc.CapsuleOffset.z));
+
+                // SEM escala do transform, de propósito: Height e Radius do
+                // CharacterController são METROS ABSOLUTOS (o Jolt cria a
+                // cápsula com esses valores crus). Multiplicar pela escala do
+                // personagem — 0.015 num Mixamo — desenhava uma cápsula de
+                // 1,6 cm dentro do pé: "ativei e não vejo nada".
+                PushCapsule(verts, model, cc.Radius, cc.Height);
             });
 
         UploadAndDraw(verts, vp);

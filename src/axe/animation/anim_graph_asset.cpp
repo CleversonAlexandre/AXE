@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <unordered_map>
 
 namespace axe
 {
@@ -19,25 +20,20 @@ namespace axe
 		asset->m_Name = name;
 		asset->m_SkeletonUUID = skeletonUUID;
 
-		// Um grafo NOVO já nasce utilizável: State Machine ligada no Output.
+		// Um grafo NOVO nasce com o Output e um parâmetro de exemplo — e SÓ.
 		//
-		// Um grafo vazio obrigaria o usuário a adivinhar que precisa criar um
-		// nó Output, criar uma State Machine, e ligar um no outro — três passos
-		// antes de ver qualquer coisa acontecer. Ninguém descobre isso sozinho.
+		// A State Machine "Locomotion" que nascia junto parecia ajuda, mas era
+		// mobília na casa dos outros: o usuário não pediu, não pode nomear
+		// antes de existir, e todo grafo começava igual. Como na Unreal, quem
+		// decide a estrutura é o usuário — botão direito no fundo cria o que
+		// ele quiser.
 		auto out = std::make_unique<AnimNode_Output>();
 		out->Title = "Output Pose";
 		out->EditorX = 620.0f;
 		out->EditorY = 200.0f;
 		const int outId = asset->m_Root.AddNode(std::move(out));
 
-		auto sm = std::make_unique<AnimNode_StateMachine>();
-		sm->Title = "Locomotion";
-		sm->EditorX = 300.0f;
-		sm->EditorY = 190.0f;
-		const int smId = asset->m_Root.AddNode(std::move(sm));
-
 		asset->m_Root.SetOutputNode(outId);
-		asset->m_Root.AddLink(smId, outId, 0, AnimLinkKind::Pose);
 
 		// Um parâmetro de exemplo: dá ao usuário algo pra ligar no primeiro
 		// blend space sem ter que descobrir o painel de parâmetros primeiro.
@@ -291,8 +287,64 @@ namespace axe
 			"State Machine ligado ao Output. Salve para gravar no formato novo.", migratedStates);
 	}
 
+	// ── Cache de identidade dos .axeanim ────────────────────────────────────
+	//
+	// Mesmo arquivo => MESMO objeto vivo. Sem isto, o editor de AnimGraph e o
+	// componente da cena carregavam o .axeanim em objetos SEPARADOS — e salvar
+	// no editor nunca alcancava o personagem da cena.
+	//
+	// O mtime guarda a validade: se o arquivo mudou POR FORA (apagado e
+	// recriado, editado externamente, sincronizado), o proximo LoadFromFile
+	// recarrega o conteudo NOVO dentro do MESMO objeto e da BumpVersion — quem
+	// segurava o ponteiro (cena, editor) continua com ele, e as instancias
+	// re-clonam sozinhas. weak_ptr: o cache nao segura o asset vivo.
+	namespace
+	{
+		struct CachedGraph
+		{
+			std::weak_ptr<AnimGraphAsset>   Asset;
+			std::filesystem::file_time_type MTime{};
+		};
+
+		std::unordered_map<std::string, CachedGraph> s_LoadedGraphs;
+
+		std::string GraphCacheKey(const std::filesystem::path& p)
+		{
+			std::error_code ec;
+			auto canon = std::filesystem::weakly_canonical(p, ec);
+			return ec ? std::string{} : canon.string();
+		}
+	}
+
 	std::shared_ptr<AnimGraphAsset> AnimGraphAsset::LoadFromFile(const std::filesystem::path& filepath)
 	{
+		const std::string key = GraphCacheKey(filepath);
+
+		std::error_code mec;
+		const auto mtime = std::filesystem::last_write_time(filepath, mec);
+
+		std::shared_ptr<AnimGraphAsset> reuse;
+
+		if (!key.empty())
+		{
+			auto it = s_LoadedGraphs.find(key);
+
+			if (it != s_LoadedGraphs.end())
+			{
+				if (auto alive = it->second.Asset.lock())
+				{
+					// Arquivo intacto desde o load/save anterior? O objeto em
+					// memoria E o arquivo — devolve direto.
+					if (!mec && it->second.MTime == mtime)
+						return alive;
+
+					// Mudou por fora: recarregar DENTRO deste mesmo objeto,
+					// preservando a identidade que a cena/editor ja seguram.
+					reuse = alive;
+				}
+			}
+		}
+
 		std::ifstream in(filepath);
 
 		if (!in.is_open())
@@ -313,7 +365,13 @@ namespace axe
 			return nullptr;
 		}
 
-		auto asset = std::make_shared<AnimGraphAsset>();
+		auto asset = reuse ? reuse : std::make_shared<AnimGraphAsset>();
+
+		// No reload-in-place, limpar o estado anterior — FromJson/Migrate
+		// preenchem por append.
+		asset->m_Parameters.clear();
+		asset->m_Root = AnimPoseGraph{};
+
 		asset->m_FilePath = filepath;
 		asset->m_Name = j.value("name", filepath.stem().string());
 		asset->m_SkeletonUUID = j.value("skeleton", std::string{});
@@ -323,25 +381,32 @@ namespace axe
 		if (version < 2)
 		{
 			MigrateV1(j, asset->m_Root, asset->m_Parameters);
-			return asset;
 		}
-
-		if (j.contains("parameters"))
+		else
 		{
-			for (const auto& jp : j["parameters"])
+			if (j.contains("parameters"))
 			{
-				AnimParamDecl d;
-				d.Name = jp.value("name", std::string{});
-				d.Type = (AnimParamType)jp.value("type", 0);
-				d.DefaultF = jp.value("default_f", 0.0f);
-				d.DefaultI = jp.value("default_i", 0);
-				d.DefaultB = jp.value("default_b", false);
-				asset->m_Parameters.push_back(d);
+				for (const auto& jp : j["parameters"])
+				{
+					AnimParamDecl d;
+					d.Name = jp.value("name", std::string{});
+					d.Type = (AnimParamType)jp.value("type", 0);
+					d.DefaultF = jp.value("default_f", 0.0f);
+					d.DefaultI = jp.value("default_i", 0);
+					d.DefaultB = jp.value("default_b", false);
+					asset->m_Parameters.push_back(d);
+				}
 			}
+
+			if (j.contains("root"))
+				asset->m_Root.FromJson(j["root"]);
 		}
 
-		if (j.contains("root"))
-			asset->m_Root.FromJson(j["root"]);
+		if (reuse)
+			asset->BumpVersion();   // instancias re-clonam no proximo Update
+
+		if (!key.empty() && !mec)
+			s_LoadedGraphs[key] = { asset, mtime };
 
 		return asset;
 	}
@@ -380,7 +445,26 @@ namespace axe
 		}
 
 		out << j.dump(2);
+		out.close();
 		m_FilePath = filepath;
+
+		// Atualiza o cache: este save NAO e "mudanca externa" — sem isto, o
+		// proximo LoadFromFile veria mtime novo e recarregaria do disco a toa
+		// (perdendo os ponteiros de clipe ja resolvidos em memoria).
+		{
+			const std::string key = GraphCacheKey(filepath);
+
+			std::error_code mec;
+			const auto mtime = std::filesystem::last_write_time(filepath, mec);
+
+			if (!key.empty() && !mec)
+			{
+				auto it = s_LoadedGraphs.find(key);
+
+				if (it != s_LoadedGraphs.end())
+					it->second.MTime = mtime;
+			}
+		}
 
 		AXE_CORE_INFO("AnimGraphAsset: salvo em '{}'.", filepath.string());
 		return true;

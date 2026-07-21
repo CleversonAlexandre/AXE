@@ -9,6 +9,8 @@
 #include "axe/script/script_base.hpp"
 #include "axe/physics/physics_system.hpp"
 #include <iostream>
+#include <algorithm>
+#include <cctype>
 
 namespace axe
 {
@@ -274,8 +276,18 @@ namespace axe
                     return;
                 }
 
+                // Arquivo de ANIMACAO? Abre o Animation Editor no clipe.
+                // (mesma checagem nos outros caminhos de abrir/instanciar —
+                // ver TryOpenAnimationFile.)
+                if (TryOpenAnimationFile(*record))
+                    return;
+
                 if (record->FilePath.extension() == ".axeskel")
                 {
+                    // Duplo-clique no personagem SPAWNA (comportamento
+                    // classico). O Animation Editor abre pelo duplo-clique
+                    // no ARQUIVO DE ANIMACAO — decisao do Clever: o gatilho
+                    // e a animacao, nao o personagem.
                     SpawnSkeletalMesh(*record, uuid);
                     return;
                 }
@@ -339,6 +351,13 @@ namespace axe
                     m_Context.Select(entity);
                     return;
                 }
+
+                // Arquivo SO DE ANIMACAO nao vira mesh estatica — abre o
+                // Animation Editor. Sem esta linha o MeshLoader reclamava
+                // "nao contem malha" e o clipe ficava inalcancavel por este
+                // caminho.
+                if (TryOpenAnimationFile(*record))
+                    return;
 
                 LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
                 if (!asset.MeshData) return;
@@ -464,6 +483,13 @@ namespace axe
                 }
 
                 // Fallback: qualquer outra coisa vira mesh estatica.
+                // Arquivo SO DE ANIMACAO nao vira mesh estatica — abre o
+                // Animation Editor. Sem esta linha o MeshLoader reclamava
+                // "nao contem malha" e o clipe ficava inalcancavel por este
+                // caminho.
+                if (TryOpenAnimationFile(*record))
+                    return;
+
                 LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
                 if (!asset.MeshData) return;
                 auto entity = m_Scene->CreateEntity(record->Name);
@@ -638,9 +664,26 @@ namespace axe
         m_EditorUI->m_ParticleEditorWindow.Initialize();
         m_EditorUI->m_ScriptGraphWindow.Initialize();
         m_EditorUI->m_AnimGraphWindow.Initialize();
+        m_EditorUI->m_AnimClipWindow.Initialize();
+        m_EditorUI->m_AnimClipWindow.SetAssetBrowser(&m_EditorUI->m_AssetBowserWindow);
+
+        AXE_EDITOR_INFO("EditorLayer — BPSYNC_SAFE_V3 (sync nao derruba script + capsula no preview + reparent por menu)");
         m_EditorUI->m_ScriptGraphWindow.SetInspectorWindow(&m_EditorUI->m_InspectorWindow);
 
+        m_EditorUI->m_ScriptGraphWindow.SetScriptSavedCallback(
+            [this](const std::filesystem::path& p) { SyncScriptInstances(p); });
+
         // ── Script editor callbacks ───────────────────────────────────────────
+        // Rename com editor aberto: o asset carregado segura o caminho antigo
+        // e regravaria o arquivo velho no proximo Save.
+        m_EditorUI->GetAssetBrowser()->SetAssetRenamedCallback(
+            [this](const std::filesystem::path& oldPath,
+                const std::filesystem::path& newPath,
+                const std::string& newName)
+            {
+                m_EditorUI->m_ScriptGraphWindow.HandleAssetRenamed(oldPath, newPath, newName);
+            });
+
         m_EditorUI->GetAssetBrowser()->SetScriptOpenCallback([this](const std::string& uuid)
             {
                 AXE_CORE_INFO("ScriptOpenCallback chamado, uuid={}", uuid);
@@ -818,6 +861,9 @@ namespace axe
             if (m_EditorUI->m_AnimGraphWindow.IsOpen())
                 m_EditorUI->m_AnimGraphWindow.RenderPreview();
 
+            if (m_EditorUI->m_AnimClipWindow.IsOpen())
+                m_EditorUI->m_AnimClipWindow.RenderPreview();
+
             m_EditorUI->Draw();
 
             if (m_EditorUI->m_ScriptGraphWindow.IsOpen())
@@ -833,6 +879,7 @@ namespace axe
             // funcionava, o asset carregava, m_Open virava true... e ninguem
             // desenhava. O proprio Draw() ja checa IsOpen().
             m_EditorUI->m_AnimGraphWindow.Draw();
+            m_EditorUI->m_AnimClipWindow.Draw();
 
             // ── On-screen messages (Print String) ────────────────────────────
             if (m_EditorState != EditorState::Edit)
@@ -1042,6 +1089,105 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  Arquivo de animacao -> Animation Editor
+    //
+    //  Um FBX/DAE/GLTF de animacao nao sabe de quem e: quem sabe e o
+    //  .axeskel que o registrou como entrada. Varremos os .axeskel do
+    //  projeto perguntando "este arquivo e teu?" e abrimos o editor no
+    //  clipe certo.
+    //
+    //  ESTE METODO EXISTE PORQUE HA TRES CAMINHOS de abrir/instanciar asset
+    //  no editor (AssetOpen, Instantiate e o drop da viewport). O tratamento
+    //  vivia inline em UM deles — nos outros dois, o FBX de animacao caia no
+    //  fallback de mesh estatica e o MeshLoader reclamava "nao contem malha".
+    //  Mesma armadilha das lambdas duplicadas que ja mordeu no .axeskel.
+    //
+    //  Devolve true quando ABRIU (o chamador deve retornar).
+    // ═══════════════════════════════════════════════════════════════════
+    bool EditorLayer::TryOpenAnimationFile(const AssetRecord& record)
+    {
+        std::string ext = record.FilePath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char ch) { return (char)std::tolower(ch); });
+
+        const bool isModelFile =
+            (ext == ".fbx" || ext == ".dae" || ext == ".gltf" || ext == ".glb");
+
+        if (!isModelFile)
+            return false;
+
+        std::string scanned;
+        int scannedCount = 0;
+
+        for (const auto& [ruuid, rec] : AssetDatabase::Get().GetAll())
+        {
+            if (rec.FilePath.extension() != ".axeskel")
+                continue;
+
+            auto skel = SkeletalMeshAsset::LoadFromFile(rec.FilePath);
+
+            if (!skel)
+                continue;
+
+            ++scannedCount;
+
+            const int entryIdx = skel->FindAnimationEntryBySource(record.FilePath);
+
+            if (entryIdx < 0)
+            {
+                scanned += "\n  - '" + skel->GetName() + "' referencia: ";
+
+                const auto& entries = skel->GetAnimations();
+
+                if (entries.empty())
+                    scanned += "(nenhuma animacao)";
+
+                for (std::size_t e = 0; e < entries.size(); ++e)
+                {
+                    if (e) scanned += ", ";
+                    scanned += entries[e].SourceFile.generic_string();
+                }
+
+                continue;
+            }
+
+            // CONTINUE, nao break: um .axeskel quebrado (ex.: apontando pra
+            // um FBX que perdeu a malha) nao pode abortar a varredura e
+            // esconder o personagem certo que vem depois.
+            if (!skel->Resolve())
+            {
+                AXE_EDITOR_WARN("Animation Editor: '{}' referencia este arquivo, mas nao resolve — pulando.",
+                    skel->GetName());
+                continue;
+            }
+
+            // Auto-cura: se o casamento veio pelo NOME (arquivo movido de
+            // pasta), grava o caminho atual no .axeskel — da proxima vez
+            // casa direto, sem fallback.
+            skel->UpdateAnimationSource((std::size_t)entryIdx, record.FilePath);
+
+            const std::string clipName = skel->GetAnimations()[entryIdx].Name;
+
+            m_EditorUI->m_AnimClipWindow.OpenForAsset(skel);
+            m_EditorUI->m_AnimClipWindow.SelectClipByName(clipName);
+
+            AXE_EDITOR_INFO("Animation Editor: '{}' pertence a '{}' — aberto no clipe '{}'.",
+                record.Name, skel->GetName(), clipName);
+
+            return true;
+        }
+
+        if (scannedCount > 0)
+        {
+            AXE_EDITOR_WARN("'{}' nao esta registrado como animacao de nenhum .axeskel ({} verificado(s)):{}"
+                "\n  Se e um clipe, importe no personagem (Inspector -> Importar animacao) ou arraste pro AnimGraph.",
+                record.Name, scannedCount, scanned);
+        }
+
+        return false;
+    }
+
     void EditorLayer::SpawnSkeletalMesh(const AssetRecord& record, const std::string& uuid)
     {
         auto asset = SkeletalMeshAsset::LoadFromFile(record.FilePath);
@@ -1351,6 +1497,219 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  Propagacao BP -> instancias na cena
+    //
+    //  Editar o Blueprint e ver a cena continuar velha e o pior dos mundos:
+    //  o autor tem que apagar e recolocar cada instancia pra ver a mudanca.
+    //  A Unreal resolve isso no "Compile"; aqui, no Salvar/Compilar.
+    //
+    //  Regras:
+    //   - Atualiza CAMPOS DE CONFIGURACAO dos componentes que ja existem, em
+    //     vez de recriar: o CharacterController carrega estado de runtime
+    //     (CharacterID do Jolt, IsCreated, contatos ativos) que nao pode ser
+    //     jogado fora sem derrubar o personagem no chao.
+    //   - Componente que o BP passou a ter e a instancia nao tem: cria.
+    //   - NAO toca no Transform da entidade: posicao/rotacao/escala na cena
+    //     sao colocacao POR INSTANCIA — reescrever isso empilharia todos os
+    //     inimigos na origem a cada save.
+    // ═══════════════════════════════════════════════════════════════════
+    int EditorLayer::SyncScriptInstances(const std::filesystem::path& scriptPath)
+    {
+        if (!m_Scene || scriptPath.empty())
+            return 0;
+
+        // Durante o PLAY, nao. Reescrever componentes de um personagem em
+        // movimento (capsula, controller, material) no meio da partida e
+        // pedir para o jogo se comportar de forma estranha; o lugar do sync
+        // e o modo edicao.
+        if (m_EditorState == EditorState::Play)
+        {
+            AXE_EDITOR_WARN("BP sync ignorado: pare o Play para propagar mudancas do Blueprint.");
+            return 0;
+        }
+
+        auto scriptAsset = ScriptAsset::LoadFromFile(scriptPath);
+
+        if (!scriptAsset)
+            return 0;
+
+        auto& registry = m_Scene->GetRegistry();
+
+        // ── Casamento de caminho no Windows ──────────────────────────────
+        //
+        // Comparar as strings direto NAO funciona: "C:/..." vs "c:\...",
+        // separador trocado, ou o caminho relativo que veio da cena salva —
+        // qualquer um desses faz a instancia nao ser reconhecida, e o autor
+        // fica achando que o sync nao existe (foi o que aconteceu).
+        //
+        // equivalent() e a resposta certa quando os DOIS arquivos existem:
+        // pergunta ao filesystem se e o mesmo arquivo, resolvendo relativo,
+        // caixa e link de uma vez. Se algum nao existir, cai na comparacao
+        // textual normalizada em caixa baixa.
+        auto samePath = [](const std::filesystem::path& a,
+            const std::filesystem::path& b)
+            {
+                std::error_code ec;
+
+                if (std::filesystem::exists(a, ec) && std::filesystem::exists(b, ec))
+                {
+                    const bool eq = std::filesystem::equivalent(a, b, ec);
+
+                    if (!ec)
+                        return eq;
+                }
+
+                auto norm = [](const std::filesystem::path& p)
+                    {
+                        std::error_code e2;
+                        std::string s = std::filesystem::absolute(p, e2).lexically_normal().generic_string();
+
+                        std::transform(s.begin(), s.end(), s.begin(),
+                            [](unsigned char ch) { return (char)std::tolower(ch); });
+
+                        return s;
+                    };
+
+                return norm(a) == norm(b);
+            };
+
+        int updated = 0;
+        int seen = 0;
+        std::string misses;
+
+        registry.view<ScriptComponent>().each(
+            [&](entt::entity entity, ScriptComponent& sc)
+            {
+                if (sc.ScriptAssetPath.empty())
+                    return;
+
+                ++seen;
+
+                if (!samePath(sc.ScriptAssetPath, scriptPath))
+                {
+                    misses += "\n  - '" + sc.ScriptName + "' aponta para: " + sc.ScriptAssetPath;
+                    return;
+                }
+
+                for (const auto& def : scriptAsset->GetComponents())
+                {
+                    if (def.Type == "CharacterController")
+                    {
+                        auto& cc = registry.get_or_emplace<CharacterControllerComponent>(entity);
+
+                        cc.Height = def.CCHeight;
+                        cc.Radius = def.CCRadius;
+                        cc.MaxSlopeAngle = def.CCMaxSlope;
+                        cc.StepHeight = def.CCStepHeight;
+                        cc.MaxSpeed = def.CCMaxSpeed;
+                        cc.JumpForce = def.CCJumpForce;
+                        cc.OrientRotationToMovement = def.CCOrientToMovement;
+                        cc.RotationRate = def.CCRotationRate;
+                        cc.ShowDebug = def.CCShowDebug;
+                        cc.CapsuleOffset = { def.CCOffsetX, def.CCOffsetY, def.CCOffsetZ };
+                        // Velocity/CharacterID/IsCreated/contatos: intocados.
+                    }
+                    else if (def.Type == "SkeletalMesh")
+                    {
+                        auto& sk = registry.get_or_emplace<SkeletalMeshComponent>(entity);
+
+                        sk.ShowSkeleton = def.ShowSkeleton;
+
+                        if (sk.AssetUUID != def.AssetUUID)
+                        {
+                            sk.AssetUUID = def.AssetUUID;
+                            sk.Asset.reset();
+                            sk.Data.reset();
+                            sk.Clips.clear();
+                            sk.CurrentClip = -1;
+                            sk._AppliedClip = -2;
+
+                            if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(def.AssetUUID))
+                            {
+                                if (auto asset = SkeletalMeshAsset::LoadFromFile(rec->FilePath);
+                                    asset && asset->Resolve())
+                                {
+                                    sk.Asset = asset;
+                                    sk.Data = asset->GetMesh();
+                                    sk.Clips = asset->GetClips();
+                                    sk.CurrentClip = asset->GetClips().empty() ? -1 : 0;
+                                }
+                            }
+                        }
+
+                        if (sk.GraphAssetUUID != def.AnimGraphUUID)
+                        {
+                            sk.GraphAssetUUID = def.AnimGraphUUID;
+                            sk.GraphAsset.reset();
+                            sk.GraphInstance.Reset();
+
+                            if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(def.AnimGraphUUID))
+                            {
+                                if (auto graph = AnimGraphAsset::LoadFromFile(rec->FilePath))
+                                {
+                                    if (sk.Asset)
+                                        graph->Resolve(*sk.Asset);
+
+                                    sk.GraphAsset = graph;
+                                }
+                            }
+                        }
+                    }
+                    else if (def.Type == "Material" && !def.AssetUUID.empty())
+                    {
+                        auto& mc = registry.get_or_emplace<MaterialComponent>(entity);
+
+                        if (mc.MaterialAssetUUID != def.AssetUUID)
+                        {
+                            if (const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID))
+                            {
+                                if (auto ma = MaterialAsset::LoadFromFile(r->FilePath))
+                                {
+                                    mc.Data = ma->GetMaterial();
+                                    mc.MaterialAssetUUID = def.AssetUUID;
+                                }
+                            }
+                        }
+                    }
+                    else if (def.Type == "SpringArm")
+                    {
+                        if (auto* sa = registry.try_get<SpringArmComponent>(entity))
+                        {
+                            sa->Length = def.SALength / 100.0f;
+                            sa->HeightOffset = def.SAHeightOffset;
+                        }
+                    }
+                }
+
+                // SO o nome. DllPath e IsCompiled sao resultado da COMPILACAO,
+                // nao configuracao do BP: propagar aqui derrubava o script que
+                // ja estava rodando — salvar sem compilar marcava a instancia
+                // como "nao compilada", o script parava e o personagem ficava
+                // ANIMANDO SEM SAIR DO LUGAR ("patinando"). Quem atualiza DLL
+                // e o Compilar, no seu proprio fluxo.
+                sc.ScriptName = scriptAsset->GetName();
+
+                ++updated;
+            });
+
+        if (updated > 0)
+        {
+            AXE_EDITOR_INFO("[BP_SYNC_V2] BP '{}': {} instancia(s) na cena atualizada(s).",
+                scriptAsset->GetName(), updated);
+        }
+        else if (seen > 0)
+        {
+            // Nenhuma casou, mas existem scripts na cena: o motivo quase
+            // sempre e caminho divergente — mostra os dois lados em vez de
+            // deixar o autor no escuro.
+            AXE_EDITOR_WARN("[BP_SYNC_V2] BP '{}': nenhuma instancia casou.\n  Salvo em: {}{}",
+                scriptAsset->GetName(), scriptPath.string(), misses);
+        }
+
+        return updated;
+    }
+
     void EditorLayer::InstantiateScriptAsset(const std::filesystem::path& scriptPath,
         const std::string& assetUUID)
     {
@@ -1360,6 +1719,20 @@ namespace axe
         auto& registry = m_Scene->GetRegistry();
         auto entity = m_Scene->CreateEntity(scriptAsset->GetName());
 
+        // Transform RAIZ autorado no Script Editor (escala do personagem,
+        // offset do pivo). Sem isto o Y Bot em cm nascia gigante na cena.
+        if (auto* rtc = registry.try_get<TransformComponent>(entity))
+        {
+            rtc->Data.Position += glm::vec3(
+                scriptAsset->RootPosX, scriptAsset->RootPosY, scriptAsset->RootPosZ);
+
+            rtc->Data.Rotation = glm::radians(glm::vec3(
+                scriptAsset->RootRotX, scriptAsset->RootRotY, scriptAsset->RootRotZ));
+
+            rtc->Data.Scale = glm::vec3(
+                scriptAsset->RootScaleX, scriptAsset->RootScaleY, scriptAsset->RootScaleZ);
+        }
+
         for (const auto& def : scriptAsset->GetComponents())
         {
             if (def.Type == "Mesh")
@@ -1368,6 +1741,48 @@ namespace axe
                 mc.Data = MeshFactory::CreateByUUID(
                     def.AssetUUID.empty() ? axe::PrimitiveUUID::Cube : def.AssetUUID);
                 mc.AssetUUID = def.AssetUUID;
+            }
+            // ── SkeletalMesh: personagem animado do script ─────────────────
+            //
+            // Mesma receita do SpawnSkeletalMesh (Asset e a fonte de verdade,
+            // Data/Clips derivam dele), mais o AnimGraph que o script escolheu.
+            else if (def.Type == "SkeletalMesh" && !def.AssetUUID.empty())
+            {
+                const AssetRecord* srec = AssetDatabase::Get().GetByUUID(def.AssetUUID);
+
+                if (srec)
+                {
+                    auto asset = SkeletalMeshAsset::LoadFromFile(srec->FilePath);
+
+                    if (asset && asset->Resolve())
+                    {
+                        auto& sk = registry.emplace<SkeletalMeshComponent>(entity);
+                        sk.Asset = asset;
+                        sk.AssetUUID = def.AssetUUID;
+                        sk.Data = asset->GetMesh();
+                        sk.Clips = asset->GetClips();
+                        sk.CurrentClip = asset->GetClips().empty() ? -1 : 0;
+                        sk.ShowSkeleton = def.ShowSkeleton;
+
+                        if (!def.AnimGraphUUID.empty())
+                        {
+                            if (const AssetRecord* grec = AssetDatabase::Get().GetByUUID(def.AnimGraphUUID))
+                            {
+                                if (auto graph = AnimGraphAsset::LoadFromFile(grec->FilePath))
+                                {
+                                    graph->Resolve(*asset);
+                                    sk.GraphAsset = graph;
+                                    sk.GraphAssetUUID = def.AnimGraphUUID;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        AXE_EDITOR_ERROR("Script '{}': nao consegui resolver o Skeletal Mesh '{}'.",
+                            scriptAsset->GetName(), srec->Name);
+                    }
+                }
             }
             else if (def.Type == "Rigidbody")
             {
@@ -1402,6 +1817,10 @@ namespace axe
                 cc.Height = def.CCHeight; cc.Radius = def.CCRadius;
                 cc.MaxSlopeAngle = def.CCMaxSlope; cc.StepHeight = def.CCStepHeight;
                 cc.MaxSpeed = def.CCMaxSpeed; cc.JumpForce = def.CCJumpForce;
+                cc.OrientRotationToMovement = def.CCOrientToMovement;
+                cc.RotationRate = def.CCRotationRate;
+                cc.ShowDebug = def.CCShowDebug;
+                cc.CapsuleOffset = { def.CCOffsetX, def.CCOffsetY, def.CCOffsetZ };
                 registry.emplace<CharacterControllerComponent>(entity, cc);
             }
             else if (def.Type == "SpringArm")
@@ -1423,18 +1842,34 @@ namespace axe
                 cam.IsPrimary = def.CamIsPrimary;
                 registry.emplace<CameraComponent>(entity, cam);
             }
-            else if (def.Type == "Material" && !def.AssetUUID.empty())
+            else if (def.Type == "Material")
             {
-                const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID);
-                if (r)
+                // Diagnostico: material que nao chega na cena e sempre um
+                // destes tres — UUID vazio (nunca escolhido no BP), record
+                // sumido do banco, ou o .axemat que nao carrega.
+                if (def.AssetUUID.empty())
                 {
-                    auto ma = MaterialAsset::LoadFromFile(r->FilePath);
-                    if (ma)
+                    AXE_EDITOR_WARN("Script '{}': componente Material sem asset escolhido — a instancia nasce sem material.",
+                        scriptAsset->GetName());
+                }
+                else if (const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID))
+                {
+                    if (auto ma = MaterialAsset::LoadFromFile(r->FilePath))
                     {
                         MaterialComponent mc{ ma->GetMaterial() };
                         mc.MaterialAssetUUID = def.AssetUUID;
                         registry.emplace<MaterialComponent>(entity, mc);
                     }
+                    else
+                    {
+                        AXE_EDITOR_WARN("Script '{}': falha ao carregar o material '{}'.",
+                            scriptAsset->GetName(), r->Name);
+                    }
+                }
+                else
+                {
+                    AXE_EDITOR_WARN("Script '{}': material UUID '{}' nao esta no AssetDatabase.",
+                        scriptAsset->GetName(), def.AssetUUID);
                 }
             }
         }

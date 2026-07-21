@@ -2,6 +2,10 @@
 #include "axe/core/types.hpp"
 #include "axe/animation/pose.hpp"
 
+#include "axe/animation/animation_clip.hpp"   // AnimNotify
+#include <entt/entt.hpp>
+#include <vector>
+
 namespace axe
 {
 	class Scene;
@@ -25,6 +29,21 @@ namespace axe
 		void OnUpdate(Scene& scene, float deltaTime, bool inPlay);
 
 	private:
+		// FX spawnados por notify (particulas): vivem alguns segundos e o
+		// proprio mundo os destroi. Só nascem em PLAY — entidades de Play
+		// morrem com o restore do snapshot no Stop, entao a cena salva
+		// nunca ganha lixo.
+		struct NotifyFx
+		{
+			entt::entity Entity{ entt::null };
+			float Ttl = 0.0f;
+		};
+
+		std::vector<NotifyFx> m_NotifyFx;
+
+		void DispatchNotifies(Scene& scene, entt::entity character,
+			const std::vector<AnimNotify>& fired, bool inPlay);
+
 		// Buffer de pose reusado entre personagens.
 		//
 		// Um vector<BoneTransform> alocado por personagem, por frame, seria

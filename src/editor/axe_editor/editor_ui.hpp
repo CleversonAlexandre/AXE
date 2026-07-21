@@ -7,6 +7,7 @@
 #include "editor/axe_editor/material/material_editor_window.hpp"
 #include "editor/axe_editor/particles/particle_editor_window.hpp"
 #include "animation/anim_graph_window.hpp"
+#include "animation/anim_clip_window.hpp"
 #include "editor/axe_editor/input/input_settings_window.hpp"
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
@@ -29,6 +30,7 @@ namespace axe
         ParticleEditorWindow m_ParticleEditorWindow;
         ScriptGraphWindow    m_ScriptGraphWindow;
         AnimGraphWindow      m_AnimGraphWindow;
+        AnimClipWindow       m_AnimClipWindow;
         InputSettingsWindow  m_InputSettingsWindow;
 
         // Callbacks conectados pelo EditorLayer
@@ -46,6 +48,7 @@ namespace axe
 
         HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
         InspectorWindow m_InspectorWindow;
+        AssetBrowser    m_AssetBowserWindow;
     private:
         void BeginDockspace();
         void EndDockspace();
@@ -56,7 +59,7 @@ namespace axe
 
         ViewportWindow  m_ViewportWindow;
 
-        AssetBrowser    m_AssetBowserWindow;
+        
 
         bool m_ShowHierarchy = true;
         bool m_ShowViewport = true;

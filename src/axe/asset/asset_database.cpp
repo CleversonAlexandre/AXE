@@ -352,6 +352,28 @@ namespace axe
 				record.UUID = entry.value("uuid", "");
 				record.FilePath = entry.value("path", "");
 				record.Type = AssetTypeFromString(entry.value("type", "Unknown"));
+
+				// A EXTENSAO NO DISCO E A VERDADE.
+				//
+				// O "type" gravado no indice e derivado e envelhece: um asset
+				// registrado ANTES de um tipo existir (.axeskel, .axeanim) fica
+				// com Unknown/Mesh pra sempre, e some de todo filtro por tipo
+				// (foi o AssetPicker do script abrindo vazio). O load do
+				// .axemeta ja fazia esta correcao; o indice nao fazia.
+				{
+					const AssetType byExt =
+						AssetTypeFromExtension(record.FilePath.extension().string());
+
+					if (byExt != AssetType::Unknown && byExt != record.Type)
+					{
+						AXE_CORE_INFO("AssetDatabase [ASSETTYPE_FIX_V1]: '{}' estava como {} no indice — corrigido para {} pela extensao.",
+							record.FilePath.filename().string(),
+							AssetTypeToString(record.Type), AssetTypeToString(byExt));
+
+						record.Type = byExt;
+					}
+				}
+
 				record.Name = entry.value("name", "");
 				record.VirtualFolder = entry.value("virtual_folder", "");
 				record.ScriptClassType = entry.value("script_class_type", "");

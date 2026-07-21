@@ -35,6 +35,8 @@ namespace axe
 
     void ScriptGraphWindow::Initialize()
     {
+        AXE_EDITOR_INFO("Script Editor — SCRIPT_SKELETAL_V2 (include fix + root transform + anim path)");
+
         ed::Config cfg;
         cfg.SettingsFile = nullptr;
         m_EdCtx = ed::CreateEditor(&cfg);
@@ -94,6 +96,23 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::HandleAssetRenamed(const std::filesystem::path& oldPath,
+        const std::filesystem::path& newPath, const std::string& newName)
+    {
+        if (!m_ScriptAsset)
+            return;
+
+        // Comparacao textual: o arquivo antigo ja NAO EXISTE neste ponto
+        // (o rename ja acabou), entao equivalent() nao serve.
+        if (m_ScriptAsset->GetFilePath() != oldPath)
+            return;
+
+        m_ScriptAsset->SetFilePath(newPath);
+        m_ScriptAsset->SetName(newName);
+
+        m_ConsoleLines.push_back("[Info] Script renomeado para: " + newName);
+    }
+
     void ScriptGraphWindow::SwitchToMainGraph()
     {
         if (!m_ScriptAsset || m_EditingFunctionIndex < 0) return; // já é o grafo principal
@@ -236,6 +255,19 @@ namespace axe
             // no painel Scene Graph, em script_details.cpp).
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.35f, 0.55f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.5f, 0.75f, 1));
+            // O DISCO manda no nome. Renomear no Asset Browser troca o
+            // arquivo (e o campo "name" dentro dele), mas o asset ja carregado
+            // aqui continuaria com o nome velho — e o proximo Save
+            // regravaria o antigo por cima. Adotar o stem do arquivo resolve
+            // pelos dois lados e nao custa nada por frame.
+            if (m_ScriptAsset && !m_ScriptAsset->GetFilePath().empty())
+            {
+                const std::string stem = m_ScriptAsset->GetFilePath().stem().string();
+
+                if (!stem.empty() && stem != m_ScriptAsset->GetName())
+                    m_ScriptAsset->SetName(stem);
+            }
+
             bool canSave = m_ScriptAsset && !m_ScriptAsset->GetFilePath().empty();
             ImGui::BeginDisabled(!canSave);
             if (iconButton(icons.GetSave(), "Save"))
@@ -243,6 +275,12 @@ namespace axe
                 SaveNodePositions();
                 m_ScriptAsset->Save(m_ScriptAsset->GetFilePath());
                 m_ConsoleLines.push_back("[Info] Script salvo: " + m_ScriptAsset->GetFilePath().string());
+
+                // Propaga pras instancias na cena (o "Compile" da Unreal):
+                // sem isto, mudar o BP so vale pros proximos spawns e o autor
+                // tem que apagar e recolocar tudo que ja esta na cena.
+                if (m_ScriptSavedCallback)
+                    m_ScriptSavedCallback(m_ScriptAsset->GetFilePath());
             }
             ImGui::EndDisabled();
             ImGui::PopStyleColor(2);
@@ -473,6 +511,11 @@ namespace axe
         {
             m_ScriptAsset->Save(m_ScriptAsset->GetFilePath());
             m_ConsoleLines.push_back("[Info] Script salvo automaticamente.");
+
+            // Compilar tambem propaga: e o gesto que o autor faz esperando
+            // "agora vale pra tudo", igual ao Compile da Unreal.
+            if (m_ScriptSavedCallback)
+                m_ScriptSavedCallback(m_ScriptAsset->GetFilePath());
         }
 
         if (!m_Graph) return;
@@ -495,7 +538,15 @@ namespace axe
             vendor / "spdlog",
             vendor / "imgui",              // components.hpp inclui <imgui.h>
             vendor / "imgui-node-editor",  // script_graph.hpp inclui imgui_node_editor.h
-            vendor / "nlohmann",           // json.hpp
+            vendor / "nlohmann",           // "json.hpp" (include SEM pasta)
+
+            // O PAI de nlohmann/ — headers do engine usam a forma
+            // <nlohmann/json.hpp> (com a pasta no caminho), e essa so
+            // resolve a partir de src/vendor. Faltava, e qualquer header
+            // que o script puxasse com esse include quebrava a compilacao
+            // com C1083 (foi o caso do anim_node.hpp, que entra na cadeia
+            // via components.hpp -> anim_graph_instance.hpp).
+            vendor,
         };
 
         std::filesystem::path axeLib = (exeDir / ".." / "axe" / "axe.lib").lexically_normal();

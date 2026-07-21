@@ -4,6 +4,7 @@
 #include "axe/animation/skeleton.hpp"
 #include "axe/animation/anim_parameters.hpp"
 
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +16,8 @@
 
 namespace axe
 {
+	struct AnimNotify;   // animation_clip.hpp
+
 	// ═════════════════════════════════════════════════════════════════════════
 	//  GRAFO DE POSES
 	//
@@ -93,6 +96,15 @@ namespace axe
 		bool AdvanceTime = true;
 
 		PosePool* Pool = nullptr;
+
+		// Coletor de notifies cruzados neste Update. Quem quiser saber (o
+		// AnimationWorld, pra spawnar particula/avisar script) aponta um
+		// vector aqui; nullptr = ninguem ouvindo, custo zero. Os NOS so
+		// COLETAM — despachar e decisao de quem esta fora do grafo.
+		// Ponteiro para vector de tipo INCOMPLETO: legal em C++17 e evita
+		// puxar animation_clip.hpp (e a cadeia dele) pra todo TU que so
+		// precisa do contexto — inclusive os scripts compilados em runtime.
+		std::vector<AnimNotify>* NotifySink = nullptr;
 
 		float GetFloat(const std::string& name) const
 		{

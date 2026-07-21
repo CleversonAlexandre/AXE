@@ -4,6 +4,7 @@
 #include "axe/animation/anim_pose_graph.hpp"
 #include "axe/animation/anim_parameters.hpp"
 #include "axe/animation/pose.hpp"
+#include "axe/animation/animation_clip.hpp"   // AnimNotify (m_FiredNotifies) — header leve, sem json
 
 #include <memory>
 
@@ -50,6 +51,8 @@ namespace axe
 
 		void Reset();
 
+		const std::vector<AnimNotify>& GetFiredNotifies() const { return m_FiredNotifies; }
+
 		// Nome do estado atual da PRIMEIRA máquina de estados encontrada.
 		//
 		// "Primeira" porque agora pode haver várias — e a pergunta "em que
@@ -68,6 +71,14 @@ namespace axe
 		// personagens apontando pro mesmo grafo andariam em sincronia perfeita,
 		// e um entrando em "Attack" mudaria o estado do outro.
 		AnimPoseGraph m_Graph;
+
+		// Notifies cruzados no ULTIMO Update — o AnimationWorld drena e
+		// despacha (particula, evento). Limpo a cada Update.
+		std::vector<AnimNotify> m_FiredNotifies;
+
+		// Versao do asset no momento do clone. Divergiu = o editor salvou
+		// edicoes novas; o Update re-clona (ver anim_graph_instance.cpp).
+		int m_AssetVersion = -1;
 
 		PosePool m_Pool;
 	};

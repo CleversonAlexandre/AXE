@@ -5,14 +5,43 @@
 #include "axe/animation/anim_graph_instance.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
+#include "axe/asset/asset_database.hpp"
+#include "axe/particles/particle_system_asset.hpp"
+#include "axe/particles/particle_system_component.hpp"
+#include "axe/log/log.hpp"
 
 #include <entt/entt.hpp>
+
+#include <algorithm>
 
 namespace axe
 {
 	void AnimationWorld::OnUpdate(Scene& scene, float deltaTime, bool inPlay)
 	{
 		auto& registry = scene.GetRegistry();
+
+		// FX de notify expiram por conta propria. O guard de valid() cobre o
+		// Stop: o restore do snapshot ja destruiu as entidades de Play, e a
+		// lista so precisa esquecer os handles mortos.
+		if (!m_NotifyFx.empty())
+		{
+			m_NotifyFx.erase(
+				std::remove_if(m_NotifyFx.begin(), m_NotifyFx.end(),
+					[&](NotifyFx& fx)
+					{
+						if (!registry.valid(fx.Entity))
+							return true;
+
+						fx.Ttl -= deltaTime;
+
+						if (fx.Ttl > 0.0f)
+							return false;
+
+						scene.DestroyEntity(fx.Entity);
+						return true;
+					}),
+				m_NotifyFx.end());
+		}
 
 		auto view = registry.view<SkeletalMeshComponent>();
 
@@ -54,6 +83,9 @@ namespace axe
 				// meio da transição e o pé escorrega no chão, bem visível.
 				skel.GraphInstance.Update(*skeleton, deltaTime, advance);
 				skel.GraphInstance.Evaluate(*skeleton, m_ScratchPose);
+
+				DispatchNotifies(scene, entity,
+					skel.GraphInstance.GetFiredNotifies(), inPlay);
 
 				AnimationSampler::BuildSkinningMatrices(*skeleton,
 					m_ScratchPose,
@@ -110,12 +142,130 @@ namespace axe
 			// Avalia a pose mesmo com o tempo parado — é o que mostra o
 			// personagem na pose certa fora do Play, em vez de colapsado.
 			// Sem clipe nenhum, o Player devolve bind pose.
+			//
+			// Notifies do caminho manual: mesmo cruzamento do ClipPlayer do
+			// grafo, so que aqui em volta do AnimationPlayer (cujo tempo e
+			// CRU — wrap dos dois lados antes de comparar).
+			const auto& manualClip = validClip ? skel.Clips[skel.CurrentClip] : nullptr;
+			const float manualPrev = manualClip ? manualClip->WrapTime(skel.Player.GetTime()) : 0.0f;
+
 			skel.Player.Update(*skeleton, deltaTime, advance);
+
+			if (manualClip && advance && !manualClip->Notifies.empty())
+			{
+				const float manualNow = manualClip->WrapTime(skel.Player.GetTime());
+
+				static thread_local std::vector<AnimNotify> s_ManualFired;
+				s_ManualFired.clear();
+
+				for (const auto& n : manualClip->Notifies)
+				{
+					const bool hit = (manualNow >= manualPrev)
+						? (n.Time > manualPrev && n.Time <= manualNow)
+						: (n.Time > manualPrev || n.Time <= manualNow);
+
+					if (hit)
+						s_ManualFired.push_back(n);
+				}
+
+				if (!s_ManualFired.empty())
+					DispatchNotifies(scene, entity, s_ManualFired, inPlay);
+			}
 
 			AnimationSampler::BuildSkinningMatrices(*skeleton,
 				skel.Player.GetPose(),
 				skel.BonePalette,
 				skel.ShowSkeleton ? &skel.BoneGlobals : nullptr);
+		}
+	}
+
+	void AnimationWorld::DispatchNotifies(Scene& scene, entt::entity character,
+		const std::vector<AnimNotify>& fired, bool inPlay)
+	{
+		if (fired.empty())
+			return;
+
+		auto& registry = scene.GetRegistry();
+
+		for (const auto& n : fired)
+		{
+			switch (n.Type)
+			{
+			case AnimNotify::Kind::Particle:
+			{
+				if (n.Payload.empty())
+					break;
+
+				// So em PLAY: entidades de Play morrem no restore do Stop —
+				// a cena salva nunca ganha lixo. Em Edit, o lugar de ver o
+				// efeito e o Animation Editor.
+				if (!inPlay)
+				{
+					static bool s_HintOnce = false;
+
+					if (!s_HintOnce)
+					{
+						AXE_CORE_INFO("AnimNotify '{}': particulas na CENA aparecem em Play. (Em Edit, use o Animation Editor.)", n.Name);
+						s_HintOnce = true;
+					}
+
+					break;
+				}
+
+				const AssetRecord* rec = AssetDatabase::Get().GetByUUID(n.Payload);
+
+				if (!rec)
+				{
+					AXE_CORE_WARN("AnimNotify '{}': asset de particula nao encontrado.", n.Name);
+					break;
+				}
+
+				auto psAsset = ParticleSystemAsset::LoadFromFile(rec->FilePath);
+
+				if (!psAsset)
+					break;
+
+				auto e = scene.CreateEntity("NotifyFX");
+
+				// CreateEntity ja adiciona o Transform — pegar, nao emplace.
+				auto& tc = registry.get<TransformComponent>(e);
+
+				glm::vec3 basePos{ 0.0f };
+				glm::vec3 baseScale{ 1.0f };
+
+				if (auto* charTc = registry.try_get<TransformComponent>(character))
+				{
+					basePos = charTc->Data.Position;
+					baseScale = charTc->Data.Scale;
+				}
+
+				// Offset autorado no espaco do PERSONAGEM: escala junto com
+				// ele (personagem 0.015 nao pode jogar o FX a metros).
+				// Ancoragem no OSSO (Socket/Attached) e a proxima etapa.
+				tc.Data.Position = basePos + n.LocationOffset * baseScale;
+				tc.Data.Rotation = glm::radians(n.RotationOffset);
+				tc.Data.Scale = n.Scale;
+
+				auto& ps = registry.emplace<ParticleSystemComponent>(e);
+				ps.Data = psAsset;
+				ps.ParticleAssetUUID = n.Payload;
+				ps.Playing = true;
+				ps.EmitterRuntimes.resize(psAsset->Emitters.size());
+
+				m_NotifyFx.push_back({ e, 5.0f });
+				break;
+			}
+
+			case AnimNotify::Kind::Event:
+				// Proxima etapa: EventBus -> Script Editor. Por ora o log
+				// prova que o cruzamento aconteceu no frame certo.
+				AXE_CORE_INFO("AnimNotify (event): '{}'", n.Name);
+				break;
+
+			case AnimNotify::Kind::Sound:
+				AXE_CORE_INFO("AnimNotify (sound): '{}' — sistema de audio ainda nao existe.", n.Name);
+				break;
+			}
 		}
 	}
 

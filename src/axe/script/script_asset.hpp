@@ -49,8 +49,17 @@ namespace axe
     {
         std::string Type;       // "Mesh", "Material", "Rigidbody", "Collider", etc.
 
-        // Mesh / Material
+        // Mesh / Material / SkeletalMesh (.axeskel)
         std::string AssetUUID;  // UUID do asset referenciado
+
+        // ── SkeletalMesh ──────────────────────────────────────────────────────
+        //
+        // Um personagem animado tem DOIS assets: o .axeskel (esqueleto + malha
+        // + clipes, em AssetUUID) e o .axeanim (o AnimGraph que decide o que
+        // toca). Separados de proposito — o mesmo esqueleto serve varios
+        // grafos (player, NPC), e o mesmo grafo serve varios personagens.
+        std::string AnimGraphUUID;
+        bool        ShowSkeleton = false;   // wireframe dos ossos no preview
 
         // Rigidbody
         std::string BodyType = "Dynamic"; // "Static", "Dynamic", "Kinematic"
@@ -87,6 +96,14 @@ namespace axe
         float CCStepHeight = 0.3f;
         float CCMaxSpeed = 5.f;
         float CCJumpForce = 5.f;
+
+        // Orient Rotation to Movement (ver CharacterControllerComponent):
+        // o personagem gira pra direcao em que anda, e a animacao de andar
+        // pra frente serve pra todos os lados.
+        bool  CCOrientToMovement = false;
+        float CCRotationRate = 720.f;
+        bool  CCShowDebug = true;      // wireframe da capsula na viewport
+        float CCOffsetX = 0.f, CCOffsetY = 0.f, CCOffsetZ = 0.f;   // offset da capsula (m)
 
         // CharacterController extra
         bool  CCGravity = true;
@@ -337,7 +354,22 @@ namespace axe
 
         const std::filesystem::path& GetFilePath() const { return m_FilePath; }
 
+        // Usado quando o arquivo e RENOMEADO com o script aberto: sem isto o
+        // proximo Save recriaria o arquivo com o nome antigo.
+        void SetFilePath(const std::filesystem::path& p) { m_FilePath = p; }
+
         // Componentes definidos no editor
+        // ── Transform RAIZ do objeto ──────────────────────────────────────
+        //
+        // O que voce ajusta no painel Object do Script Editor. Antes vivia so
+        // na entidade do PREVIEW (volatil): escalar o personagem ali nao
+        // chegava na cena nem sobrevivia ao Save. Agora e autoria do asset.
+        //
+        // Escala default 1: personagem Mixamo em cm normalmente quer ~0.015.
+        float RootPosX = 0.0f, RootPosY = 0.0f, RootPosZ = 0.0f;
+        float RootRotX = 0.0f, RootRotY = 0.0f, RootRotZ = 0.0f;   // graus
+        float RootScaleX = 1.0f, RootScaleY = 1.0f, RootScaleZ = 1.0f;
+
         std::vector<ScriptComponentDef>& GetComponents() { return m_Components; }
         const std::vector<ScriptComponentDef>& GetComponents() const { return m_Components; }
         void AddComponent(const ScriptComponentDef& def) { m_Components.push_back(def); }

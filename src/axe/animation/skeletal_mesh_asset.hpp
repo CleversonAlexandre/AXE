@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace axe
 {
@@ -71,6 +72,31 @@ namespace axe
 		const std::filesystem::path& GetFilePath() const { return m_FilePath; }
 		const std::vector<AnimEntry>& GetAnimations() const { return m_Animations; }
 
+		// Remove uma ENTRADA (o registro do arquivo) e reconstroi a lista de
+		// clipes. E o "desimportar" — os clipes daquele arquivo somem do
+		// combo, e os sufixos anti-colisao reassentam.
+		bool RemoveAnimation(std::size_t index);
+
+		// ── Metadados de autoria por clipe (Animation Editor) ────────────
+		//
+		// Loop, RateScale, RootMotion e Notifies vivem NO CLIPE em runtime,
+		// mas o clipe e reconstruido do FBX a cada Resolve — entao a copia
+		// persistente mora aqui, chaveada pelo NOME (a mesma chave que o
+		// grafo usa). StoreClipMeta copia do clipe vivo pro mapa; o Resolve
+		// aplica o mapa de volta nos clipes recem-importados.
+		void StoreClipMeta(const std::shared_ptr<AnimationClip>& clip);
+
+		// Este arquivo esta registrado como animacao AQUI? Devolve o indice
+		// da entrada, ou -1. E o que faz duplo-clique num FBX de animacao
+		// abrir o Animation Editor no clipe certo — o FBX nao sabe de quem
+		// e; quem sabe e o .axeskel que o referencia.
+		int FindAnimationEntryBySource(const std::filesystem::path& file) const;
+
+		// Conserta o caminho de uma entrada (arquivo movido de pasta) e
+		// salva. Devolve true se ALGO mudou. Auto-cura: quem achou a entrada
+		// pelo nome do arquivo chama isto e o .axeskel para de mentir.
+		bool UpdateAnimationSource(std::size_t index, const std::filesystem::path& file);
+
 	private:
 		// Resolve um caminho do JSON: relativo é interpretado a partir da
 		// pasta do .axeskel. É o que permite mover o projeto de máquina sem
@@ -87,6 +113,18 @@ namespace axe
 		std::filesystem::path m_FilePath;     // o próprio .axeskel
 
 		std::vector<AnimEntry> m_Animations;
+
+		// Autoria por clipe, persistida no JSON (bloco "clip_meta").
+		struct ClipMeta
+		{
+			bool  Loop = true;
+			float RateScale = 1.0f;
+			bool  RootMotion = false;
+			int   TrackCount = 1;
+			std::vector<AnimNotify> Notifies;
+		};
+
+		std::unordered_map<std::string, ClipMeta> m_ClipMeta;
 
 		// Runtime — não vai pro JSON.
 		std::shared_ptr<SkinnedMesh>                m_Mesh;

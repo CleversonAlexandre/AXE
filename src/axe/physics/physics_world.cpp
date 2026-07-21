@@ -253,10 +253,37 @@ namespace axe
         // Cápsula: Height é a altura total, Radius é o raio
         float halfHeight = std::max(cc->Height * 0.5f - cc->Radius, 0.01f);
         JPH::CapsuleShapeSettings capsule(halfHeight, std::max(cc->Radius, 0.01f));
-        auto shapeResult = capsule.Create();
-        if (!shapeResult.IsValid())
+        auto capsuleResult = capsule.Create();
+        if (!capsuleResult.IsValid())
         {
             AXE_CORE_ERROR("PhysicsWorld: falha ao criar shape do CharacterController.");
+            return;
+        }
+
+        // ── Origem nos PÉS, não no centro ────────────────────────────────
+        //
+        // A CapsuleShape do Jolt nasce CENTRADA na origem, e o CharacterVirtual
+        // posiciona a shape por essa origem. Como o transform do personagem
+        // (modelo Mixamo) tem a origem nos PÉS, criar o character direto na
+        // posição do transform enterrava METADE da cápsula no chão: a física
+        // empurrava pra cima e o sync devolvia a posição elevada — o
+        // personagem "flutuava" meia altura assim que entrava em Play.
+        //
+        // Deslocar a shape meia altura pra cima faz a origem do character
+        // coincidir com os pés, que é a convenção do resto do engine (e da
+        // Unreal/Unity). Sem offset em nenhum outro lugar: posição do
+        // character == posição do transform, ponto.
+        JPH::RotatedTranslatedShapeSettings offsetShape(
+            JPH::Vec3(cc->CapsuleOffset.x,
+                cc->Height * 0.5f + cc->CapsuleOffset.y,
+                cc->CapsuleOffset.z),
+            JPH::Quat::sIdentity(),
+            capsuleResult.Get());
+
+        auto shapeResult = offsetShape.Create();
+        if (!shapeResult.IsValid())
+        {
+            AXE_CORE_ERROR("PhysicsWorld: falha ao deslocar a shape do CharacterController.");
             return;
         }
 
@@ -274,7 +301,7 @@ namespace axe
 
         cc->IsCreated = true;
         cc->CharacterID = (uint32_t)entity; // usa entity ID como handle
-        AXE_CORE_INFO("PhysicsWorld: CharacterController criado (entity {}).", (uint32_t)entity);
+        AXE_CORE_INFO("[CHARCAPSULE_V1] CharacterController criado (entity {}): origem nos PES, capsula h={:.2f} r={:.2f}.", (uint32_t)entity, cc->Height, cc->Radius);
     }
 
     void PhysicsWorld::DestroyCharacter(entt::entity entity, Scene& scene)
@@ -536,6 +563,37 @@ namespace axe
                 JPH::RVec3 newPos = ch.GetPosition();
                 tc.Data.Position = glm::vec3((float)newPos.GetX(), (float)newPos.GetY(), (float)newPos.GetZ());
                 tc.Data.UseWorldMatrix = false;
+
+                // ── Orient Rotation to Movement ───────────────────────────
+                //
+                // Gira o personagem em direcao ao yaw pedido pelo Move(),
+                // limitado por RotationRate. Girar de uma vez fica robotico;
+                // limitado, o corpo "vira" e a animacao de andar pra frente
+                // serve pra qualquer direcao.
+                if (cc.OrientRotationToMovement && cc.HasDesiredYaw)
+                {
+                    const float current = tc.Data.Rotation.y;
+
+                    // Menor caminho angular: sem isto, ir de +170 para -170
+                    // (2 graus de diferenca real) daria a volta inteira.
+                    float delta = cc.DesiredYaw - current;
+
+                    constexpr float kTwoPi = 6.2831853071795864f;
+                    while (delta > kTwoPi * 0.5f) delta -= kTwoPi;
+                    while (delta < -kTwoPi * 0.5f) delta += kTwoPi;
+
+                    if (cc.RotationRate <= 0.0f)
+                    {
+                        tc.Data.Rotation.y = cc.DesiredYaw;   // instantaneo
+                    }
+                    else
+                    {
+                        const float maxStep = glm::radians(cc.RotationRate) * deltaTime;
+                        const float step = glm::clamp(delta, -maxStep, maxStep);
+
+                        tc.Data.Rotation.y = current + step;
+                    }
+                }
 
                 // Reset velocidade XZ (será reescrita pelo script no próximo frame)
                 cc.Velocity.x = 0;

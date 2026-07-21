@@ -3,6 +3,7 @@
 #include "axe/core/types.hpp"
 #include "script_graph.hpp"
 #include <string>
+#include <set>
 
 namespace axe
 {
@@ -49,6 +50,13 @@ namespace axe
             // num Event body, ou dentro de Branch/Sequence/Switch — que não
             // repetem, só desviam uma vez), fica false.
             bool insideLoopOrFunction = false;
+
+            // IDs dos nos "Call <Function>" JA emitidos neste corpo. Um no
+            // que le o output de uma chamada que ainda nao aconteceu esta
+            // pedindo um valor do futuro: o C++ gerado usaria _callResN
+            // antes da declaracao (C2065). Com este registro, detectamos e
+            // avisamos o AUTOR em vez de deixar o MSVC cuspir o erro cru.
+            std::set<int> emittedCalls;
 
             void Line(const std::string& s = "")
             {

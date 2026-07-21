@@ -18,6 +18,9 @@
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/component_wise.hpp>
+#include "axe/animation/skeletal_mesh_asset.hpp"
+#include "axe/animation/anim_graph_asset.hpp"
+#include "axe/asset/asset_database.hpp"
 
 namespace axe
 {
@@ -116,15 +119,43 @@ namespace axe
         if (!m_PreviewScene || !m_ScriptAsset || m_PreviewEntity == entt::null) return;
         auto& reg = m_PreviewScene->GetRegistry();
 
+        // Transform RAIZ do asset -> preview. Aplicado UMA vez por asset
+        // aberto: depois disso o painel Object edita o preview e escreve de
+        // volta no asset (senao um sync no meio da edicao pisaria no valor
+        // que o usuario esta arrastando).
+        if (m_RootTransformAppliedFor != m_ScriptAsset.get())
+        {
+            if (auto* rtc = reg.try_get<TransformComponent>(m_PreviewEntity))
+            {
+                rtc->Data.Position = { m_ScriptAsset->RootPosX, m_ScriptAsset->RootPosY, m_ScriptAsset->RootPosZ };
+                rtc->Data.Rotation = glm::radians(glm::vec3(
+                    m_ScriptAsset->RootRotX, m_ScriptAsset->RootRotY, m_ScriptAsset->RootRotZ));
+                rtc->Data.Scale = { m_ScriptAsset->RootScaleX, m_ScriptAsset->RootScaleY, m_ScriptAsset->RootScaleZ };
+                rtc->Data.UseWorldMatrix = false;
+                rtc->Data.WorldMatrix = rtc->Data.GetMatrix();
+            }
+
+            m_RootTransformAppliedFor = m_ScriptAsset.get();
+        }
+
         if (reg.all_of<ColliderComponent>(m_PreviewEntity))            reg.remove<ColliderComponent>(m_PreviewEntity);
         if (reg.all_of<RigidbodyComponent>(m_PreviewEntity))           reg.remove<RigidbodyComponent>(m_PreviewEntity);
         if (reg.all_of<CharacterControllerComponent>(m_PreviewEntity)) reg.remove<CharacterControllerComponent>(m_PreviewEntity);
 
         bool hasMesh = false;
+        bool hasSkeletal = false;
+
         for (auto& def : m_ScriptAsset->GetComponents())
-            if (def.Type == "Mesh") { hasMesh = true; break; }
+        {
+            if (def.Type == "Mesh")         hasMesh = true;
+            if (def.Type == "SkeletalMesh") hasSkeletal = true;
+        }
+
         if (!hasMesh && reg.all_of<MeshComponent>(m_PreviewEntity))
             reg.remove<MeshComponent>(m_PreviewEntity);
+
+        if (!hasSkeletal && reg.all_of<SkeletalMeshComponent>(m_PreviewEntity))
+            reg.remove<SkeletalMeshComponent>(m_PreviewEntity);
 
         for (auto& def : m_ScriptAsset->GetComponents())
         {
@@ -140,8 +171,67 @@ namespace axe
                 sa.MouseRotates = def.SAMouseRotates;
             }
 
+            // ── SkeletalMesh: personagem animado (.axeskel + .axeanim) ───────
+            if (def.Type == "SkeletalMesh")
+            {
+                auto& sk = reg.get_or_emplace<SkeletalMeshComponent>(m_PreviewEntity);
+
+                // Esqueleto. Recarrega so quando o UUID muda — o cache de
+                // identidade garante que e sempre o MESMO objeto do resto do
+                // editor (importar um clipe no Animation Editor aparece aqui).
+                if (sk.AssetUUID != def.AssetUUID)
+                {
+                    sk.AssetUUID = def.AssetUUID;
+                    sk.Asset.reset();
+                    sk.Data.reset();
+                    sk.Clips.clear();
+                    sk.CurrentClip = -1;
+                    sk._AppliedClip = -2;
+
+                    if (!def.AssetUUID.empty())
+                    {
+                        if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(def.AssetUUID))
+                        {
+                            if (auto asset = SkeletalMeshAsset::LoadFromFile(rec->FilePath);
+                                asset && asset->Resolve())
+                            {
+                                sk.Asset = asset;
+                                sk.Data = asset->GetMesh();
+                                sk.Clips = asset->GetClips();
+                                sk.CurrentClip = asset->GetClips().empty() ? -1 : 0;
+                            }
+                        }
+                    }
+                }
+
+                // AnimGraph. Com grafo, ele manda; sem grafo, o CurrentClip
+                // acima segura a pose (o personagem nao fica em T-pose).
+                if (sk.GraphAssetUUID != def.AnimGraphUUID)
+                {
+                    sk.GraphAssetUUID = def.AnimGraphUUID;
+                    sk.GraphAsset.reset();
+                    sk.GraphInstance.Reset();
+
+                    if (!def.AnimGraphUUID.empty())
+                    {
+                        if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(def.AnimGraphUUID))
+                        {
+                            if (auto graph = AnimGraphAsset::LoadFromFile(rec->FilePath))
+                            {
+                                if (sk.Asset && sk.Asset->GetSkeleton())
+                                    graph->Resolve(*sk.Asset);
+
+                                sk.GraphAsset = graph;
+                            }
+                        }
+                    }
+                }
+
+                sk.PreviewInEditor = true;
+                sk.ShowSkeleton = def.ShowSkeleton;
+            }
             // ── Mesh ──────────────────────────────────────────────────────────
-            if (def.Type == "Mesh")
+            else if (def.Type == "Mesh")
             {
                 auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
                 mc.Data = MeshFactory::CreateByUUID(def.AssetUUID.empty() ? PrimitiveUUID::Sphere : def.AssetUUID);
@@ -230,12 +320,18 @@ namespace axe
                 cc.MaxSlopeAngle = def.CCMaxSlope; cc.StepHeight = def.CCStepHeight;
                 cc.MaxSpeed = def.CCMaxSpeed; cc.JumpForce = def.CCJumpForce;
 
-                // Capsule collider implícito para debug visual
-                auto& col = reg.emplace_or_replace<ColliderComponent>(m_PreviewEntity);
-                col.Shape = ColliderShape::Capsule;
-                col.Height = def.CCHeight;
-                col.CapsuleRadius = def.CCRadius;
-                col.ShowDebug = true;
+                // Faltavam estes dois: por isso mexer no Capsule Offset (ou
+                // desligar o wireframe) no Script Editor nao mudava NADA no
+                // preview — o componente era recriado sem eles a cada sync.
+                cc.CapsuleOffset = { def.CCOffsetX, def.CCOffsetY, def.CCOffsetZ };
+                cc.ShowDebug = def.CCShowDebug;
+
+                // O collider implicito que existia aqui so para "ver a
+                // capsula" saiu: o CharacterController agora tem desenho
+                // proprio (e correto, sem a escala do transform). Manter os
+                // dois desenhava uma segunda capsula, minuscula, por cima.
+                if (reg.all_of<ColliderComponent>(m_PreviewEntity))
+                    reg.remove<ColliderComponent>(m_PreviewEntity);
             }
         }
     }
@@ -265,6 +361,15 @@ namespace axe
                 m_PreviewRenderer->m_Camera->SetAspectRatio((float)w / (float)h);
         }
 
+        // Anima o personagem do preview (SkeletalMesh + AnimGraph). Sem Play:
+        // PreviewInEditor ja autoriza o tempo a correr no editor.
+        {
+            if (!m_PreviewAnim)
+                m_PreviewAnim = std::make_unique<AnimationWorld>();
+
+            m_PreviewAnim->OnUpdate(*m_PreviewScene, ImGui::GetIO().DeltaTime, false);
+        }
+
         m_PreviewRenderer->SetScene(m_PreviewScene.get());
         m_PreviewRenderer->RenderToFramebuffer(*m_PreviewFramebuffer, w, h, 0.0f);
     }
@@ -291,6 +396,13 @@ namespace axe
             gizmoBtn("R", ImGuizmo::ROTATE);
             gizmoBtn("S", ImGuizmo::SCALE);
             ImGui::PopStyleVar();
+
+            // O helper acima chama SameLine DEPOIS de cada botao — inclusive
+            // do ultimo. Sem quebrar a linha aqui, a imagem do preview era
+            // submetida AO LADO dos botoes: comecava deslocada e o
+            // GetContentRegionAvail devolvia so a sobra da linha, deixando a
+            // faixa vazia a esquerda e o preview menor que o painel.
+            ImGui::NewLine();
 
             // ── Imagem do preview ─────────────────────────────────────────────
             ImVec2 avail = ImGui::GetContentRegionAvail();
