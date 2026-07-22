@@ -16,6 +16,7 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include <string>
 #include <vector>
+#include <utility> // std::pair no retorno de CollectAnimGraphParams
 #include <sstream>
 #include <entt/entt.hpp>
 #include "axe/animation/animation_world.hpp"
@@ -27,6 +28,21 @@ namespace ed = ax::NodeEditor;
 
 namespace axe
 {
+    // Payload de arrasto de um COMPONENTE do Scene Graph.
+    //
+    // Um unico gesto — arrastar o nome do componente — serve para os DOIS
+    // destinos, porque o ImGui so aceita um DragDropSource por item:
+    //   • soltar no canvas do grafo  -> cria o node (usa Node)
+    //   • soltar em outro componente -> reparenta   (usa Index)
+    // Quem recebe decide qual campo usar. Node vazio = componente sem node
+    // correspondente (Mesh, Material...), que ainda assim pode ser movido
+    // na hierarquia.
+    struct ComponentDragPayload
+    {
+        int  Index = -1;
+        char Node[64] = {};
+    };
+
     class ScriptGraphWindow
     {
     public:
@@ -125,6 +141,44 @@ namespace axe
         void SyncMeshFromSource();
         void SyncMeshFromAsset();
         void SyncComponentsToPreview();  // espelha ScriptComponentDef → componentes reais no preview
+
+        // ── Parametros do AnimGraph (Set Anim Float/Bool, Anim Trigger) ───────
+        //
+        // Compartilhados entre o combo do CANVAS e o painel Script Details, que
+        // e o que ele pediu: "seria interessante ter nos dois". Uma fonte so
+        // evita as duas telas divergirem.
+        //
+        // O tipo vai como int (cast de AnimParamType) para nao arrastar o
+        // header do sistema de animacao para dentro deste.
+        std::vector<std::pair<std::string, int>> CollectAnimGraphParams(bool forceReload);
+
+        // Se o node for um dos tres de animacao, devolve o pin "Parametro" e
+        // escreve em wantType o tipo esperado. Fora disso, nullptr.
+        static ScriptPin* FindAnimParamPin(ScriptNode* node, int* wantType);
+
+        // Desenha a lista de parametros (conteudo do popup/combo). Devolve
+        // true se algo foi escolhido.
+        bool DrawAnimParamList(ScriptPin* paramPin, int wantType);
+
+        // Guarda onde o popup deve nascer, a partir do ultimo item submetido.
+        void CaptureComboAnchor();
+
+        // ── Combo deferido do canvas ─────────────────────────────────────────
+        //
+        // Popup aberto de dentro de um node do imgui-node-editor nao expande:
+        // ele precisa ser desenhado no bloco ed::Suspend()/ed::Resume(), que
+        // roda DEPOIS de todos os nodes. Entao o widget no node vira um botao
+        // que so REGISTRA o pedido, e o popup e desenhado la.
+        ed::NodeId m_ComboNodeId = ed::NodeId(0);
+        int        m_ComboKind = 0;      // 0 = nenhum, 1 = action/axis, 2 = anim param
+
+        // Retangulo do botao em coordenadas de TELA. O botao e desenhado em
+        // espaco de canvas (que difere da tela quando ha zoom), entao a
+        // conversao acontece na hora de guardar — o popup nasce colado nele e
+        // com a mesma largura, como um combo de verdade.
+        ImVec2     m_ComboAnchor{};
+        float      m_ComboWidth = 0.f;
+        bool       m_ComboRequested = false;
         void SaveNodePositions();           // salva posições do editor de volta nos ScriptNodes
 
         // Node editor

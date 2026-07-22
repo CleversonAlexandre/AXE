@@ -272,29 +272,59 @@ namespace axe
             if (func)
             {
                 // A chamada ja rodou neste corpo? Se nao, o no que estamos
-                // gerando consome um resultado que ainda nao existe — quase
-                // sempre porque o no de fluxo esta ANTES do "Call" na cadeia
-                // de execucao, mas puxa dados dele. Sem este guard, o C++
-                // sai com "_callResN undeclared identifier" e o autor fica
-                // sem pista do que fazer.
-                if (!ctx.emittedCalls.count((int)srcNode->ID.Get()))
+                // gerando consome um resultado que ainda nao existe —
+                // quase sempre porque o no de fluxo esta ANTES do "Call"
+                // na cadeia de execucao, mas puxa dados dele.
+                //
+                // Antes, isto devolvia um literal neutro (0.0f) e so
+                // gritava no log: o C++ compilava e o autor ficava com um
+                // personagem que nao anda e nenhuma pista na tela. Pior
+                // que um erro.
+                //
+                // Agora ICAMOS a chamada: ela e emitida AQUI, imediatamente
+                // antes do statement que precisa do resultado, e o node de
+                // fluxo original nao a repete. Um LINK DE DADOS ja e uma
+                // declaracao de dependencia — "isto precisa estar pronto
+                // antes" — e respeitar isso e o comportamento menos
+                // surpreendente. A funcao continua rodando UMA vez por
+                // passada; so acontece um pouco mais cedo do que o
+                // desenho do fluxo sugeria.
+                auto emitted = ctx.emittedCalls.find((int)srcNode->ID.Get());
+
+                // Emitida em escopo MAIS PROFUNDO (dentro de um if, por
+                // exemplo)? As variaveis de resultado morreram com aquele
+                // bloco — precisa de uma emissao propria aqui.
+                if (emitted == ctx.emittedCalls.end() || emitted->second > ctx.indent)
                 {
-                    AXE_CORE_ERROR("Script: a saida '{}' da funcao '{}' esta sendo usada ANTES da chamada acontecer no fluxo. "
-                        "Ligue o Flow para chamar a funcao primeiro, e so depois o no que consome o resultado.",
+                    const int id = (int)srcNode->ID.Get();
+
+                    if (ctx.hoisting.count(id))
+                    {
+                        // Ciclo: a funcao consome o proprio resultado. Nao
+                        // ha ordem valida — o autor precisa quebrar o laco.
+                        AXE_CORE_ERROR("Script: a funcao '{}' consome o proprio resultado (ciclo de dados). "
+                            "Quebre a dependencia circular no grafo.", srcNode->StringValue);
+
+                        switch (srcPin->Type)
+                        {
+                        case ScriptPinType::Float:  return "0.0f";
+                        case ScriptPinType::Int:    return "0";
+                        case ScriptPinType::Bool:   return "false";
+                        case ScriptPinType::String: return "\"\"";
+                        case ScriptPinType::Vec3:   return "glm::vec3(0.f)";
+                        case ScriptPinType::Object: return "entt::null";
+                        default:                    return "{}";
+                        }
+                    }
+
+                    AXE_CORE_WARN("Script: a saida '{}' da funcao '{}' e usada antes da chamada no fluxo. "
+                        "A chamada foi ANTECIPADA para o ponto de uso. Se a ordem importa, "
+                        "ligue o Flow para chamar a funcao primeiro.",
                         srcPin->Name, srcNode->StringValue);
 
-                    // Valor neutro pelo TIPO do pino: o C++ continua valido e
-                    // o autor le a mensagem acima em vez de um C2065.
-                    switch (srcPin->Type)
-                    {
-                    case ScriptPinType::Float:  return "0.0f";
-                    case ScriptPinType::Int:    return "0";
-                    case ScriptPinType::Bool:   return "false";
-                    case ScriptPinType::String: return "\"\"";
-                    case ScriptPinType::Vec3:   return "glm::vec3(0.f)";
-                    case ScriptPinType::Object: return "entt::null";
-                    default:                    return "{}";
-                    }
+                    ctx.hoisting.insert(id);
+                    EmitCall(ctx, srcNode);
+                    ctx.hoisting.erase(id);
                 }
 
                 std::string sid = std::to_string((int)srcNode->ID.Get());
@@ -832,6 +862,55 @@ namespace axe
             return varOut;
         }
 
+        if (nodeName == "Get Right Vector")
+        {
+            std::string nodeId = std::to_string(srcNode->ID.Get());
+            std::string varOut = "_right" + nodeId;
+
+            if (ctx.code.find(varOut) == std::string::npos)
+            {
+                std::string target = "m_Context.Entity";
+                for (const auto& inp : srcNode->Inputs)
+                    if (inp.Name == "Target") { target = ResolvePin(ctx, inp); break; }
+
+                // Mesma cadeia do Get Forward Vector, e o right sai do
+                // produto vetorial com o "para cima" do mundo — assim os
+                // dois nos nunca discordam sobre para onde a entidade
+                // aponta.
+                ctx.Line("glm::vec3 " + varOut + " = glm::vec3(1.f,0.f,0.f);");
+                ctx.Line("{ auto _rt = " + target + ";");
+                ctx.Line("  if (_rt != entt::null) {");
+                ctx.Line("    auto* _rc = m_Context.ScenePtr->GetRegistry().try_get<axe::TransformComponent>(_rt);");
+                ctx.Line("    if (_rc) {");
+                ctx.Line("      glm::vec3 _rr = glm::radians(_rc->Data.Rotation);");
+                ctx.Line("      glm::vec3 _rf = glm::normalize(glm::vec3(cos(_rr.y)*cos(_rr.x),sin(_rr.x),sin(_rr.y)*cos(_rr.x)));");
+                ctx.Line("      " + varOut + " = glm::normalize(glm::cross(_rf, glm::vec3(0.f,1.f,0.f)));");
+                ctx.Line("    }");
+                ctx.Line("  }");
+                ctx.Line("}");
+            }
+
+            return varOut;
+        }
+
+        if (nodeName == "Get Camera Direction")
+        {
+            if (srcPin->Name == "Camera Forward") return "GetCamera().GetForward()";
+            if (srcPin->Name == "Camera Right")   return "GetCamera().GetRight()";
+
+            if (srcPin->Name == "Direction")
+            {
+                std::string fwd = "0.0f", right = "0.0f";
+                for (const auto& inp : srcNode->Inputs)
+                {
+                    if (inp.Name == "Forward Axis") fwd = ResolvePin(ctx, inp);
+                    if (inp.Name == "Right Axis")   right = ResolvePin(ctx, inp);
+                }
+
+                return "GetCamera().RelativeDirection(" + fwd + ", " + right + ")";
+            }
+        }
+
         if (nodeName == "Get Rigidbody")
         {
             if (srcPin->Name == "Velocity") return "GetRigidbody().GetVelocity()";
@@ -910,6 +989,74 @@ namespace axe
 
         // Fallback
         return "{}";
+    }
+
+    // ─── Emissao de uma chamada de Function ───────────────────────────────────
+    //
+    // Extraida para ser usada nos DOIS caminhos possiveis: o fluxo chegando
+    // no node "Call", e o hoist disparado por um consumidor de dados que
+    // precisa do resultado antes (ResolvePin). Ter um unico ponto de emissao
+    // e o que garante que os dois produzam identificadores identicos.
+    //
+    //   0 outputs -> statement puro:              Func(args);
+    //   1 output  -> variavel local de resultado: T _callResN = Func(args);
+    //   2+ outputs-> out-params por referencia:   Func(args, out0, out1, ...);
+    void ScriptGraphCompiler::EmitCall(Context& ctx, const ScriptNode* node)
+    {
+        if (!node) return;
+
+        const ScriptFunction* func = nullptr;
+        if (ctx.functions)
+            for (auto& f : *ctx.functions) if (f.Name == node->StringValue) { func = &f; break; }
+
+        if (!func)
+        {
+            ctx.Line("// AVISO: função '" + node->StringValue + "' nao encontrada (removida?)");
+            return;
+        }
+
+        std::string sid = std::to_string((int)node->ID.Get());
+        std::vector<std::string> argExprs;
+        for (auto& param : func->Inputs)
+        {
+            std::string expr = "{}";
+            for (auto& inp : node->Inputs)
+                if (inp.Name == param.Name) { expr = ResolvePin(ctx, inp); break; }
+            argExprs.push_back(expr);
+        }
+
+        // Registrada JUNTO com o nivel de escopo em que sai o codigo.
+        ctx.emittedCalls[(int)node->ID.Get()] = ctx.indent;
+
+        std::string call = SanitizeIdent(func->Name) + "(";
+        for (size_t i = 0; i < argExprs.size(); i++)
+        {
+            if (i > 0) call += ", ";
+            call += argExprs[i];
+        }
+
+        if (func->Outputs.empty())
+        {
+            call += ");";
+            ctx.Line(call);
+        }
+        else if (func->Outputs.size() == 1)
+        {
+            call += ");";
+            ctx.Line(CppTypeNameFor(func->Outputs[0].Type) + " _callRes" + sid + " = " + call);
+        }
+        else
+        {
+            for (size_t i = 0; i < func->Outputs.size(); i++)
+                ctx.Line(CppTypeNameFor(func->Outputs[i].Type) + " _callRes" + sid + "_" + std::to_string((int)i) + ";");
+            for (size_t i = 0; i < func->Outputs.size(); i++)
+            {
+                if (!argExprs.empty() || i > 0) call += ", ";
+                call += "_callRes" + sid + "_" + std::to_string((int)i);
+            }
+            call += ");";
+            ctx.Line(call);
+        }
     }
 
     // ─── Geração de nodes de ação ─────────────────────────────────────────────
@@ -1712,65 +1859,16 @@ namespace axe
         }
         else if (node->Category == ScriptNodeCategory::Function && name != "Function Entry")
         {
-            // Call <Function> — node->StringValue é o NOME da função chamada
-            // (mesma convenção de Get/Set Variable usando StringValue como
-            // chave de lookup). Outputs.size() decide a forma da chamada:
-            //   0 outputs -> statement puro:           Func(args);
-            //   1 output  -> variável local de resultado: T _callResN = Func(args);
-            //   2+ outputs-> out-params por referência:   Func(args, &out0, &out1, ...);
-            // (ver ResolvePin para como os pins de saída leem essas variáveis)
-            const ScriptFunction* func = nullptr;
-            if (ctx.functions)
-                for (auto& f : *ctx.functions) if (f.Name == node->StringValue) { func = &f; break; }
+            // A chamada ja pode ter sido ANTECIPADA por um consumidor de
+            // dados (ver ResolvePin). Nesse caso ela ja rodou neste mesmo
+            // escopo — emitir de novo a executaria DUAS vezes por passada.
+            auto emitted = ctx.emittedCalls.find((int)node->ID.Get());
+            const bool alreadyRan = emitted != ctx.emittedCalls.end()
+                && emitted->second <= ctx.indent;
 
-            if (func)
-            {
-                std::string sid = std::to_string((int)node->ID.Get());
-                std::vector<std::string> argExprs;
-                for (auto& param : func->Inputs)
-                {
-                    std::string expr = "{}";
-                    for (auto& inp : node->Inputs)
-                        if (inp.Name == param.Name) { expr = ResolvePin(ctx, inp); break; }
-                    argExprs.push_back(expr);
-                }
+            if (!alreadyRan)
+                EmitCall(ctx, node);
 
-                ctx.emittedCalls.insert((int)node->ID.Get());
-
-                std::string call = SanitizeIdent(func->Name) + "(";
-                for (size_t i = 0; i < argExprs.size(); i++)
-                {
-                    if (i > 0) call += ", ";
-                    call += argExprs[i];
-                }
-
-                if (func->Outputs.empty())
-                {
-                    call += ");";
-                    ctx.Line(call);
-                }
-                else if (func->Outputs.size() == 1)
-                {
-                    call += ");";
-                    ctx.Line(CppTypeNameFor(func->Outputs[0].Type) + " _callRes" + sid + " = " + call);
-                }
-                else
-                {
-                    for (size_t i = 0; i < func->Outputs.size(); i++)
-                        ctx.Line(CppTypeNameFor(func->Outputs[i].Type) + " _callRes" + sid + "_" + std::to_string((int)i) + ";");
-                    for (size_t i = 0; i < func->Outputs.size(); i++)
-                    {
-                        if (!argExprs.empty() || i > 0) call += ", ";
-                        call += "_callRes" + sid + "_" + std::to_string((int)i);
-                    }
-                    call += ");";
-                    ctx.Line(call);
-                }
-            }
-            else
-            {
-                ctx.Line("// AVISO: função '" + node->StringValue + "' nao encontrada (removida?)");
-            }
             // Segue o "Flow Out" normalmente — Call tem o pin padrão, igual
             // qualquer node de Action (cai no bloco genérico no fim da função).
         }
@@ -1902,7 +2000,7 @@ namespace axe
 
         // ── Header ────────────────────────────────────────────────────────────
         ctx.code += "// Gerado automaticamente pelo AXE Script Editor — nao edite manualmente\n";
-        ctx.code += "// [IDENT_SANITIZE_V2] nomes sanitizados + guard de leitura antecipada de output\n";
+        ctx.code += "// [CALLHOIST_V3] nomes sanitizados + chamada antecipada quando o dado e usado antes do fluxo\n";
         ctx.code += "#pragma once\n";
         ctx.code += "#include \"axe/script/script_base.hpp\"\n";
         ctx.code += "#include \"axe/utils/glm_config.hpp\"\n";

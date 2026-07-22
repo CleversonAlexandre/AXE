@@ -49,6 +49,20 @@ namespace axe
         void Follow(entt::entity target);
         void StopFollow();
         void SetFOV(float fov);
+
+        // ── Movimento relativo a camera (mouse look) ──────────────────────
+        //
+        // Achatados no plano do chao (Y = 0) de proposito: com a camera
+        // olhando para baixo, um forward inclinado faria o personagem
+        // tentar andar para dentro do chao.
+        glm::vec3 GetForward() const;
+        glm::vec3 GetRight() const;
+
+        // Direção de movimento ja montada: forward*fwdAxis + right*rightAxis,
+        // normalizada. Existe como UMA chamada porque no grafo os pinos de
+        // Multiply sao Float — multiplicar Vec3 por Float exigiria nos de
+        // conversao a mais. Aqui a Unreal precisa de seis nos; o AXE, de um.
+        glm::vec3 RelativeDirection(float fwdAxis, float rightAxis) const;
     };
 
     // ─────────────────────────────────────────────────────────────────────────

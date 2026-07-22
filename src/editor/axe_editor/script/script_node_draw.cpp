@@ -7,6 +7,8 @@
 #include "axe/script/script_graph.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/input/input_mapping.hpp"
+#include "axe/animation/anim_graph_asset.hpp" // combo de parametros do AnimGraph
+#include "axe/asset/asset_database.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <utilities/widgets.h>
@@ -14,6 +16,8 @@
 #include <algorithm>
 #include <vector>
 #include <string>
+#include <limits> // quiet_NaN no reroute (pino solto)
+#include <cmath>  // std::sqrt na forca da curva do reroute
 
 
 namespace ed = ax::NodeEditor;
@@ -209,6 +213,127 @@ namespace axe
         // mesmo sendo dois ed::PinId separados por trás).
         if (node->Name == "Reroute")
         {
+            // ── Pinos que ACOMPANHAM o fio ────────────────────────────────
+            //
+            // A tangente do fio sai do pino na direcao fixada pelos style
+            // vars SourceDirection (+1,0 = para a direita) e TargetDirection
+            // (-1,0 = para a esquerda), lidos dentro do BeginPin. Com um
+            // reroute posicionado a ESQUERDA da origem, ou a DIREITA do
+            // destino, essas direcoes apontam para o lado errado e o fio
+            // desenha um laco por fora — o "no" que aparecia quando ele
+            // reorganizava os nodes.
+            //
+            // Aqui a direcao de cada pino e decidida pela posicao REAL do
+            // outro extremo do fio: e o mesmo comportamento do reroute da
+            // Unreal, onde o pontinho simplesmente segue o caminho.
+            const ImVec2 selfPos = ed::GetNodePosition(node->ID);
+
+            // Posicao aproximada do outro extremo do fio ligado a este pino
+            // (borda do node do lado que encara o reroute, na meia altura).
+            // Devolve NaN quando o pino esta solto — nesse caso vale o padrao.
+            auto otherSidePos = [&](ed::PinId pinId) -> ImVec2
+                {
+                    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+                    for (const auto& link : m_Graph->GetLinks())
+                    {
+                        ed::PinId otherId;
+                        if (link.StartPin == pinId)      otherId = link.EndPin;
+                        else if (link.EndPin == pinId)   otherId = link.StartPin;
+                        else                             continue;
+
+                        for (const auto& n : m_Graph->GetNodes())
+                        {
+                            const ImVec2 p = ed::GetNodePosition(n->ID);
+                            const ImVec2 s = ed::GetNodeSize(n->ID);
+
+                            for (const auto& pin : n->Inputs)
+                                if (pin.ID == otherId) return ImVec2(p.x, p.y + s.y * 0.5f);
+                            for (const auto& pin : n->Outputs)
+                                if (pin.ID == otherId) return ImVec2(p.x + s.x, p.y + s.y * 0.5f);
+                        }
+                    }
+
+                    return ImVec2(nan, nan);
+                };
+
+            // As DUAS direcoes sao decididas antes de desenhar, porque uma
+            // depende da outra: quando apontam para o MESMO lado, o fio faz
+            // meia-volta.
+            float inDirX = -1.0f, outDirX = 1.0f;
+            ImVec2 srcPos(std::numeric_limits<float>::quiet_NaN(), 0.f);
+            ImVec2 dstPos(std::numeric_limits<float>::quiet_NaN(), 0.f);
+
+            if (!node->Inputs.empty())
+            {
+                // Origem a DIREITA do reroute? O fio chega pela direita.
+                srcPos = otherSidePos(node->Inputs[0].ID);
+                if (srcPos.x == srcPos.x && srcPos.x > selfPos.x) inDirX = 1.0f;
+            }
+
+            if (!node->Outputs.empty())
+            {
+                // Destino a ESQUERDA? O fio sai pela esquerda.
+                dstPos = otherSidePos(node->Outputs[0].ID);
+                if (dstPos.x == dstPos.x && dstPos.x < selfPos.x) outDirX = -1.0f;
+            }
+
+            // MEIA-VOLTA: origem e destino do mesmo lado do reroute, entao os
+            // dois pinos apontam para la e os pontos de controle da bezier vao
+            // para a MESMA direcao. Com o LinkStrength padrao (100, fixo) isso
+            // estufa num laco quando o reroute esta perto; com um valor fixo
+            // PEQUENO — que foi minha primeira tentativa — o fio sai quase
+            // reto do pontinho quando esta longe, e achata.
+            //
+            // O que a Unreal faz, e o que faz o reroute se ajeitar em QUALQUER
+            // posicao, e a tangente ACOMPANHAR a distancia ate o outro extremo:
+            // perto vira cotovelo justo, longe abre um arco amplo. Como cada
+            // ponta viaja uma distancia propria, cada pino leva a sua.
+            const bool uTurn = (inDirX == outDirX);
+
+            auto strengthFor = [&](const ImVec2& other) -> float
+                {
+                    if (!(other.x == other.x)) return 100.0f; // solto: padrao
+
+                    const float dx = other.x - selfPos.x;
+                    const float dy = other.y - selfPos.y;
+                    const float dist = std::sqrt(dx * dx + dy * dy);
+
+                    // 0.45 da uma curva cheia sem virar espiral; os limites
+                    // evitam tangente nula em fio curtissimo e arco gigante
+                    // em fio que atravessa o canvas inteiro.
+                    return std::clamp(dist * 0.45f, 25.0f, 260.0f);
+                };
+
+            // Direcao da tangente. No caso em S ela e horizontal — e o que
+            // ele aprovou, nao se mexe. Na MEIA-VOLTA ela MIRA o alvo.
+            //
+            // Com as duas tangentes horizontais, as duas metades da meia-volta
+            // saiam do pontinho no mesmo rumo e quase sobrepostas — o embolado
+            // dos reroutes de float. Mirando, um lobo sobe em direcao a origem
+            // e o outro desce em direcao ao destino: eles se separam sozinhos,
+            // que e o que faz a meia-volta da Unreal ficar legivel.
+            auto dirFor = [&](const ImVec2& other, float fallbackX) -> ImVec2
+                {
+                    if (!uTurn || !(other.x == other.x))
+                        return ImVec2(fallbackX, 0.0f);
+
+                    const float dx = other.x - selfPos.x;
+                    const float dy = other.y - selfPos.y;
+                    const float len = std::sqrt(dx * dx + dy * dy);
+
+                    if (len < 1.0f) return ImVec2(fallbackX, 0.0f);
+
+                    // Componente vertical limitada: mirar em cheio um alvo
+                    // quase na vertical deixaria a tangente apontando pra
+                    // cima e o fio sairia do pontinho por cima, esquisito.
+                    const float ny = std::clamp(dy / len, -0.6f, 0.6f);
+                    const float nx = std::sqrt(std::max(1.0f - ny * ny, 0.0f))
+                        * (dx < 0.0f ? -1.0f : 1.0f);
+
+                    return ImVec2(nx, ny);
+                };
+
             ed::PushStyleColor(ed::StyleColor_NodeBg, ImColor(255, 255, 255, 30));
             ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(255, 255, 255, 90));
             ed::PushStyleVar(ed::StyleVar_NodeRounding, 20.0f);
@@ -221,19 +346,29 @@ namespace axe
             if (!node->Inputs.empty())
             {
                 auto& pin = node->Inputs[0];
+
+                // Cada ponta leva a SUA forca: as duas viajam distancias
+                // diferentes, entao um valor unico deixaria uma delas torta.
+                if (uTurn) ed::PushStyleVar(ed::StyleVar_LinkStrength, strengthFor(srcPos));
+                ed::PushStyleVar(ed::StyleVar_TargetDirection, dirFor(srcPos, inDirX));
                 ed::BeginPin(pin.ID, ed::PinKind::Input);
                 ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
                 ed::EndPin();
+                ed::PopStyleVar(uTurn ? 2 : 1);
             }
             ImGui::SameLine(0, 0);
             if (!node->Outputs.empty())
             {
                 auto& pin = node->Outputs[0];
+
+                if (uTurn) ed::PushStyleVar(ed::StyleVar_LinkStrength, strengthFor(dstPos));
+                ed::PushStyleVar(ed::StyleVar_SourceDirection, dirFor(dstPos, outDirX));
                 ed::BeginPin(pin.ID, ed::PinKind::Output);
                 ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
                 ed::EndPin();
+                ed::PopStyleVar(uTurn ? 2 : 1);
             }
             ImGui::EndGroup();
 
@@ -428,6 +563,56 @@ namespace axe
             ImGui::Spacing();
         }
 
+        // ── Seletor de parametro do AnimGraph ────────────────────────────────
+        //
+        // Set Anim Float/Bool e Anim Trigger recebem o nome do parametro num
+        // pin String cujo DefaultString vinha CRAVADO na criacao do node
+        // ("Speed", "IsGrounded", "Attack") e nao tinha editor em lugar
+        // nenhum — nao havia como trocar. O Float parecia funcionar por
+        // coincidencia (o default "Speed" batia com o parametro criado); o
+        // Bool escrevia eternamente em "IsGrounded". Silencioso dos dois
+        // lados, porque AnimParameters::SetBool faz m_Values[name] e o
+        // operator[] CRIA a entrada — nascia um parametro fantasma.
+        //
+        // O widget aqui e um BOTAO, nao um combo: popup aberto de dentro de um
+        // node do imgui-node-editor nao expande. Ele registra o pedido e o
+        // popup sai no bloco suspenso, depois dos nodes.
+        {
+            int wantType = 0;
+            if (ScriptPin* paramPin = FindAnimParamPin(node, &wantType))
+            {
+                const std::string preview = paramPin->DefaultString.empty()
+                    ? std::string("(escolher parametro)") : paramPin->DefaultString;
+
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+
+                if (ImGui::Button((preview + "##animparam").c_str(), ImVec2(nodeW - 16.f, 0)))
+                {
+                    m_ComboNodeId = node->ID;
+                    m_ComboKind = 2;
+                    m_ComboRequested = true;
+                    CaptureComboAnchor();
+                }
+
+                // Nome que nao existe mais no grafo (renomeado/removido) fica
+                // vermelho em vez de falhar calado no Play.
+                if (!paramPin->DefaultString.empty())
+                {
+                    bool known = false;
+                    for (const auto& pr : CollectAnimGraphParams(false))
+                        if (pr.first == paramPin->DefaultString) { known = true; break; }
+
+                    if (!known)
+                    {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+                        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f), "nao existe no grafo");
+                    }
+                }
+
+                ImGui::Spacing();
+            }
+        }
+
         // ── Combo de seleção para Get Action / Get Axis ───────────────────────
         // Substitui o antigo pin de string solta (onde a tecla era digitada à
         // mão) por um dropdown alimentado pelo InputMappingConfig — a Action/
@@ -448,28 +633,19 @@ namespace axe
                 if (names[i] == node->StringValue) { curIdx = i; break; }
 
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-            ImGui::SetNextItemWidth(nodeW - 16.f);
             const char* comboLabel = (curIdx >= 0) ? names[curIdx].c_str()
                 : (names.empty() ? "(nenhuma configurada)" : "(selecione)");
-            if (ImGui::BeginCombo("##selname", comboLabel))
+
+            // Botao, nao combo: ver a nota do seletor de parametro acima —
+            // popup aberto dentro de um node do node-editor nao expande, o
+            // que obrigava a trocar a Action sempre pelo Script Details.
+            if (ImGui::Button((std::string(comboLabel) + "##selname").c_str(),
+                ImVec2(nodeW - 16.f, 0)))
             {
-                for (int i = 0; i < (int)names.size(); i++)
-                {
-                    bool sel = (i == curIdx);
-                    if (ImGui::Selectable(names[i].c_str(), sel))
-                    {
-                        node->StringValue = names[i];
-                        if (isGetAxis)
-                        {
-                            auto* axis = cfg.FindAxis(names[i]);
-                            if (axis) m_Graph->RebuildAxisOutputPins(node, (int)axis->ValueType);
-                        }
-                    }
-                    if (sel) ImGui::SetItemDefaultFocus();
-                }
-                if (names.empty())
-                    ImGui::TextDisabled("Configure em Project > Input Settings");
-                ImGui::EndCombo();
+                m_ComboNodeId = node->ID;
+                m_ComboKind = 1;
+                m_ComboRequested = true;
+                CaptureComboAnchor();
             }
 
             // Cobre o caso de um grafo carregado do disco (Deserialize): o
@@ -645,6 +821,106 @@ namespace axe
         ed::PopStyleVar(3);
         ed::PopStyleColor(2);
         ImGui::PopID();
+    }
+
+    // ── Parametros do AnimGraph — fonte unica ─────────────────────────────────
+    //
+    // Usada pelo popup do canvas E pelo painel Script Details. Duas telas
+    // lendo a mesma funcao nao tem como divergir.
+
+    // Converte o retangulo do botao recem-submetido de espaco de CANVAS para
+    // espaco de TELA. Chamada logo apos o Button, enquanto ele ainda e o
+    // "ultimo item" — o popup depois nasce exatamente embaixo dele, com a
+    // mesma largura, em vez de aparecer solto no meio do canvas.
+    void ScriptGraphWindow::CaptureComboAnchor()
+    {
+        const ImVec2 mn = ed::CanvasToScreen(ImGui::GetItemRectMin());
+        const ImVec2 mx = ed::CanvasToScreen(ImGui::GetItemRectMax());
+
+        m_ComboAnchor = ImVec2(mn.x, mx.y + 2.f);
+        m_ComboWidth = mx.x - mn.x;
+    }
+
+    ScriptPin* ScriptGraphWindow::FindAnimParamPin(ScriptNode* node, int* wantType)
+    {
+        if (!node) return nullptr;
+
+        int want;
+        if (node->Name == "Set Anim Float")   want = (int)AnimParamType::Float;
+        else if (node->Name == "Set Anim Bool")    want = (int)AnimParamType::Bool;
+        else if (node->Name == "Anim Trigger")     want = (int)AnimParamType::Trigger;
+        else return nullptr;
+
+        for (auto& inp : node->Inputs)
+            if (inp.Name == "Parametro")
+            {
+                if (wantType) *wantType = want;
+                return &inp;
+            }
+
+        return nullptr;
+    }
+
+    std::vector<std::pair<std::string, int>>
+        ScriptGraphWindow::CollectAnimGraphParams(bool forceReload)
+    {
+        // Cache por UUID: sem isto seria um LoadFromFile por node e por frame.
+        // forceReload existe para o momento em que o popup ABRE — assim um
+        // parametro criado no AnimGraph com o Script Editor aberto aparece
+        // sem precisar reabrir nada.
+        static std::string s_Uuid;
+        static std::vector<std::pair<std::string, int>> s_Params;
+
+        std::string uuid;
+        if (m_ScriptAsset)
+            for (const auto& c : m_ScriptAsset->GetComponents())
+                if (!c.AnimGraphUUID.empty()) { uuid = c.AnimGraphUUID; break; }
+
+        if (uuid != s_Uuid || forceReload)
+        {
+            s_Uuid = uuid;
+            s_Params.clear();
+
+            if (!uuid.empty())
+            {
+                const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+                if (auto graph = rec ? AnimGraphAsset::LoadFromFile(rec->FilePath) : nullptr)
+                    for (const auto& p : graph->GetParameters())
+                        s_Params.emplace_back(p.Name, (int)p.Type);
+            }
+        }
+
+        return s_Params;
+    }
+
+    bool ScriptGraphWindow::DrawAnimParamList(ScriptPin* paramPin, int wantType)
+    {
+        if (!paramPin) return false;
+
+        const auto params = CollectAnimGraphParams(true);
+        bool picked = false, any = false;
+
+        for (const auto& p : params)
+        {
+            // Int serve para o Set Anim Float: o getter converte entre tipos.
+            const bool fits = (p.second == wantType)
+                || (wantType == (int)AnimParamType::Float && p.second == (int)AnimParamType::Int);
+            if (!fits) continue;
+
+            any = true;
+            if (ImGui::Selectable(p.first.c_str(), p.first == paramPin->DefaultString))
+            {
+                paramPin->DefaultString = p.first;
+                picked = true;
+            }
+        }
+
+        if (!any)
+            ImGui::TextDisabled(params.empty()
+                ? "Sem AnimGraph no componente Skeletal Mesh"
+                : "O grafo nao tem parametro deste tipo");
+
+        return picked;
     }
 
 } // namespace axe

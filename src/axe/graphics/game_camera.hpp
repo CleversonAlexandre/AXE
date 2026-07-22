@@ -23,6 +23,13 @@ namespace axe
 
         const glm::vec3& GetPosition() const { return m_Position; }
 
+        // Angulo da orbita third-person, em graus. Publico porque o script
+        // precisa dele para mover o personagem em relacao a CAMERA (mouse
+        // look): sem isto, "para frente" e sempre o mesmo eixo do mundo e
+        // girar a camera nao corrige a direcao do movimento.
+        float GetYaw()   const { return m_Yaw; }
+        float GetPitch() const { return m_Pitch; }
+
         void Reset(const glm::vec3& position, float yaw, float pitch);
 
         // ── Camera Shake ──────────────────────────────────────────────────────

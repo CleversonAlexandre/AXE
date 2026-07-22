@@ -23,6 +23,8 @@
 #include <imgui_node_editor.h>
 #include <fstream>
 #include <filesystem>
+#include <functional> // std::function no desenho recursivo da arvore
+#include <cstdio>     // std::snprintf no payload de arrasto
 #include <algorithm>
 
 namespace ed = ax::NodeEditor;
@@ -292,12 +294,19 @@ namespace axe
         }
         else if (def.Type == "CharacterController")
         {
-            ImGui::DragFloat("Height", &def.CCHeight, 0.01f, 0.5f, 5.f);
-            ImGui::DragFloat("Radius", &def.CCRadius, 0.01f, 0.1f, 2.f);
-            ImGui::DragFloat("Max Slope", &def.CCMaxSlope, 0.5f, 0.f, 89.f);
-            ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f);
-            ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f);
-            ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f);
+            // Cada edicao precisa chegar ao componente REAL do preview —
+            // o wireframe da capsula e desenhado a partir dele, nao do def.
+            // Sem este sync, mexer em Height/Radius/Offset aqui nao mudava
+            // NADA na tela (o SkeletalMesh e o SpringArm ja sincronizavam;
+            // este painel era o unico que editava o def em silencio).
+            bool ccChanged = false;
+
+            if (ImGui::DragFloat("Height", &def.CCHeight, 0.01f, 0.5f, 5.f)) ccChanged = true;
+            if (ImGui::DragFloat("Radius", &def.CCRadius, 0.01f, 0.1f, 2.f)) ccChanged = true;
+            if (ImGui::DragFloat("Max Slope", &def.CCMaxSlope, 0.5f, 0.f, 89.f)) ccChanged = true;
+            if (ImGui::DragFloat("Step Height", &def.CCStepHeight, 0.01f, 0.f, 1.f)) ccChanged = true;
+            if (ImGui::DragFloat("Max Speed", &def.CCMaxSpeed, 0.1f, 0.f, 50.f)) ccChanged = true;
+            if (ImGui::DragFloat("Jump Force", &def.CCJumpForce, 0.1f, 0.f, 50.f)) ccChanged = true;
 
             {
                 float off[3] = { def.CCOffsetX, def.CCOffsetY, def.CCOffsetZ };
@@ -307,13 +316,14 @@ namespace axe
                     def.CCOffsetX = off[0];
                     def.CCOffsetY = off[1];
                     def.CCOffsetZ = off[2];
+                    ccChanged = true;
                 }
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Move a CAPSULA sem mover o personagem.\nEm metros; Y ja parte de meia altura.");
+                    ImGui::SetTooltip("Move a CAPSULA sem mover o personagem.\nEm metros; Y ja parte de meia altura.\nPara pivo nos PES (Mixamo), deixe em 0,0,0.");
             }
 
-            ImGui::Checkbox("Debug Wireframe", &def.CCShowDebug);
+            if (ImGui::Checkbox("Debug Wireframe", &def.CCShowDebug)) ccChanged = true;
 
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Desenha a capsula da fisica na viewport.\nA base dela fica nos PES do personagem.");
@@ -327,6 +337,9 @@ namespace axe
 
             if (def.CCOrientToMovement)
                 ImGui::DragFloat("Rotation Rate", &def.CCRotationRate, 10.f, 0.f, 2000.f, "%.0f deg/s");
+
+            if (ccChanged)
+                SyncComponentsToPreview();
         }
         else if (def.Type == "SpringArm")
         {
@@ -728,7 +741,7 @@ namespace axe
                 // Componentes do ScriptAsset
                 if (m_ScriptAsset)
                 {
-                    ImGui::TextDisabled("Botao direito = mover para dentro  |  ^ = tirar de dentro");
+                    ImGui::TextDisabled("Arraste o nome para dentro de outro  |  solte em Transform para tirar de dentro");
 
                     auto& comps = m_ScriptAsset->GetComponents();
                     for (int i = 0; i < (int)comps.size(); i++)
@@ -945,6 +958,43 @@ namespace axe
                                 ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
                             }
 
+                            // ── Parametro do AnimGraph, tambem aqui ──────────
+                            //
+                            // Pedido dele: "seria interessante ter nos dois,
+                            // node e script details". Mesma funcao usada pelo
+                            // popup do canvas, entao as duas telas nao tem como
+                            // divergir.
+                            {
+                                int wantType = 0;
+                                if (ScriptPin* paramPin = FindAnimParamPin(node, &wantType))
+                                {
+                                    ImGui::TextDisabled("Parametro do AnimGraph:");
+                                    ImGui::SetNextItemWidth(-1);
+
+                                    const std::string prev = paramPin->DefaultString.empty()
+                                        ? std::string("(escolher)") : paramPin->DefaultString;
+
+                                    if (ImGui::BeginCombo("##animparamdet", prev.c_str()))
+                                    {
+                                        DrawAnimParamList(paramPin, wantType);
+                                        ImGui::EndCombo();
+                                    }
+
+                                    if (!paramPin->DefaultString.empty())
+                                    {
+                                        bool known = false;
+                                        for (const auto& pr : CollectAnimGraphParams(false))
+                                            if (pr.first == paramPin->DefaultString) { known = true; break; }
+
+                                        if (!known)
+                                            ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f),
+                                                "nao existe no grafo");
+                                    }
+
+                                    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+                                }
+                            }
+
                             // Pins listados
                             for (auto& p : node->Inputs)
                             {
@@ -1109,6 +1159,29 @@ namespace axe
                     ImGui::EndDragDropSource();
                 }
 
+                // Soltar um componente AQUI o tira da hierarquia (vira raiz).
+                //
+                // Sem isto, sair de dentro de outro componente so era
+                // possivel pelo botao "^" — ou apagando o componente. Como o
+                // pai e guardado por INDICE, nao existe alvo natural para
+                // "fora"; o Transform e a raiz de todos, entao ele e o lugar
+                // que faz sentido.
+                if (ImGui::BeginDragDropTarget())
+                {
+                    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_DRAG"))
+                    {
+                        const int idx = ((const ComponentDragPayload*)p->Data)->Index;
+
+                        if (idx >= 0 && idx < (int)comps.size())
+                        {
+                            comps[idx].ParentIndex = -1;
+                            SyncComponentsToPreview();
+                        }
+                    }
+
+                    ImGui::EndDragDropTarget();
+                }
+
                 auto getColor = [](const std::string& t) -> ImVec4 {
                     if (t == "Mesh")           return { 0.6f,0.9f,1.f,1 };
                     if (t == "Material")       return { 1.f,0.7f,0.4f,1 };
@@ -1141,6 +1214,41 @@ namespace axe
                     ImGui::PushID(i);
                     if (indent > 0) ImGui::Indent(indent);
 
+                    // Aceita a soltura do reparent NO ULTIMO item submetido.
+                    // Chamado depois de mais de um item da linha (hitbox e
+                    // nome), de proposito: com overlap liberado, qual deles
+                    // fica com o hover depende de onde o cursor esta, entao
+                    // os dois precisam aceitar. Alvos redundantes nao se
+                    // atrapalham — so um recebe o payload.
+                    auto acceptReparent = [&]() {
+                        if (!ImGui::BeginDragDropTarget())
+                            return;
+
+                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_DRAG"))
+                        {
+                            const int childIdx = ((const ComponentDragPayload*)p->Data)->Index;
+
+                            // Proibe ciclo: nao da pra ser filho de si mesmo
+                            // nem de um descendente seu (a arvore viraria um
+                            // anel e o desenho recursivo entraria em loop).
+                            bool cycle = (childIdx == i);
+
+                            for (int p2 = comps[i].ParentIndex; p2 >= 0 && !cycle; )
+                            {
+                                if (p2 == childIdx) cycle = true;
+                                else p2 = comps[p2].ParentIndex;
+                            }
+
+                            if (!cycle && childIdx < (int)comps.size())
+                            {
+                                comps[childIdx].ParentIndex = i;
+                                SyncComponentsToPreview();
+                            }
+                        }
+
+                        ImGui::EndDragDropTarget();
+                        };
+
                     // ── Card estilo UE5: fundo arredondado + respiro vertical ──
                     float cardWidth = ImGui::GetContentRegionAvail().x;
                     float cardHeight = 34.f;
@@ -1153,6 +1261,43 @@ namespace axe
                     dl->AddRectFilled(cardMin, cardMax, cardBg, 6.0f);
                     if (isSelected)
                         dl->AddRect(cardMin, cardMax, ImGui::ColorConvertFloat4ToU32(ImVec4(col.x, col.y, col.z, 0.65f)), 6.0f, 0, 1.5f);
+
+                    // ── Hitbox da linha inteira ───────────────────────────
+                    //
+                    // Um item invisivel do tamanho do card, submetido ANTES
+                    // do conteudo, para que QUALQUER ponto da linha aceite a
+                    // soltura do reparent.
+                    //
+                    // SetNextItemAllowOverlap e OBRIGATORIO aqui. Sem ele o
+                    // ImGui da o hover para o PRIMEIRO item de uma regiao
+                    // sobreposta e bloqueia todos os desenhados depois — foi
+                    // o que aconteceu na V2: esta hitbox engoliu a alca, o
+                    // nome e os botoes, e nada mais respondia. Nao existe
+                    // regra de "o ultimo item vence"; a sobreposicao precisa
+                    // ser pedida.
+                    ImGui::SetNextItemAllowOverlap();
+                    ImGui::InvisibleButton("##row", ImVec2(cardWidth, cardHeight));
+                    acceptReparent();
+
+                    // Realce da linha sob o cursor durante o arrasto. Usa o
+                    // retangulo direto, e nao IsItemHovered: com overlap
+                    // liberado, a hitbox NAO conta como hovered quando o
+                    // cursor esta sobre um dos widgets por cima dela.
+                    if (const ImGuiPayload* drag = ImGui::GetDragDropPayload())
+                    {
+                        if (drag->IsDataType("COMP_DRAG")
+                            && ImGui::IsMouseHoveringRect(cardMin, cardMax)
+                            && ((const ComponentDragPayload*)drag->Data)->Index != i)
+                        {
+                            dl->AddRect(cardMin, cardMax,
+                                ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.8f, 1.f, 0.9f)),
+                                6.0f, 0, 2.0f);
+                        }
+                    }
+
+                    // Volta o cursor para o inicio do card: o conteudo e
+                    // desenhado POR CIMA da hitbox.
+                    ImGui::SetCursorScreenPos(cardMin);
 
                     ImGui::Dummy(ImVec2(8, cardHeight)); // respiro esquerdo dentro do card
                     ImGui::SameLine(0, 0);
@@ -1194,113 +1339,47 @@ namespace axe
                         m_SelectedCompIndex = i;
                     ImGui::PopStyleColor(3);
 
-                    // Drag para graph — vinculado ao Selectable acima (nome do
-                    // componente).
+                    // ── Arrasto do componente: UM gesto, dois destinos ────
                     //
-                    // COM CTRL, este source e PULADO de proposito: o ImGui so
-                    // aceita UM DragDropSource por item, e o primeiro submetido
-                    // vence. Como este vinha antes, ele engolia o gesto e o
-                    // reparent (mais abaixo) nunca disparava — era por isso que
-                    // Ctrl+arrastar nao movia componente nenhum.
-                    if (!ImGui::GetIO().KeyCtrl
-                        && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                    // Antes existia uma alca "::" so para reparentar, porque
+                    // o ImGui aceita um unico DragDropSource por item e o
+                    // nome ja arrastava para o grafo. Agora o payload leva
+                    // as DUAS informacoes (indice + node), e quem recebe
+                    // escolhe o que usar: o canvas cria o node, uma linha de
+                    // componente reparenta. Um gesto so, o mesmo que ele ja
+                    // usava e que ja funcionava.
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
                     {
+                        ComponentDragPayload drag;
+                        drag.Index = i;
+
                         std::string node;
                         if (def.Type == "Rigidbody")                             node = "GetRigidbody";
                         else if (def.Type.find("Collider") != std::string::npos)      node = "GetCollider";
                         else if (def.Type == "CharacterController")                   node = "GetCharacterController";
                         else if (def.Type == "SpringArm")                             node = "GetSpringArm";
                         else if (def.Type == "Camera")                                node = "GetCamera";
-                        if (!node.empty())
-                        {
-                            ImGui::SetDragDropPayload("COMP_NODE", node.c_str(), node.size() + 1);
-                            ImGui::PushStyleColor(ImGuiCol_Text, col);
-                            ImGui::Text("Drag %s → Graph", def.Type.c_str());
-                            ImGui::PopStyleColor();
-                        }
-                        else ImGui::TextDisabled("%s", def.Type.c_str());
+
+                        // Cabe? Node[64] contra nomes de ~24 chars — sobra,
+                        // mas o truncamento explicito evita surpresa se um
+                        // nome novo crescer.
+                        std::snprintf(drag.Node, sizeof(drag.Node), "%s", node.c_str());
+
+                        ImGui::SetDragDropPayload("COMP_DRAG", &drag, sizeof(drag));
+                        ImGui::PushStyleColor(ImGuiCol_Text, col);
+
+                        if (node.empty())
+                            ImGui::Text("Mover %s", def.Type.c_str());
+                        else
+                            ImGui::Text("%s → grafo ou para dentro de outro", def.Type.c_str());
+
+                        ImGui::PopStyleColor();
                         ImGui::EndDragDropSource();
                     }
 
-                    // ── Reparentar: QUALQUER componente em QUALQUER outro ──
-                    //
-                    // Antes so a Camera podia ser arrastada e so o SpringArm
-                    // aceitava — o que deixava qualquer outro arranjo preso
-                    // do jeito que nasceu.
-                    if (ImGui::BeginDragDropTarget())
-                    {
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("COMP_REPARENT"))
-                        {
-                            const int childIdx = *(const int*)p->Data;
-
-                            // Proibe ciclo: nao da pra ser filho de si mesmo
-                            // nem de um descendente seu (a arvore viraria um
-                            // anel e o desenho recursivo entraria em loop).
-                            bool cycle = (childIdx == i);
-
-                            for (int p2 = comps[i].ParentIndex; p2 >= 0 && !cycle; )
-                            {
-                                if (p2 == childIdx) cycle = true;
-                                else p2 = comps[p2].ParentIndex;
-                            }
-
-                            if (!cycle && childIdx < (int)comps.size())
-                                comps[childIdx].ParentIndex = i;
-                        }
-
-                        ImGui::EndDragDropTarget();
-                    }
-
-                    // Ctrl+arrastar = reparentar. O Ctrl separa este gesto do
-                    // arrasto para o GRAFO, que usa o mesmo item.
-                    if (ImGui::GetIO().KeyCtrl
-                        && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-                    {
-                        ImGui::SetDragDropPayload("COMP_REPARENT", &i, sizeof(int));
-                        ImGui::Text("Mover %s para dentro de...", def.Type.c_str());
-                        ImGui::EndDragDropSource();
-                    }
-
-                    // ── Menu de contexto: mover para dentro de... ─────────
-                    //
-                    // O arrasto (Ctrl) e escorregadio: depende de o ImGui
-                    // ceder o gesto e de acertar o alvo. Este menu faz a
-                    // MESMA coisa com dois cliques e sempre funciona — e
-                    // mostra explicitamente quais alvos sao validos.
-                    if (ImGui::BeginPopupContextItem("comp_ctx"))
-                    {
-                        if (ImGui::BeginMenu("Mover para dentro de"))
-                        {
-                            for (int t = 0; t < (int)comps.size(); ++t)
-                            {
-                                if (t == i)
-                                    continue;
-
-                                // Nao pode virar filho de um descendente seu.
-                                bool cycle = false;
-
-                                for (int p2 = comps[t].ParentIndex; p2 >= 0 && !cycle; )
-                                {
-                                    if (p2 == i) cycle = true;
-                                    else p2 = comps[p2].ParentIndex;
-                                }
-
-                                if (cycle)
-                                    continue;
-
-                                if (ImGui::MenuItem(comps[t].Type.c_str()))
-                                    comps[i].ParentIndex = t;
-                            }
-
-                            ImGui::EndMenu();
-                        }
-
-                        if (ImGui::MenuItem("Tirar de dentro (raiz)", nullptr, false,
-                            def.ParentIndex >= 0))
-                            def.ParentIndex = -1;
-
-                        ImGui::EndPopup();
-                    }
+                    // O nome tambem aceita a soltura: quando o cursor esta
+                    // sobre ele, e ELE que tem o hover, nao a hitbox.
+                    acceptReparent();
 
                     // Desparentar: com o pai definido por INDICE, arrastar de
                     // volta pra raiz nao tem alvo natural — um botao resolve
@@ -1309,12 +1388,30 @@ namespace axe
                     {
                         ImGui::SameLine();
 
+                        // O nome do pai e lido ANTES do clique. Depois de
+                        // clicar, ParentIndex ja vale -1 no mesmo frame, e o
+                        // tooltip (que ainda e avaliado, porque o cursor
+                        // segue sobre o botao) fazia comps[-1] — indice sem
+                        // sinal enorme, acesso fora de faixa, crash. O
+                        // ponteiro continua valido depois do clique: so um
+                        // int mudou, a string do pai nao foi tocada.
+                        //
+                        // A faixa tambem e checada: um ParentIndex velho,
+                        // sobrevivente de uma remocao, nao pode derrubar o
+                        // editor inteiro por causa de um tooltip.
+                        const bool parentOk = def.ParentIndex >= 0
+                            && def.ParentIndex < (int)comps.size();
+                        const char* parentName = parentOk
+                            ? comps[def.ParentIndex].Type.c_str() : "?";
+
                         if (ImGui::SmallButton("^"))
+                        {
                             def.ParentIndex = -1;
+                            SyncComponentsToPreview();
+                        }
 
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Tirar de dentro de '%s' (volta a ser raiz)",
-                                comps[def.ParentIndex].Type.c_str());
+                            ImGui::SetTooltip("Tirar de dentro de '%s' (volta a ser raiz)", parentName);
                     }
 
                     ImGui::EndGroup();
@@ -1338,15 +1435,51 @@ namespace axe
                 // Camera dentro de SpringArm), não campos de propriedades — esses
                 // ficam só no Script Details, para não duplicar dado editável em
                 // dois lugares ao mesmo tempo.
+                // Desenho RECURSIVO: cada filho sai logo abaixo do proprio
+                // pai, com um nivel de indentacao a mais.
+                //
+                // Antes eram duas passadas planas — primeiro todas as raizes,
+                // depois TODOS os filhos de qualquer pai, em ordem de indice.
+                // Um filho do SpringArm acabava desenhado depois do Material
+                // e parecia filho DELE: a hierarquia real estava certa, o
+                // desenho e que mentia. Era exatamente o "comportamento
+                // visual" que ele descreveu.
+                // Blindagem do desenho recursivo. O ParentIndex e um INDICE
+                // no vector, e indice envelhece mal: uma remocao antiga ou
+                // um arquivo salvo por uma versao anterior pode deixar um
+                // valor fora de faixa, ou ate um ciclo. Nada disso pode
+                // derrubar o editor nem sumir com um componente da lista.
+                std::vector<bool> drawn(comps.size(), false);
+
+                auto parentOf = [&](int i) {
+                    const int p = comps[i].ParentIndex;
+                    return (p >= 0 && p < (int)comps.size() && p != i) ? p : -1;
+                    };
+
+                std::function<void(int, float)> drawBranch = [&](int i, float indent) {
+                    if (i < 0 || i >= (int)comps.size() || drawn[i]) return;
+                    drawn[i] = true;
+
+                    drawComp(i, indent);
+
+                    const bool collapsed = (i >= 0 && i < 32) ? m_CompCollapsed[i] : false;
+                    if (collapsed) return;
+
+                    for (int c = 0; c < (int)comps.size(); ++c)
+                        if (parentOf(c) == i)
+                            drawBranch(c, indent + 16.f);
+                    };
+
+                // Raiz = sem pai, ou com pai invalido (orfao). Sem o segundo
+                // caso o componente simplesmente nao apareceria em lugar
+                // nenhum e pareceria ter sumido.
                 for (int i = 0; i < (int)comps.size(); i++)
-                    if (comps[i].ParentIndex == -1) drawComp(i, 0.f);
+                    if (parentOf(i) < 0) drawBranch(i, 0.f);
+
+                // Rede de seguranca: se um ciclo residual deixou alguem de
+                // fora, ele aparece na raiz em vez de desaparecer.
                 for (int i = 0; i < (int)comps.size(); i++)
-                    if (comps[i].ParentIndex >= 0)
-                    {
-                        int parent = comps[i].ParentIndex;
-                        bool parentCollapsed = (parent >= 0 && parent < 32) ? m_CompCollapsed[parent] : false;
-                        if (!parentCollapsed) drawComp(i, 16.f);
-                    }
+                    if (!drawn[i]) drawBranch(i, 0.f);
 
                 if (removeIdx >= 0)
                 {

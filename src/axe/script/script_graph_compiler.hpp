@@ -4,6 +4,7 @@
 #include "script_graph.hpp"
 #include <string>
 #include <set>
+#include <map>
 
 namespace axe
 {
@@ -56,7 +57,17 @@ namespace axe
             // pedindo um valor do futuro: o C++ gerado usaria _callResN
             // antes da declaracao (C2065). Com este registro, detectamos e
             // avisamos o AUTOR em vez de deixar o MSVC cuspir o erro cru.
-            std::set<int> emittedCalls;
+            // Nos "Call <Function>" JA emitidos neste corpo, e em qual
+            // nivel de indentacao (escopo) cada um foi emitido. O nivel
+            // importa: uma chamada emitida DENTRO de um if() declara suas
+            // variaveis de resultado naquele escopo, entao um consumidor
+            // fora dele precisa de uma emissao propria.
+            std::map<int, int> emittedCalls;
+
+            // Chamadas sendo IÇADAS neste momento — corta recursao quando
+            // uma funcao acaba consumindo o proprio resultado (grafo
+            // ciclico); sem isto, o hoist se chamaria pra sempre.
+            std::set<int> hoisting;
 
             void Line(const std::string& s = "")
             {
@@ -84,6 +95,12 @@ namespace axe
             const ScriptNode* node,
             const std::string& deltaTimeVar,
             int depth = 0);
+
+        // Emite as declaracoes de resultado + a chamada de um node
+        // "Call <Function>". Usada em DOIS momentos: quando o fluxo chega
+        // no node (caminho normal) e quando um consumidor de dados precisa
+        // do resultado ANTES disso (hoist — ver ResolvePin).
+        static void EmitCall(Context& ctx, const ScriptNode* node);
 
         // Resolve o valor de um pin de dados (segue links para trás)
         static std::string ResolvePin(Context& ctx,

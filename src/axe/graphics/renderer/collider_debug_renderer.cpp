@@ -9,6 +9,7 @@
 #include "axe/log/log.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/component_wise.hpp>
+#include <algorithm> // std::max no PushCapsule
 #include "axe/physics/physics_components.hpp"
 
 namespace axe
@@ -35,6 +36,7 @@ namespace axe
         if (m_Initialized) return;
         m_Shader = Shader::Create(s_Vert, s_Frag);
         m_Initialized = true;
+        AXE_CORE_INFO("[CAPSULE_DRAW_V1] ColliderDebugRenderer: capsula desenhada com ALTURA TOTAL (igual a fisica).");
     }
 
     // Adiciona dois pontos de linha com a cor definida
@@ -95,7 +97,18 @@ namespace axe
         const glm::mat4& model, float radius, float height)
     {
         const int segs = 16;
-        float halfH = height * 0.5f;
+
+        // `height` e a altura TOTAL da capsula (base do hemisferio inferior
+        // ate o topo do superior) — a MESMA convencao da fisica: tanto o
+        // CharacterController (PhysicsWorld::CreateCharacter) quanto o
+        // Collider Capsule (CreateShape) criam a CapsuleShape do Jolt com
+        // halfHeight = height*0.5 - radius. A versao antiga usava `height`
+        // como altura so do CILINDRO e desenhava os hemisferios ALEM dela:
+        // a capsula desenhada media Height + 2*Radius — meio metro a mais
+        // em cada ponta num personagem padrao. Era por isso que alinhar o
+        // wireframe no chao exigia um Capsule Offset que afundava o
+        // personagem no Play: o desenho e a fisica discordavam do tamanho.
+        float halfH = std::max(height * 0.5f - radius, 0.0f);
         glm::vec3 center = glm::vec3(model[3]);
 
         // Círculo do meio (cilindro)

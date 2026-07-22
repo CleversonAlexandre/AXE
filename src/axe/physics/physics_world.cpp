@@ -301,7 +301,7 @@ namespace axe
 
         cc->IsCreated = true;
         cc->CharacterID = (uint32_t)entity; // usa entity ID como handle
-        AXE_CORE_INFO("[CHARCAPSULE_V1] CharacterController criado (entity {}): origem nos PES, capsula h={:.2f} r={:.2f}.", (uint32_t)entity, cc->Height, cc->Radius);
+        AXE_CORE_INFO("[CHARCAPSULE_V1][GROUNDED_ORDER_V1] CharacterController criado (entity {}): origem nos PES, capsula h={:.2f} r={:.2f}.", (uint32_t)entity, cc->Height, cc->Radius);
     }
 
     void PhysicsWorld::DestroyCharacter(entt::entity entity, Scene& scene)
@@ -481,12 +481,15 @@ namespace axe
                 if (std::abs(vx) > 0.001f || std::abs(vz) > 0.001f)
                     AXE_CORE_INFO("PhysicsWorld CC: entity={} vel=({:.2f},{:.2f})", (uint32_t)entity, vx, vz);
 
-                // Pulo
-                bool grounded = ch.IsSupported();
-                cc.IsGrounded = grounded;
+                // Pulo — decidido com o grounded de ANTES do movimento deste
+                // frame (ch.IsSupported() aqui ainda reflete o fim do frame
+                // anterior; o valor pos-update e gravado la embaixo, depois do
+                // ExtendedUpdate). Para "posso pular?" isto e o correto: se
+                // estava no chao no fim do frame passado, pode.
+                bool groundedPre = ch.IsSupported();
                 float vy = curVel.GetY();
 
-                if (cc.WantsJump && grounded)
+                if (cc.WantsJump && groundedPre)
                 {
                     vy = cc.JumpForce;
                     cc.WantsJump = false;
@@ -513,6 +516,15 @@ namespace axe
                     {},  // BodyFilter
                     {},  // ShapeFilter
                     *ta);
+
+                // grounded ATUALIZADO: le IsSupported() DEPOIS do
+                // ExtendedUpdate, que e quando o Jolt reavalia o contato com o
+                // chao para a posicao nova. Ler antes (como era) entregava ao
+                // script o estado de um frame atras — parado no chao dava
+                // false no primeiro frame e ficava sempre defasado, porque o
+                // script roda ANTES da fisica no loop (editor_layer OnUpdate:
+                // ScriptWorld.OnSceneUpdate e so entao PhysicsWorld.OnUpdate).
+                cc.IsGrounded = ch.IsSupported();
 
                 // ── Detecta contatos do CharacterVirtual ──────────────────────
                 // CharacterVirtual não dispara o ContactListener do Jolt —

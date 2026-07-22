@@ -667,7 +667,7 @@ namespace axe
         m_EditorUI->m_AnimClipWindow.Initialize();
         m_EditorUI->m_AnimClipWindow.SetAssetBrowser(&m_EditorUI->m_AssetBowserWindow);
 
-        AXE_EDITOR_INFO("EditorLayer — BPSYNC_SAFE_V3 (sync nao derruba script + capsula no preview + reparent por menu)");
+        AXE_EDITOR_INFO("EditorLayer — NODECOMBO_V3 (popup ancorado no botao, com cara de combo)");
         m_EditorUI->m_ScriptGraphWindow.SetInspectorWindow(&m_EditorUI->m_InspectorWindow);
 
         m_EditorUI->m_ScriptGraphWindow.SetScriptSavedCallback(

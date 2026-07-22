@@ -178,6 +178,34 @@ namespace axe
         if (CameraPtr) CameraPtr->Fov = glm::clamp(fov, 10.f, 170.f);
     }
 
+    glm::vec3 ScriptCameraProxy::GetForward() const
+    {
+        // MESMA formula de GameCamera::UpdateThirdPerson (camDir.x = cos(yaw),
+        // camDir.z = sin(yaw)) — se as duas divergirem, o personagem anda
+        // torto em relacao ao que a tela mostra. Sem pitch: achatado no chao.
+        if (!CameraPtr) return glm::vec3(0.f, 0.f, 1.f);
+
+        const float yaw = glm::radians(CameraPtr->GetYaw());
+        return glm::normalize(glm::vec3(std::cos(yaw), 0.f, std::sin(yaw)));
+    }
+
+    glm::vec3 ScriptCameraProxy::GetRight() const
+    {
+        // Mao direita, Y para cima: right = forward × up.
+        return glm::normalize(glm::cross(GetForward(), glm::vec3(0.f, 1.f, 0.f)));
+    }
+
+    glm::vec3 ScriptCameraProxy::RelativeDirection(float fwdAxis, float rightAxis) const
+    {
+        const glm::vec3 dir = GetForward() * fwdAxis + GetRight() * rightAxis;
+
+        // Normaliza so quando ha movimento: normalizar o vetor nulo devolve
+        // NaN e contamina a posicao do personagem em silencio. De quebra,
+        // isto tira o ganho de velocidade na diagonal.
+        const float lenSq = glm::dot(dir, dir);
+        return (lenSq > 1e-6f) ? dir / std::sqrt(lenSq) : glm::vec3(0.f);
+    }
+
     // ── ScriptParticleProxy ───────────────────────────────────────────────────
 
     void ScriptParticleProxy::Play()

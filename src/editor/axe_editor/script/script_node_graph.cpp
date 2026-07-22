@@ -6,6 +6,7 @@
 #include "script_graph_window.hpp"
 #include "axe/script/script_graph.hpp"
 #include "axe/script/script_asset.hpp"
+#include "axe/input/input_mapping.hpp" // popup do combo de Get Action/Axis
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <algorithm>
@@ -57,8 +58,10 @@ namespace axe
         {"Get Position","GetOtherPosition"},{"Set Position","SetOtherPosition"},
         {"Get Rotation","GetOtherRotation"},{"Set Rotation","SetOtherRotation"},
         {"Get Scale","GetOtherScale"},{"Set Scale","SetOtherScale"},
-        {"Get Forward Vector","GetForwardVector"} };
+        {"Get Forward Vector","GetForwardVector"},
+        {"Get Right Vector","GetRightVector"} };
     static const NE sCam[] = {
+        {"Get Camera Direction","GetCameraDirection"},
         {"Camera Shake","CameraShake"},{"Camera Follow","CameraFollow"},
         {"Camera Stop Follow","CameraStopFollow"},{"Set Camera FOV","SetCameraFOV"} };
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
@@ -82,23 +85,31 @@ namespace axe
         {"Float to Vec3","FloatToVec3"},{nullptr,nullptr}
     };
 
+    // Conta as entradas do proprio array, ignorando a sentinela {nullptr,
+    // nullptr} quando existe (so o sCast tem uma).
+    //
+    // Antes cada categoria trazia o numero escrito a mao, e errar esse numero
+    // faz o no EXISTIR e nunca aparecer no menu — bug silencioso que ja
+    // aconteceu com o "Particle Burst" (11 escrito, 12 entradas). Derivando do
+    // array, adicionar um no passa a ser uma linha so.
+    template <size_t N>
+    static int NECount(const NE(&a)[N])
+    {
+        return (N > 0 && a[N - 1].label == nullptr) ? (int)N - 1 : (int)N;
+    }
+
     struct CatDef { const char* name; const NE* e; int n; ImVec4 col; };
     static const CatDef s_Cats[] = {
-        {"Events",        sEv,   5,  {0.85f,0.3f,0.2f,  1}},
-        // 16 = 12 originais + 4 de animacao.
-        //
-        // NOTA: estava 11 com 12 entradas no array — o "Particle Burst" nunca
-        // aparecia no menu. Contagem hardcoded e um convite a esse tipo de bug
-        // silencioso; o ideal seria std::size(sAc).
-        {"Actions",       sAc,  16,  {0.2f, 0.7f,0.45f, 1}},
-        {"Transform",     sTr,   7,  {0.9f, 0.65f,0.2f, 1}},
-        {"Camera",        sCam,  4,  {0.3f, 0.7f,0.95f, 1}},
-        {"Logic",         sLo,   8,  {0.8f, 0.6f,0.1f,  1}},
-        {"Math",          sMa,  19,  {0.3f, 0.5f,0.9f,  1}},
-        {"Input",         sIn,   2,  {0.7f, 0.2f,0.6f,  1}},
-        {"Array",         sArr,  5,  {0.55f,0.45f,0.85f,1}},
-        {"Flow Control",  sFlow, 9,  {0.45f,0.6f,0.75f, 1}},
-        {"Cast",          sCast, 7,  {0.5f, 0.8f,0.8f,  1}},
+        {"Events",        sEv,   NECount(sEv),   {0.85f,0.3f,0.2f,  1}},
+        {"Actions",       sAc,   NECount(sAc),   {0.2f, 0.7f,0.45f, 1}},
+        {"Transform",     sTr,   NECount(sTr),   {0.9f, 0.65f,0.2f, 1}},
+        {"Camera",        sCam,  NECount(sCam),  {0.3f, 0.7f,0.95f, 1}},
+        {"Logic",         sLo,   NECount(sLo),   {0.8f, 0.6f,0.1f,  1}},
+        {"Math",          sMa,   NECount(sMa),   {0.3f, 0.5f,0.9f,  1}},
+        {"Input",         sIn,   NECount(sIn),   {0.7f, 0.2f,0.6f,  1}},
+        {"Array",         sArr,  NECount(sArr),  {0.55f,0.45f,0.85f,1}},
+        {"Flow Control",  sFlow, NECount(sFlow), {0.45f,0.6f,0.75f, 1}},
+        {"Cast",          sCast, NECount(sCast), {0.5f, 0.8f,0.8f,  1}},
     };
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
@@ -712,6 +723,90 @@ namespace axe
         ed::Suspend();
         if (openPinCtx)  ImGui::OpenPopup("##PinCtx");
         if (openNodeCtx) ImGui::OpenPopup("##NodeCtx");
+
+        // ── Popup dos combos que moram DENTRO dos nodes ───────────────────────
+        //
+        // Aberto aqui, e nao no node: dentro de BeginNode/EndNode o popup do
+        // ImGui simplesmente nao expande, porque o canvas do node-editor esta
+        // com a propria transformacao ativa. Por isso o widget la e um botao
+        // que so registra o pedido — era o motivo de a Action so poder ser
+        // trocada pelo Script Details.
+        if (m_ComboRequested)
+        {
+            ImGui::OpenPopup("##NodeCombo");
+            m_ComboRequested = false;
+        }
+
+        // Aparencia de combo, nao de menu solto: nasce colado no botao, com a
+        // largura dele, fundo e realce iguais aos do dropdown do Script
+        // Details. Sem isto o popup saia pequeno e no meio do canvas.
+        ImGui::SetNextWindowPos(m_ComboAnchor);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(std::max(m_ComboWidth, 140.f), 0.f),
+            ImVec2(std::max(m_ComboWidth, 140.f), 320.f));
+
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
+
+        if (ImGui::BeginPopup("##NodeCombo"))
+        {
+            ScriptNode* cn = nullptr;
+            for (auto& n : m_Graph->GetNodes())
+                if (n->ID == m_ComboNodeId) { cn = n.get(); break; }
+
+            // Item ocupando a largura toda, como no combo do painel.
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
+
+            if (!cn)
+            {
+                ImGui::TextDisabled(" node removido");
+            }
+            else if (m_ComboKind == 2)
+            {
+                int wantType = 0;
+                if (ScriptPin* paramPin = FindAnimParamPin(cn, &wantType))
+                    if (DrawAnimParamList(paramPin, wantType)) ImGui::CloseCurrentPopup();
+            }
+            else if (m_ComboKind == 1)
+            {
+                const bool isGetAction = (cn->Name == "Get Action");
+                auto& cfg = InputMappingConfig::Get();
+
+                std::vector<std::string> names;
+                if (isGetAction) for (auto& a : cfg.GetActions()) names.push_back(a.Name);
+                else             for (auto& a : cfg.GetAxes())    names.push_back(a.Name);
+
+                for (const auto& nm : names)
+                {
+                    if (ImGui::Selectable(nm.c_str(), nm == cn->StringValue))
+                    {
+                        cn->StringValue = nm;
+
+                        if (!isGetAction)
+                        {
+                            auto* axis = cfg.FindAxis(nm);
+                            if (axis) m_Graph->RebuildAxisOutputPins(cn, (int)axis->ValueType);
+                        }
+
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+
+                if (names.empty())
+                    ImGui::TextDisabled(" Configure em Project > Input Settings");
+            }
+
+            ImGui::PopStyleVar();
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopStyleVar(4);
+        ImGui::PopStyleColor(2);
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
 
         // ── Pin context (Split / Recombine / Promote) ─────────────────────────
@@ -1190,9 +1285,27 @@ namespace axe
 
         if (ImGui::BeginDragDropTarget())
         {
+            // COMP_DRAG vem do Scene Graph e carrega indice + node: aqui so
+            // o node interessa. Node vazio (Mesh, Material...) = componente
+            // que existe na hierarquia mas nao tem node correspondente;
+            // soltar no canvas nao deve criar nada.
+            std::string nodeTypeFromComp;
+
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("COMP_DRAG"))
+            {
+                const auto* drag = (const ComponentDragPayload*)payload->Data;
+                if (drag->Node[0] != '\0')
+                    nodeTypeFromComp = drag->Node;
+            }
+
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("COMP_NODE"))
             {
-                std::string nodeType = (const char*)payload->Data;
+                nodeTypeFromComp = (const char*)payload->Data;
+            }
+
+            if (!nodeTypeFromComp.empty())
+            {
+                const std::string& nodeType = nodeTypeFromComp;
                 if (m_Graph && m_EdCtx)
                 {
                     ed::SetCurrentEditor(m_EdCtx);

@@ -932,8 +932,34 @@ namespace axe
             node->Outputs.emplace_back(m_NextId++, "Forward", ScriptPinType::Vec3, ed::PinKind::Output);
             return node;
         }
+        if (t == "GetRightVector")
+        {
+            // Par do Get Forward Vector: o "para a direita" DA ENTIDADE.
+            // Nao serve pro movimento do player (para isso e o Get Camera
+            // Direction, que segue o mouse look) — serve pra mirar, empurrar
+            // ou spawnar algo ao lado de um objeto.
+            auto node = makeNode(baseId, "Get Right Vector", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Right", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
 
         // ── Camera nodes ──────────────────────────────────────────────────────
+        if (t == "GetCameraDirection")
+        {
+            // Movimento relativo a camera (mouse look de third person).
+            // Entram os DOIS eixos crus do teclado, sai a direcao ja no
+            // referencial da camera — pronta para o pino Direction do
+            // Character Move. Os vetores da camera saem tambem, para quem
+            // quiser montar outra coisa.
+            auto node = makeNode(baseId, "Get Camera Direction", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Forward Axis", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Right Axis", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Direction", ScriptPinType::Vec3, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Camera Forward", ScriptPinType::Vec3, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Camera Right", ScriptPinType::Vec3, ed::PinKind::Output);
+            return node;
+        }
         if (t == "CameraShake")
         {
             auto node = makeNode(baseId, "Camera Shake", ScriptNodeCategory::Action);
