@@ -32,7 +32,8 @@ namespace axe
 		m_Graph.Reset();
 	}
 
-	void AnimGraphInstance::Update(const Skeleton& skeleton, float deltaTime, bool advanceTime)
+	void AnimGraphInstance::Update(const Skeleton& skeleton, float deltaTime, bool advanceTime,
+		const glm::mat4& worldTransform, bool allowWorldQueries)
 	{
 		if (!m_Asset)
 			return;
@@ -58,6 +59,8 @@ namespace axe
 		ctx.DeltaTime = deltaTime;
 		ctx.AdvanceTime = advanceTime;
 		ctx.Pool = &m_Pool;
+		ctx.WorldTransform = worldTransform;
+		ctx.AllowWorldQueries = allowWorldQueries;
 
 		m_Graph.Update(ctx);
 
@@ -70,7 +73,8 @@ namespace axe
 		// de forma intermitente, dependendo do frame. O pior tipo de bug.
 	}
 
-	void AnimGraphInstance::Evaluate(const Skeleton& skeleton, Pose& out)
+	void AnimGraphInstance::Evaluate(const Skeleton& skeleton, Pose& out,
+		const glm::mat4& worldTransform, bool allowWorldQueries)
 	{
 		if (!m_Asset)
 		{
@@ -84,6 +88,8 @@ namespace axe
 		ctx.DeltaTime = 0.0f;      // Evaluate NUNCA avança tempo. Quem avança é o Update.
 		ctx.AdvanceTime = false;
 		ctx.Pool = &m_Pool;
+		ctx.WorldTransform = worldTransform;
+		ctx.AllowWorldQueries = allowWorldQueries;
 
 		m_Graph.Evaluate(ctx, out);
 

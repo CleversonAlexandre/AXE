@@ -75,14 +75,31 @@ namespace axe
 				if (!skel.GraphInstance.HasGraph())
 					skel.GraphInstance.SetAsset(skel.GraphAsset);
 
+				// Transform do personagem no mundo — para o Foot IK converter
+				// a posição do pé pra espaço de mundo, consultar o chão via
+				// raycast e voltar. Nós que não tocam o mundo ignoram.
+				//
+				// try_get: um personagem sem TransformComponent (não deveria
+				// acontecer, mas o editor permite estados estranhos) cai na
+				// identidade e o IK trabalha como se estivesse na origem, em
+				// vez de crashar.
+				glm::mat4 worldXform(1.0f);
+
+				if (auto* tc = registry.try_get<TransformComponent>(entity))
+					worldXform = tc->Data.GetMatrix();
+
 				// DUAS FASES.
 				//
 				// Update avança o tempo e decide as transições; Evaluate produz
 				// a pose. Separados porque, num crossfade, o estado que está
 				// SAINDO precisa continuar avançando — senão ele congela no
 				// meio da transição e o pé escorrega no chão, bem visível.
-				skel.GraphInstance.Update(*skeleton, deltaTime, advance);
-				skel.GraphInstance.Evaluate(*skeleton, m_ScratchPose);
+				// allowWorldQueries = inPlay: só a cena REAL em Play tem física
+				// ativa pro Foot IK consultar. No preview do editor (inPlay
+				// false) o raycast cairia no mundo Jolt da cena principal —
+				// então o IK fica inerte lá, e a pose passa intacta.
+				skel.GraphInstance.Update(*skeleton, deltaTime, advance, worldXform, inPlay);
+				skel.GraphInstance.Evaluate(*skeleton, m_ScratchPose, worldXform, inPlay);
 
 				DispatchNotifies(scene, entity,
 					skel.GraphInstance.GetFiredNotifies(), inPlay);

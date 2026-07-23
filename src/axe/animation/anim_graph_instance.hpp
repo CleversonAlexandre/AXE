@@ -46,8 +46,17 @@ namespace axe
 		// AnimationWorld precisa poder dar Update em todos os personagens antes
 		// de avaliar qualquer um — é o que permitirá, depois, avaliar em
 		// paralelo.
-		void Update(const Skeleton& skeleton, float deltaTime, bool advanceTime = true);
-		void Evaluate(const Skeleton& skeleton, Pose& out);
+		// worldTransform (component -> mundo) só é usado por nós que tocam o
+		// mundo — hoje só o Foot IK, pro raycast no chão. Default identidade:
+		// quem chamava sem ele (a maioria dos call-sites) segue igual, e o IK
+		// só age errado se de fato houver um Foot IK no grafo E ninguém passar
+		// a transform — nesse caso ele trabalha como se estivesse na origem.
+		void Update(const Skeleton& skeleton, float deltaTime, bool advanceTime = true,
+			const glm::mat4& worldTransform = glm::mat4(1.0f),
+			bool allowWorldQueries = false);
+		void Evaluate(const Skeleton& skeleton, Pose& out,
+			const glm::mat4& worldTransform = glm::mat4(1.0f),
+			bool allowWorldQueries = false);
 
 		void Reset();
 

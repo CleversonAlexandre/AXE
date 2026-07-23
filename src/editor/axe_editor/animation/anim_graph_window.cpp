@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>     // std::sqrt — geometria das setas de transicao
 #include <set>
 #include <cstdio>
 
@@ -161,9 +162,11 @@ namespace axe
 		const std::shared_ptr<SkeletalMeshAsset>& skeleton)
 	{
 		// Carimbo de versao. Se esta linha aparecer no console ao abrir o
-		// editor, os arquivos do ANIMGRAPH_UX_V6 estao em uso (cena segue o
-		// grafo ao salvar; drop de FBX vira Clip Player; .axeskel revincula).
-		AXE_EDITOR_INFO("AnimGraph editor — ANIMGRAPH_UX_V6");
+		// editor, os arquivos do SM_UESTYLE_V1 estao em uso (maquina de
+		// estados estilo Unreal: setas retas borda-a-borda, icone de
+		// transicao clicavel, arrasto de borda cria transicao, nivel de
+		// regra navegavel).
+		AXE_EDITOR_INFO("AnimGraph editor - SM_UESTYLE_V1 + FOOTIK_V5");
 
 		m_Asset = asset;
 		m_Skeleton = skeleton;
@@ -180,6 +183,7 @@ namespace axe
 		m_SelectedNode = -1;
 		m_SelectedState = -1;
 		m_SelectedTransition = -1;
+		m_SelectedCondition = -1;
 	}
 
 	void AnimGraphWindow::NavigateTo(const NavEntry& entry)
@@ -190,6 +194,7 @@ namespace axe
 		m_SelectedNode = -1;
 		m_SelectedState = -1;
 		m_SelectedTransition = -1;
+		m_SelectedCondition = -1;
 	}
 
 	void AnimGraphWindow::NavigateUpTo(int depth)
@@ -203,6 +208,7 @@ namespace axe
 		m_SelectedNode = -1;
 		m_SelectedState = -1;
 		m_SelectedTransition = -1;
+		m_SelectedCondition = -1;
 	}
 
 	bool AnimGraphWindow::DecodePin(int pinId, int& outNode, int& outPin, bool& outIsData, bool& outIsOutput)
@@ -328,6 +334,8 @@ namespace axe
 
 			if (top.Graph)
 				DrawPoseGraphCanvas(*top.Graph);
+			else if (top.Sm && top.TransIndex >= 0)
+				DrawTransitionRuleCanvas(*top.Sm, top.TransIndex);
 			else if (top.Sm)
 				DrawStateMachineCanvas(*top.Sm);
 		}
@@ -390,8 +398,10 @@ namespace axe
 
 		if (top.Graph)
 			ImGui::TextDisabled("botao direito no fundo = adicionar no  |  duplo-clique numa State Machine = entrar nela");
+		else if (top.TransIndex >= 0)
+			ImGui::TextDisabled("botao direito no fundo = nova condicao  |  selecione um no de condicao para editar  |  Delete apaga");
 		else
-			ImGui::TextDisabled("duplo-clique num estado = abrir o sub-grafo dele  |  arraste entre os pinos = transicao");
+			ImGui::TextDisabled("arraste da BORDA de um estado = transicao  |  circulo da seta = a transicao (duplo-clique abre a regra)");
 	}
 
 	void AnimGraphWindow::DrawBreadcrumb()
@@ -1280,6 +1290,10 @@ namespace axe
 			{ "Get Bool (parametro)",  "GetBool" },
 		};
 
+		static const Entry kPostProcess[] = {
+			{ "Foot IK", "FootIK" },
+		};
+
 		auto emit = [&](const Entry* list, int count)
 			{
 				for (int i = 0; i < count; ++i)
@@ -1314,6 +1328,10 @@ namespace axe
 		emit(kBlends, 4);
 
 		ImGui::Separator();
+		ImGui::TextDisabled("Pos-processamento");
+		emit(kPostProcess, 1);
+
+		ImGui::Separator();
 		ImGui::TextDisabled("Variaveis");
 		emit(kValues, 2);
 	}
@@ -1325,6 +1343,79 @@ namespace axe
 	//  Aqui a semantica muda: no = estado, link = TRANSICAO. A informacao
 	//  importante nao vive no no — vive no link.
 	// ═════════════════════════════════════════════════════════════════════════
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  MAQUINA DE ESTADOS — SM_UESTYLE_V1
+	//
+	//  A versao anterior desenhava transicao como ed::Link entre pinos
+	//  "Entra"/"Sai". Com 4 estados isso ja era um emaranhado: todo fio nasce
+	//  e morre no MESMO ponto do card, e bezier cruzando bezier nao diz nem
+	//  DE ONDE nem PARA ONDE.
+	//
+	//  Agora e como na Unreal:
+	//
+	//    - estado e uma CAIXA compacta, sem pino nenhum;
+	//    - transicao e uma SETA RETA de borda a borda; ida e volta correm em
+	//      linhas PARALELAS (cada uma deslocada pra sua direita), entao
+	//      Idle<->Walk sao duas setas lado a lado, nao um X;
+	//    - no meio da seta vive um CIRCULO com a direcao — ELE e a transicao:
+	//      clique seleciona (painel Detalhes), duplo-clique ABRE A REGRA,
+	//      botao direito da o menu, Delete apaga;
+	//    - criar transicao = arrastar da BORDA de um estado (a borda acende
+	//      ao passar o mouse) e soltar em cima do outro. O menu de contexto
+	//      do estado tambem cria, pra quem preferir descobrir por ali.
+	//
+	//  Truques de implementacao (nenhum e obvio, todos importam):
+	//
+	//    - o circulo da transicao e um NO do node-editor SEM pinos,
+	//      re-ancorado com SetNodePosition TODO frame no meio da seta. E o
+	//      que da selecao, duplo-clique, menu de contexto e Delete de graca —
+	//      e impede o editor de tratar o clique como box-select do fundo;
+	//    - as bordas sao 4 pinos finos com ed::PinRect explicito. O rect do
+	//      no vem do frame ANTERIOR (GetNodeSize) — no primeiro frame ele e
+	//      zero e os pinos so nascem no seguinte, imperceptivel;
+	//    - enquanto um arrasto de transicao esta vivo, cada estado ganha um
+	//      pino EXTRA cobrindo o corpo inteiro: soltar no MEIO do alvo
+	//      funciona (como na Unreal). Fora do arrasto esse pino nao existe,
+	//      senao ele roubaria o clique de MOVER o estado;
+	//    - a seta e desenhada em DOIS segmentos com um vao no meio — o
+	//      circulo senta no vao, entao nao importa em qual canal do splitter
+	//      do node-editor o draw list caiu: nada risca por cima do icone.
+	// ═════════════════════════════════════════════════════════════════════════
+
+	// Ponto onde o segmento (from -> to) SAI do retangulo que contem `from`.
+	// Liang-Barsky de saida: e o que faz a seta nascer na BORDA do card, nao
+	// no centro dele.
+	static ImVec2 RectExitPoint(const ImVec2& mn, const ImVec2& mx,
+		const ImVec2& from, const ImVec2& to)
+	{
+		const float dx = to.x - from.x;
+		const float dy = to.y - from.y;
+
+		float t = 1.0f;
+
+		if (dx > 0.0f)      t = std::min(t, (mx.x - from.x) / dx);
+		else if (dx < 0.0f) t = std::min(t, (mn.x - from.x) / dx);
+
+		if (dy > 0.0f)      t = std::min(t, (mx.y - from.y) / dy);
+		else if (dy < 0.0f) t = std::min(t, (mn.y - from.y) / dy);
+
+		if (t < 0.0f) t = 0.0f;
+
+		return ImVec2(from.x + dx * t, from.y + dy * t);
+	}
+
+	static void DrawArrowHead(ImDrawList* dl, const ImVec2& tip,
+		const ImVec2& dir, ImU32 col, float size)
+	{
+		const ImVec2 n(-dir.y, dir.x);
+		const ImVec2 back(tip.x - dir.x * size, tip.y - dir.y * size);
+
+		dl->AddTriangleFilled(tip,
+			ImVec2(back.x + n.x * size * 0.55f, back.y + n.y * size * 0.55f),
+			ImVec2(back.x - n.x * size * 0.55f, back.y - n.y * size * 0.55f),
+			col);
+	}
 
 	void AnimGraphWindow::DrawStateMachineCanvas(AnimNode_StateMachine& sm)
 	{
@@ -1341,53 +1432,91 @@ namespace axe
 			m_PositionsLoaded = true;
 		}
 
-		// ANIMGRAPH_STYLE_V2 — mesmo card do grafo de poses: corpo escuro e
-		// borda do proprio node-editor, header pintado por cima.
-		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0, 0, 0, 5));
-		ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0f);
-		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
+		// Navegacoes decididas dentro do frame (duplo-clique, menu) sao
+		// EXECUTADAS so no fim — depois de gravar as posicoes dos nos.
+		int pendingStateNav = -1;
+		int pendingRuleNav = -1;
 
-		// ── Entry (estilo Unreal) ────────────────────────────────────────────
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		// ── Pinos de borda / drop (PinRect explicito) ────────────────────────
 		//
-		// A primeira pergunta de quem abre uma maquina de estados e "onde o
-		// personagem comeca?". A resposta e uma SETA, nao uma cor: o Entry
-		// aponta o estado inicial, e arrastar dele pra outro estado troca a
-		// entrada.
-		{
-			const ImVec4 entryAccent{ 0.14f, 0.30f, 0.19f, 1.0f };
+		// Chamados DENTRO do BeginNode do dono. Usam o rect do frame anterior.
+		auto SubmitBorderPins = [](int nodeId, int pinIdBase)
+			{
+				const ImVec2 p = ed::GetNodePosition(nodeId);
+				const ImVec2 s = ed::GetNodeSize(nodeId);
 
-			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
-			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+				if (s.x <= 0.0f || s.y <= 0.0f)
+					return;
+
+				const ImVec2 mn = p;
+				const ImVec2 mx(p.x + s.x, p.y + s.y);
+				const ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+
+				const float b = 9.0f;   // faixa pra dentro
+				const float o = 4.0f;   // folga pra fora (facilita a pegada)
+
+				const ImVec2 r[4][2] = {
+					{ ImVec2(mn.x - o, mn.y - o), ImVec2(mx.x + o, mn.y + b) },   // topo
+					{ ImVec2(mn.x - o, mx.y - b), ImVec2(mx.x + o, mx.y + o) },   // baixo
+					{ ImVec2(mn.x - o, mn.y),     ImVec2(mn.x + b, mx.y) },       // esquerda
+					{ ImVec2(mx.x - b, mn.y),     ImVec2(mx.x + o, mx.y) },       // direita
+				};
+
+				for (int side = 0; side < 4; ++side)
+				{
+					ed::BeginPin(pinIdBase + side, ed::PinKind::Output);
+					ed::PinRect(r[side][0], r[side][1]);
+					ed::PinPivotRect(c, c);   // o fio-preview nasce do centro
+					ed::EndPin();
+				}
+			};
+
+		auto SubmitDropPin = [](int nodeId, int pinId)
+			{
+				const ImVec2 p = ed::GetNodePosition(nodeId);
+				const ImVec2 s = ed::GetNodeSize(nodeId);
+
+				if (s.x <= 0.0f || s.y <= 0.0f)
+					return;
+
+				const ImVec2 c(p.x + s.x * 0.5f, p.y + s.y * 0.5f);
+
+				ed::BeginPin(pinId, ed::PinKind::Input);
+				ed::PinRect(ImVec2(p.x - 2.0f, p.y - 2.0f),
+					ImVec2(p.x + s.x + 2.0f, p.y + s.y + 2.0f));
+				ed::PinPivotRect(c, c);
+				ed::EndPin();
+			};
+
+		// ── Caixas ───────────────────────────────────────────────────────────
+		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(12, 7, 12, 7));
+		ed::PushStyleVar(ed::StyleVar_NodeRounding, 6.0f);
+		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.4f);
+
+		// Entry: caixinha verde com um "play". Arrastar da borda dele pra um
+		// estado REAPONTA a entrada (nao cria transicao).
+		{
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.095f, 0.20f, 0.12f, 0.98f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.9f));
 
 			ed::BeginNode(kEntryNode);
 
-			const float w = NodeWidthFor("Entry", nullptr) - 60.0f;   // card curto
+			const ImVec2 gp = ImGui::GetCursorScreenPos();
+			const float  th = ImGui::GetTextLineHeight();
 
-			DrawNodeHeader("Entry", nullptr, entryAccent, w);
+			dl->AddTriangleFilled(
+				ImVec2(gp.x + 2.0f, gp.y + 2.0f),
+				ImVec2(gp.x + 2.0f, gp.y + th - 2.0f),
+				ImVec2(gp.x + 12.0f, gp.y + th * 0.5f),
+				IM_COL32(110, 220, 130, 255));
 
-			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
-			const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
-
-			ImGui::SetCursorScreenPos(ImVec2(
-				bodyStart.x + w - contentW - 8.0f, bodyStart.y));
-
-			ed::BeginPin(kEntryOut, ed::PinKind::Output);
-			ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
-			ed::PinPivotSize(ImVec2(0, 0));
-
-			ImGui::BeginGroup();
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-			ImGui::TextUnformatted("Sai");
+			ImGui::Dummy(ImVec2(16.0f, th));
 			ImGui::SameLine();
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-				- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-			DrawPinIcon(kPoseColor, true, true);
-			ImGui::EndGroup();
+			ImGui::TextUnformatted("Entry");
 
-			ed::EndPin();
-
-			ImGui::Dummy(ImVec2(w, 1.0f));
+			SubmitBorderPins(kEntryNode, kEntryBorderPin0);
 
 			ed::EndNode();
 			ed::PopStyleColor(2);
@@ -1397,8 +1526,7 @@ namespace axe
 		//
 		// Sem ele voce teria que arrastar uma seta de TODOS os estados ate
 		// "Morrer" e "Levar dano". Mas ele so aparece se voce PEDIR (menu de
-		// contexto) ou se ja existem transicoes partindo dele — por padrao o
-		// canvas e limpo, como na Unreal.
+		// contexto) ou se ja existem transicoes partindo dele.
 		bool hasAnyTransitions = false;
 
 		for (const auto& tr : sm.Transitions)
@@ -1406,44 +1534,26 @@ namespace axe
 
 		const bool drawAnyState = m_ShowAnyState || hasAnyTransitions;
 
-		const ImVec4 anyAccent{ 0.38f, 0.28f, 0.11f, 1.0f };
-
 		if (drawAnyState)
 		{
-			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
-			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.24f, 0.185f, 0.075f, 0.98f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.9f));
 
 			ed::BeginNode(kAnyStateNode);
-			{
-				const char* anySub = "dispara de qualquer estado";
-				const float w = NodeWidthFor("Any State", anySub);
 
-				DrawNodeHeader("Any State", anySub, anyAccent, w);
+			const ImVec2 gp = ImGui::GetCursorScreenPos();
+			const float  th = ImGui::GetTextLineHeight();
+			const ImVec2 gc(gp.x + 7.0f, gp.y + th * 0.5f);
 
-				const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
-				const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
+			dl->AddCircle(gc, 6.0f, IM_COL32(255, 196, 90, 255), 0, 1.6f);
+			dl->AddCircleFilled(gc, 2.4f, IM_COL32(255, 196, 90, 255));
 
-				ImGui::SetCursorScreenPos(ImVec2(
-					bodyStart.x + w - contentW - 8.0f, bodyStart.y));
+			ImGui::Dummy(ImVec2(17.0f, th));
+			ImGui::SameLine();
+			ImGui::TextUnformatted("Any State");
 
-				ed::BeginPin(kAnyStateOut, ed::PinKind::Output);
-				ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
-				ed::PinPivotSize(ImVec2(0, 0));
+			SubmitBorderPins(kAnyStateNode, kAnyBorderPin0);
 
-				ImGui::BeginGroup();
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-				ImGui::TextUnformatted("Sai");
-				ImGui::SameLine();
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-					- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-				DrawPinIcon(kPoseColor, true, true);
-				ImGui::EndGroup();
-
-				ed::EndPin();
-
-				ImGui::Dummy(ImVec2(w, 1.0f));
-			}
 			ed::EndNode();
 			ed::PopStyleColor(2);
 		}
@@ -1453,62 +1563,37 @@ namespace axe
 		{
 			auto& st = sm.States[i];
 
-			// Quem diz onde o personagem comeca e a SETA do Entry, como na
-			// Unreal — nao uma cor especial no estado.
-			const ImVec4 accent{ 0.21f, 0.22f, 0.26f, 1.0f };   // cinza UE
-			const char* sub = "sub-grafo (duplo-clique)";
-
-			const float w = NodeWidthFor(st.Name.c_str(), sub);
-
-			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
-			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.155f, 0.165f, 0.195f, 0.98f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.9f));
 
 			ed::BeginNode(StateNode((int)i));
 
-			DrawNodeHeader(st.Name.c_str(), sub, accent, w);
+			const ImVec2 gp = ImGui::GetCursorScreenPos();
+			const float  th = ImGui::GetTextLineHeight();
+			const ImVec2 gc(gp.x + 6.0f, gp.y + th * 0.5f);
 
-			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+			// Bolinha de "estado", como o iconezinho da UE.
+			dl->AddCircleFilled(gc, 5.0f, IM_COL32(205, 208, 218, 255));
+			dl->AddCircle(gc, 5.0f, IM_COL32(0, 0, 0, 160), 0, 1.2f);
 
-			// Entra (esquerda)
-			ed::BeginPin(StateIn((int)i), ed::PinKind::Input);
-			ed::PinPivotAlignment(ImVec2(0.0f, 0.5f));
-			ed::PinPivotSize(ImVec2(0, 0));
-
-			ImGui::BeginGroup();
-			DrawPinIcon(kPoseColor, true, true);
+			ImGui::Dummy(ImVec2(15.0f, th));
 			ImGui::SameLine();
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-			ImGui::TextUnformatted("Entra");
-			ImGui::EndGroup();
+			ImGui::TextUnformatted(st.Name.c_str());
 
-			ed::EndPin();
+			// Largura minima: caixa muito curta e dificil de acertar.
+			const float used = 15.0f + ImGui::CalcTextSize(st.Name.c_str()).x;
 
-			// Sai (direita, mesma linha)
+			if (used < 78.0f)
 			{
-				const float contentW = ImGui::CalcTextSize("Sai").x + kPinIconSize + 6.0f;
-
-				ImGui::SetCursorScreenPos(ImVec2(
-					bodyStart.x + w - contentW - 8.0f, bodyStart.y));
-
-				ed::BeginPin(StateOut((int)i), ed::PinKind::Output);
-				ed::PinPivotAlignment(ImVec2(1.0f, 0.5f));
-				ed::PinPivotSize(ImVec2(0, 0));
-
-				ImGui::BeginGroup();
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-					+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-				ImGui::TextUnformatted("Sai");
-				ImGui::SameLine();
-				ImGui::SetCursorPosY(ImGui::GetCursorPosY()
-					- (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
-				DrawPinIcon(kPoseColor, true, true);
-				ImGui::EndGroup();
-
-				ed::EndPin();
+				ImGui::SameLine(0.0f, 0.0f);
+				ImGui::Dummy(ImVec2(78.0f - used, 1.0f));
 			}
 
-			ImGui::Dummy(ImVec2(w, 1.0f));
+			SubmitBorderPins(StateNode((int)i), StateBorderPin((int)i, 0));
+
+			// So durante um arrasto vivo — ver comentario do cabecalho.
+			if (m_WasCreatingLink)
+				SubmitDropPin(StateNode((int)i), StateDropPin((int)i));
 
 			ed::EndNode();
 			ed::PopStyleColor(2);
@@ -1516,15 +1601,87 @@ namespace axe
 
 		ed::PopStyleVar(3);
 
-		// ── Link do Entry ────────────────────────────────────────────────────
+		// ── Feedback de borda ────────────────────────────────────────────────
 		//
-		// Sempre desenhado (grosso, verde): e a resposta visual de "onde
-		// comeca". Nao e uma transicao — mora fora de sm.Transitions.
-		if (sm.EntryState >= 0 && sm.EntryState < (int)sm.States.size())
-			ed::Link(kEntryLink, kEntryOut, StateIn(sm.EntryState),
-				ImVec4(0.30f, 0.75f, 0.40f, 1.0f), 2.5f);
+		// Mouse numa faixa de borda = anel azul no dono + cursor de mao. E o
+		// aviso de "arrastar daqui cria transicao" — sem ele a borda e um
+		// gesto invisivel.
+		{
+			const int hp = (int)ed::GetHoveredPin().Get();
+			int ringNode = 0;
 
-		// ── Transicoes ───────────────────────────────────────────────────────
+			if (hp >= kEntryBorderPin0 && hp < kEntryBorderPin0 + 4)      ringNode = kEntryNode;
+			else if (hp >= kAnyBorderPin0 && hp < kAnyBorderPin0 + 4)     ringNode = kAnyStateNode;
+			else if (hp >= 0x71000 && hp < 0x81000)                       ringNode = StateNode((hp - 0x71000) / 4);
+
+			if (ringNode != 0)
+			{
+				const ImVec2 p = ed::GetNodePosition(ringNode);
+				const ImVec2 s = ed::GetNodeSize(ringNode);
+
+				if (s.x > 0.0f)
+				{
+					dl->AddRect(ImVec2(p.x - 3.0f, p.y - 3.0f),
+						ImVec2(p.x + s.x + 3.0f, p.y + s.y + 3.0f),
+						IM_COL32(120, 190, 255, 220), 8.0f, 0, 2.0f);
+				}
+
+				ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+			}
+		}
+
+		auto NodeRect = [](int id, ImVec2& mn, ImVec2& mx) -> bool
+			{
+				const ImVec2 p = ed::GetNodePosition(id);
+				const ImVec2 s = ed::GetNodeSize(id);
+
+				if (s.x <= 0.0f || s.y <= 0.0f)
+					return false;
+
+				mn = p;
+				mx = ImVec2(p.x + s.x, p.y + s.y);
+				return true;
+			};
+
+		// ── Seta do Entry ────────────────────────────────────────────────────
+		if (sm.EntryState >= 0 && sm.EntryState < (int)sm.States.size())
+		{
+			ImVec2 emn, emx, smn, smx;
+
+			if (NodeRect(kEntryNode, emn, emx) && NodeRect(StateNode(sm.EntryState), smn, smx))
+			{
+				const ImVec2 ce((emn.x + emx.x) * 0.5f, (emn.y + emx.y) * 0.5f);
+				const ImVec2 cs((smn.x + smx.x) * 0.5f, (smn.y + smx.y) * 0.5f);
+
+				const ImVec2 A = RectExitPoint(emn, emx, ce, cs);
+				const ImVec2 B = RectExitPoint(smn, smx, cs, ce);
+
+				const float dx = B.x - A.x, dy = B.y - A.y;
+				const float len = std::sqrt(dx * dx + dy * dy);
+
+				if (len > 4.0f)
+				{
+					const ImVec2 dir(dx / len, dy / len);
+					const ImU32  col = IM_COL32(88, 205, 112, 255);
+
+					dl->AddLine(A, ImVec2(B.x - dir.x * 9.0f, B.y - dir.y * 9.0f), col, 2.4f);
+					DrawArrowHead(dl, B, dir, col, 11.0f);
+				}
+			}
+		}
+
+		// ── Geometria das transicoes ─────────────────────────────────────────
+		struct TGeom
+		{
+			ImVec2 A, B, Dir, Mid;
+			ImU32  Col = 0;
+			bool   Valid = false;
+		};
+
+		std::vector<TGeom> geo(sm.Transitions.size());
+
+		const int hoveredNodeId = (int)ed::GetHoveredNode().Get();
+
 		for (std::size_t t = 0; t < sm.Transitions.size(); ++t)
 		{
 			const auto& tr = sm.Transitions[t];
@@ -1532,41 +1689,180 @@ namespace axe
 			if (tr.To < 0 || tr.To >= (int)sm.States.size())
 				continue;
 
-			const int from = (tr.From < 0) ? kAnyStateOut : StateOut(tr.From);
-			const int to = StateIn(tr.To);
+			ImVec2 fmn, fmx, tmn, tmx;
 
-			// Transicao com trigger em laranja: ela pode disparar a qualquer
-			// momento, e e a que mais confunde ao ler um grafo.
-			ImVec4 col{ 0.6f, 0.6f, 0.7f, 1.0f };
+			const bool okFrom = (tr.From < 0)
+				? (drawAnyState && NodeRect(kAnyStateNode, fmn, fmx))
+				: (tr.From < (int)sm.States.size() && NodeRect(StateNode(tr.From), fmn, fmx));
+
+			if (!okFrom || !NodeRect(StateNode(tr.To), tmn, tmx))
+				continue;
+
+			const ImVec2 ca((fmn.x + fmx.x) * 0.5f, (fmn.y + fmx.y) * 0.5f);
+			const ImVec2 cb((tmn.x + tmx.x) * 0.5f, (tmn.y + tmx.y) * 0.5f);
+
+			float dx = cb.x - ca.x, dy = cb.y - ca.y;
+			float len = std::sqrt(dx * dx + dy * dy);
+
+			if (len < 4.0f)
+				continue;
+
+			ImVec2 dir(dx / len, dy / len);
+			const ImVec2 n(-dir.y, dir.x);
+
+			// Faixa da seta: cada transicao anda pra SUA direita. A->B e B->A
+			// caem em lados opostos automaticamente — e o paralelismo da UE.
+			// Duplicatas na MESMA direcao ganham faixas extras.
+			int lane = 0;
+
+			for (std::size_t t2 = 0; t2 < t; ++t2)
+				if (sm.Transitions[t2].From == tr.From && sm.Transitions[t2].To == tr.To)
+					++lane;
+
+			float off = 13.0f + 16.0f * (float)lane;
+
+			const float half = std::min(
+				std::min((fmx.x - fmn.x), (tmx.x - tmn.x)) * 0.5f,
+				std::min((fmx.y - fmn.y), (tmx.y - tmn.y)) * 0.5f) - 4.0f;
+
+			off = std::min(off, std::max(6.0f, half));
+
+			const ImVec2 pa(ca.x + n.x * off, ca.y + n.y * off);
+			const ImVec2 pb(cb.x + n.x * off, cb.y + n.y * off);
+
+			const ImVec2 A = RectExitPoint(fmn, fmx, pa, pb);
+			const ImVec2 B = RectExitPoint(tmn, tmx, pb, pa);
+
+			dx = B.x - A.x; dy = B.y - A.y;
+			len = std::sqrt(dx * dx + dy * dy);
+
+			if (len < 2.0f)
+				continue;
+
+			dir = ImVec2(dx / len, dy / len);
+
+			bool hasTrigger = false;
 
 			for (const auto& c : tr.Conditions)
 				if (c.Op == AnimCompare::TriggerSet)
-					col = ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
+					hasTrigger = true;
 
-			ed::Link(TransLink((int)t), from, to, col, tr.From < 0 ? 2.5f : 1.5f);
+			ImU32 col = hasTrigger ? IM_COL32(255, 178, 64, 235)
+				: IM_COL32(196, 198, 208, 235);
+
+			if (hoveredNodeId == TransIconNode((int)t)) col = IM_COL32(255, 255, 255, 255);
+			if (m_SelectedTransition == (int)t)         col = IM_COL32(255, 200, 90, 255);
+
+			auto& g = geo[t];
+			g.A = A;
+			g.B = B;
+			g.Dir = dir;
+			g.Mid = ImVec2((A.x + B.x) * 0.5f, (A.y + B.y) * 0.5f);
+			g.Col = col;
+			g.Valid = true;
+
+			// A seta: dois segmentos com o vao do icone no meio.
+			const float thick = (m_SelectedTransition == (int)t) ? 2.8f : 2.0f;
+			const float gap = 15.0f;
+			const ImVec2 tipBack(B.x - dir.x * 9.0f, B.y - dir.y * 9.0f);
+
+			if (len > 2.0f * gap + 24.0f)
+			{
+				dl->AddLine(A, ImVec2(g.Mid.x - dir.x * gap, g.Mid.y - dir.y * gap), col, thick);
+				dl->AddLine(ImVec2(g.Mid.x + dir.x * gap, g.Mid.y + dir.y * gap), tipBack, col, thick);
+			}
+			else
+			{
+				dl->AddLine(A, tipBack, col, thick);
+			}
+
+			DrawArrowHead(dl, B, dir, col, 11.0f);
 		}
 
-		// ── Criar transicao ──────────────────────────────────────────────────
-		if (ed::BeginCreate())
+		// ── Icones de transicao (nos sem pinos, ancorados todo frame) ────────
+		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0, 0, 0, 0));
+		ed::PushStyleVar(ed::StyleVar_NodeRounding, 11.0f);
+		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.6f);
+
+		for (std::size_t t = 0; t < sm.Transitions.size(); ++t)
+		{
+			const auto& g = geo[t];
+
+			if (!g.Valid)
+				continue;
+
+			const bool sel = (m_SelectedTransition == (int)t);
+			const bool hov = (hoveredNodeId == TransIconNode((int)t));
+
+			const ImVec4 bg = sel ? ImVec4(0.95f, 0.66f, 0.20f, 1.0f)
+				: hov ? ImVec4(0.30f, 0.32f, 0.38f, 1.0f)
+				: ImVec4(0.14f, 0.15f, 0.18f, 1.0f);
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, bg);
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImGui::ColorConvertU32ToFloat4(g.Col));
+
+			ed::SetNodePosition(TransIconNode((int)t), ImVec2(g.Mid.x - 11.0f, g.Mid.y - 11.0f));
+			ed::BeginNode(TransIconNode((int)t));
+
+			const ImVec2 gp = ImGui::GetCursorScreenPos();
+			ImGui::Dummy(ImVec2(22.0f, 22.0f));
+
+			// Setinha interna apontando a DIRECAO — e o que resolve "essa
+			// transicao vai ou volta?" sem seguir a linha com o olho.
+			const ImVec2 c(gp.x + 11.0f, gp.y + 11.0f);
+			const ImVec2 d = g.Dir;
+			const ImVec2 nn(-d.y, d.x);
+
+			const ImU32 gcol = sel ? IM_COL32(28, 22, 10, 255) : g.Col;
+
+			dl->AddTriangleFilled(
+				ImVec2(c.x + d.x * 5.0f, c.y + d.y * 5.0f),
+				ImVec2(c.x - d.x * 4.0f + nn.x * 4.2f, c.y - d.y * 4.0f + nn.y * 4.2f),
+				ImVec2(c.x - d.x * 4.0f - nn.x * 4.2f, c.y - d.y * 4.0f - nn.y * 4.2f),
+				gcol);
+
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
+
+		ed::PopStyleVar(3);
+
+		// ── Criar transicao (arrasto de borda) ───────────────────────────────
+		//
+		// Qualquer pino decodifica de volta pro DONO. Entry re-aponta a
+		// entrada; Any State cria transicao com From = -1.
+		auto PinOwner = [](int id, bool& isEntry, bool& isAny) -> int
+			{
+				isEntry = false;
+				isAny = false;
+
+				if (id >= kEntryBorderPin0 && id < kEntryBorderPin0 + 4) { isEntry = true; return -2; }
+				if (id >= kAnyBorderPin0 && id < kAnyBorderPin0 + 4) { isAny = true;   return -1; }
+				if (id >= 0x71000 && id < 0x81000)                        return (id - 0x71000) / 4;
+				if (id >= 0x81000 && id < 0x91000)                        return id - 0x81000;
+
+				return -3;
+			};
+
+		const bool creating = ed::BeginCreate(ImVec4(0.45f, 0.72f, 1.0f, 1.0f), 2.5f);
+
+		if (creating)
 		{
 			ed::PinId a, b;
 
 			if (ed::QueryNewLink(&a, &b))
 			{
-				const int ia = (int)a.Get();
-				const int ib = (int)b.Get();
+				bool aEntry = false, aAny = false, bEntry = false, bAny = false;
 
-				int from = -2, to = -2;
+				const int from = PinOwner((int)a.Get(), aEntry, aAny);
+				const int to = PinOwner((int)b.Get(), bEntry, bAny);
 
-				if (ia == kAnyStateOut)                     from = -1;
-				else if (ia >= 0x21000 && ia < 0x31000)     from = ia - 0x21000;
+				const bool toIsState = (to >= 0) && !bEntry && !bAny;
 
-				if (ib >= 0x11000 && ib < 0x21000)          to = ib - 0x11000;
-
-				// Arrastar do ENTRY nao cria transicao: REAPONTA a entrada.
-				if (ia == kEntryOut)
+				if (aEntry)
 				{
-					if (to >= 0)
+					// Arrastar do ENTRY nao cria transicao: REAPONTA a entrada.
+					if (toIsState)
 					{
 						if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
 						{
@@ -1581,9 +1877,9 @@ namespace axe
 				}
 				else
 				{
-					// Auto-transicao sem exit time trava o personagem no frame 0
-					// pra sempre. Quase sempre e engano de arrasto.
-					const bool valid = (from != -2) && (to >= 0) && (from != to);
+					// Auto-transicao sem exit time trava o personagem no frame
+					// 0 pra sempre. Quase sempre e engano de arrasto.
+					const bool valid = toIsState && (aAny || (from >= 0 && from != to));
 
 					if (!valid)
 					{
@@ -1592,7 +1888,7 @@ namespace axe
 					else if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
 					{
 						AnimTransition tr;
-						tr.From = from;
+						tr.From = aAny ? -1 : from;
 						tr.To = to;
 						tr.Duration = 0.2f;
 
@@ -1606,37 +1902,34 @@ namespace axe
 		}
 		ed::EndCreate();
 
-		// ── Apagar ───────────────────────────────────────────────────────────
+		m_WasCreatingLink = creating;
+
+		// ── Apagar (Delete) ──────────────────────────────────────────────────
 		if (ed::BeginDelete())
 		{
-			ed::LinkId lid;
-			while (ed::QueryDeletedLink(&lid))
-			{
-				// O link do Entry nao se apaga: sem entrada, a maquina nao sabe
-				// onde comecar. Pra mudar, arraste do Entry pra outro estado.
-				if ((int)lid.Get() == kEntryLink)
-				{
-					ed::RejectDeletedItem();
-					continue;
-				}
-
-				if (ed::AcceptDeletedItem())
-				{
-					const int idx = (int)lid.Get() - 0x41000;
-
-					if (idx >= 0 && idx < (int)sm.Transitions.size())
-					{
-						sm.Transitions.erase(sm.Transitions.begin() + idx);
-						m_SelectedTransition = -1;
-						MarkEdited();
-					}
-				}
-			}
-
 			ed::NodeId nid;
+
 			while (ed::QueryDeletedNode(&nid))
 			{
 				const int id = (int)nid.Get();
+
+				// Icone de transicao selecionado + Delete = apagar a transicao.
+				if (id >= 0x51000 && id < 0x61000)
+				{
+					if (!ed::AcceptDeletedItem())
+						continue;
+
+					const int t = id - 0x51000;
+
+					if (t >= 0 && t < (int)sm.Transitions.size())
+					{
+						sm.Transitions.erase(sm.Transitions.begin() + t);
+						m_SelectedTransition = -1;
+						MarkEdited();
+					}
+
+					continue;
+				}
 
 				if (id == kAnyStateNode || id == kEntryNode)
 				{
@@ -1656,8 +1949,8 @@ namespace axe
 				//
 				// Sem isto, apagar o estado 2 faria toda transicao que apontava
 				// pro 3 passar a apontar pro estado errado — em silencio. E o
-				// bug so apareceria em runtime, como "o personagem vai pro estado
-				// errado as vezes".
+				// bug so apareceria em runtime, como "o personagem vai pro
+				// estado errado as vezes".
 				sm.States.erase(sm.States.begin() + idx);
 
 				sm.Transitions.erase(
@@ -1685,8 +1978,16 @@ namespace axe
 		}
 		ed::EndDelete();
 
-		// ── Menu: novo estado ────────────────────────────────────────────────
+		// ── Menus de contexto ────────────────────────────────────────────────
 		ed::Suspend();
+
+		ed::NodeId ctxNode;
+
+		if (ed::ShowNodeContextMenu(&ctxNode))
+		{
+			m_CtxNodeId = (int)ctxNode.Get();
+			ImGui::OpenPopup("sm_node_ctx");
+		}
 
 		if (ed::ShowBackgroundContextMenu())
 		{
@@ -1694,18 +1995,107 @@ namespace axe
 			ImGui::OpenPopup("add_state");
 		}
 
+		if (ImGui::BeginPopup("sm_node_ctx"))
+		{
+			const int id = m_CtxNodeId;
+
+			if (id >= 0x51000 && id < 0x61000)          // ── transicao
+			{
+				const int t = id - 0x51000;
+
+				if (t >= 0 && t < (int)sm.Transitions.size())
+				{
+					if (ImGui::MenuItem("Editar regra"))
+						pendingRuleNav = t;
+
+					if (ImGui::MenuItem("Excluir transicao"))
+					{
+						sm.Transitions.erase(sm.Transitions.begin() + t);
+						m_SelectedTransition = -1;
+						MarkEdited();
+					}
+				}
+			}
+			else if (id == kAnyStateNode)               // ── Any State
+			{
+				if (ImGui::BeginMenu("Criar transicao para"))
+				{
+					for (std::size_t j = 0; j < sm.States.size(); ++j)
+					{
+						if (ImGui::MenuItem(sm.States[j].Name.c_str()))
+						{
+							AnimTransition tr;
+							tr.From = -1;
+							tr.To = (int)j;
+							tr.Duration = 0.2f;
+
+							sm.Transitions.push_back(tr);
+							m_SelectedTransition = (int)sm.Transitions.size() - 1;
+							m_SelectedState = -1;
+							MarkEdited();
+						}
+					}
+
+					ImGui::EndMenu();
+				}
+			}
+			else if (id >= 0x01000 && id < 0x11000)     // ── estado
+			{
+				const int i = id - 0x01000;
+
+				if (i >= 0 && i < (int)sm.States.size())
+				{
+					if (ImGui::BeginMenu("Criar transicao para"))
+					{
+						for (std::size_t j = 0; j < sm.States.size(); ++j)
+						{
+							if ((int)j == i)
+								continue;
+
+							if (ImGui::MenuItem(sm.States[j].Name.c_str()))
+							{
+								AnimTransition tr;
+								tr.From = i;
+								tr.To = (int)j;
+								tr.Duration = 0.2f;
+
+								sm.Transitions.push_back(tr);
+								m_SelectedTransition = (int)sm.Transitions.size() - 1;
+								m_SelectedState = -1;
+								MarkEdited();
+							}
+						}
+
+						ImGui::EndMenu();
+					}
+
+					if (sm.EntryState != i && ImGui::MenuItem("Tornar estado de entrada"))
+					{
+						sm.EntryState = i;
+						MarkEdited();
+					}
+
+					ImGui::Separator();
+
+					if (ImGui::MenuItem("Abrir sub-grafo"))
+						pendingStateNav = i;
+				}
+			}
+
+			ImGui::EndPopup();
+		}
+
 		if (ImGui::BeginPopup("add_state"))
 		{
 			// Any State e opt-in. Com transicoes partindo dele, esconder
-			// deixaria links sem origem — dai o item trava ligado.
+			// deixaria setas sem origem — dai o item trava ligado.
 			{
-				bool anyVisible = false;
 				bool anyLocked = false;
 
 				for (const auto& tr : sm.Transitions)
 					if (tr.From < 0) { anyLocked = true; break; }
 
-				anyVisible = m_ShowAnyState || anyLocked;
+				const bool anyVisible = m_ShowAnyState || anyLocked;
 
 				if (ImGui::MenuItem("Any State", nullptr, anyVisible, !anyLocked))
 					m_ShowAnyState = !anyVisible;
@@ -1721,21 +2111,16 @@ namespace axe
 				AnimSmState st;
 				st.Name = "Estado " + std::to_string(sm.States.size());
 
-				// Nasce onde o mouse ABRIU o menu — que e onde voce esta olhando.
-				//
-				// Antes usava ScreenToCanvas em GetMousePos NA HORA do clique no
-				// item, que ja tinha se movido pro menu; o estado aparecia longe,
-				// as vezes fora da tela. Guardamos a posicao de quando o menu
-				// abriu.
+				// Nasce onde o mouse ABRIU o menu — que e onde voce esta
+				// olhando. (GetMousePos na hora do clique ja se moveu pro
+				// proprio menu.)
 				st.EditorX = m_MenuOpenCanvasPos.x;
 				st.EditorY = m_MenuOpenCanvasPos.y;
 
 				// O estado nasce com um SUB-GRAFO utilizavel: ClipPlayer ->
-				// Output, ja ligados.
-				//
-				// Um sub-grafo vazio obrigaria o usuario a entrar nele, criar um
-				// Output, criar um player e ligar os dois — quatro passos antes de
-				// ver qualquer coisa. Ninguem descobre isso sozinho.
+				// Output, ja ligados. Um sub-grafo vazio obrigaria o usuario a
+				// entrar nele, criar um Output, criar um player e ligar os
+				// dois — quatro passos antes de ver qualquer coisa.
 				const int outId = st.Graph.AddNode(CreateAnimNode("Output"));
 				st.Graph.SetOutputNode(outId);
 
@@ -1755,14 +2140,12 @@ namespace axe
 				const int newIdx = (int)sm.States.size();
 				sm.States.push_back(std::move(st));
 
-				// Posiciona SO o no novo — nao marca m_PositionsLoaded=false, que
-				// reposicionaria TODOS os nos e embaralharia o que voce ja
+				// Posiciona SO o no novo — nao marca m_PositionsLoaded=false,
+				// que reposicionaria TODOS os nos e embaralharia o que voce ja
 				// arrumou.
 				ed::SetNodePosition(StateNode(newIdx),
 					ImVec2(sm.States[newIdx].EditorX, sm.States[newIdx].EditorY));
 
-				// Ja seleciona: o painel de detalhes abre no estado novo, e voce
-				// ve na hora onde ele esta e como configura-lo.
 				m_SelectedState = newIdx;
 				m_SelectedTransition = -1;
 
@@ -1777,7 +2160,6 @@ namespace axe
 
 		// ── Selecao ──────────────────────────────────────────────────────────
 		ed::NodeId selNode = 0;
-		ed::LinkId selLink = 0;
 
 		if (ed::GetSelectedNodes(&selNode, 1) > 0)
 		{
@@ -1788,36 +2170,27 @@ namespace axe
 				m_SelectedState = id - 0x01000;
 				m_SelectedTransition = -1;
 			}
-		}
-
-		if (ed::GetSelectedLinks(&selLink, 1) > 0)
-		{
-			m_SelectedTransition = (int)selLink.Get() - 0x41000;
-			m_SelectedState = -1;
-		}
-
-		// ── Duplo-clique num estado = abrir o SUB-GRAFO ──────────────────────
-		ed::NodeId dbl = ed::GetDoubleClickedNode();
-
-		if (dbl.Get() != 0 && (int)dbl.Get() != kAnyStateNode)
-		{
-			const int idx = (int)dbl.Get() - 0x01000;
-
-			if (idx >= 0 && idx < (int)sm.States.size())
+			else if (id >= 0x51000 && id < 0x61000)
 			{
-				for (std::size_t i = 0; i < sm.States.size(); ++i)
-				{
-					const ImVec2 pos = ed::GetNodePosition(StateNode((int)i));
-					sm.States[i].EditorX = pos.x;
-					sm.States[i].EditorY = pos.y;
-				}
-
-				ed::SetCurrentEditor(nullptr);
-				NavigateTo({ sm.States[idx].Name, &sm.States[idx].Graph, nullptr });
-				return;
+				m_SelectedTransition = id - 0x51000;
+				m_SelectedState = -1;
 			}
 		}
 
+		// ── Duplo-clique ─────────────────────────────────────────────────────
+		//
+		// Estado = abrir o sub-grafo. Icone de transicao = abrir a REGRA.
+		{
+			const ed::NodeId dbl = ed::GetDoubleClickedNode();
+			const int id = (int)dbl.Get();
+
+			if (id >= 0x01000 && id < 0x11000)
+				pendingStateNav = id - 0x01000;
+			else if (id >= 0x51000 && id < 0x61000)
+				pendingRuleNav = id - 0x51000;
+		}
+
+		// Grava as posicoes TODO frame — barato, e um arrasto nunca se perde.
 		for (std::size_t i = 0; i < sm.States.size(); ++i)
 		{
 			const ImVec2 pos = ed::GetNodePosition(StateNode((int)i));
@@ -1828,6 +2201,321 @@ namespace axe
 				sm.States[i].EditorY = pos.y;
 				MarkEdited();
 			}
+		}
+
+		// ── Navegacoes pendentes (posicoes ja gravadas acima) ────────────────
+		if (pendingStateNav >= 0 && pendingStateNav < (int)sm.States.size())
+		{
+			ed::SetCurrentEditor(nullptr);
+			NavigateTo({ sm.States[pendingStateNav].Name, &sm.States[pendingStateNav].Graph, nullptr });
+			return;
+		}
+
+		if (pendingRuleNav >= 0 && pendingRuleNav < (int)sm.Transitions.size())
+		{
+			const auto& tr = sm.Transitions[pendingRuleNav];
+
+			const std::string fromName = (tr.From < 0) ? "Any State"
+				: (tr.From < (int)sm.States.size() ? sm.States[tr.From].Name : "?");
+
+			const std::string toName = (tr.To >= 0 && tr.To < (int)sm.States.size())
+				? sm.States[tr.To].Name : "?";
+
+			ed::SetCurrentEditor(nullptr);
+			NavigateTo({ fromName + " -> " + toName + " (regra)", nullptr, &sm, pendingRuleNav });
+			return;
+		}
+
+		ed::SetCurrentEditor(nullptr);
+	}
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  GRAFO DA REGRA — o "Crouch to Idle (rule)" da Unreal
+	//
+	//  Um nivel navegavel proprio: nos vermelhos de condicao alimentando o no
+	//  Result ("Can Enter Transition"). As condicoes continuam sendo DADOS
+	//  (AnimCondition), nao nos compilaveis — este canvas e a APRESENTACAO
+	//  delas: selecionar um no edita a condicao no painel Detalhes, botao
+	//  direito no fundo adiciona, Delete remove.
+	//
+	//  Posicoes aqui sao por SESSAO (nao persistem no .axeanim): sao poucos
+	//  nos e o layout automatico ja e legivel.
+	// ═════════════════════════════════════════════════════════════════════════
+	void AnimGraphWindow::DrawTransitionRuleCanvas(AnimNode_StateMachine& sm, int transIndex)
+	{
+		// A transicao pode ter sido apagada por outro caminho — sobe um nivel.
+		if (transIndex < 0 || transIndex >= (int)sm.Transitions.size())
+		{
+			NavigateUpTo((int)m_Nav.size() - 2);
+			return;
+		}
+
+		auto& tr = sm.Transitions[transIndex];
+		const auto& params = m_Asset->GetParameters();
+
+		ed::SetCurrentEditor(m_EdCtx);
+		ed::Begin("TransitionRule");
+
+		if (!m_PositionsLoaded)
+		{
+			ed::SetNodePosition(kRuleResultNode, ImVec2(560.0f, 160.0f));
+			ed::SetNodePosition(kRuleExitNode, ImVec2(150.0f, 30.0f));
+
+			for (std::size_t c = 0; c < tr.Conditions.size(); ++c)
+				ed::SetNodePosition(CondNode((int)c), ImVec2(150.0f, 130.0f + (float)c * 100.0f));
+
+			m_PositionsLoaded = true;
+		}
+
+		ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0, 0, 0, 5));
+		ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0f);
+		ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
+
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		static const char* kOpLabels[] = { ">", ">=", "<", "<=", "==", "!=", "e true", "e false", "disparou" };
+
+		// ── Result ───────────────────────────────────────────────────────────
+		{
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+
+			ed::BeginNode(kRuleResultNode);
+
+			const float w = NodeWidthFor("Result", "Can Enter Transition");
+
+			DrawNodeHeader("Result", nullptr, ImVec4(0.33f, 0.33f, 0.38f, 1.0f), w);
+
+			DrawPinIcon(kBoolColor, !tr.Conditions.empty() || tr.HasExitTime, false);
+			ImGui::SameLine();
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+			ImGui::TextUnformatted("Can Enter Transition");
+
+			ImGui::Dummy(ImVec2(w, 1.0f));
+
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
+
+		// ── Condicoes ────────────────────────────────────────────────────────
+		char buf[96];
+
+		for (std::size_t c = 0; c < tr.Conditions.size(); ++c)
+		{
+			const auto& cond = tr.Conditions[c];
+			const char* pname = cond.Parameter.empty() ? "(parametro?)" : cond.Parameter.c_str();
+			const int   op = (int)cond.Op;
+
+			if (cond.Op <= AnimCompare::NotEqual)
+				std::snprintf(buf, sizeof(buf), "%s %s %.2f", pname, kOpLabels[op], cond.Value);
+			else
+				std::snprintf(buf, sizeof(buf), "%s %s", pname, kOpLabels[op]);
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+
+			ed::BeginNode(CondNode((int)c));
+
+			const float w = NodeWidthFor("Condicao", buf);
+
+			DrawNodeHeader("Condicao", nullptr, ImVec4(0.50f, 0.18f, 0.18f, 1.0f), w);
+
+			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
+
+			ImGui::SetCursorScreenPos(ImVec2(bodyStart.x + 8.0f, bodyStart.y));
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (kPinIconSize - ImGui::GetTextLineHeight()) * 0.5f);
+			ImGui::TextUnformatted(buf);
+
+			// Pino decorativo de saida, encostado na direita.
+			ImGui::SetCursorScreenPos(ImVec2(bodyStart.x + w - kPinIconSize - 6.0f, bodyStart.y));
+			DrawPinIcon(kBoolColor, true, false);
+
+			ImGui::Dummy(ImVec2(w, 1.0f));
+
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
+
+		// ── Exit Time (informativo — edita no Detalhes) ──────────────────────
+		if (tr.HasExitTime)
+		{
+			std::snprintf(buf, sizeof(buf), "apos %.2f do ciclo", tr.ExitTime);
+
+			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
+			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+
+			ed::BeginNode(kRuleExitNode);
+
+			const float w = NodeWidthFor("Exit Time", buf);
+
+			DrawNodeHeader("Exit Time", nullptr, ImVec4(0.16f, 0.32f, 0.50f, 1.0f), w);
+
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
+			ImGui::TextUnformatted(buf);
+			ImGui::Dummy(ImVec2(w, 1.0f));
+
+			ed::EndNode();
+			ed::PopStyleColor(2);
+		}
+
+		ed::PopStyleVar(3);
+
+		// ── Fios (retos, com seta — vermelho = bool, azul = tempo) ───────────
+		{
+			auto NodeRect = [](int id, ImVec2& mn, ImVec2& mx) -> bool
+				{
+					const ImVec2 p = ed::GetNodePosition(id);
+					const ImVec2 s = ed::GetNodeSize(id);
+
+					if (s.x <= 0.0f || s.y <= 0.0f)
+						return false;
+
+					mn = p;
+					mx = ImVec2(p.x + s.x, p.y + s.y);
+					return true;
+				};
+
+			ImVec2 rmn, rmx;
+
+			if (NodeRect(kRuleResultNode, rmn, rmx))
+			{
+				const ImVec2 rc((rmn.x + rmx.x) * 0.5f, (rmn.y + rmx.y) * 0.5f);
+
+				auto DrawWire = [&](int fromNodeId, ImU32 col)
+					{
+						ImVec2 cmn, cmx;
+
+						if (!NodeRect(fromNodeId, cmn, cmx))
+							return;
+
+						const ImVec2 cc((cmn.x + cmx.x) * 0.5f, (cmn.y + cmx.y) * 0.5f);
+
+						const ImVec2 A = RectExitPoint(cmn, cmx, cc, rc);
+						const ImVec2 B = RectExitPoint(rmn, rmx, rc, cc);
+
+						const float dx = B.x - A.x, dy = B.y - A.y;
+						const float len = std::sqrt(dx * dx + dy * dy);
+
+						if (len < 4.0f)
+							return;
+
+						const ImVec2 dir(dx / len, dy / len);
+
+						dl->AddLine(A, ImVec2(B.x - dir.x * 8.0f, B.y - dir.y * 8.0f), col, 2.0f);
+						DrawArrowHead(dl, B, dir, col, 10.0f);
+					};
+
+				for (std::size_t c = 0; c < tr.Conditions.size(); ++c)
+					DrawWire(CondNode((int)c), IM_COL32(214, 92, 92, 235));
+
+				if (tr.HasExitTime)
+					DrawWire(kRuleExitNode, IM_COL32(96, 156, 214, 235));
+			}
+		}
+
+		// ── Apagar condicao (Delete) ─────────────────────────────────────────
+		if (ed::BeginDelete())
+		{
+			ed::NodeId nid;
+
+			while (ed::QueryDeletedNode(&nid))
+			{
+				const int id = (int)nid.Get();
+
+				if (id >= 0x61000 && id < 0x71000)
+				{
+					if (!ed::AcceptDeletedItem())
+						continue;
+
+					const int c = id - 0x61000;
+
+					if (c >= 0 && c < (int)tr.Conditions.size())
+					{
+						tr.Conditions.erase(tr.Conditions.begin() + c);
+						m_SelectedCondition = -1;
+						m_PositionsLoaded = false;   // re-arruma o layout
+						MarkEdited();
+					}
+				}
+				else
+				{
+					ed::RejectDeletedItem();   // Result e Exit Time ficam
+				}
+			}
+		}
+		ed::EndDelete();
+
+		// ── Menus ────────────────────────────────────────────────────────────
+		ed::Suspend();
+
+		ed::NodeId ctxNode;
+
+		if (ed::ShowNodeContextMenu(&ctxNode))
+		{
+			m_CtxNodeId = (int)ctxNode.Get();
+			ImGui::OpenPopup("rule_node_ctx");
+		}
+
+		if (ed::ShowBackgroundContextMenu())
+		{
+			m_MenuOpenCanvasPos = ed::ScreenToCanvas(ImGui::GetMousePos());
+			ImGui::OpenPopup("rule_bg_ctx");
+		}
+
+		if (ImGui::BeginPopup("rule_node_ctx"))
+		{
+			const int id = m_CtxNodeId;
+
+			if (id >= 0x61000 && id < 0x71000)
+			{
+				const int c = id - 0x61000;
+
+				if (c < (int)tr.Conditions.size() && ImGui::MenuItem("Excluir condicao"))
+				{
+					tr.Conditions.erase(tr.Conditions.begin() + c);
+					m_SelectedCondition = -1;
+					m_PositionsLoaded = false;
+					MarkEdited();
+				}
+			}
+
+			ImGui::EndPopup();
+		}
+
+		if (ImGui::BeginPopup("rule_bg_ctx"))
+		{
+			if (ImGui::MenuItem("+ Condicao"))
+			{
+				AnimCondition c;
+
+				if (!params.empty())
+					c.Parameter = params[0].Name;
+
+				tr.Conditions.push_back(c);
+
+				const int newIdx = (int)tr.Conditions.size() - 1;
+
+				ed::SetNodePosition(CondNode(newIdx), m_MenuOpenCanvasPos);
+				m_SelectedCondition = newIdx;
+				MarkEdited();
+			}
+
+			ImGui::EndPopup();
+		}
+
+		ed::Resume();
+		ed::End();
+
+		// ── Selecao ──────────────────────────────────────────────────────────
+		ed::NodeId selNode = 0;
+
+		if (ed::GetSelectedNodes(&selNode, 1) > 0)
+		{
+			const int id = (int)selNode.Get();
+
+			m_SelectedCondition = (id >= 0x61000 && id < 0x71000) ? (id - 0x61000) : -1;
 		}
 
 		ed::SetCurrentEditor(nullptr);
@@ -1870,6 +2558,47 @@ namespace axe
 			return;
 		}
 
+		// ── Nivel de REGRA (SM_UESTYLE_V1) ───────────────────────────────────
+		//
+		// No de condicao selecionado -> edita SO aquela condicao. Nada
+		// selecionado -> as opcoes da transicao inteira (como a aba Details
+		// da Unreal com a transicao aberta).
+		if (top.Sm && top.TransIndex >= 0)
+		{
+			if (top.TransIndex >= (int)top.Sm->Transitions.size())
+				return;
+
+			auto& tr = top.Sm->Transitions[top.TransIndex];
+
+			if (m_SelectedCondition >= 0 && m_SelectedCondition < (int)tr.Conditions.size())
+			{
+				ImGui::TextUnformatted("Condicao");
+				ImGui::Separator();
+
+				int removeCond = -1;
+
+				DrawConditionRow(tr, (std::size_t)m_SelectedCondition, removeCond);
+
+				ImGui::Spacing();
+
+				if (ImGui::Button("Excluir condicao", ImVec2(-1, 0)))
+					removeCond = m_SelectedCondition;
+
+				if (removeCond >= 0)
+				{
+					tr.Conditions.erase(tr.Conditions.begin() + removeCond);
+					m_SelectedCondition = -1;
+					m_PositionsLoaded = false;   // re-arruma os nos da regra
+					MarkEdited();
+				}
+
+				return;
+			}
+
+			DrawTransitionDetails(*top.Sm, top.TransIndex);
+			return;
+		}
+
 		if (top.Sm)
 		{
 			if (m_SelectedTransition >= 0 && m_SelectedTransition < (int)top.Sm->Transitions.size())
@@ -1890,7 +2619,9 @@ namespace axe
 			ImGui::TextWrapped(
 				"Estado = o que toca. Cada um contem um SUB-GRAFO de poses "
 				"(duplo-clique para abrir).\n\n"
-				"Transicao = quando trocar.\n\n"
+				"Transicao = quando trocar. Arraste da BORDA de um estado ate "
+				"outro para criar; o circulo no meio da seta E a transicao "
+				"(clique seleciona, duplo-clique abre a REGRA da condicao).\n\n"
 				"Locomocao inteira cabe em UM estado com um Blend Space. Nao faca "
 				"idle/walk/run como tres estados - as transicoes entre eles dao pop "
 				"no meio de uma aceleracao.");
@@ -2137,6 +2868,101 @@ namespace axe
 			return;
 		}
 
+		if (auto* ik = dynamic_cast<AnimNode_FootIK*>(&node))
+		{
+			ImGui::TextWrapped("Cola os pes no chao (rampas, degraus). Faz raycast "
+				"pra baixo em cada pe e dobra o joelho pra alcancar.");
+			ImGui::Spacing();
+
+			// Lista de ossos do esqueleto pros combos.
+			const Skeleton* sk = m_Skeleton ? m_Skeleton->GetSkeleton().get() : nullptr;
+
+			auto boneCombo = [&](const char* label, std::string& value)
+				{
+					if (!sk)
+					{
+						// Sem esqueleto: campo de texto puro (ainda editavel).
+						char buf[64];
+						std::snprintf(buf, sizeof(buf), "%s", value.c_str());
+						if (ImGui::InputText(label, buf, sizeof(buf))) { value = buf; MarkEdited(); }
+						return;
+					}
+
+					if (ImGui::BeginCombo(label, value.empty() ? "(escolher)" : value.c_str()))
+					{
+						for (const auto& b : sk->GetBones())
+							if (ImGui::Selectable(b.Name.c_str(), b.Name == value))
+							{
+								value = b.Name;
+								MarkEdited();
+							}
+
+						ImGui::EndCombo();
+					}
+				};
+
+			int removeLeg = -1;
+
+			for (std::size_t i = 0; i < ik->Legs.size(); ++i)
+			{
+				ImGui::PushID((int)i);
+				ImGui::Separator();
+
+				ImGui::Text("Perna %d", (int)i + 1);
+				ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
+				if (ImGui::SmallButton("x")) removeLeg = (int)i;
+
+				boneCombo("Coxa", ik->Legs[i].Upper);
+				boneCombo("Canela", ik->Legs[i].Lower);
+				boneCombo("Pe", ik->Legs[i].Foot);
+
+				ImGui::PopID();
+			}
+
+			if (removeLeg >= 0)
+			{
+				ik->Legs.erase(ik->Legs.begin() + removeLeg);
+				MarkEdited();
+			}
+
+			ImGui::Spacing();
+
+			if (ImGui::Button("+ Perna", ImVec2(-1, 0)))
+			{
+				ik->Legs.push_back({});
+				MarkEdited();
+			}
+
+			ImGui::Separator();
+			ImGui::TextDisabled("Parametros");
+
+			if (ImGui::DragFloat("Alcance max", &ik->MaxReach, 0.01f, 0.05f, 2.0f, "%.2fm")) MarkEdited();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Quanto o pe pode subir/descer do plano da animacao.\n"
+					"Passou disso, o no desiste do pe (buraco, parede).");
+
+			if (ImGui::DragFloat("Trim vertical", &ik->FootHeight, 0.005f, -0.1f, 0.2f, "%.3fm")) MarkEdited();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Ajuste fino somado a TODO pe. 0 = a sola encosta\nonde a animacao a poe. Positivo levanta.");
+
+			if (ImGui::DragFloat("Suavizacao", &ik->Smoothing, 0.5f, 0.0f, 40.0f, "%.0f/s")) MarkEdited();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Persegue o alvo em vez de saltar nele.\n"
+					"Menor = mais macio e mais atrasado. 0 = sem suavizacao.");
+
+			if (ImGui::Checkbox("Abaixar quadril (pelvis dip)", &ik->DipPelvis)) MarkEdited();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Desce o quadril quando um pe nao alcanca.\n"
+					"Sem isso, a perna estica reto e o corpo parece puxado pra cima.");
+
+			if (ik->DipPelvis)
+				boneCombo("Osso do quadril", ik->PelvisBone);
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("O pino Alpha controla a intensidade (0..1).");
+			return;
+		}
+
 		if (dynamic_cast<AnimNode_StateMachine*>(&node))
 		{
 			ImGui::TextWrapped("Duplo-clique no no para editar os estados.");
@@ -2188,6 +3014,62 @@ namespace axe
 			NavigateTo({ st.Name, &st.Graph, nullptr });
 	}
 
+	// Uma linha do editor de condicoes: [parametro] [operador] [valor] [x].
+	// Extraida pra ser reusada pelo Detalhes da transicao (lista completa) e
+	// pelo Detalhes do nivel de REGRA (uma condicao so, a selecionada).
+	void AnimGraphWindow::DrawConditionRow(AnimTransition& tr, std::size_t c, int& removeCond)
+	{
+		const auto& params = m_Asset->GetParameters();
+
+		ImGui::PushID((int)c);
+
+		auto& cond = tr.Conditions[c];
+
+		// Dropdown dos parametros declarados. Digitar o nome a mao produz o
+		// pior bug possivel: le 0 e nunca dispara, sem erro nenhum.
+		ImGui::SetNextItemWidth(90.0f);
+
+		if (ImGui::BeginCombo("##p", cond.Parameter.empty() ? "param" : cond.Parameter.c_str()))
+		{
+			for (const auto& p : params)
+			{
+				if (!ImGui::Selectable(p.Name.c_str(), p.Name == cond.Parameter))
+					continue;
+
+				cond.Parameter = p.Name;
+
+				// Ajusta o operador ao tipo: comparar ">" um Trigger nao faz
+				// sentido, e o usuario nao deveria ter que saber disso.
+				if (p.Type == AnimParamType::Trigger)   cond.Op = AnimCompare::TriggerSet;
+				else if (p.Type == AnimParamType::Bool) cond.Op = AnimCompare::IsTrue;
+
+				MarkEdited();
+			}
+
+			ImGui::EndCombo();
+		}
+
+		ImGui::SameLine();
+
+		const char* ops[] = { ">", ">=", "<", "<=", "==", "!=", "e true", "e false", "disparou" };
+		int op = (int)cond.Op;
+
+		ImGui::SetNextItemWidth(78.0f);
+		if (ImGui::Combo("##o", &op, ops, 9)) { cond.Op = (AnimCompare)op; MarkEdited(); }
+
+		if (cond.Op <= AnimCompare::NotEqual)
+		{
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(60.0f);
+			if (ImGui::DragFloat("##v", &cond.Value, 0.5f)) MarkEdited();
+		}
+
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x")) removeCond = (int)c;
+
+		ImGui::PopID();
+	}
+
 	void AnimGraphWindow::DrawTransitionDetails(AnimNode_StateMachine& sm, int index)
 	{
 		auto& tr = sm.Transitions[index];
@@ -2202,6 +3084,18 @@ namespace axe
 			? sm.States[tr.To].Name.c_str() : "?";
 
 		ImGui::Text("%s  ->  %s", fromName, toName);
+
+		// Botao pra ENTRAR na regra (so quando ainda nao estamos nela — senao
+		// empilharia um segundo nivel de regra identico).
+		if (m_Nav.back().TransIndex < 0 &&
+			ImGui::Button("Abrir grafo da regra", ImVec2(-1, 0)))
+		{
+			ed::SetCurrentEditor(nullptr);
+			NavigateTo({ std::string(fromName) + " -> " + toName + " (regra)",
+				nullptr, &sm, index });
+			return;
+		}
+
 		ImGui::Spacing();
 
 		if (ImGui::DragFloat("Duracao", &tr.Duration, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
@@ -2254,55 +3148,7 @@ namespace axe
 		int removeCond = -1;
 
 		for (std::size_t c = 0; c < tr.Conditions.size(); ++c)
-		{
-			ImGui::PushID((int)c);
-
-			auto& cond = tr.Conditions[c];
-
-			// Dropdown dos parametros declarados. Digitar o nome a mao produz o
-			// pior bug possivel: le 0 e nunca dispara, sem erro nenhum.
-			ImGui::SetNextItemWidth(90.0f);
-
-			if (ImGui::BeginCombo("##p", cond.Parameter.empty() ? "param" : cond.Parameter.c_str()))
-			{
-				for (const auto& p : params)
-				{
-					if (!ImGui::Selectable(p.Name.c_str(), p.Name == cond.Parameter))
-						continue;
-
-					cond.Parameter = p.Name;
-
-					// Ajusta o operador ao tipo: comparar ">" um Trigger nao faz
-					// sentido, e o usuario nao deveria ter que saber disso.
-					if (p.Type == AnimParamType::Trigger)   cond.Op = AnimCompare::TriggerSet;
-					else if (p.Type == AnimParamType::Bool) cond.Op = AnimCompare::IsTrue;
-
-					MarkEdited();
-				}
-
-				ImGui::EndCombo();
-			}
-
-			ImGui::SameLine();
-
-			const char* ops[] = { ">", ">=", "<", "<=", "==", "!=", "e true", "e false", "disparou" };
-			int op = (int)cond.Op;
-
-			ImGui::SetNextItemWidth(78.0f);
-			if (ImGui::Combo("##o", &op, ops, 9)) { cond.Op = (AnimCompare)op; MarkEdited(); }
-
-			if (cond.Op <= AnimCompare::NotEqual)
-			{
-				ImGui::SameLine();
-				ImGui::SetNextItemWidth(60.0f);
-				if (ImGui::DragFloat("##v", &cond.Value, 0.5f)) MarkEdited();
-			}
-
-			ImGui::SameLine();
-			if (ImGui::SmallButton("x")) removeCond = (int)c;
-
-			ImGui::PopID();
-		}
+			DrawConditionRow(tr, c, removeCond);
 
 		if (removeCond >= 0)
 		{

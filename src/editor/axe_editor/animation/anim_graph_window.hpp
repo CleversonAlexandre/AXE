@@ -83,6 +83,11 @@ namespace axe
 			std::string             Label;
 			AnimPoseGraph* Graph = nullptr;
 			AnimNode_StateMachine* Sm = nullptr;
+
+			// SM_UESTYLE_V1: >= 0 significa que este nivel e a REGRA da
+			// transicao Sm->Transitions[TransIndex] — o "Crouch to Idle
+			// (rule)" da Unreal. Graph continua nulo nesse caso.
+			int TransIndex = -1;
 		};
 
 		void DrawBreadcrumb();
@@ -108,10 +113,15 @@ namespace axe
 
 		void DrawPoseGraphCanvas(AnimPoseGraph& graph);
 		void DrawStateMachineCanvas(AnimNode_StateMachine& sm);
+		void DrawTransitionRuleCanvas(AnimNode_StateMachine& sm, int transIndex);
 
 		void DrawNodeDetails(AnimNode& node);
 		void DrawTransitionDetails(AnimNode_StateMachine& sm, int index);
 		void DrawStateDetails(AnimNode_StateMachine& sm, int index);
+
+		// Uma linha de condicao (parametro / operador / valor / excluir).
+		// Usada pelo Detalhes da transicao E pelo Detalhes do nivel de regra.
+		void DrawConditionRow(AnimTransition& tr, std::size_t c, int& removeCond);
 
 		void DrawNodePalette(AnimPoseGraph& graph);
 
@@ -133,21 +143,31 @@ namespace axe
 		static int LinkId(int i) { return 0x40000 + i; }
 
 		// Máquina de estados (outro canvas, outra faixa).
+		//
+		// SM_UESTYLE_V1: nao existem mais pinos Entra/Sai nem ed::Link de
+		// transicao. A transicao virou um NO-ICONE (o circulo no meio da
+		// seta), e a criacao sai de PINOS DE BORDA — 4 faixas finas por
+		// estado, com ed::PinRect explicito. O pino de "drop" cobre o corpo
+		// inteiro do estado e so existe enquanto um arrasto esta vivo.
 		static int StateNode(int i) { return 0x01000 + i; }
-		static int StateIn(int i) { return 0x11000 + i; }
-		static int StateOut(int i) { return 0x21000 + i; }
-		static int TransLink(int i) { return 0x41000 + i; }
+		static int TransIconNode(int t) { return 0x51000 + t; }
+		static int StateBorderPin(int i, int side) { return 0x71000 + i * 4 + side; }
+		static int StateDropPin(int i) { return 0x81000 + i; }
 
 		static constexpr int kAnyStateNode = 0x00900;
-		static constexpr int kAnyStateOut = 0x00901;
+		static constexpr int kAnyBorderPin0 = 0x00910;   // +0..3
 
 		// Entry (estilo Unreal): um no fixo de onde UMA seta sai e aponta o
-		// estado inicial. Arrastar Entry -> estado troca o EntryState. O link
-		// e sempre desenhado e nao pode ser apagado — sem entrada, a maquina
-		// nao sabe onde comecar.
+		// estado inicial. Arrastar da borda do Entry ate um estado troca o
+		// EntryState. A seta e sempre desenhada e nao pode ser apagada — sem
+		// entrada, a maquina nao sabe onde comecar.
 		static constexpr int kEntryNode = 0x00800;
-		static constexpr int kEntryOut = 0x00801;
-		static constexpr int kEntryLink = 0x00902;
+		static constexpr int kEntryBorderPin0 = 0x00810; // +0..3
+
+		// Nivel de REGRA (o grafo da condicao de UMA transicao).
+		static int CondNode(int i) { return 0x61000 + i; }
+		static constexpr int kRuleResultNode = 0x00A00;
+		static constexpr int kRuleExitNode = 0x00A10;
 
 		// Decodifica um pino de volta em (nó, índice, é-dado?).
 		static bool DecodePin(int pinId, int& outNode, int& outPin, bool& outIsData, bool& outIsOutput);
@@ -178,6 +198,15 @@ namespace axe
 		int m_SelectedNode = -1;         // no canvas de grafo
 		int m_SelectedState = -1;        // no canvas de máquina
 		int m_SelectedTransition = -1;
+		int m_SelectedCondition = -1;    // no canvas de REGRA
+
+		// O frame ANTERIOR tinha um arrasto de transicao vivo? E o que liga
+		// os pinos de "drop" (corpo inteiro) dos estados — eles nao podem
+		// existir fora do arrasto, senao roubam o clique de mover o no.
+		bool m_WasCreatingLink = false;
+
+		// No que abriu o menu de contexto da maquina/regra.
+		int m_CtxNodeId = 0;
 
 		// Any State e OPCIONAL: escondido por padrao (na Unreal ele nem
 		// existe). Aparece por escolha no menu de contexto — ou a forca,

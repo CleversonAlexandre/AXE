@@ -301,7 +301,7 @@ namespace axe
 
         cc->IsCreated = true;
         cc->CharacterID = (uint32_t)entity; // usa entity ID como handle
-        AXE_CORE_INFO("[CHARCAPSULE_V1][GROUNDED_ORDER_V1] CharacterController criado (entity {}): origem nos PES, capsula h={:.2f} r={:.2f}.", (uint32_t)entity, cc->Height, cc->Radius);
+        AXE_CORE_INFO("[CHARCAPSULE_V1][GROUNDED_ORDER_V1][SLOPE_STICK_V1] CharacterController criado (entity {}): origem nos PES, capsula h={:.2f} r={:.2f}, rampa max {:.0f} graus.", (uint32_t)entity, cc->Height, cc->Radius, cc->MaxSlopeAngle);
     }
 
     void PhysicsWorld::DestroyCharacter(entt::entity entity, Scene& scene)
@@ -478,8 +478,8 @@ namespace axe
                 float vx = cc.Velocity.x;
                 float vz = cc.Velocity.z;
 
-                if (std::abs(vx) > 0.001f || std::abs(vz) > 0.001f)
-                    AXE_CORE_INFO("PhysicsWorld CC: entity={} vel=({:.2f},{:.2f})", (uint32_t)entity, vx, vz);
+                //if (std::abs(vx) > 0.001f || std::abs(vz) > 0.001f)
+                //    AXE_CORE_INFO("PhysicsWorld CC: entity={} vel=({:.2f},{:.2f})", (uint32_t)entity, vx, vz);
 
                 // Pulo — decidido com o grounded de ANTES do movimento deste
                 // frame (ch.IsSupported() aqui ainda reflete o fim do frame
@@ -487,6 +487,28 @@ namespace axe
                 // ExtendedUpdate). Para "posso pular?" isto e o correto: se
                 // estava no chao no fim do frame passado, pode.
                 bool groundedPre = ch.IsSupported();
+
+                // ── Velocidade vertical ───────────────────────────────────────
+                //
+                // APOIADO em chao caminhavel = a velocidade vertical NAO
+                // acumula.
+                //
+                // Antes a gravidade somava todo frame, sempre. Em piso PLANO
+                // isso nao aparece: o vetor aponta direto pra dentro do chao e
+                // o Jolt cancela inteiro. Numa RAMPA, nao — o Jolt projeta esse
+                // vetor no plano inclinado e sobra uma componente TANGENTE,
+                // morro abaixo. Como a gravidade continuava somando, a
+                // componente crescia a cada frame: o personagem escorregava
+                // pela rampa, acelerando, mesmo sem input nenhum.
+                //
+                // O proprio Jolt documenta a divisao no EGroundState: em
+                // OnSteepGround "o chamador deve aplicar velocidade pra baixo
+                // SE quiser deslizar". Em OnGround, portanto, nao deve.
+                const JPH::CharacterBase::EGroundState groundState = ch.GetGroundState();
+
+                const bool onWalkable =
+                    (groundState == JPH::CharacterBase::EGroundState::OnGround);
+
                 float vy = curVel.GetY();
 
                 if (cc.WantsJump && groundedPre)
@@ -494,9 +516,18 @@ namespace axe
                     vy = cc.JumpForce;
                     cc.WantsJump = false;
                 }
+                else if (onWalkable && vy <= 0.0f)
+                {
+                    // Adota a velocidade do CHAO — 0 num piso estatico, a da
+                    // plataforma se ela se mover (elevador, barco). Quem
+                    // mantem o contato ao DESCER a rampa e o
+                    // mStickToFloorStepDown do ExtendedUpdate, logo abaixo.
+                    vy = ch.GetGroundVelocity().GetY();
+                }
                 else
                 {
-                    // Aplica gravidade
+                    // No ar, ou em rampa ingreme demais (acima do MaxSlopeAngle):
+                    // ai deslizar e o comportamento certo.
                     vy += gravity.GetY() * deltaTime;
                 }
 

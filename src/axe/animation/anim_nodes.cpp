@@ -2,8 +2,11 @@
 #include <nlohmann/json.hpp>
 #include "animation_sampler.hpp"
 #include "axe/log/log.hpp"
+#include "axe/physics/physics_system.hpp"   // Foot IK: raycast no chao
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>            // glm::rotation, glm::slerp
+#include <glm/gtx/norm.hpp>
 #include <cmath>
 
 namespace axe
@@ -570,6 +573,557 @@ namespace axe
 
 	// ═══ Fábrica ═════════════════════════════════════════════════════════════
 
+	// ═══ Foot IK ═════════════════════════════════════════════════════════════
+	//
+	// A matemática do two-bone IK é a lei dos cossenos: sabendo o comprimento
+	// da coxa (a) e da canela (b) e a distância do quadril ao alvo (c), o
+	// ângulo do joelho é único. O resto é orientar a cadeia pra apontar do
+	// quadril ao alvo, mantendo o joelho dobrando pra frente (o "pole vector").
+	//
+	// Trabalhamos em ESPAÇO DE COMPONENTE (globais do personagem, antes da
+	// world transform): é onde a hierarquia de ossos vive. Só o raycast sai
+	// pra mundo e volta.
+
+	namespace
+	{
+		// Poses globais (component-space) da pose local, num loop pra frente.
+		// Mesmo cálculo do AnimationSampler::BuildPose, mas guardando a matriz
+		// global de cada osso — que é o que o IK precisa ler e reescrever.
+		void ComputeGlobals(const Skeleton& skel, const Pose& pose,
+			std::vector<glm::mat4>& globals)
+		{
+			const auto& bones = skel.GetBones();
+			const std::size_t n = bones.size();
+			globals.resize(n);
+
+			for (std::size_t i = 0; i < n; ++i)
+			{
+				const glm::mat4 local = (i < pose.Size())
+					? pose[i].ToMatrix()
+					: bones[i].LocalBindPose;
+
+				globals[i] = (bones[i].ParentIndex < 0)
+					? local
+					: globals[bones[i].ParentIndex] * local;
+			}
+		}
+
+		glm::vec3 MatPos(const glm::mat4& m) { return glm::vec3(m[3]); }
+
+		// Casa um nome de osso TOLERANDO prefixo de namespace.
+		//
+		// Os nomes vem do arquivo CRUS: a Mixamo grava "mixamorig:LeftUpLeg",
+		// o Blender as vezes "Armature|LeftUpLeg", outro rig so "LeftUpLeg".
+		// Skeleton::FindBone e exato — entao um nome escrito sem o prefixo (ou
+		// com um prefixo diferente) simplesmente NAO acha, e o no fica MUDO,
+		// sem erro visivel na tela. Foi exatamente o que aconteceu com os
+		// defaults deste no.
+		//
+		// O loader ja faz esse mesmo casamento por sufixo pra ligar os canais
+		// dos clipes aos ossos; aqui e a mesma politica, inclusive na recusa do
+		// ambiguo — casar errado em silencio e pior que nao casar.
+		int FindBoneFlexible(const Skeleton& skel, const std::string& name)
+		{
+			if (name.empty())
+				return -1;
+
+			const int exact = skel.FindBone(name);
+
+			if (exact >= 0)
+				return exact;
+
+			auto suffixOf = [](const std::string& s) -> std::string
+				{
+					const std::size_t p = s.find_last_of(":|");
+					return (p == std::string::npos) ? s : s.substr(p + 1);
+				};
+
+			const std::string want = suffixOf(name);
+
+			const auto& bones = skel.GetBones();
+
+			int found = -1;
+			int matches = 0;
+
+			for (std::size_t i = 0; i < bones.size(); ++i)
+			{
+				if (suffixOf(bones[i].Name) != want)
+					continue;
+
+				++matches;
+
+				if (found < 0)
+					found = (int)i;
+			}
+
+			return (matches == 1) ? found : -1;
+		}
+
+		// Reescreve o LOCAL de um osso a partir de um novo GLOBAL, dado o
+		// global do pai — o inverso da concatenação de ComputeGlobals.
+		// local = parentGlobal⁻¹ * newGlobal.
+		BoneTransform LocalFromGlobal(const glm::mat4& newGlobal,
+			const glm::mat4& parentGlobal)
+		{
+			return BoneTransform::FromMatrix(glm::inverse(parentGlobal) * newGlobal);
+		}
+	}
+
+	void AnimNode_FootIK::ResolveBones(const Skeleton& skel)
+	{
+		// Carimbo de versao do lado da axe.dll. Aparece uma vez por no, quando
+		// ele resolve os ossos — confirma que o runtime do FOOTIK_V1 esta em
+		// uso (e nao so o editor recompilado).
+		AXE_CORE_INFO("FootIK - FOOTIK_V5 ({} pernas)", Legs.size());
+
+		m_Resolved.clear();
+		m_Resolved.reserve(Legs.size());
+
+		int failed = 0;
+
+		for (const auto& leg : Legs)
+		{
+			ResolvedLeg r;
+			r.Upper = FindBoneFlexible(skel, leg.Upper);
+			r.Lower = FindBoneFlexible(skel, leg.Lower);
+			r.Foot = FindBoneFlexible(skel, leg.Foot);
+
+			if (r.Upper < 0 || r.Lower < 0 || r.Foot < 0)
+			{
+				// Diz QUAL osso falhou — "a perna nao casou" nao ajuda a
+				// consertar. Um '?' marca o que nao foi encontrado.
+				AXE_CORE_WARN("FootIK: perna IGNORADA — coxa '{}'{} canela '{}'{} pe '{}'{}",
+					leg.Upper, r.Upper < 0 ? " (?)" : "",
+					leg.Lower, r.Lower < 0 ? " (?)" : "",
+					leg.Foot, r.Foot < 0 ? " (?)" : "");
+
+				++failed;
+			}
+			else
+			{
+				AXE_CORE_INFO("FootIK: perna OK — {} / {} / {}",
+					skel.GetBones()[r.Upper].Name,
+					skel.GetBones()[r.Lower].Name,
+					skel.GetBones()[r.Foot].Name);
+			}
+
+			m_Resolved.push_back(r);
+		}
+
+		// Nenhuma perna casou = o no nao vai fazer NADA. Sem este aviso o
+		// sintoma e "o IK simplesmente nao funciona", sem pista nenhuma —
+		// entao mostramos alguns nomes reais do esqueleto pra comparar.
+		if (failed > 0 && failed == (int)Legs.size() && !skel.GetBones().empty())
+		{
+			std::string sample;
+
+			for (std::size_t i = 0; i < skel.GetBones().size() && i < 6; ++i)
+				sample += (i ? ", " : "") + skel.GetBones()[i].Name;
+
+			AXE_CORE_ERROR("FootIK: NENHUMA perna casou com o esqueleto — o no "
+				"nao fara nada. Ossos deste esqueleto comecam assim: {} ...", sample);
+		}
+
+		// Pélvis: o osso nomeado, ou o pai comum das coxas, ou a raiz.
+		m_PelvisIdx = PelvisBone.empty() ? -1 : FindBoneFlexible(skel, PelvisBone);
+
+		if (m_PelvisIdx < 0 && !m_Resolved.empty() && m_Resolved[0].Upper >= 0)
+		{
+			// Pai da primeira coxa é o candidato natural (quadril/pélvis).
+			m_PelvisIdx = skel.GetBones()[m_Resolved[0].Upper].ParentIndex;
+		}
+
+		m_BonesResolved = true;
+	}
+
+	void AnimNode_FootIK::Update(AnimEvalContext& ctx)
+	{
+		// Guarda o dt aqui: o contexto do Evaluate vem com DeltaTime = 0 (so o
+		// Update avanca tempo), mas a suavizacao precisa dele — e o Update
+		// sempre roda antes do Evaluate no mesmo frame.
+		m_LastDt = ctx.DeltaTime;
+
+		UpdateInput(ctx, 0);
+	}
+
+	void AnimNode_FootIK::Reset()
+	{
+		m_State.clear();
+		m_PelvisOffset = 0.0f;
+	}
+
+	void AnimNode_FootIK::Evaluate(AnimEvalContext& ctx, Pose& out)
+	{
+		if (!ctx.Skel || !ctx.Pool)
+			return;
+
+		// A pose de entrada é o ponto de partida SEMPRE — o IK só corrige.
+		EvalInput(ctx, 0, out);
+
+		// Sem física ativa (preview do editor), o IK não tem chão pra
+		// consultar. Passa a pose intacta em vez de raycastar no mundo errado.
+		if (!ctx.AllowWorldQueries)
+			return;
+
+		const float alpha = glm::clamp(ReadFloat(ctx, 0), 0.0f, 1.0f);
+
+		if (alpha <= 0.001f || Legs.empty())
+			return;
+
+		const Skeleton& skel = *ctx.Skel;
+
+		// Re-resolve os índices se a lista de pernas mudou no editor. A hash é
+		// barata e evita FindBone (busca em mapa) por frame.
+		std::size_t hash = Legs.size() * 1315423911u;
+		for (const auto& l : Legs)
+			hash ^= std::hash<std::string>{}(l.Upper) + std::hash<std::string>{}(l.Foot)
+			+ 0x9e3779b9u + (hash << 6) + (hash >> 2);
+
+		if (!m_BonesResolved || hash != m_ResolvedHash)
+		{
+			ResolveBones(skel);
+			m_ResolvedHash = hash;
+			m_State.clear();
+		}
+
+		if (m_State.size() != m_Resolved.size())
+			m_State.assign(m_Resolved.size(), LegState{});
+
+		// Globais da pose de entrada (component-space).
+		std::vector<glm::mat4> globals;
+		ComputeGlobals(skel, out, globals);
+
+		const glm::mat4& toWorld = ctx.WorldTransform;
+		const glm::mat4  toLocal = glm::inverse(toWorld);
+
+		// O "pra cima" do mundo em espaço de componente.
+		const glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+		const glm::vec3 compUp = glm::normalize(glm::vec3(toLocal * glm::vec4(worldUp, 0.0f)));
+
+		// Quantos METROS do mundo vale 1 unidade de espaco de componente.
+		// E o comprimento da coluna Y do transform (a escala vertical). Guarda
+		// contra escala zero, que zeraria a divisao adiante.
+		const float compScale = std::max(1e-6f, glm::length(glm::vec3(toWorld[1])));
+
+		// Fator de perseguicao exponencial. Independente de framerate.
+		const float k = (m_LastDt > 0.0f && Smoothing > 0.0f)
+			? (1.0f - std::exp(-Smoothing * m_LastDt))
+			: 1.0f;
+
+		// Posicao ORIGINAL de cada pe (antes do pelvis dip) — o alvo do IK e
+		// absoluto, entao precisa ser calculado antes de mexer no quadril.
+		std::vector<glm::vec3> footOrig(m_Resolved.size());
+
+		for (std::size_t li = 0; li < m_Resolved.size(); ++li)
+		{
+			const ResolvedLeg& r = m_Resolved[li];
+			LegState& st = m_State[li];
+
+			if (r.Upper < 0 || r.Lower < 0 || r.Foot < 0)
+			{
+				st.Weight += (0.0f - st.Weight) * k;
+				continue;
+			}
+
+			const glm::vec3 footComp = MatPos(globals[r.Foot]);
+			footOrig[li] = footComp;
+
+			const glm::vec3 footWorld = glm::vec3(toWorld * glm::vec4(footComp, 1.0f));
+
+			const glm::vec3 origin = footWorld + worldUp * MaxReach;
+			const RaycastHit hit = PhysicsSystem::Get().Raycast(
+				origin, -worldUp, MaxReach * 2.0f);
+
+			float wantOffset = 0.0f;
+			float wantWeight = 0.0f;
+			glm::vec3 wantNormal = compUp;
+
+			if (hit.Hit)
+			{
+				wantNormal = glm::normalize(glm::vec3(toLocal * glm::vec4(hit.Normal, 0.0f)));
+
+				// ── O deslocamento e a ALTURA DO TERRENO sob este pe ──────────
+				//
+				// Medida em MUNDO (metros), relativa ao plano de apoio do
+				// personagem — a origem do transform, que fica nos PES: o pivo
+				// do modelo esta na sola e a fisica apoia a base da capsula no
+				// chao (ver CHARCAPSULE_V1). Em chao plano isso da zero e a
+				// pose passa intacta; numa rampa da o desvio do chao sob cada
+				// pe.
+				//
+				// MEDIR EM MUNDO IMPORTA. MaxReach e FootHeight sao METROS,
+				// mas a pose vive em espaco de COMPONENTE, que pode estar
+				// escalado pelo transform do personagem. Comparar os dois
+				// direto fazia o clamp cortar o deslocamento pra quase nada —
+				// a perna nao mexia, enquanto o alinhamento do pe (rotacao
+				// pura, imune a escala) continuava funcionando. Era esse o
+				// sintoma de "so o pe se ajusta".
+				const glm::vec3 baseWorld = glm::vec3(toWorld[3]);
+
+				float groundMeters = glm::dot(hit.Point - baseWorld, worldUp) + FootHeight;
+				groundMeters = glm::clamp(groundMeters, -MaxReach, MaxReach);
+
+				// Metros -> unidades de componente (uma unica conversao).
+				wantOffset = groundMeters / compScale;
+
+				wantWeight = 1.0f;
+			}
+
+			// Primeiro frame entra direto no valor certo (senao o personagem
+			// "assenta" visivelmente ao dar Play).
+			if (!st.Init)
+			{
+				st.Offset = wantOffset;
+				st.Normal = wantNormal;
+				st.Weight = wantWeight;
+				st.Init = true;
+			}
+			else
+			{
+				st.Offset += (wantOffset - st.Offset) * k;
+				st.Weight += (wantWeight - st.Weight) * k;
+				st.Normal = glm::normalize(glm::mix(st.Normal, wantNormal, k));
+			}
+		}
+
+		// ── Pelvis dip ───────────────────────────────────────────────────────
+		//
+		// Abaixa o quadril pelo pé que mais precisa DESCER, pra que a perna não
+		// tenha que esticar reto. Feito ANTES do two-bone IK; os alvos dos pés
+		// são absolutos, então continuam no chão e as pernas passam a dobrar
+		// naturalmente pra alcançá-los.
+		{
+			float wantDip = 0.0f;
+
+			for (std::size_t li = 0; li < m_State.size(); ++li)
+			{
+				const float eff = m_State[li].Offset * m_State[li].Weight;
+
+				if (eff < wantDip)
+					wantDip = eff;
+			}
+
+			m_PelvisOffset += (wantDip - m_PelvisOffset) * k;
+
+			if (DipPelvis && m_PelvisIdx >= 0 && m_PelvisOffset < -1e-4f)
+			{
+				glm::mat4 g = globals[m_PelvisIdx];
+				g[3] += glm::vec4(compUp * (m_PelvisOffset * alpha), 0.0f);
+
+				const int parent = skel.GetBones()[m_PelvisIdx].ParentIndex;
+				const glm::mat4 pg = (parent < 0) ? glm::mat4(1.0f) : globals[parent];
+
+				if (m_PelvisIdx < (int)out.Size())
+					out[m_PelvisIdx] = LocalFromGlobal(g, pg);
+
+				// A pélvis desceu e TODOS os filhos (as pernas) desceram junto.
+				ComputeGlobals(skel, out, globals);
+			}
+		}
+
+		// ── Two-Bone IK por perna ────────────────────────────────────────────
+		for (std::size_t li = 0; li < m_Resolved.size(); ++li)
+		{
+			const ResolvedLeg& r = m_Resolved[li];
+			const LegState& st = m_State[li];
+
+			if (r.Upper < 0 || r.Lower < 0 || r.Foot < 0)
+				continue;
+
+			const float w = alpha * st.Weight;
+
+			if (w <= 0.001f)
+				continue;
+
+			glm::vec3 hipPos = MatPos(globals[r.Upper]);
+			glm::vec3 kneePos = MatPos(globals[r.Lower]);
+			glm::vec3 footPos = MatPos(globals[r.Foot]);
+
+			const float upperLen = glm::length(kneePos - hipPos);
+			const float lowerLen = glm::length(footPos - kneePos);
+
+			if (upperLen < 1e-5f || lowerLen < 1e-5f)
+				continue;
+
+			// Alvo ABSOLUTO: a posição original do pé mais o deslocamento
+			// suavizado, misturado pelo peso.
+			const glm::vec3 wanted = footOrig[li] + compUp * st.Offset;
+			const glm::vec3 target = glm::mix(footPos, wanted, w);
+
+			glm::vec3 toTarget = target - hipPos;
+			const float rawDist = glm::length(toTarget);
+
+			if (rawDist < 1e-5f)
+				continue;
+
+			// Não deixa o alvo passar do alcance total (senão acos estoura) nem
+			// colar no quadril.
+			const float maxLen = (upperLen + lowerLen) * 0.999f;
+			const float minLen = std::abs(upperLen - lowerLen) * 1.001f + 1e-4f;
+			const float dist = glm::clamp(rawDist, minLen, maxLen);
+
+			const glm::vec3 dirToTarget = toTarget / rawDist;
+
+			// Direção do joelho (pole): mantém a dobra que a animação já tem,
+			// projetada fora da linha quadril->alvo. Sem isto o joelho estala
+			// pro lado.
+			glm::vec3 kneeDir = kneePos - hipPos;
+			glm::vec3 poleRaw = kneeDir - dirToTarget * glm::dot(kneeDir, dirToTarget);
+
+			if (glm::length2(poleRaw) < 1e-8f)
+			{
+				glm::vec3 fwd = glm::normalize(glm::vec3(globals[r.Upper][2]));
+				poleRaw = fwd - dirToTarget * glm::dot(fwd, dirToTarget);
+
+				if (glm::length2(poleRaw) < 1e-8f)
+					poleRaw = glm::cross(dirToTarget, compUp);
+			}
+
+			if (glm::length2(poleRaw) < 1e-8f)
+				continue;
+
+			const glm::vec3 pole = glm::normalize(poleRaw);
+
+			// Lei dos cossenos: ângulo no quadril entre (quadril->alvo) e
+			// (quadril->joelho).
+			const float cosHip = glm::clamp(
+				(upperLen * upperLen + dist * dist - lowerLen * lowerLen)
+				/ (2.0f * upperLen * dist), -1.0f, 1.0f);
+			const float hipAngle = std::acos(cosHip);
+
+			const glm::vec3 newKnee = hipPos
+				+ (std::cos(hipAngle) * dirToTarget + std::sin(hipAngle) * pole) * upperLen;
+
+			const glm::vec3 newFoot = hipPos + dirToTarget * dist;
+
+			// Rotaciona um osso de modo que a direção osso->filho passe da
+			// antiga para a nova. glm::rotation devolve o quaternion mínimo
+			// entre dois vetores unitários.
+			auto rotateBoneToward = [&](int bone, const glm::vec3& oldChild,
+				const glm::vec3& newChild)
+				{
+					const glm::vec3 bonePos = MatPos(globals[bone]);
+
+					const glm::vec3 oldV = oldChild - bonePos;
+					const glm::vec3 newV = newChild - bonePos;
+
+					if (glm::length2(oldV) < 1e-10f || glm::length2(newV) < 1e-10f)
+						return;
+
+					const glm::quat delta =
+						glm::rotation(glm::normalize(oldV), glm::normalize(newV));
+
+					glm::mat4 g = globals[bone];
+					g = glm::translate(glm::mat4(1.0f), bonePos)
+						* glm::mat4_cast(delta)
+						* glm::translate(glm::mat4(1.0f), -bonePos) * g;
+					globals[bone] = g;
+
+					const int parent = skel.GetBones()[bone].ParentIndex;
+					const glm::mat4 pg = (parent < 0) ? glm::mat4(1.0f) : globals[parent];
+
+					if (bone < (int)out.Size())
+						out[bone] = LocalFromGlobal(g, pg);
+				};
+
+			rotateBoneToward(r.Upper, kneePos, newKnee);
+			ComputeGlobals(skel, out, globals);
+
+			kneePos = MatPos(globals[r.Lower]);
+			footPos = MatPos(globals[r.Foot]);
+
+			rotateBoneToward(r.Lower, footPos, newFoot);
+			ComputeGlobals(skel, out, globals);
+
+			// ── Alinhar o pé à inclinação do chão ─────────────────────────────
+			//
+			// SEM supor qual eixo do osso é a sola.
+			//
+			// A versão anterior assumia que o +Y do osso do pé apontava pra
+			// cima e girava esse eixo até a normal. Num rig Mixamo o osso do pé
+			// aponta pro DEDO, não pra cima — então a correção era uma rotação
+			// enorme e arbitrária, e o pé saía torto/invertido. Pior: quando os
+			// dois vetores ficam quase opostos, glm::rotation é degenerado (o
+			// eixo é indefinido) e o resultado tremia.
+			//
+			// O que vale pra QUALQUER rig: em chão plano a animação já orienta
+			// o pé corretamente. Numa rampa, basta inclinar o pé pela MESMA
+			// rotação que inclina o chão em relação ao plano — seja qual for a
+			// orientação interna do osso.
+			{
+				const float dot = glm::clamp(glm::dot(compUp, st.Normal), -1.0f, 1.0f);
+
+				// Chão praticamente plano: nada a fazer (e evita o caso
+				// degenerado do quaternion).
+				if (dot < 0.9999f)
+				{
+					glm::quat tilt = glm::rotation(compUp, st.Normal);
+
+					// Trava em 45 graus. Uma normal absurda (parede, quina de
+					// colisor) não deve virar o pé de cabeça pra baixo.
+					const float angle = std::acos(dot);
+					const float maxAngle = glm::radians(45.0f);
+
+					float t = w;
+
+					if (angle > maxAngle)
+						t *= maxAngle / angle;
+
+					tilt = glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), tilt, t);
+
+					const glm::mat4 fg = globals[r.Foot];
+					const glm::vec3 pos = MatPos(fg);
+
+					const glm::mat4 g = glm::translate(glm::mat4(1.0f), pos)
+						* glm::mat4_cast(tilt)
+						* glm::translate(glm::mat4(1.0f), -pos) * fg;
+
+					const int parent = skel.GetBones()[r.Foot].ParentIndex;
+					const glm::mat4 pg = (parent < 0) ? glm::mat4(1.0f) : globals[parent];
+
+					if (r.Foot < (int)out.Size())
+						out[r.Foot] = LocalFromGlobal(g, pg);
+
+					globals[r.Foot] = g;
+				}
+			}
+		}
+	}
+
+	void AnimNode_FootIK::Serialize(nlohmann::json& j) const
+	{
+		j["max_reach"] = MaxReach;
+		j["foot_height"] = FootHeight;
+		j["smoothing"] = Smoothing;
+		j["dip_pelvis"] = DipPelvis;
+		j["pelvis_bone"] = PelvisBone;
+
+		j["legs"] = nlohmann::json::array();
+		for (const auto& l : Legs)
+			j["legs"].push_back({ {"upper", l.Upper}, {"lower", l.Lower}, {"foot", l.Foot} });
+	}
+
+	void AnimNode_FootIK::Deserialize(const nlohmann::json& j)
+	{
+		MaxReach = j.value("max_reach", 0.5f);
+		FootHeight = j.value("foot_height", 0.0f);
+		Smoothing = j.value("smoothing", 12.0f);
+		DipPelvis = j.value("dip_pelvis", true);
+		PelvisBone = j.value("pelvis_bone", std::string());
+
+		if (j.contains("legs"))
+		{
+			Legs.clear();
+			for (const auto& jl : j["legs"])
+				Legs.push_back({
+					jl.value("upper", std::string()),
+					jl.value("lower", std::string()),
+					jl.value("foot",  std::string()) });
+		}
+
+		m_BonesResolved = false;   // força re-resolver com os novos nomes
+	}
+
 	std::unique_ptr<AnimNode> CreateAnimNode(const std::string& t)
 	{
 		if (t == "Output")           return std::make_unique<AnimNode_Output>();
@@ -584,6 +1138,7 @@ namespace axe
 		if (t == "BlendByBool")      return std::make_unique<AnimNode_BlendByBool>();
 		if (t == "LayeredBlend")     return std::make_unique<AnimNode_LayeredBlend>();
 		if (t == "ApplyAdditive")    return std::make_unique<AnimNode_ApplyAdditive>();
+		if (t == "FootIK")           return std::make_unique<AnimNode_FootIK>();
 		if (t == "StateMachine")     return std::make_unique<AnimNode_StateMachine>();
 
 		AXE_CORE_ERROR("CreateAnimNode: tipo desconhecido '{}'.", t);

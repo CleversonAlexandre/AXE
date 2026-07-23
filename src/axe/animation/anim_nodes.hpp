@@ -384,6 +384,133 @@ namespace axe
 		bool m_UseSnapshot = false;
 	};
 
+	// ── Foot IK ─────────────────────────────────────────────────────────────
+	//
+	// Cola os pés no chão. A animação de idle/walk foi feita pra chão plano;
+	// numa rampa ou degrau os pés atravessam ou flutuam. Este nó, pra cada
+	// perna, faz um raycast pra baixo a partir do pé, e:
+	//
+	//   - se o chão está ACIMA de onde a animação pôs o pé (rampa subindo),
+	//     levanta o alvo do pé até lá e dobra o joelho pra alcançar
+	//     (Two-Bone IK: coxa -> canela -> pé);
+	//   - alinha o pé à NORMAL do chão (o pé acompanha a inclinação);
+	//   - abaixa o QUADRIL o suficiente pra que a perna mais esticada ainda
+	//     alcance — senão uma perna estica reto e a outra fica no ar.
+	//
+	// É um nó como qualquer outro: entra uma pose, sai uma pose. A diferença
+	// é que ele consulta o mundo (PhysicsSystem::Get().Raycast) e por isso
+	// precisa da WorldTransform do contexto — o único nó que sai do espaço
+	// local.
+	//
+	// Genérico em N pernas (não fixo em esq/dir): um quadrúpede é só quatro
+	// pernas na lista. Cada perna são três ossos nomeados, casados por nome
+	// com o esqueleto — sem hardcode de "mixamorig:LeftFoot".
+	class AXE_API AnimNode_FootIK : public AnimNode
+	{
+	public:
+		const char* TypeName() const override { return "FootIK"; }
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_FootIK>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		int InputCount() const override { return 1; }
+		const char* InputName(int) const override { return "Pose"; }
+
+		// Uma perna: os três ossos da cadeia IK, do quadril ao pé.
+		//
+		//   Upper = coxa (a raiz que roda)   ex: LeftUpLeg
+		//   Lower = canela (o joelho)        ex: LeftLeg
+		//   Foot  = pé (recebe o alinhamento) ex: LeftFoot
+		struct Leg
+		{
+			std::string Upper;
+			std::string Lower;
+			std::string Foot;
+		};
+
+		std::vector<Leg> Legs;
+
+		// Quanto o pé pode subir/descer do plano da animação, em metros. Passou
+		// disso, o nó desiste daquele pé (buraco fundo, parede) em vez de
+		// esticar a perna de forma grotesca.
+		float MaxReach = 0.5f;
+
+		// Trim vertical fino, em metros, somado ao deslocamento de TODO pe.
+		// 0 = a sola encosta exatamente onde a animacao a poe. Positivo levanta
+		// (util se a malha do pe crava um pouco no chao).
+		float FootHeight = 0.0f;
+
+		// Suavizacao temporal (1/s). O alvo do pe e a normal do chao sao
+		// perseguidos exponencialmente em vez de saltarem: raycast que muda de
+		// superficie entre um frame e outro deixa de dar POP.
+		float Smoothing = 12.0f;
+
+		// Abaixar o quadril quando um pé não alcança (pelvis dip). Sem isso, o
+		// pé baixo estica a perna reto e o corpo parece "puxado" pra cima.
+		bool  DipPelvis = true;
+
+		// Osso do quadril/raiz que desce no pelvis dip. Vazio = usa o pai comum
+		// das pernas, resolvido no primeiro Evaluate.
+		std::string PelvisBone;
+
+		// Alpha inline 1.0: um Foot IK recém-criado age INTEIRO. Se começasse
+		// em 0, você ligaria tudo certo e não veria efeito nenhum.
+		AnimNode_FootIK()
+		{
+			AddFloatPin("Alpha", 1.0f);
+
+			// Bípede por padrão, com os nomes da Mixamo (sem o prefixo
+			// "mixamorig:", que o loader do AXE já remove). Casa direto com o
+			// Y Bot; qualquer outro rig, troca nos combos do painel.
+			Legs.push_back({ "LeftUpLeg",  "LeftLeg",  "LeftFoot" });
+			Legs.push_back({ "RightUpLeg", "RightLeg", "RightFoot" });
+		}
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+
+		void Update(AnimEvalContext& ctx) override;
+		void Evaluate(AnimEvalContext& ctx, Pose& out) override;
+		void Reset() override;
+
+	private:
+		// Resolve os índices de osso uma vez (casamento por nome é caro pra
+		// fazer por frame). Invalida quando a lista de pernas muda no editor.
+		struct ResolvedLeg { int Upper = -1, Lower = -1, Foot = -1; };
+
+		// Estado SUAVIZADO por perna. Sem ele o IK reage instantaneamente a
+		// cada raycast, e qualquer variacao de superficie vira tremor.
+		struct LegState
+		{
+			float     Offset = 0.0f;              // deslocamento vertical do pe
+			glm::vec3 Normal{ 0.0f, 1.0f, 0.0f }; // normal do chao
+			float     Weight = 0.0f;              // 0 = pe no ar, 1 = pe no chao
+			bool      Init = false;
+		};
+
+		void ResolveBones(const Skeleton& skel);
+
+		std::vector<ResolvedLeg> m_Resolved;
+		std::vector<LegState>    m_State;
+
+		float m_PelvisOffset = 0.0f;
+
+		// DeltaTime do ultimo Update. O contexto do Evaluate vem com
+		// DeltaTime = 0 (so o Update avanca tempo), mas a suavizacao precisa
+		// de dt — e o Update SEMPRE roda antes do Evaluate no mesmo frame.
+		float m_LastDt = 0.0f;
+		int  m_PelvisIdx = -1;
+		bool m_BonesResolved = false;
+
+		// Assinatura da última resolução — detecta troca de osso no editor sem
+		// precisar de um Reset() explícito.
+		std::size_t m_ResolvedHash = 0;
+	};
+
 	// Fábrica por nome de tipo — usada pelo carregador do .axeanim.
 	AXE_API std::unique_ptr<AnimNode> CreateAnimNode(const std::string& typeName);
 

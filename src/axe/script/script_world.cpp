@@ -60,7 +60,7 @@ namespace axe
                             {
                                 sc.Instance = std::shared_ptr<ScriptBase>(raw);
                                 sc.IsLoaded = true;
-                                AXE_CORE_INFO("ScriptWorld: DLL '{}' carregada.", sc.ScriptName);
+                                //AXE_CORE_INFO("ScriptWorld: DLL '{}' carregada.", sc.ScriptName);
                             }
                             else
                             {
@@ -138,18 +138,18 @@ namespace axe
 
                 if (rb.NeedsForceApply)
                 {
-                    AXE_CORE_INFO("ScriptWorld: AddForce entity {} → ({},{},{})",
-                        (uint32_t)entity,
-                        rb.PendingForce.x, rb.PendingForce.y, rb.PendingForce.z);
+                    //AXE_CORE_INFO("ScriptWorld: AddForce entity {} → ({},{},{})",
+                    //    (uint32_t)entity,
+                    //    rb.PendingForce.x, rb.PendingForce.y, rb.PendingForce.z);
                     rb.PendingForce = {};
                     rb.NeedsForceApply = false;
                 }
 
                 if (rb.NeedsVelocitySet)
                 {
-                    AXE_CORE_INFO("ScriptWorld: SetVelocity entity {} → ({},{},{})",
-                        (uint32_t)entity,
-                        rb.PendingVelocity.x, rb.PendingVelocity.y, rb.PendingVelocity.z);
+                    //AXE_CORE_INFO("ScriptWorld: SetVelocity entity {} → ({},{},{})",
+                    //    (uint32_t)entity,
+                    //    rb.PendingVelocity.x, rb.PendingVelocity.y, rb.PendingVelocity.z);
                     rb.PendingVelocity = {};
                     rb.NeedsVelocitySet = false;
                 }

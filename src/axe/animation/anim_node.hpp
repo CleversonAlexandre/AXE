@@ -89,6 +89,30 @@ namespace axe
 		// O blackboard. Nós leem daqui; o gameplay escreve.
 		AnimParameters* Params = nullptr;
 
+		// Transform do PERSONAGEM no mundo (component -> mundo).
+		//
+		// Quase todo nó ignora isto — animação é matemática em espaço LOCAL,
+		// que não precisa saber onde o personagem está. A EXCEÇÃO é o Foot IK:
+		// pra alinhar o pé ao chão ele tem que sair do espaço do componente,
+		// consultar a física no mundo (raycast) e voltar. Sem esta matriz não
+		// há como converter entre os dois espaços.
+		//
+		// Default identidade: um grafo avaliado sem um personagem na cena (o
+		// preview antes de posicionar, um teste) continua funcionando — o IK
+		// simplesmente trabalha como se o personagem estivesse na origem.
+		glm::mat4 WorldTransform{ 1.0f };
+
+		// O grafo pode consultar o MUNDO (raycast de física)?
+		//
+		// false no preview do editor: lá o personagem vive numa cena isolada
+		// SEM física própria, e um raycast cairia no mundo Jolt da cena
+		// principal — acertando geometria numa posição relativa sem sentido.
+		// O Foot IK vira no-op nesse caso (a pose passa intacta), que é o certo:
+		// não há chão de verdade pra colar o pé no preview.
+		//
+		// true só no AnimationWorld da cena real, onde a física está ativa.
+		bool AllowWorldQueries = false;
+
 		float DeltaTime = 0.0f;
 
 		// false = preview do editor com o tempo congelado. Os nós ainda
