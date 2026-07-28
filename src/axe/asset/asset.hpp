@@ -18,7 +18,8 @@ namespace axe
 		GameMode,    // .axegamemode
 		ParticleSystem, // .axepart
 		SkeletalMesh,   // .axeskel — personagem animado (aponta pro FBX + lista de animacoes)
-		AnimGraph       // .axeanim — state machine de animacao
+		AnimGraph,      // .axeanim — state machine de animacao
+		ControlRig      // .axerig — hierarquia + grafo de rig (Forwards Solve)
 	};
 
 	// Converte extensão para tipo
@@ -37,6 +38,7 @@ namespace axe
 		if (ext == ".axepart")                                return AssetType::ParticleSystem;
 		if (ext == ".axeskel")                                return AssetType::SkeletalMesh;
 		if (ext == ".axeanim")                                return AssetType::AnimGraph;
+		if (ext == ".axerig")                                 return AssetType::ControlRig;
 		return AssetType::Unknown;
 	}
 
@@ -54,6 +56,7 @@ namespace axe
 		case AssetType::ParticleSystem: return "ParticleSystem";
 		case AssetType::SkeletalMesh:   return "SkeletalMesh";
 		case AssetType::AnimGraph:      return "AnimGraph";
+		case AssetType::ControlRig:     return "ControlRig";
 
 		default:					return "Unknown";
 		}

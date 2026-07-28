@@ -7,6 +7,7 @@
 #include "editor/axe_editor/material/material_editor_window.hpp"
 #include "editor/axe_editor/particles/particle_editor_window.hpp"
 #include "animation/anim_graph_window.hpp"
+#include "rig/control_rig_window.hpp"
 #include "animation/anim_clip_window.hpp"
 #include "editor/axe_editor/input/input_settings_window.hpp"
 #include "editor/axe_editor/script/script_graph_window.hpp"
@@ -30,6 +31,7 @@ namespace axe
         ParticleEditorWindow m_ParticleEditorWindow;
         ScriptGraphWindow    m_ScriptGraphWindow;
         AnimGraphWindow      m_AnimGraphWindow;
+        ControlRigWindow     m_ControlRigWindow;
         AnimClipWindow       m_AnimClipWindow;
         InputSettingsWindow  m_InputSettingsWindow;
 
@@ -59,7 +61,7 @@ namespace axe
 
         ViewportWindow  m_ViewportWindow;
 
-        
+
 
         bool m_ShowHierarchy = true;
         bool m_ShowViewport = true;

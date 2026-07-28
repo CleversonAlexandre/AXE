@@ -1,0 +1,202 @@
+#pragma once
+#include "axe/core/types.hpp"
+#include "axe/animation/rig/rig_hierarchy.hpp"
+#include "axe/utils/glm_config.hpp"
+
+// O header completo: o vendor traz so o json.hpp single-header, sem json_fwd.
+#include <nlohmann/json.hpp>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace axe
+{
+	class RigGraph;
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  NO DE RIG — CONTROLRIG_V1
+	//
+	//  Aqui o grafo e IMPERATIVO, nao fluxo de dados como o AnimGraph.
+	//
+	//  No AnimGraph a pose e PUXADA: o Output pede a pose ao no anterior, que
+	//  pede ao anterior, e assim por diante. Faz sentido la, porque so existe
+	//  uma coisa fluindo e ela tem um destino unico.
+	//
+	//  Num rig isso nao serve. "Mova o pe, DEPOIS mova o joelho, DEPOIS
+	//  alinhe o tornozelo" e uma ORDEM — e ordem nao se expressa puxando
+	//  dados. Entao existem dois tipos de fio, e a diferenca entre eles e o
+	//  ponto que mais confunde quem monta rig:
+	//
+	//    EXECUCAO (branco) — diz QUANDO cada no roda. Segue-se pra frente,
+	//                        a partir do evento Forwards Solve.
+	//    DADOS             — dizem DE ONDE vem cada valor. Sao PUXADOS sob
+	//                        demanda, no instante em que o no que executa
+	//                        precisa ler a entrada.
+	//
+	//  Um no sem pinos de execucao e PURO: nao tem lugar na ordem, so
+	//  responde quando alguem le a saida dele. "Get Transform" e puro; "Set
+	//  Transform" nao pode ser, porque a hora em que ele escreve importa.
+	// ═════════════════════════════════════════════════════════════════════════
+
+	enum class RigPinType
+	{
+		Exec,
+		Bool,
+		Float,
+		Vector,
+		Transform,
+		Item,       // referencia a um elemento da hierarquia (nome + tipo)
+
+		// Aceita qualquer coisa e ADOTA o tipo do primeiro fio ligado.
+		//
+		// Existe pro Reroute: um no de desvio que so repassa o valor nao pode
+		// ter tipo fixo, senao voce precisaria de um Reroute por tipo.
+		Wildcard,
+
+		// LISTA de elementos. Existe pra um no so poder operar sobre uma cadeia
+		// inteira: sem ela, rigar um braco custa tres Get + tres Set + os fios,
+		// e o grafo vira um emaranhado que esconde a intencao.
+		ItemArray
+	};
+
+	// Uma referencia a elemento da hierarquia. NOME + TIPO, porque Bone e
+	// Control podem ter o mesmo nome e pegar o errado deforma em silencio.
+	struct AXE_API RigItemRef
+	{
+		std::string    Name;
+		RigElementType Type = RigElementType::Bone;
+	};
+
+	struct AXE_API RigPinValue
+	{
+		bool           Bool = false;
+		float          Float = 0.0f;
+		glm::vec3      Vector{ 0.0f };
+		BoneTransform  Transform;
+
+		std::string    ItemName;
+		RigElementType ItemType = RigElementType::Bone;
+
+		std::vector<RigItemRef> Items;
+	};
+
+	struct AXE_API RigPin
+	{
+		std::string Name;
+		RigPinType  Type = RigPinType::Float;
+
+		// Valor usado quando NADA esta ligado neste pino. E o que permite
+		// digitar 0.35 direto no no em vez de arrastar um fio de uma constante
+		// pra cada numerozinho.
+		RigPinValue Default;
+	};
+
+	// Tudo que um no precisa saber do mundo durante o solve.
+	struct AXE_API RigExecContext
+	{
+		RigHierarchy* Hierarchy = nullptr;
+		const Skeleton* Skel = nullptr;
+
+		// Transform do personagem no mundo. So interessa a quem consulta o
+		// mundo (o trace de chao) — mesma licao do Foot IK: parametro em
+		// metros nunca encosta em distancia de espaco de componente sem
+		// conversao explicita, e a escala sai daqui.
+		glm::mat4 WorldTransform{ 1.0f };
+
+		// Pode consultar a fisica? Falso no preview do editor, que roda numa
+		// cena isolada sem mundo fisico proprio.
+		bool  AllowWorldQueries = false;
+
+		// CHAO VIRTUAL do preview, no plano Y = 0 (o mesmo grid que voce ve).
+		//
+		// Sem isto o Ground Trace devolvia ZERO no editor, e qualquer grafo
+		// que passasse por ele ficava morto — o Two Bone IK recebia um alvo
+		// constante e o personagem nao reagia a nada. Com o plano, da pra
+		// montar e conferir o Foot IK no proprio preview; a fisica de verdade
+		// entra em Play.
+		bool  UseEditorGround = false;
+
+		float DeltaTime = 0.0f;
+
+		// Necessario pros nos lerem as proprias entradas (o pull de dados).
+		RigGraph* Graph = nullptr;
+	};
+
+	class AXE_API RigNode
+	{
+	public:
+		virtual ~RigNode() = default;
+
+		virtual const char* TypeName() const = 0;
+		virtual std::unique_ptr<RigNode> Clone() const = 0;
+
+		int         Id = -1;
+		std::string Title;
+
+		float EditorX = 0.0f;
+		float EditorY = 0.0f;
+
+		std::vector<RigPin> Inputs;
+		std::vector<RigPin> Outputs;
+
+		// Tem pino de execucao de ENTRADA? (o evento Forwards Solve nao tem:
+		// ele e o comeco da corrente.)
+		bool HasExecIn = false;
+
+		// Nomes dos pinos de execucao de SAIDA. Um no comum tem um so, sem
+		// nome; o Sequence tem varios (A, B, C...); um Branch tem dois.
+		std::vector<std::string> ExecOut;
+
+		// Sem execucao nenhuma = no PURO. Ver o cabecalho.
+		bool IsPure() const { return !HasExecIn && ExecOut.empty(); }
+
+		// Roda o no. So faz sentido pra nos nao-puros.
+		virtual void Execute(RigExecContext& ctx) { (void)ctx; }
+
+		// Produz o valor de uma saida de dados. Chamado sob demanda pelo pull.
+		virtual void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+		{
+			(void)ctx; (void)pin; (void)out;
+		}
+
+		// Este no dispara as PROPRIAS saidas de execucao dentro do Execute?
+		//
+		// Quem devolve true (so o Sequence) fica responsavel por rodar TODAS
+		// as suas correntes, na ordem que quiser — e o percurso externo para
+		// nele em vez de seguir a saida 0, senao aquela corrente rodaria duas
+		// vezes.
+		virtual bool HandlesOwnFlow() const { return false; }
+
+		// Chamado quando um fio chega num pino Wildcard: o no assume o tipo
+		// concreto. Ninguem alem do Reroute precisa disto.
+		virtual void AdoptType(RigPinType t) { (void)t; }
+
+		virtual void Serialize(nlohmann::json& j) const { (void)j; }
+		virtual void Deserialize(const nlohmann::json& j) { (void)j; }
+
+	protected:
+		// Atalhos de declaracao de pino, pra os construtores dos nos ficarem
+		// legiveis.
+		void AddIn(const std::string& name, RigPinType type);
+		void AddInFloat(const std::string& name, float def);
+		void AddInBool(const std::string& name, bool def);
+		void AddInItem(const std::string& name, RigElementType type);
+		void AddOut(const std::string& name, RigPinType type);
+
+		// Le uma entrada: segue o fio de dados se houver, senao devolve o
+		// Default do pino.
+		RigPinValue Read(RigExecContext& ctx, int pin) const;
+
+		float     ReadFloat(RigExecContext& ctx, int pin) const;
+		bool      ReadBool(RigExecContext& ctx, int pin) const;
+		glm::vec3 ReadVector(RigExecContext& ctx, int pin) const;
+
+		// Resolve um pino Item para indice na hierarquia. Devolve -1 se nao
+		// casar — os nos tratam isso como "nao faca nada", nunca como crash.
+		int ReadItem(RigExecContext& ctx, int pin) const;
+	};
+
+	// Fabrica por nome de tipo, usada pelo carregador do .axerig.
+	AXE_API std::unique_ptr<RigNode> CreateRigNode(const std::string& typeName);
+
+} // namespace axe

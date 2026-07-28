@@ -56,6 +56,190 @@ namespace axe
 		MarkDirty();
 	}
 
+	std::vector<int> RigHierarchy::CollectDescendants(int index) const
+	{
+		std::vector<int> out;
+
+		if (index < 0 || index >= (int)m_Elements.size())
+			return out;
+
+		// Um unico passe pra frente basta: o pai sempre tem indice menor, entao
+		// quando chegamos num filho o pai dele ja foi classificado.
+		std::vector<bool> inSubtree(m_Elements.size(), false);
+		inSubtree[index] = true;
+
+		for (std::size_t i = index + 1; i < m_Elements.size(); ++i)
+		{
+			const int p = m_Elements[i].Parent;
+
+			if (p >= 0 && inSubtree[p])
+			{
+				inSubtree[i] = true;
+				out.push_back((int)i);
+			}
+		}
+
+		return out;
+	}
+
+	int RigHierarchy::Remove(int index)
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return 0;
+
+		std::vector<bool> doomed(m_Elements.size(), false);
+		doomed[index] = true;
+
+		for (int d : CollectDescendants(index))
+			doomed[d] = true;
+
+		// old -> new. -1 marca quem morreu.
+		std::vector<int> remap(m_Elements.size(), -1);
+
+		std::vector<RigElement> kept;
+		kept.reserve(m_Elements.size());
+
+		for (std::size_t i = 0; i < m_Elements.size(); ++i)
+		{
+			if (doomed[i])
+				continue;
+
+			remap[i] = (int)kept.size();
+			kept.push_back(std::move(m_Elements[i]));
+		}
+
+		const int removed = (int)m_Elements.size() - (int)kept.size();
+
+		// REINDEXA os pais. Sem isto o rig passa a mexer no osso errado, em
+		// silencio — ver o comentario no header.
+		for (auto& e : kept)
+			if (e.Parent >= 0)
+				e.Parent = remap[e.Parent];
+
+		m_Elements = std::move(kept);
+		MarkDirty();
+
+		return removed;
+	}
+
+	int RigHierarchy::Reparent(int index, int newParent)
+	{
+		const int n = (int)m_Elements.size();
+
+		if (index < 0 || index >= n || newParent >= n || newParent == index)
+			return -1;
+
+		if (m_Elements[index].Parent == newParent)
+			return -1;
+
+		// CICLO: o novo pai nao pode estar dentro do galho que estamos movendo.
+		// Sem esta guarda a hierarquia fica sem raiz e QUALQUER loop que a
+		// percorre trava — inclusive o do proprio solve.
+		for (int p = newParent; p >= 0; p = m_Elements[p].Parent)
+			if (p == index)
+			{
+				AXE_CORE_WARN("RigHierarchy: '{}' nao pode virar filho do proprio "
+					"descendente.", m_Elements[index].Name);
+				return -1;
+			}
+
+		// A pose e preservada: guardamos onde o elemento ESTA antes de trocar o
+		// pai e devolvemos depois. Sem isso ele saltaria pra outro lugar, e
+		// reparentear viraria uma operacao que voce tem que desfazer a mao.
+		const glm::mat4 keep = GetInitialGlobal(index);
+
+		m_Elements[index].Parent = newParent;
+
+		// ── REORDENA ─────────────────────────────────────────────────────────
+		//
+		// Todo o resto do sistema depende de PAI ANTES DE FILHO (o loop unico
+		// que monta os globais, o Remove, o CollectDescendants). Trocar o pai
+		// pode quebrar essa ordem, entao refazemos por DFS em pre-ordem.
+		std::vector<std::vector<int>> children((std::size_t)n);
+		std::vector<int> stack;
+
+		for (int i = n - 1; i >= 0; --i)
+		{
+			const int p = m_Elements[i].Parent;
+
+			if (p >= 0)
+				children[(std::size_t)p].push_back(i);
+			else
+				stack.push_back(i);
+		}
+
+		std::vector<int> order;
+		order.reserve((std::size_t)n);
+
+		while (!stack.empty())
+		{
+			const int i = stack.back();
+			stack.pop_back();
+
+			order.push_back(i);
+
+			for (int k = (int)children[(std::size_t)i].size() - 1; k >= 0; --k)
+				stack.push_back(children[(std::size_t)i][k]);
+		}
+
+		// Elemento inalcancavel (nao deveria existir) seria PERDIDO no rebuild;
+		// melhor abortar do que apagar dado do usuario em silencio.
+		if ((int)order.size() != n)
+		{
+			AXE_CORE_ERROR("RigHierarchy: hierarquia inconsistente, reparent abortado.");
+			return -1;
+		}
+
+		std::vector<int> newIndex((std::size_t)n, -1);
+
+		for (std::size_t k = 0; k < order.size(); ++k)
+			newIndex[(std::size_t)order[k]] = (int)k;
+
+		std::vector<RigElement> rebuilt;
+		rebuilt.reserve((std::size_t)n);
+
+		for (const int old : order)
+		{
+			RigElement e = std::move(m_Elements[(std::size_t)old]);
+
+			if (e.Parent >= 0)
+				e.Parent = newIndex[(std::size_t)e.Parent];
+
+			rebuilt.push_back(std::move(e));
+		}
+
+		m_Elements = std::move(rebuilt);
+		MarkDirty();
+
+		const int moved = newIndex[(std::size_t)index];
+
+		// Devolve o elemento pra onde ele estava, agora em relacao ao novo pai.
+		SetInitialGlobal(moved, keep);
+		m_Elements[(std::size_t)moved].Current = m_Elements[(std::size_t)moved].Initial;
+
+		MarkDirty();
+		return moved;
+	}
+
+	bool RigHierarchy::Rename(int index, const std::string& newName)
+	{
+		if (index < 0 || index >= (int)m_Elements.size() || newName.empty())
+			return false;
+
+		const int clash = Find(newName, m_Elements[index].Type);
+
+		if (clash >= 0 && clash != index)
+		{
+			AXE_CORE_WARN("RigHierarchy: ja existe '{}' deste tipo.", newName);
+			return false;
+		}
+
+		m_Elements[index].Name = newName;
+		MarkDirty();
+
+		return true;
+	}
+
 	void RigHierarchy::ImportFromSkeleton(const Skeleton& skeleton)
 	{
 		Clear();
@@ -160,6 +344,14 @@ namespace axe
 
 		EnsureGlobals();
 		return m_Globals[i];
+	}
+
+	glm::mat4 RigHierarchy::GetControlShapeMatrix(int i) const
+	{
+		if (i < 0 || i >= (int)m_Elements.size())
+			return glm::mat4(1.0f);
+
+		return GetGlobal(i) * m_Elements[i].ShapeOffset.ToMatrix();
 	}
 
 	glm::mat4 RigHierarchy::GetInitialGlobal(int i) const

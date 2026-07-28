@@ -96,6 +96,34 @@ namespace axe
 
 		void Clear();
 
+		// Remove o elemento E TODOS OS DESCENDENTES, reindexando os pais dos
+		// sobreviventes.
+		//
+		// O reindex nao e opcional: Parent e um INDICE, entao apagar alguem no
+		// meio faz todo mundo abaixo apontar pro elemento errado. Sem erro,
+		// sem crash — o rig so passa a deformar o osso errado. Devolve quantos
+		// elementos sairam.
+		//
+		// Os descendentes vao junto de proposito: um Control orfao ficaria
+		// pendurado na raiz, longe do corpo, sem nenhuma indicacao do porque.
+		int Remove(int index);
+
+		// Troca o PAI de um elemento, PRESERVANDO a pose — ele continua
+		// exatamente onde esta na tela.
+		//
+		// Devolve o NOVO indice (a lista e reordenada pra manter pai antes de
+		// filho) ou -1 se recusado. Recusa criar CICLO: mover um elemento pra
+		// dentro do proprio galho deixaria a hierarquia sem raiz e travaria
+		// todo loop que a percorre.
+		int Reparent(int index, int newParent);
+
+		// Renomeia recusando duplicata do mesmo tipo (os nos do grafo
+		// referenciam por NOME).
+		bool Rename(int index, const std::string& newName);
+
+		// Todos os descendentes de `index`, em ordem crescente.
+		std::vector<int> CollectDescendants(int index) const;
+
 		// Copia os ossos do esqueleto para ca, preservando a hierarquia. E o
 		// primeiro passo de "criar Control Rig a partir do esqueleto".
 		void ImportFromSkeleton(const Skeleton& skeleton);
@@ -106,6 +134,19 @@ namespace axe
 
 		const std::vector<RigElement>& GetElements() const { return m_Elements; }
 		std::vector<RigElement>& GetElements() { return m_Elements; }
+
+		// Repoe a lista inteira (usado pelo undo/redo do editor).
+		//
+		// Existe porque escrever direto pelo GetElements() nao invalida o
+		// cache de globais — a hierarquia voltaria ao estado antigo mas as
+		// matrizes continuariam as de antes, e o personagem ficaria deformado
+		// ate alguem mexer em outra coisa.
+		void SetElements(std::vector<RigElement> elements)
+		{
+			m_Elements = std::move(elements);
+			m_GlobalsDirty = true;
+			m_MapSkeleton = nullptr;
+		}
 
 		const RigElement& operator[](int i) const { return m_Elements[i]; }
 		RigElement& operator[](int i) { return m_Elements[i]; }
@@ -143,6 +184,14 @@ namespace axe
 		void SetGlobal(int i, const glm::mat4& m, bool propagateToChildren = true);
 
 		// Os mesmos, sobre o transform INICIAL.
+		// Matriz COMPLETA do desenho de um Control: global do elemento ja
+		// combinado com o ShapeOffset (translacao, rotacao E escala).
+		//
+		// Existe porque o editor NAO pode montar essa matriz: BoneTransform
+		// nao e exportado da dll, entao ToMatrix() nao esta disponivel la. A
+		// composicao acontece aqui dentro.
+		glm::mat4 GetControlShapeMatrix(int i) const;
+
 		glm::mat4 GetInitialGlobal(int i) const;
 		void      SetInitialGlobal(int i, const glm::mat4& m);
 

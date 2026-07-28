@@ -1,6 +1,7 @@
 #include "editor_layer.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
+#include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -289,6 +290,44 @@ namespace axe
                     // no ARQUIVO DE ANIMACAO — decisao do Clever: o gatilho
                     // e a animacao, nao o personagem.
                     SpawnSkeletalMesh(*record, uuid);
+                    return;
+                }
+
+                // Control Rig nao vira entidade — ABRE O EDITOR.
+                //
+                // Mesmo raciocinio do .axeanim: e asset de comportamento, nao
+                // de cena. O esqueleto vem junto porque a janela precisa dele
+                // pra sincronizar ossos novos e pro preview.
+                if (record->FilePath.extension() == ".axerig")
+                {
+                    AXE_EDITOR_INFO("Control Rig: abrindo '{}'...", record->Name);
+
+                    auto rigAsset = ControlRigAsset::LoadFromFile(record->FilePath);
+
+                    if (!rigAsset)
+                    {
+                        AXE_EDITOR_ERROR("Control Rig: falha ao ler '{}'. Arquivo corrompido?",
+                            record->FilePath.string());
+                        return;
+                    }
+
+                    std::shared_ptr<SkeletalMeshAsset> skel;
+
+                    if (const AssetRecord* skelRec =
+                        AssetDatabase::Get().GetByUUID(rigAsset->GetSkeletonUUID()))
+                    {
+                        skel = SkeletalMeshAsset::LoadFromFile(skelRec->FilePath);
+
+                        if (skel)
+                            skel->Resolve();
+                    }
+                    else
+                    {
+                        AXE_EDITOR_ERROR("Control Rig '{}': o esqueleto (.axeskel) referenciado nao "
+                            "foi encontrado. A janela abre, mas sem preview.", record->Name);
+                    }
+
+                    m_EditorUI->m_ControlRigWindow.OpenForAsset(rigAsset, skel);
                     return;
                 }
 
@@ -879,6 +918,7 @@ namespace axe
             // funcionava, o asset carregava, m_Open virava true... e ninguem
             // desenhava. O proprio Draw() ja checa IsOpen().
             m_EditorUI->m_AnimGraphWindow.Draw();
+            m_EditorUI->m_ControlRigWindow.Draw();
             m_EditorUI->m_AnimClipWindow.Draw();
 
             // ── On-screen messages (Print String) ────────────────────────────

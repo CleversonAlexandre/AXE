@@ -1,6 +1,7 @@
 #include "asset_browser.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
+#include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/log/log.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/project/project_manager.hpp"
@@ -22,7 +23,8 @@ namespace axe
     static const std::vector<std::string> s_SupportedExtensions = {
         ".gltf", ".glb", ".obj", ".fbx", ".dae",   // .fbx: formato da Mixamo
         ".png", ".jpg", ".jpeg",
-        ".axemat", ".axescene", ".axeskel", ".axeanim"   // .axeskel: personagem | .axeanim: state machine
+        ".axemat", ".axescene", ".axeskel", ".axeanim",  // .axeskel: personagem | .axeanim: state machine
+        ".axerig"                                        // .axerig: control rig
     };
 
 
@@ -415,7 +417,8 @@ namespace axe
                 const std::string ext = newPath.extension().string();
 
                 if (ext == ".axescript" || ext == ".axeanim" ||
-                    ext == ".axeskel" || ext == ".axepart")
+                    ext == ".axeskel" || ext == ".axepart" ||
+                    ext == ".axerig")
                 {
                     try
                     {
@@ -1343,6 +1346,50 @@ namespace axe
 
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Cria uma state machine (.axeanim) ligada a este personagem.");
+
+            // ── Criar Control Rig a partir do personagem ──────────────────
+            //
+            // O rig nasce POVOADO com os ossos do esqueleto. Um rig vazio nao
+            // teria o que os nos referenciassem, entao precisamos CARREGAR o
+            // .axeskel aqui — nao basta guardar o UUID.
+            if (ImGui::MenuItem("Criar Control Rig"))
+            {
+                auto skelAsset = SkeletalMeshAsset::LoadFromFile(record.FilePath);
+
+                const Skeleton* sk = (skelAsset && skelAsset->GetSkeleton())
+                    ? skelAsset->GetSkeleton().get()
+                    : nullptr;
+
+                if (!sk)
+                {
+                    AXE_EDITOR_ERROR("Control Rig: '{}' nao tem esqueleto carregavel. "
+                        "Reimporte o personagem antes.", record.Name);
+                }
+                else
+                {
+                    auto rig = ControlRigAsset::Create(record.Name, record.UUID, sk);
+
+                    std::filesystem::path out = record.FilePath;
+                    out.replace_extension(".axerig");
+
+                    if (rig->Save(out))
+                    {
+                        const std::string newUuid = AssetDatabase::Get().Register(out);
+
+                        if (auto* newRec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(newUuid)))
+                            newRec->VirtualFolder = record.VirtualFolder;
+
+                        if (ProjectManager::Get().HasProject())
+                            AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+                        AXE_EDITOR_INFO("Control Rig '{}' criado com {} elementos. "
+                            "Duplo-clique para abrir o editor.", record.Name, rig->GetHierarchy().Size());
+                    }
+                }
+            }
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cria um Control Rig (.axerig) com os ossos deste personagem.");
         }
 
         if (record.Type == AssetType::Mesh)
