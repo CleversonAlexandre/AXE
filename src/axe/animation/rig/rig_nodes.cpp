@@ -849,6 +849,129 @@ namespace axe
 		}
 	}
 
+	// ═══ Hide Controls ═══════════════════════════════════════════════════════
+
+	void RigNode_HideControls::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const RigPinValue list = Read(ctx, 0);
+
+		// Active LIGADO = esconde. Desligado = mostra, o que permite ligar o
+		// MESMO interruptor nos dois nos (um negado) e trocar os dois conjuntos
+		// de controle de uma vez.
+		const bool hide = ReadBool(ctx, 1);
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		for (const auto& ref : list.Items)
+		{
+			const int idx = ResolveRef(h, ref);
+
+			if (idx >= 0)
+				h[idx].Visible = !hide;
+		}
+	}
+
+	// ═══ Parent Constraint ═══════════════════════════════════════════════════
+
+	void RigNode_ParentConstraint::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const int child = ReadItem(ctx, 0);
+
+		if (child < 0)
+			return;
+
+		const float weight = glm::clamp(ReadFloat(ctx, 3), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		const bool maintain = ReadBool(ctx, 1);
+		const RigPinValue parents = Read(ctx, 2);
+
+		if (parents.Items.empty())
+		{
+			if (!m_WarnedEmpty)
+			{
+				m_WarnedEmpty = true;
+
+				AXE_CORE_WARN("Parent Constraint '{}': a lista de pais esta vazia — "
+					"o no nao vai fazer nada. Ligue um Item Array no pino Parents.",
+					Title);
+			}
+
+			return;
+		}
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		const glm::mat4 childInit = h.GetInitialGlobal(child);
+
+		glm::vec3 pos(0.0f);
+		glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
+		glm::vec3 scl(1.0f);
+
+		int found = 0;
+
+		for (const auto& ref : parents.Items)
+		{
+			const int p = ResolveRef(h, ref);
+
+			if (p < 0)
+				continue;
+
+			glm::mat4 target = h.GetGlobal(p);
+
+			if (maintain)
+			{
+				// A FOLGA de repouso: onde o filho estava EM RELACAO ao pai
+				// quando os dois nasceram. Reaplicada sobre a posicao ATUAL do
+				// pai, ela faz o filho acompanhar sem colar em cima dele.
+				target = target * (glm::inverse(h.GetInitialGlobal(p)) * childInit);
+			}
+
+			const BoneTransform t = BoneTransform::FromMatrix(target);
+
+			++found;
+
+			if (found == 1)
+			{
+				pos = t.Translation;
+				rot = t.Rotation;
+				scl = t.Scale;
+			}
+			else
+			{
+				// Media incremental: com peso 1/n a cada novo pai, o resultado
+				// e a media exata de todos, sem precisar guardar a lista.
+				const float a = 1.0f / (float)found;
+
+				pos = glm::mix(pos, t.Translation, a);
+				rot = glm::slerp(rot, t.Rotation, a);
+				scl = glm::mix(scl, t.Scale, a);
+			}
+		}
+
+		if (found == 0)
+			return;
+
+		// Peso parcial mistura com onde o filho ja esta — e o que permite
+		// atenuar a restricao em vez de so ligar e desligar.
+		const BoneTransform cur = BoneTransform::FromMatrix(h.GetGlobal(child));
+
+		BoneTransform result;
+		result.Translation = glm::mix(cur.Translation, pos, weight);
+		result.Rotation = glm::slerp(cur.Rotation, rot, weight);
+		result.Scale = glm::mix(cur.Scale, scl, weight);
+
+		h.SetGlobal(child, result.ToMatrix(), true);
+	}
+
 	// ═══ Fabrica ═════════════════════════════════════════════════════════════
 
 	std::unique_ptr<RigNode> CreateRigNode(const std::string& t)
@@ -867,7 +990,10 @@ namespace axe
 		if (t == "VectorOp")       return std::make_unique<RigNode_VectorOp>();
 		if (t == "ItemArray")      return std::make_unique<RigNode_ItemArray>();
 		if (t == "At")             return std::make_unique<RigNode_At>();
+		if (t == "GetControlValue") return std::make_unique<RigNode_GetControlValue>();
 		if (t == "FKChain")        return std::make_unique<RigNode_FKChain>();
+		if (t == "ParentConstraint") return std::make_unique<RigNode_ParentConstraint>();
+		if (t == "HideControls")   return std::make_unique<RigNode_HideControls>();
 		if (t == "Reroute")        return std::make_unique<RigNode_Reroute>();
 
 		// Compatibilidade: arquivos salvos quando o reroute de execucao era um

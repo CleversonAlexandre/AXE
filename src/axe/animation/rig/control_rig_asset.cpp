@@ -157,6 +157,11 @@ namespace axe
 
 			if (e.Type == RigElementType::Control)
 			{
+				je["vtype"] = (int)e.ValueType;
+				je["bval"] = e.BoolValue;
+				je["fval"] = e.FloatValue;
+				je["srcbone"] = e.SourceBone;
+
 				je["shape"] = (int)e.Shape;
 				je["color"] = { e.ShapeColor.r, e.ShapeColor.g, e.ShapeColor.b };
 				je["size"] = e.ShapeSize;
@@ -287,6 +292,11 @@ namespace axe
 
 				if (e.Type == RigElementType::Control)
 				{
+					e.ValueType = (RigControlValue)je.value("vtype", 0);
+					e.BoolValue = je.value("bval", false);
+					e.FloatValue = je.value("fval", 0.0f);
+					e.SourceBone = je.value("srcbone", std::string());
+
 					e.Shape = (RigControlShape)je.value("shape", 0);
 
 					if (je.contains("color") && je["color"].size() == 3)

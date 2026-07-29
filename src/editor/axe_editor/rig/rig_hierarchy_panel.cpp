@@ -13,13 +13,83 @@ namespace axe
 		// Cor por especie. E a leitura mais rapida da arvore: osso e neutro,
 		// controle e o que voce agarra (amarelo, como na Unreal), null e o
 		// agrupador discreto.
-		ImVec4 ColorFor(RigElementType t)
+		// ── A COR DA LINHA E A COR DO PROPRIO CONTROLE ───────────────────────
+		//
+		// Antes todo controle saia amarelo, entao a arvore nao ajudava a achar
+		// nada: com trinta deles, a unica pista era ler nome por nome. Usando a
+		// cor que voce escolheu pra forma, o olho casa a linha da lista com o
+		// desenho no viewport na hora.
+		//
+		// Clareia o suficiente pra ler sobre fundo escuro — cores fechadas
+		// ficam ilegiveis como texto, por mais bonitas que sejam no gizmo.
+		ImVec4 ColorFor(const RigElement& e)
 		{
-			switch (t)
+			if (e.Type == RigElementType::Null)
+				return ImVec4(0.55f, 0.75f, 1.00f, 1.0f);
+
+			if (e.Type != RigElementType::Control)
+				return ImVec4(0.80f, 0.82f, 0.88f, 1.0f);
+
+			// Canal nao tem forma, entao nao tem cor propria: um verde discreto
+			// o separa dos controles que mexem em algo.
+			if (e.ValueType != RigControlValue::Transform)
+				return ImVec4(0.55f, 0.90f, 0.60f, 1.0f);
+
+			const float boost = 0.45f;
+
+			return ImVec4(
+				e.ShapeColor.r + (1.0f - e.ShapeColor.r) * boost,
+				e.ShapeColor.g + (1.0f - e.ShapeColor.g) * boost,
+				e.ShapeColor.b + (1.0f - e.ShapeColor.b) * boost,
+				1.0f);
+		}
+
+		// Marca da especie, desenhada A MAO antes do nome.
+		//
+		// Uma letra ou um "o" seriam mais simples, mas a FORMA se le sem
+		// decodificar: losango = controle, quadradinho = canal, ponto = osso.
+		void DrawElementMark(const RigElement& e, const ImVec4& color)
+		{
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+
+			const ImVec2 rmin = ImGui::GetItemRectMin();
+
+			// GetTreeNodeToLabelSpacing e exatamente o vao ate onde o texto
+			// comeca — e o unico ponto de ancoragem que acompanha a indentacao.
+			const float off = ImGui::GetTreeNodeToLabelSpacing();
+
+			const ImVec2 c(rmin.x + off + 5.0f,
+				rmin.y + ImGui::GetTextLineHeight() * 0.5f + 1.0f);
+
+			const ImU32 col = ImGui::ColorConvertFloat4ToU32(color);
+
+			switch (e.Type)
 			{
-			case RigElementType::Control: return ImVec4(1.00f, 0.82f, 0.25f, 1.0f);
-			case RigElementType::Null:    return ImVec4(0.55f, 0.75f, 1.00f, 1.0f);
-			default:                      return ImVec4(0.80f, 0.82f, 0.88f, 1.0f);
+			case RigElementType::Control:
+				if (e.ValueType != RigControlValue::Transform)
+				{
+					// Canal: quadradinho, como um interruptor.
+					dl->AddRectFilled(ImVec2(c.x - 3.5f, c.y - 3.5f),
+						ImVec2(c.x + 3.5f, c.y + 3.5f), col, 1.0f);
+				}
+				else
+				{
+					const ImVec2 pts[4] = {
+						ImVec2(c.x, c.y - 5.0f), ImVec2(c.x + 4.5f, c.y),
+						ImVec2(c.x, c.y + 5.0f), ImVec2(c.x - 4.5f, c.y) };
+
+					dl->AddConvexPolyFilled(pts, 4, col);
+				}
+				break;
+
+			case RigElementType::Null:
+				dl->AddRect(ImVec2(c.x - 4.0f, c.y - 4.0f),
+					ImVec2(c.x + 4.0f, c.y + 4.0f), col, 1.0f, 0, 1.4f);
+				break;
+
+			default:
+				dl->AddCircleFilled(c, 2.6f, col);
+				break;
 			}
 		}
 
@@ -36,15 +106,6 @@ namespace axe
 			return (p == std::string::npos) ? full.c_str() : full.c_str() + p + 1;
 		}
 
-		const char* GlyphFor(RigElementType t)
-		{
-			switch (t)
-			{
-			case RigElementType::Control: return "o";
-			case RigElementType::Null:    return "+";
-			default:                      return "-";
-			}
-		}
 	}
 
 	void ControlRigWindow::DrawElementContextMenu(int index)
@@ -212,12 +273,16 @@ namespace axe
 			return;
 		}
 
-		ImGui::PushStyleColor(ImGuiCol_Text, ColorFor(e.Type));
+		const ImVec4 color = ColorFor(e);
 
-		const std::string label = std::string(GlyphFor(e.Type)) + "  " + ShortName(e.Name);
-		const bool opened = ImGui::TreeNodeEx("##el", flags, "%s", label.c_str());
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+
+		// Os espacos reservam a faixa onde o marcador e desenhado depois.
+		const bool opened = ImGui::TreeNodeEx("##el", flags, "    %s", ShortName(e.Name));
 
 		ImGui::PopStyleColor();
+
+		DrawElementMark(e, color);
 
 		// O nome COMPLETO no tooltip: e ele que vai nos pinos Item do grafo.
 		if (ImGui::IsItemHovered() && e.Name != ShortName(e.Name))
@@ -346,9 +411,11 @@ namespace axe
 					continue;
 				}
 
-				ImGui::PushStyleColor(ImGuiCol_Text, ColorFor(e.Type));
+				const ImVec4 color = ColorFor(e);
 
-				const std::string label = std::string(GlyphFor(e.Type)) + "  " + ShortName(e.Name);
+				ImGui::PushStyleColor(ImGuiCol_Text, color);
+
+				const std::string label = std::string("    ") + ShortName(e.Name);
 
 				if (ImGui::Selectable(label.c_str(), IsSelected((int)i)))
 				{
@@ -363,6 +430,8 @@ namespace axe
 				SubmitDragSource(e, (int)m_Selection.size() - 1);
 
 				ImGui::PopStyleColor();
+
+				DrawElementMark(e, color);
 
 				if (ImGui::BeginPopupContextItem("##ctx"))
 				{
@@ -438,6 +507,10 @@ namespace axe
 						// Mesmo local do osso = mesma posicao E mesma
 						// orientacao que ele.
 						h[idx].Initial = h[clicked].Initial;
+
+						// Lembra de ONDE ele nasceu: e pra la que o
+						// "Reset to bind pose" devolve o controle.
+						h[idx].SourceBone = h[clicked].Name;
 					}
 					else
 					{

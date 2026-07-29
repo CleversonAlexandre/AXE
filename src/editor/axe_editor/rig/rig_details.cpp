@@ -190,14 +190,76 @@ namespace axe
 
 		if (ImGui::Button("Reset to bind pose", ImVec2(-1, 0)))
 		{
-			e.Initial = BoneTransform{};
+			// ── VOLTA PRO OSSO DE ORIGEM, NAO PRA IDENTIDADE ─────────────
+			//
+			// Identidade joga o controle pra origem do rig. O que se quer ao
+			// "resetar" um controle e devolve-lo pra cima do osso de onde ele
+			// nasceu — que e o unico lugar onde o FK volta a ser neutro.
+			//
+			// Isso importa porque o gizmo escreve no INITIAL: mover um controle
+			// pra testar muda o REPOUSO dele, e a partir dai o FK aplica esse
+			// desvio pra sempre. E o que faz o membro "descer um pouco" sem
+			// motivo aparente.
+			const int src = e.SourceBone.empty()
+				? -1
+				: h.Find(e.SourceBone, RigElementType::Bone);
+
+			e.Initial = (src >= 0) ? h[src].Initial : BoneTransform{};
 			e.Current = e.Initial;
+
 			m_EulerOwner[0] = -1;   // forca re-derivar o Euler exibido
 			MarkEdited("Reset to bind pose");
 		}
 
+		if (!e.SourceBone.empty() && ImGui::IsItemHovered())
+			ImGui::SetTooltip("Volta pro repouso de '%s'.", e.SourceBone.c_str());
+
 		// ── Forma do controle ────────────────────────────────────────────────
 		if (e.Type != RigElementType::Control)
+			return;
+
+		ImGui::Spacing();
+		ImGui::Separator();
+
+		// ── CONTROLE DE CANAL ────────────────────────────────────────────────
+		//
+		// Um controle que carrega so um VALOR, pra ser lido pelo grafo e
+		// animado depois pelo sequencer. E assim que se faz um interruptor de
+		// IK/FK: o Branch le este valor em vez de um numero digitado no no, que
+		// ninguem conseguiria animar.
+		{
+			static const char* kValueTypes[] = { "Transform", "Bool", "Float" };
+
+			int vt = (int)e.ValueType;
+
+			if (ImGui::Combo("Value type", &vt, kValueTypes, 3))
+			{
+				e.ValueType = (RigControlValue)vt;
+				MarkEdited("Change control type");
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(
+					"Transform: o controle normal, com forma no viewport.\n\n"
+					"Bool / Float: um CANAL — sem forma, so um valor.\n"
+					"Leia com o no Get Control Value.");
+			}
+
+			if (e.ValueType == RigControlValue::Bool)
+			{
+				if (ImGui::Checkbox("Value", &e.BoolValue))
+					MarkEdited("Edit control value");
+			}
+			else if (e.ValueType == RigControlValue::Float)
+			{
+				if (ImGui::DragFloat("Value", &e.FloatValue, 0.01f, 0.0f, 1.0f))
+					MarkEdited("Edit control value");
+			}
+		}
+
+		// Canal nao tem forma pra configurar: nao ha o que desenhar nem agarrar.
+		if (e.ValueType != RigControlValue::Transform)
 			return;
 
 		ImGui::Spacing();

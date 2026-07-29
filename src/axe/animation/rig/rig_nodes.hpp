@@ -160,6 +160,59 @@ namespace axe
 		int        m_Count = 0;
 	};
 
+	// ── Get Control Value (PURO) ─────────────────────────────────────────────
+	//
+	// Le o valor de um controle de CANAL. E a ponte entre "o animador mexeu no
+	// interruptor" e o grafo reagir — sem ela, um Branch so poderia ser ligado
+	// por um valor digitado no proprio no, que ninguem consegue animar depois.
+	class AXE_API RigNode_GetControlValue : public RigNode
+	{
+	public:
+		RigNode_GetControlValue()
+		{
+			Title = "Get Control Value";
+
+			AddInItem("Control", RigElementType::Control);
+
+			AddOut("Bool", RigPinType::Bool);
+			AddOut("Float", RigPinType::Float);
+		}
+
+		const char* TypeName() const override { return "GetControlValue"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_GetControlValue>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override
+		{
+			out = RigPinValue{};
+
+			if (!ctx.Hierarchy)
+				return;
+
+			const int idx = ReadItem(ctx, 0);
+
+			if (idx < 0)
+				return;
+
+			const RigElement& e = (*ctx.Hierarchy)[idx];
+
+			// As duas saidas sempre respondem, convertendo entre si: assim
+			// ligar um canal Float num Branch, ou um Bool num peso, faz o que
+			// se espera em vez de devolver zero calado.
+			if (pin == 0)
+				out.Bool = (e.ValueType == RigControlValue::Float)
+				? (e.FloatValue > 0.5f)
+				: e.BoolValue;
+			else
+				out.Float = (e.ValueType == RigControlValue::Bool)
+				? (e.BoolValue ? 1.0f : 0.0f)
+				: e.FloatValue;
+		}
+	};
+
 	// ── At (PURO) ────────────────────────────────────────────────────────────
 	//
 	// Devolve o elemento de uma lista numa posicao. Sozinho parece pouco; o
@@ -309,6 +362,82 @@ namespace axe
 		// Ja avisei que o Target esta zerado? Uma vez por no, senao viraria
 		// spam de 60 linhas por segundo no console.
 		bool m_WarnedZeroTarget = false;
+	};
+
+	// ── Hide Controls ────────────────────────────────────────────────────────
+	//
+	// Some com os controles da lista quando ligado, e devolve quando desligado.
+	//
+	// Serve pro par IK/FK: com o interruptor em IK, os controles de FK viram
+	// ruido na tela — e pior, dao pra clicar e mexer sem efeito nenhum, porque
+	// o ramo que os le nem esta rodando. Escondendo, sobra so o que de fato
+	// controla alguma coisa naquele momento.
+	class AXE_API RigNode_HideControls : public RigNode
+	{
+	public:
+		RigNode_HideControls()
+		{
+			Title = "Hide Controls";
+			HasExecIn = true;
+			ExecOut.push_back("");
+
+			AddIn("Controls", RigPinType::ItemArray);
+			AddInBool("Active", true);
+		}
+
+		const char* TypeName() const override { return "HideControls"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_HideControls>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+	};
+
+	// ── Parent Constraint ────────────────────────────────────────────────────
+	//
+	// Faz um elemento SEGUIR outro(s), como se fosse filho — sem realmente
+	// reparentear.
+	//
+	// E a metade que faltava do casamento IK <-> FK. O Project to New Parent
+	// resolve um lado (o FK acompanha o resultado do IK); este resolve o outro:
+	// o controle de IK segue o osso movido pelo FK, entao virar a chave de FK
+	// pra IK nao faz o membro saltar.
+	//
+	// Aceita VARIOS pais e mistura entre eles em partes iguais — e assim que se
+	// faz uma mao "presa" a um volante ou a outro personagem sem trocar a
+	// hierarquia de verdade.
+	class AXE_API RigNode_ParentConstraint : public RigNode
+	{
+	public:
+		RigNode_ParentConstraint()
+		{
+			Title = "Parent Constraint";
+			HasExecIn = true;
+			ExecOut.push_back("");
+
+			AddInItem("Child", RigElementType::Control);
+
+			// Ligado por padrao: sem manter a folga, o filho SALTA pra cima do
+			// pai no instante em que o no roda — quase nunca e o que se quer.
+			AddInBool("Maintain Offset", true);
+
+			AddIn("Parents", RigPinType::ItemArray);
+			AddInFloat("Weight", 1.0f);
+		}
+
+		const char* TypeName() const override { return "ParentConstraint"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_ParentConstraint>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+	private:
+		bool m_WarnedEmpty = false;
 	};
 
 	// ── Ground Trace (PURO) ──────────────────────────────────────────────────

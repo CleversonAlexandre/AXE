@@ -430,7 +430,15 @@ namespace axe
 	void RigHierarchy::ResetToInitial()
 	{
 		for (auto& e : m_Elements)
+		{
 			e.Current = e.Initial;
+
+			// Todo mundo volta a aparecer no comeco do solve; quem quiser
+			// esconder alguem tem que dizer isso TODO frame. Sem esse reset,
+			// desligar o no que escondia deixaria os controles sumidos pra
+			// sempre, sem nada na tela explicando por que.
+			e.Visible = true;
+		}
 
 		MarkDirty();
 	}

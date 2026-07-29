@@ -90,7 +90,9 @@ namespace axe
 			if (t == "ForwardsSolve")                      return ImVec4(0.55f, 0.20f, 0.20f, 1.0f);
 			if (t == "Sequence" || t == "Branch" || t == "ForEach")
 				return ImVec4(0.32f, 0.32f, 0.36f, 1.0f);
-			if (t == "SetTransform" || t == "TwoBoneIK")   return ImVec4(0.50f, 0.33f, 0.14f, 1.0f);
+			if (t == "SetTransform" || t == "TwoBoneIK"
+				|| t == "FKChain" || t == "ParentConstraint")
+				return ImVec4(0.50f, 0.33f, 0.14f, 1.0f);
 			if (t == "GetTransform" || t == "GroundTrace") return ImVec4(0.16f, 0.34f, 0.50f, 1.0f);
 
 			return ImVec4(0.26f, 0.28f, 0.34f, 1.0f);
@@ -940,11 +942,32 @@ namespace axe
 					MarkEdited("Add node");
 				};
 
-			if (ImGui::MenuItem("Get Transform"))
-				spawn("GetTransform");
+			// ── O MENU SEGUE O QUE FOI SOLTO ─────────────────────────────
+			//
+			// Um controle de CANAL nao tem posicao no espaco: oferecer Get/Set
+			// Transform pra ele seria oferecer um caminho que nao leva a lugar
+			// nenhum — e a pessoa so descobre isso depois de criar o no e
+			// procurar um pino que nao existe.
+			const auto& hd = m_Asset->GetHierarchy();
+			const int dropped = hd.Find(m_DropName, m_DropType);
 
-			if (ImGui::MenuItem("Set Transform"))
-				spawn("SetTransform");
+			const bool isChannel = (dropped >= 0)
+				&& hd[dropped].Type == RigElementType::Control
+				&& hd[dropped].ValueType != RigControlValue::Transform;
+
+			if (isChannel)
+			{
+				if (ImGui::MenuItem("Get Control Value"))
+					spawn("GetControlValue");
+			}
+			else
+			{
+				if (ImGui::MenuItem("Get Transform"))
+					spawn("GetTransform");
+
+				if (ImGui::MenuItem("Set Transform"))
+					spawn("SetTransform");
+			}
 
 			// ── SOLTOU VARIOS: vira uma LISTA ────────────────────────────
 			//
@@ -1021,6 +1044,7 @@ namespace axe
 				{ "Ground Trace",  "GroundTrace" },
 				{ "Item Array",    "ItemArray" },
 				{ "At",            "At" },
+				{ "Get Control Value", "GetControlValue" },
 				{ "Project to New Parent", "ProjectToNewParent" },
 			};
 
@@ -1028,6 +1052,8 @@ namespace axe
 				{ "Set Transform", "SetTransform" },
 				{ "Two Bone IK",   "TwoBoneIK" },
 				{ "FK Chain",      "FKChain" },
+				{ "Parent Constraint", "ParentConstraint" },
+				{ "Hide Controls", "HideControls" },
 			};
 
 			static const Entry kOrganize[] = {
@@ -1075,11 +1101,11 @@ namespace axe
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Read");
-			emit(kRead, 5);
+			emit(kRead, 6);
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Write");
-			emit(kWrite, 3);
+			emit(kWrite, 5);
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Math");

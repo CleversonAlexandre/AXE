@@ -338,7 +338,11 @@ namespace axe
 		{
 			const RigElement& e = h[(int)i];
 
-			if (e.Type != RigElementType::Control)
+			// Canal nao tem forma: e um valor, nao um objeto no espaco.
+			// Desenhar um circulo pra ele so daria algo pra clicar sem efeito.
+			if (e.Type != RigElementType::Control
+				|| e.ValueType != RigControlValue::Transform
+				|| !e.Visible)
 				continue;
 
 			// ── A MATRIZ COMPLETA DO DESENHO ─────────────────────────────

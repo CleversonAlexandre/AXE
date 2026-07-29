@@ -58,6 +58,20 @@ namespace axe
 		Arrow
 	};
 
+	// O que um Control REPRESENTA.
+	//
+	// Nem todo controle move alguma coisa no espaco. Um "canal" e um controle
+	// que carrega so um VALOR — o interruptor de IK/FK, a abertura da mao, a
+	// intensidade de um efeito. Ele aparece na hierarquia (pra ser animado
+	// depois pelo sequencer) mas nao tem forma no viewport, porque nao ha o que
+	// agarrar.
+	enum class RigControlValue
+	{
+		Transform,   // o normal: posicao/rotacao/escala
+		Bool,
+		Float
+	};
+
 	struct AXE_API RigElement
 	{
 		std::string     Name;
@@ -72,6 +86,30 @@ namespace axe
 		BoneTransform   Current;
 
 		// ── So para Control ──────────────────────────────────────────────────
+		RigControlValue ValueType = RigControlValue::Transform;
+
+		// Valor do canal. So conta quando ValueType nao e Transform.
+		//
+		// Fica FORA de Initial/Current de proposito: o solve reseta transforms
+		// todo frame, e um interruptor que voltasse ao padrao a cada quadro
+		// seria inutil.
+		bool  BoolValue = false;
+		float FloatValue = 0.0f;
+
+		// De qual osso este controle nasceu.
+		//
+		// Guardado pra o "Reset to bind pose" saber pra ONDE voltar. Sem isso a
+		// unica opcao seria zerar pra identidade — que joga o controle pra
+		// origem do rig, nao pra cima do osso dele.
+		std::string SourceBone;
+
+		// Visivel no viewport?
+		//
+		// E estado de RUNTIME, decidido pelo grafo a cada solve — nao vai pro
+		// disco. Um controle que ficasse escondido "de fábrica" seria muito
+		// dificil de descobrir depois.
+		bool Visible = true;
+
 		RigControlShape Shape = RigControlShape::Circle;
 		glm::vec3       ShapeColor{ 1.0f, 0.85f, 0.15f };
 		float           ShapeSize = 1.0f;
