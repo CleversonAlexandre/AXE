@@ -707,4 +707,201 @@ namespace axe
 		Op Operation = Op::Add;
 	};
 
+	// ── Float Math (PURO) ────────────────────────────────────────────────────
+	//
+	// O grafo nao tinha NENHUMA matematica escalar — so o VectorOp. Sem isto
+	// nao da pra montar um Foot IK como grafo: falta clampar o alcance, tirar
+	// o minimo entre duas folgas, misturar dois pesos.
+	//
+	// Os pinos SE RENOMEIAM conforme a operacao (Clamp vira Value/Min/Max,
+	// Lerp vira A/B/Alpha). Os fios referenciam o pino por INDICE, entao
+	// renomear e seguro — e "A, B, C" num Clamp nao diria qual e o minimo.
+	class AXE_API RigNode_FloatMath : public RigNode
+	{
+	public:
+		enum class Op { Add, Subtract, Multiply, Divide, Min, Max, Clamp, Lerp, Abs };
+
+		RigNode_FloatMath();
+
+		const char* TypeName() const override { return "FloatMath"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_FloatMath>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+
+		// Renomeia os pinos pra casarem com a operacao. Chamado pelo painel de
+		// detalhes e pelo Deserialize.
+		void ApplyOperation();
+
+		Op Operation = Op::Add;
+	};
+
+	// ── Select Float (PURO) ──────────────────────────────────────────────────
+	//
+	// A ponte que faltava de Bool pra Float. O Ground Trace diz "acertou" num
+	// bool, e o peso do Two Bone IK pede um float — sem este no, "pe no chao =
+	// peso 1, pe no vazio = peso 0" so daria pra montar com um Branch e dois
+	// ramos duplicados.
+	class AXE_API RigNode_SelectFloat : public RigNode
+	{
+	public:
+		RigNode_SelectFloat();
+
+		const char* TypeName() const override { return "SelectFloat"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_SelectFloat>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+	};
+
+	// ── Damp Float / Damp Vector (PUROS, mas COM ESTADO) ─────────────────────
+	//
+	// Perseguem o valor de entrada em vez de saltar nele. Sao os UNICOS nos do
+	// rig que lembram do frame anterior — e e por isso que existem: um raycast
+	// que muda de superficie entre dois frames faz o pe dar POP sem eles.
+	//
+	// O estado sobrevive ao ResetToInitial de proposito (ele reseta a
+	// HIERARQUIA, nao os nos). Cada personagem roda o proprio clone do grafo,
+	// entao dois personagens nao dividem a suavizacao um do outro.
+	class AXE_API RigNode_DampFloat : public RigNode
+	{
+	public:
+		RigNode_DampFloat();
+
+		const char* TypeName() const override { return "DampFloat"; }
+
+		// A copia nasce FRIA: m_Init falso faz o primeiro frame SNAPAR no
+		// valor em vez de subir de zero. Sem isso o personagem "assentaria"
+		// visivelmente no instante do Play.
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			auto c = std::make_unique<RigNode_DampFloat>(*this);
+			c->m_Init = false;
+			return c;
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+	private:
+		float m_Value = 0.0f;
+		bool  m_Init = false;
+	};
+
+	class AXE_API RigNode_DampVector : public RigNode
+	{
+	public:
+		RigNode_DampVector();
+
+		const char* TypeName() const override { return "DampVector"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			auto c = std::make_unique<RigNode_DampVector>(*this);
+			c->m_Init = false;
+			return c;
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+	private:
+		glm::vec3 m_Value{ 0.0f };
+		bool      m_Init = false;
+	};
+
+	// ── Align To Vector ──────────────────────────────────────────────────────
+	//
+	// Inclina um elemento pela MESMA rotacao que leva um vetor a outro. E como
+	// o pe acompanha a inclinacao da rampa.
+	//
+	// ── POR QUE NAO E UM "AIM" ───────────────────────────────────────────
+	//
+	// A tentacao e fazer "aponte o eixo +Y do pe pra normal do chao". Isso JA
+	// FOI TENTADO no AnimNode_FootIK e deu errado: no rig Mixamo o osso do pe
+	// aponta pro DEDO, nao pra cima, entao alinhar o +Y a normal girava o pe
+	// por um angulo enorme e arbitrario — o pe saia deformado e invertido.
+	//
+	// A solucao rig-agnostica: em chao plano a animacao JA orienta o pe certo,
+	// entao basta aplicar POR CIMA a inclinacao do chao em relacao ao plano.
+	// Nao se supoe eixo nenhum do osso — so a diferenca entre dois vetores do
+	// mundo. Ligue From = (0,1,0) e To = a Normal do Ground Trace.
+	class AXE_API RigNode_AlignToVector : public RigNode
+	{
+	public:
+		RigNode_AlignToVector();
+
+		const char* TypeName() const override { return "AlignToVector"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_AlignToVector>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+	private:
+		bool m_WarnedDegenerate = false;
+	};
+
+	// ── Control Follow Bone ──────────────────────────────────────────────────
+	//
+	// Faz um CONTROLE cavalgar o osso animado, PRESERVANDO a correcao que voce
+	// autorou nele. E a peca que faltava pro mesmo rig servir em jogo e no
+	// editor sem trocar um fio.
+	//
+	// ── O PROBLEMA QUE ELE RESOLVE ───────────────────────────────────────
+	//
+	// Um controle tem UM transform. A manipulacao do gizmo grava no Initial
+	// (SetInitialGlobal), e o solve faz Current = Initial. Ou seja: "repouso" e
+	// "pose autorada" sao o MESMO campo, e nao existe onde guardar "onde a
+	// animacao pos este osso neste frame". Consequencia: se o Two Bone IK le o
+	// OSSO, funciona em jogo mas o controle fica morto; se le o CONTROLE, o
+	// controle manda mas a animacao e ignorada (o controle nao sai do repouso).
+	//
+	// ── COMO ESCAPA DISSO SEM MEXER NA HIERARQUIA ────────────────────────
+	//
+	// A correcao autorada e a relacao de REPOUSO entre controle e osso:
+	//
+	//     delta  = inverse(bone.InitialGlobal) * control.InitialGlobal
+	//     target = bone.CurrentGlobal * delta
+	//
+	// Nao ha campo novo, nao ha composicao nova — so aritmetica com o que a
+	// hierarquia ja expoe. E as duas pontas caem certas de graca:
+	//
+	//   EM JOGO: controle criado sobre o osso => delta = identidade => o
+	//   controle pousa exatamente no osso ANIMADO. O Two Bone IK le o controle
+	//   e obedece a animacao.
+	//
+	//   NO EDITOR DE RIG: nao ha animacao, entao CurrentGlobal == InitialGlobal
+	//   do osso => target == control.InitialGlobal => o controle fica
+	//   EXATAMENTE onde voce o largou. Comportamento identico ao de hoje —
+	//   por isso este no nao pode regredir o editor.
+	//
+	// Rode-o ANTES do Two Bone IK que le o controle.
+	class AXE_API RigNode_ControlFollowBone : public RigNode
+	{
+	public:
+		RigNode_ControlFollowBone();
+
+		const char* TypeName() const override { return "ControlFollowBone"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_ControlFollowBone>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+	private:
+		bool m_Warned = false;
+	};
+
 } // namespace axe

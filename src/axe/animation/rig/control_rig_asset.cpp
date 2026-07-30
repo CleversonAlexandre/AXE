@@ -3,9 +3,48 @@
 
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <unordered_map>
+#include <algorithm>
+#include <cctype>
 
 namespace axe
 {
+	namespace
+	{
+		// ── CACHE POR IDENTIDADE ─────────────────────────────────────────────
+		//
+		// Sem isto, o editor de rig e o AnimGraph carregavam o MESMO .axerig em
+		// DOIS objetos independentes. Consequencia pratica: voce editava o rig,
+		// dava Play, e o personagem continuava rodando a copia velha do disco —
+		// entao QUALQUER teste feito mexendo no grafo mentia ("tirei o Two Bone
+		// IK do fluxo e nao mudou nada" era verdade: a mudanca nunca chegou la).
+		//
+		// weak_ptr: o cache NAO segura o asset vivo. Enquanto alguem usa, todos
+		// recebem o MESMO objeto — e o BumpVersion do Save chega em todos, que e
+		// o que faz o AnimNode_ControlRig re-clonar a copia de trabalho.
+		std::unordered_map<std::string, std::weak_ptr<ControlRigAsset>> s_RigCache;
+
+		std::string RigCacheKey(const std::filesystem::path& p)
+		{
+			std::error_code ec;
+			std::filesystem::path c = std::filesystem::weakly_canonical(p, ec);
+
+			if (ec)
+				c = p;
+
+			std::string key = c.string();
+
+			// Windows nao diferencia caixa, e weakly_canonical nao normaliza a
+			// caixa de trecho inexistente — sem isto "Assets/Rig.axerig" e
+			// "assets/rig.axerig" viravam dois objetos. Mesma licao do
+			// FindAnimationEntryBySource.
+			std::transform(key.begin(), key.end(), key.begin(),
+				[](unsigned char ch) { return (char)std::tolower(ch); });
+
+			return key;
+		}
+	}
+
 	namespace
 	{
 		nlohmann::json SaveTransform(const BoneTransform& t)
@@ -245,6 +284,25 @@ namespace axe
 	std::shared_ptr<ControlRigAsset> ControlRigAsset::LoadFromFile(
 		const std::filesystem::path& filepath)
 	{
+		// MESMO ARQUIVO = MESMO OBJETO. Se alguem ja tem este rig aberto (o
+		// editor de rig, outro personagem), devolvemos a MESMA instancia em vez
+		// de reler o disco — senao editar o rig nao tem efeito em quem ja esta
+		// rodando, e o proprio teste de "mudei e nao adiantou" fica invalido.
+		const std::string cacheKey = RigCacheKey(filepath);
+
+		{
+			const auto it = s_RigCache.find(cacheKey);
+
+			if (it != s_RigCache.end())
+			{
+				if (std::shared_ptr<ControlRigAsset> alive = it->second.lock())
+					return alive;
+
+				// Ninguem usa mais: entrada morta, sai do mapa.
+				s_RigCache.erase(it);
+			}
+		}
+
 		std::ifstream in(filepath);
 
 		if (!in)
@@ -383,6 +441,8 @@ namespace axe
 
 		AXE_CORE_INFO("ControlRig - CONTROLRIG_V1: '{}' carregado ({} elementos, {} nos).",
 			rig->m_Name, rig->m_Hierarchy.Size(), rig->m_Graph.GetNodes().size());
+
+		s_RigCache[cacheKey] = rig;
 
 		return rig;
 	}

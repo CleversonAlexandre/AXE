@@ -1291,7 +1291,8 @@ namespace axe
 		};
 
 		static const Entry kPostProcess[] = {
-			{ "Foot IK", "FootIK" },
+			{ "Foot IK",     "FootIK" },
+			{ "Control Rig", "ControlRig" },
 		};
 
 		auto emit = [&](const Entry* list, int count)
@@ -1329,7 +1330,7 @@ namespace axe
 
 		ImGui::Separator();
 		ImGui::TextDisabled("Pos-processamento");
-		emit(kPostProcess, 1);
+		emit(kPostProcess, 2);
 
 		ImGui::Separator();
 		ImGui::TextDisabled("Variaveis");
@@ -2865,6 +2866,67 @@ namespace axe
 
 				ImGui::EndCombo();
 			}
+			return;
+		}
+
+		if (auto* cr = dynamic_cast<AnimNode_ControlRig*>(&node))
+		{
+			ImGui::TextWrapped("Roda um Control Rig (.axerig) POR CIMA da pose que chega. "
+				"O Forwards Solve do rig processa os ossos (Foot IK, look-at, "
+				"correcoes procedurais) e a pose corrigida segue no grafo.");
+			ImGui::Spacing();
+
+			// Nome do rig escolhido (UUID -> nome legivel) pro combo.
+			std::string current = "(nenhum)";
+			if (!cr->RigUUID.empty())
+			{
+				if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(cr->RigUUID))
+					current = rec->Name.empty() ? rec->FilePath.stem().string() : rec->Name;
+				else
+					current = "(faltando)";
+			}
+
+			if (ImGui::BeginCombo("Control Rig", current.c_str()))
+			{
+				// "(nenhum)" desliga o no — a pose passa intacta.
+				if (ImGui::Selectable("(nenhum)", cr->RigUUID.empty()))
+				{
+					cr->RigUUID.clear();
+					cr->ResolveRig(m_Skeleton ? m_Skeleton->GetSkeleton().get() : nullptr, "editor");
+					MarkEdited();
+				}
+
+				// Lista os .axerig do projeto. Filtra por EXTENSAO (a verdade
+				// no disco), nao por record.Type, que pode estar velho pra
+				// assets registrados antes do tipo ControlRig existir.
+				for (const auto& kv : AssetDatabase::Get().GetAll())
+				{
+					const AssetRecord& rec = kv.second;
+					if (rec.FilePath.extension() != ".axerig")
+						continue;
+
+					const std::string label = rec.Name.empty()
+						? rec.FilePath.stem().string() : rec.Name;
+
+					if (ImGui::Selectable(label.c_str(), rec.UUID == cr->RigUUID))
+					{
+						cr->RigUUID = rec.UUID;
+						cr->ResolveRig(m_Skeleton ? m_Skeleton->GetSkeleton().get() : nullptr, "editor");   // carrega ja, pro preview refletir na hora
+						MarkEdited();
+					}
+				}
+
+				ImGui::EndCombo();
+			}
+
+			if (cr->RigUUID.empty())
+				ImGui::TextDisabled("Escolha um .axerig pra este no fazer algo.");
+			else if (!cr->RigAsset)
+				ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+					"O rig nao carregou. Salve/reabra o grafo ou confira o arquivo.");
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("O pino Alpha controla a intensidade (0..1).");
 			return;
 		}
 

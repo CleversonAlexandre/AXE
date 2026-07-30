@@ -354,19 +354,40 @@ namespace axe
 		// ── DIAGNOSTICO: Target zerado ───────────────────────────────────────
 		//
 		// (0,0,0) e a ORIGEM do rig, entre os pes — praticamente nunca e onde
-		// alguem quer o efetor. Na pratica significa que o pino nao esta ligado,
-		// ou que o que alimenta ele esta devolvendo zero (um Vector Op em modo
-		// Add com A e B vazios, por exemplo).
+		// alguem quer o efetor. Mas zero SO e sintoma quando o pino esta
+		// SOLTO: com um fio ligado, um zero e quase sempre transitorio (o
+		// Ground Trace nao acertou neste frame, o solve ainda nao tem dado, um
+		// Damp ainda nao esquentou).
 		//
-		// Sem este aviso o sintoma e mudo: o membro se estica na direcao da
-		// origem e parece que "o IK nao funciona".
+		// Avisar mesmo com o pino ligado foi um DEFEITO desta funcao: como o
+		// aviso e uma-vez-e-nunca-mais, um unico frame ruim deixava no console
+		// uma mensagem que parecia atual e acusava um erro que nao existia.
 		if (!m_WarnedZeroTarget && glm::length2(targetIn) < 1e-8f)
 		{
-			m_WarnedZeroTarget = true;
+			bool linked = false;
 
-			AXE_CORE_WARN("Two Bone IK '{}': Target esta em (0,0,0) — o efetor vai "
-				"ser puxado pra origem do rig. Ligue a Location de um controle "
-				"nesse pino.", Title);
+			// So varremos os fios no caso raro (valor zerado e ainda sem
+			// aviso), entao isto nao custa nada no frame normal.
+			if (ctx.Graph)
+			{
+				for (const auto& l : ctx.Graph->GetDataLinks())
+				{
+					if (l.ToNode == Id && l.ToPin == 3)
+					{
+						linked = true;
+						break;
+					}
+				}
+			}
+
+			if (!linked)
+			{
+				m_WarnedZeroTarget = true;
+
+				AXE_CORE_WARN("Two Bone IK '{}': o pino Target esta SOLTO e o valor "
+					"digitado nele e (0,0,0) — o efetor vai ser puxado pra origem do "
+					"rig. Ligue a Location de um controle nesse pino.", Title);
+			}
 		}
 
 		const glm::vec3 target = glm::mix(tipPos, targetIn, weight);
@@ -972,6 +993,411 @@ namespace axe
 		h.SetGlobal(child, result.ToMatrix(), true);
 	}
 
+	// ═══ Float Math ══════════════════════════════════════════════════════════
+
+	RigNode_FloatMath::RigNode_FloatMath()
+	{
+		Title = "Float Math";
+
+		AddInFloat("A", 0.0f);
+		AddInFloat("B", 0.0f);
+		AddInFloat("C", 0.0f);
+
+		AddOut("Result", RigPinType::Float);
+
+		ApplyOperation();
+	}
+
+	void RigNode_FloatMath::ApplyOperation()
+	{
+		// Defensivo: o Deserialize chama isto, e um arquivo corrompido podia
+		// chegar aqui antes dos pinos existirem.
+		if (Inputs.size() < 3)
+			return;
+
+		switch (Operation)
+		{
+		case Op::Clamp:
+			Inputs[0].Name = "Value";
+			Inputs[1].Name = "Min";
+			Inputs[2].Name = "Max";
+			break;
+
+		case Op::Lerp:
+			Inputs[0].Name = "A";
+			Inputs[1].Name = "B";
+			Inputs[2].Name = "Alpha";
+			break;
+
+		case Op::Abs:
+			Inputs[0].Name = "A";
+			Inputs[1].Name = "-";
+			Inputs[2].Name = "-";
+			break;
+
+		default:
+			Inputs[0].Name = "A";
+			Inputs[1].Name = "B";
+			Inputs[2].Name = "-";
+			break;
+		}
+	}
+
+	void RigNode_FloatMath::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		(void)pin;
+
+		out = RigPinValue{};
+
+		const float a = ReadFloat(ctx, 0);
+		const float b = ReadFloat(ctx, 1);
+		const float c = ReadFloat(ctx, 2);
+
+		switch (Operation)
+		{
+		case Op::Add:      out.Float = a + b; break;
+		case Op::Subtract: out.Float = a - b; break;
+		case Op::Multiply: out.Float = a * b; break;
+
+			// Divisao por zero devolve A em vez de inf/nan. Um nan entrando num
+			// transform contamina a pose inteira, e o sintoma e o personagem
+			// SUMIR da tela — muito pior de rastrear que um valor inesperado.
+		case Op::Divide:   out.Float = (glm::abs(b) > 1e-6f) ? (a / b) : a; break;
+
+		case Op::Min:      out.Float = glm::min(a, b); break;
+		case Op::Max:      out.Float = glm::max(a, b); break;
+
+			// Min e Max trocados dariam resultado sem sentido em silencio; ordena.
+		case Op::Clamp:    out.Float = glm::clamp(a, glm::min(b, c), glm::max(b, c)); break;
+
+		case Op::Lerp:     out.Float = glm::mix(a, b, glm::clamp(c, 0.0f, 1.0f)); break;
+		case Op::Abs:      out.Float = glm::abs(a); break;
+		}
+	}
+
+	void RigNode_FloatMath::Serialize(nlohmann::json& j) const
+	{
+		j["op"] = (int)Operation;
+	}
+
+	void RigNode_FloatMath::Deserialize(const nlohmann::json& j)
+	{
+		Operation = (Op)j.value("op", 0);
+
+		// Os nomes dos pinos seguem a operacao — sem isto um Clamp salvo
+		// reabriria mostrando "A / B / -".
+		ApplyOperation();
+	}
+
+	// ═══ Select Float ════════════════════════════════════════════════════════
+
+	RigNode_SelectFloat::RigNode_SelectFloat()
+	{
+		Title = "Select Float";
+
+		AddInBool("Condition", false);
+		AddInFloat("True", 1.0f);
+		AddInFloat("False", 0.0f);
+
+		AddOut("Result", RigPinType::Float);
+	}
+
+	void RigNode_SelectFloat::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		(void)pin;
+
+		out = RigPinValue{};
+		out.Float = ReadBool(ctx, 0) ? ReadFloat(ctx, 1) : ReadFloat(ctx, 2);
+	}
+
+	// ═══ Damp Float / Damp Vector ════════════════════════════════════════════
+
+	RigNode_DampFloat::RigNode_DampFloat()
+	{
+		Title = "Damp Float";
+
+		AddInFloat("Value", 0.0f);
+
+		// 12/s e o default calibrado na pratica no AnimNode_FootIK.
+		AddInFloat("Speed", 12.0f);
+
+		AddOut("Result", RigPinType::Float);
+	}
+
+	void RigNode_DampFloat::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		(void)pin;
+
+		out = RigPinValue{};
+
+		const float target = ReadFloat(ctx, 0);
+		const float speed = ReadFloat(ctx, 1);
+
+		if (!m_Init)
+		{
+			// PRIMEIRO frame entra DIRETO no valor.
+			m_Value = target;
+			m_Init = true;
+		}
+		else if (speed <= 0.0f)
+		{
+			// Suavizacao desligada = passa direto. Assim da pra comparar com e
+			// sem suavizacao sem desmontar o fio.
+			m_Value = target;
+		}
+		else if (ctx.DeltaTime > 0.0f)
+		{
+			// k = 1 - exp(-speed*dt): perseguicao exponencial INDEPENDENTE do
+			// frame rate. Um lerp de fator fixo mudaria de velocidade conforme
+			// o FPS, e o rig ficaria mais macio no PC lento — o tipo de bug
+			// que so aparece na maquina de outra pessoa.
+			const float k = 1.0f - std::exp(-speed * ctx.DeltaTime);
+			m_Value += (target - m_Value) * k;
+		}
+		// dt == 0 (preview pausado): congela onde esta, nao salta.
+
+		out.Float = m_Value;
+	}
+
+	RigNode_DampVector::RigNode_DampVector()
+	{
+		Title = "Damp Vector";
+
+		AddIn("Value", RigPinType::Vector);
+		AddInFloat("Speed", 12.0f);
+
+		AddOut("Result", RigPinType::Vector);
+	}
+
+	void RigNode_DampVector::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		(void)pin;
+
+		out = RigPinValue{};
+
+		const glm::vec3 target = ReadVector(ctx, 0);
+		const float     speed = ReadFloat(ctx, 1);
+
+		if (!m_Init)
+		{
+			m_Value = target;
+			m_Init = true;
+		}
+		else if (speed <= 0.0f)
+		{
+			m_Value = target;
+		}
+		else if (ctx.DeltaTime > 0.0f)
+		{
+			const float k = 1.0f - std::exp(-speed * ctx.DeltaTime);
+			m_Value = glm::mix(m_Value, target, k);
+		}
+
+		out.Vector = m_Value;
+	}
+
+	// ═══ Align To Vector ═════════════════════════════════════════════════════
+
+	RigNode_AlignToVector::RigNode_AlignToVector()
+	{
+		Title = "Align To Vector";
+		HasExecIn = true;
+		ExecOut.push_back("");
+
+		AddInItem("Item", RigElementType::Bone);
+
+		AddIn("From", RigPinType::Vector);
+		AddIn("To", RigPinType::Vector);
+
+		// 45 graus: normal absurda de quina de colisor nao vira o pe de cabeca
+		// pra baixo. Mesma trava do AnimNode_FootIK.
+		AddInFloat("Max Angle", 45.0f);
+		AddInFloat("Weight", 1.0f);
+
+		// From e To comecam os DOIS em +Y: assim o no recem-criado e um no-op
+		// (a rotacao entre um vetor e ele mesmo e identidade) em vez de torcer
+		// o osso antes de voce ligar qualquer fio.
+		Inputs[1].Default.Vector = glm::vec3(0.0f, 1.0f, 0.0f);
+		Inputs[2].Default.Vector = glm::vec3(0.0f, 1.0f, 0.0f);
+	}
+
+	void RigNode_AlignToVector::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const int i = ReadItem(ctx, 0);
+
+		if (i < 0)
+			return;
+
+		const float weight = glm::clamp(ReadFloat(ctx, 4), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		glm::vec3 from = ReadVector(ctx, 1);
+		glm::vec3 to = ReadVector(ctx, 2);
+
+		const float lenFrom = glm::length(from);
+		const float lenTo = glm::length(to);
+
+		// Vetor nulo nao tem direcao: girar por ele produz quaternion invalido
+		// e a pose sai com nan. Avisa UMA vez — num solve por frame, avisar
+		// sempre encheria o console em um segundo.
+		if (lenFrom < 1e-6f || lenTo < 1e-6f)
+		{
+			if (!m_WarnedDegenerate)
+			{
+				m_WarnedDegenerate = true;
+
+				AXE_CORE_WARN("Align To Vector '{}': From ou To e um vetor nulo, "
+					"o no nao fez nada. Ligue a Normal de um Ground Trace no pino To.",
+					Title);
+			}
+
+			return;
+		}
+
+		from /= lenFrom;
+		to /= lenTo;
+
+		const float d = glm::clamp(glm::dot(from, to), -1.0f, 1.0f);
+
+		// Ja alinhados: girar por um angulo de ~0 e so ruido numerico.
+		if (d > 0.99999f)
+			return;
+
+		const float maxAngle = glm::radians(glm::max(ReadFloat(ctx, 3), 0.0f));
+
+		float angle = std::acos(d);
+		angle = glm::min(angle, maxAngle);
+
+		if (angle < 1e-6f)
+			return;
+
+		// Eixo do giro. Com os vetores OPOSTOS o cross e nulo (eixo indefinido)
+		// — ai qualquer perpendicular serve, e escolher uma e melhor que
+		// devolver nan.
+		glm::vec3 axis = glm::cross(from, to);
+
+		if (glm::length(axis) < 1e-6f)
+		{
+			axis = glm::cross(from, glm::vec3(1.0f, 0.0f, 0.0f));
+
+			if (glm::length(axis) < 1e-6f)
+				axis = glm::cross(from, glm::vec3(0.0f, 0.0f, 1.0f));
+		}
+
+		axis = glm::normalize(axis);
+
+		const glm::quat delta = glm::angleAxis(angle * weight, axis);
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		// Gira EM TORNO DA PROPRIA POSICAO do elemento: zera a translacao,
+		// gira, devolve. Girar a matriz inteira arrastaria o elemento num arco
+		// ao redor da origem do rig — o osso sairia voando pro lado.
+		glm::mat4 g = h.GetGlobal(i);
+
+		const glm::vec3 pos = glm::vec3(g[3]);
+
+		g[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		glm::mat4 ng = glm::toMat4(delta) * g;
+		ng[3] = glm::vec4(pos, 1.0f);
+
+		h.SetGlobal(i, ng, true);
+	}
+
+	// ═══ Control Follow Bone ═════════════════════════════════════════════════
+
+	RigNode_ControlFollowBone::RigNode_ControlFollowBone()
+	{
+		Title = "Control Follow Bone";
+		HasExecIn = true;
+		ExecOut.push_back("");
+
+		AddInItem("Control", RigElementType::Control);
+		AddInItem("Bone", RigElementType::Bone);
+
+		// Weight 1 = o controle acompanha o osso inteiro. Em 0 ele fica no
+		// repouso autorado, que e o comportamento antigo — da pra comparar os
+		// dois sem desmontar fio.
+		AddInFloat("Weight", 1.0f);
+	}
+
+	void RigNode_ControlFollowBone::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		const int ctrl = ReadItem(ctx, 0);
+
+		if (ctrl < 0)
+			return;
+
+		int bone = ReadItem(ctx, 1);
+
+		if (bone < 0)
+		{
+			// Pino do osso vazio: cai no osso de ORIGEM do controle. Assim o
+			// caso comum ("controle criado sobre o osso") nao pede configuracao.
+			const std::string& src = h.GetElements()[ctrl].SourceBone;
+
+			if (!src.empty())
+				bone = h.Find(src, RigElementType::Bone);
+		}
+
+		if (bone < 0)
+		{
+			if (!m_Warned)
+			{
+				m_Warned = true;
+
+				AXE_CORE_WARN("Control Follow Bone '{}': nenhum osso resolvido. "
+					"Escolha o osso no pino Bone (o controle deste rig nao tem osso "
+					"de origem gravado).", Title);
+			}
+
+			return;
+		}
+
+		const float weight = glm::clamp(ReadFloat(ctx, 2), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		// A correcao AUTORADA e a relacao de repouso entre os dois. Ela sai do
+		// Initial de proposito: e ali que o gizmo do editor grava, entao e ali
+		// que vive a intencao do animador.
+		const glm::mat4 delta =
+			glm::inverse(h.GetInitialGlobal(bone)) * h.GetInitialGlobal(ctrl);
+
+		const glm::mat4 target = h.GetGlobal(bone) * delta;
+
+		if (weight >= 0.9999f)
+		{
+			h.SetGlobal(ctrl, target, true);
+			return;
+		}
+
+		// Blend parcial: interpola em TRS, nao na matriz. Interpolar matriz
+		// linearmente produz shear e encolhe o elemento — mesma razao pela qual
+		// a Pose do engine e local e nao mat4.
+		const BoneTransform a = BoneTransform::FromMatrix(h.GetGlobal(ctrl));
+		const BoneTransform b = BoneTransform::FromMatrix(target);
+
+		BoneTransform r;
+		r.Translation = glm::mix(a.Translation, b.Translation, weight);
+		r.Rotation = glm::slerp(a.Rotation, b.Rotation, weight);
+		r.Scale = glm::mix(a.Scale, b.Scale, weight);
+
+		h.SetGlobal(ctrl, r.ToMatrix(), true);
+	}
+
 	// ═══ Fabrica ═════════════════════════════════════════════════════════════
 
 	std::unique_ptr<RigNode> CreateRigNode(const std::string& t)
@@ -988,6 +1414,12 @@ namespace axe
 		if (t == "MakeTransform")  return std::make_unique<RigNode_MakeTransform>();
 		if (t == "BreakTransform") return std::make_unique<RigNode_BreakTransform>();
 		if (t == "VectorOp")       return std::make_unique<RigNode_VectorOp>();
+		if (t == "FloatMath")      return std::make_unique<RigNode_FloatMath>();
+		if (t == "SelectFloat")    return std::make_unique<RigNode_SelectFloat>();
+		if (t == "DampFloat")      return std::make_unique<RigNode_DampFloat>();
+		if (t == "DampVector")     return std::make_unique<RigNode_DampVector>();
+		if (t == "AlignToVector")  return std::make_unique<RigNode_AlignToVector>();
+		if (t == "ControlFollowBone") return std::make_unique<RigNode_ControlFollowBone>();
 		if (t == "ItemArray")      return std::make_unique<RigNode_ItemArray>();
 		if (t == "At")             return std::make_unique<RigNode_At>();
 		if (t == "GetControlValue") return std::make_unique<RigNode_GetControlValue>();

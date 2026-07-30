@@ -129,6 +129,14 @@ namespace axe
 				for (auto& st : sm->States)
 					ok &= ResolveGraph(st.Graph, skel, assetName);
 			}
+			else if (auto* cr = dynamic_cast<AnimNode_ControlRig*>(node.get()))
+			{
+				// Carrega o .axerig referenciado por UUID. Diferente dos clipes
+				// (que já vêm no personagem), o rig é um asset separado — o nó
+				// resolve pelo AssetDatabase. UUID vazio não derruba o Resolve:
+				// o nó fica em passagem até o usuário escolher o rig no painel.
+				cr->ResolveRig(skel.GetSkeleton().get(), assetName.c_str());
+			}
 		}
 
 		graph.Resolve();

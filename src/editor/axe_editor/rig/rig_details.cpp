@@ -401,6 +401,65 @@ namespace axe
 			return;
 		}
 
+		if (auto* f = dynamic_cast<RigNode_FloatMath*>(n))
+		{
+			static const char* kOps[] = {
+				"Add", "Subtract", "Multiply", "Divide",
+				"Min", "Max", "Clamp", "Lerp", "Abs"
+			};
+
+			int op = (int)f->Operation;
+
+			if (ImGui::Combo("Operation", &op, kOps, IM_ARRAYSIZE(kOps)))
+			{
+				f->Operation = (RigNode_FloatMath::Op)op;
+
+				// Os PINOS seguem a operacao: Clamp mostra Value/Min/Max, Lerp
+				// mostra A/B/Alpha. Os fios ligam por INDICE, entao renomear
+				// nao quebra ligacao nenhuma.
+				f->ApplyOperation();
+
+				f->Title = std::string("Float ") + kOps[op];
+
+				MarkEdited("Change operation");
+			}
+
+			ImGui::TextDisabled("Os nomes dos pinos acompanham a operacao.");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_DampFloat*>(n) || dynamic_cast<RigNode_DampVector*>(n))
+		{
+			ImGui::TextWrapped("Persegue o valor de entrada em vez de saltar nele. "
+				"Speed maior = mais rapido e mais duro; 0 desliga a suavizacao.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("O primeiro frame entra direto no valor, sem subir de zero.");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_ControlFollowBone*>(n))
+		{
+			ImGui::TextWrapped("Faz o controle cavalgar o osso animado, preservando a "
+				"correcao que voce autorou nele. E o que permite o Two Bone IK ler o "
+				"CONTROLE e ainda assim obedecer a animacao em jogo.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Ponha ANTES do Two Bone IK que le este controle.");
+			ImGui::TextDisabled("No editor de rig nao ha animacao, entao o controle fica\n"
+				"onde voce o largou — este no nao muda nada aqui.");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_AlignToVector*>(n))
+		{
+			ImGui::TextWrapped("Inclina o elemento pela mesma rotacao que leva From "
+				"ate To. Pro pe acompanhar a rampa: From = (0,1,0) e "
+				"To = a Normal do Ground Trace.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Nao supoe eixo nenhum do osso — por isso funciona "
+				"em qualquer rig.");
+			return;
+		}
+
 		// ── Item Array ───────────────────────────────────────────────────────
 		//
 		// A lista mora AQUI e nao no no do canvas de proposito: aqui estamos em

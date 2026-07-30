@@ -91,7 +91,8 @@ namespace axe
 			if (t == "Sequence" || t == "Branch" || t == "ForEach")
 				return ImVec4(0.32f, 0.32f, 0.36f, 1.0f);
 			if (t == "SetTransform" || t == "TwoBoneIK"
-				|| t == "FKChain" || t == "ParentConstraint")
+				|| t == "FKChain" || t == "ParentConstraint"
+				|| t == "AlignToVector" || t == "ControlFollowBone")
 				return ImVec4(0.50f, 0.33f, 0.14f, 1.0f);
 			if (t == "GetTransform" || t == "GroundTrace") return ImVec4(0.16f, 0.34f, 0.50f, 1.0f);
 
@@ -1054,6 +1055,8 @@ namespace axe
 				{ "FK Chain",      "FKChain" },
 				{ "Parent Constraint", "ParentConstraint" },
 				{ "Hide Controls", "HideControls" },
+				{ "Align To Vector", "AlignToVector" },
+				{ "Control Follow Bone", "ControlFollowBone" },
 			};
 
 			static const Entry kOrganize[] = {
@@ -1065,6 +1068,10 @@ namespace axe
 				{ "Make Transform",  "MakeTransform" },
 				{ "Break Transform", "BreakTransform" },
 				{ "Vector Op",       "VectorOp" },
+				{ "Float Math",      "FloatMath" },
+				{ "Select Float",    "SelectFloat" },
+				{ "Damp Float",      "DampFloat" },
+				{ "Damp Vector",     "DampVector" },
 			};
 
 			auto emit = [&](const Entry* list, int count)
@@ -1096,24 +1103,29 @@ namespace axe
 					}
 				};
 
+			// IM_ARRAYSIZE e nao um numero digitado: a contagem a mao ja
+			// escondeu uma entrada de menu neste projeto (o "Particle Burst"
+			// do script editor, que ficou invisivel por meses porque a tabela
+			// dizia 11 com 12 entradas). Agora acrescentar uma linha na tabela
+			// basta.
 			ImGui::TextDisabled("Flow");
-			emit(kFlow, 3);
+			emit(kFlow, IM_ARRAYSIZE(kFlow));
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Read");
-			emit(kRead, 6);
+			emit(kRead, IM_ARRAYSIZE(kRead));
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Write");
-			emit(kWrite, 5);
+			emit(kWrite, IM_ARRAYSIZE(kWrite));
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Math");
-			emit(kMath, 3);
+			emit(kMath, IM_ARRAYSIZE(kMath));
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Organize");
-			emit(kOrganize, 2);
+			emit(kOrganize, IM_ARRAYSIZE(kOrganize));
 
 			ImGui::EndPopup();
 		}
@@ -1321,4 +1333,4 @@ namespace axe
 		ed::SetCurrentEditor(nullptr);
 	}
 
-} // namespace axe
+} // namespace axed

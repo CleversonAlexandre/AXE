@@ -6,6 +6,7 @@
 #include "axe/animation/animation_clip.hpp"
 #include "axe/animation/blend_space_1d.hpp"
 #include "axe/animation/bone_mask.hpp"
+#include "axe/animation/rig/control_rig_asset.hpp"   // AnimNode_ControlRig
 
 #include <memory>
 #include <string>
@@ -509,6 +510,107 @@ namespace axe
 		// Assinatura da última resolução — detecta troca de osso no editor sem
 		// precisar de um Reset() explícito.
 		std::size_t m_ResolvedHash = 0;
+	};
+
+	// ── Control Rig ───────────────────────────────────────────────────────────
+	//
+	// Roda um asset .axerig DENTRO do AnimGraph: entra uma pose, o Forwards
+	// Solve do rig processa os ossos, sai a pose processada. É EXATAMENTE o
+	// solve que o preview do editor de rig já rodava — a única diferença é o
+	// ponto de partida:
+	//
+	//   - o PREVIEW parte do REPOUSO (ResetToInitial) pra você ver só o efeito
+	//     isolado do grafo;
+	//   - AQUI parte da pose da ANIMAÇÃO que chega no pino, então o rig trabalha
+	//     POR CIMA do movimento (Foot IK, look-at, correções procedurais).
+	//
+	// Sem este nó o Control Rig só existia no preview do editor — não havia como
+	// um personagem na cena usar o rig. Este é o ponto que fecha o ciclo.
+	//
+	// ── UMA CÓPIA DE TRABALHO POR PERSONAGEM ─────────────────────────────
+	//
+	// A hierarquia e o grafo do rig carregam ESTADO de runtime (o Current de
+	// cada elemento, o cache de dados do grafo). Dois personagens dividindo a
+	// mesma cópia deformariam um ao outro. Por isso o nó guarda o ASSET (o
+	// molde, compartilhado entre as instâncias) e CLONA a própria cópia de
+	// trabalho — re-clonando quando o asset muda de versão. É o mesmo mecanismo
+	// que o próprio AnimGraph já usa pra se re-clonar ao salvar.
+	class AXE_API AnimNode_ControlRig : public AnimNode
+	{
+	public:
+		const char* TypeName() const override { return "ControlRig"; }
+
+		// Clone MANUAL, e de propósito: NÃO copia a cópia de trabalho
+		// (m_Hierarchy/m_Graph). Cada instância re-clona do asset no primeiro
+		// Evaluate — se copiasse, dois personagens herdariam o mesmo Current e
+		// o mesmo cache de dados, e um mexeria no outro. Só o molde (RigAsset)
+		// e a autoria (RigUUID) atravessam o clone.
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_ControlRig>();
+			CopyCommonTo(*c);
+			c->RigUUID = RigUUID;
+			c->RigAsset = RigAsset;   // compartilha o molde; a cópia de trabalho nasce depois
+			return c;
+		}
+
+		int InputCount() const override { return 1; }
+		const char* InputName(int) const override { return "Pose"; }
+
+		// Qual .axerig. Referência por UUID (o caminho muda quando o arquivo se
+		// move; o UUID não). Religado a um ControlRigAsset real no Resolve do
+		// .axeanim, exatamente como os clipes.
+		std::string RigUUID;
+
+		// O molde, resolvido a partir do UUID. NÃO vai pro disco (só o UUID vai)
+		// e é COMPARTILHADO entre as instâncias — cada uma clona a própria cópia
+		// de trabalho a partir dele.
+		std::shared_ptr<ControlRigAsset> RigAsset;
+
+		// Alpha inline 1.0: um Control Rig recém-criado age INTEIRO. Começar em
+		// 0 faria você ligar tudo certo e não ver efeito nenhum — a mesma
+		// armadilha do Foot IK.
+		AnimNode_ControlRig() { AddFloatPin("Alpha", 1.0f); }
+
+		// Carrega o RigAsset a partir do RigUUID via AssetDatabase. Chamado pelo
+		// Resolve do AnimGraphAsset. Fora dele (UUID vazio, asset ausente) o nó
+		// vira passagem — a pose passa intacta e um log explica.
+		//
+		// Recebe o esqueleto pra poder relatar a COBERTURA: quais ossos do
+		// esqueleto o rig nao tem. Sem esse relatorio, um osso de fora do rig
+		// e invisivel na autoria e o efeito dele so aparece como "a animacao
+		// desse pedaco parou de funcionar".
+		void ResolveRig(const Skeleton* skel, const char* graphName);
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+
+		void Update(AnimEvalContext& ctx) override;
+		void Evaluate(AnimEvalContext& ctx, Pose& out) override;
+
+		// Força re-clone no próximo Evaluate (entrar num estado, dar Stop).
+		void Reset() override { m_Cloned = false; }
+
+	private:
+		// Garante que a cópia de trabalho existe e está na versão do asset.
+		void EnsureWorkingCopy();
+
+		// Cópia de trabalho POR INSTÂNCIA. Não é serializada nem clonada —
+		// nasce do molde no primeiro Evaluate.
+		RigHierarchy m_Hierarchy;
+		RigGraph     m_Graph;
+		bool         m_Cloned = false;
+		uint32_t     m_ClonedVersion = 0;
+
+		// dt do último Update. O contexto do Evaluate vem com DeltaTime = 0 (só
+		// o Update avança tempo), mas um solve pode ter nós que dependem de dt.
+		// Mesma lição do Foot IK: o Update SEMPRE roda antes do Evaluate no
+		// mesmo frame.
+		float m_LastDt = 0.0f;
+
+		// Pose de trabalho reusada (o resultado do solve antes do blend por
+		// Alpha). Membro pra não realocar por frame.
+		Pose m_Solved;
 	};
 
 	// Fábrica por nome de tipo — usada pelo carregador do .axeanim.

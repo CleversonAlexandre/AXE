@@ -3,6 +3,7 @@
 #include "animation_sampler.hpp"
 #include "axe/log/log.hpp"
 #include "axe/physics/physics_system.hpp"   // Foot IK: raycast no chao
+#include "axe/asset/asset_database.hpp"      // Control Rig: UUID -> .axerig
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>            // glm::rotation, glm::slerp
@@ -861,12 +862,27 @@ namespace axe
 				const glm::vec3 baseWorld = glm::vec3(toWorld[3]);
 
 				float groundMeters = glm::dot(hit.Point - baseWorld, worldUp) + FootHeight;
-				groundMeters = glm::clamp(groundMeters, -MaxReach, MaxReach);
 
-				// Metros -> unidades de componente (uma unica conversao).
-				wantOffset = groundMeters / compScale;
-
-				wantWeight = 1.0f;
+				// CHAO FORA DE ALCANCE = SEM CHAO. Antes eu clampava em
+				// -MaxReach, o que finge que o chao esta a MaxReach abaixo e
+				// arranca o pe pra la. No meio de um PULO isso descia o quadril
+				// meio metro, esticava as pernas retas pra baixo e reescrevia o
+				// Hips todo frame — a animacao do pulo sumia da pelvis pra
+				// baixo e so o tronco parecia animar. Fora de alcance o IK
+				// DESISTE (peso 0) e a animacao passa intacta; a suavizacao
+				// temporal faz a saida e a volta serem suaves, entao nao ha pop
+				// ao decolar nem ao aterrissar.
+				if (glm::abs(groundMeters) > MaxReach)
+				{
+					wantOffset = 0.0f;
+					wantWeight = 0.0f;
+				}
+				else
+				{
+					// Metros -> unidades de componente (uma unica conversao).
+					wantOffset = groundMeters / compScale;
+					wantWeight = 1.0f;
+				}
 			}
 
 			// Primeiro frame entra direto no valor certo (senao o personagem
@@ -1124,6 +1140,185 @@ namespace axe
 		m_BonesResolved = false;   // força re-resolver com os novos nomes
 	}
 
+	// ═══ Control Rig ═════════════════════════════════════════════════════════
+
+	void AnimNode_ControlRig::Serialize(nlohmann::json& j) const
+	{
+		j["rig"] = RigUUID;
+	}
+
+	void AnimNode_ControlRig::Deserialize(const nlohmann::json& j)
+	{
+		RigUUID = j.value("rig", std::string{});
+	}
+
+	void AnimNode_ControlRig::ResolveRig(const Skeleton* skel, const char* graphName)
+	{
+		// Recomeça do zero: qualquer molde anterior sai, e a cópia de trabalho
+		// é marcada como velha pra re-clonar do molde novo.
+		RigAsset.reset();
+		m_Cloned = false;
+
+		// UUID vazio NÃO é erro — o usuário ainda vai escolher o rig no painel.
+		// O nó simplesmente passa a pose intacta até lá.
+		if (RigUUID.empty())
+			return;
+
+		const AssetRecord* rec = AssetDatabase::Get().GetByUUID(RigUUID);
+		if (!rec)
+		{
+			AXE_CORE_ERROR("AnimGraph '{}': Control Rig com UUID '{}' nao existe no "
+				"projeto. O no vai passar a pose intacta.",
+				graphName ? graphName : "?", RigUUID);
+			return;
+		}
+
+		RigAsset = ControlRigAsset::LoadFromFile(rec->FilePath);
+		if (!RigAsset)
+			AXE_CORE_ERROR("AnimGraph '{}': falha ao carregar o Control Rig '{}'.",
+				graphName ? graphName : "?", rec->FilePath.string());
+		else
+			AXE_CORE_INFO("AnimNode_ControlRig - CONTROLRIG_ANIMNODE_V1: rig '{}' pronto.",
+				RigAsset->GetName());
+
+		// ── COBERTURA: quais ossos do esqueleto o rig NAO tem ────────────────
+		//
+		// WritePose so escreve os ossos presentes na hierarquia do rig. Um osso
+		// de fora nao da erro nenhum — ele so deixa de ser processado, e isso e
+		// invisivel na autoria. Relatar aqui, uma vez, no Resolve.
+		//
+		// A regra de casamento e a MESMA do runtime (RigHierarchy::EnsureBoneMap
+		// usa Find exato por nome + tipo Bone). Se o diagnostico usasse uma
+		// regra mais tolerante ele MENTIRIA: diria que o osso esta coberto
+		// quando o solve nao o encontra.
+		if (RigAsset && skel)
+		{
+			const RigHierarchy& h = RigAsset->GetHierarchy();
+			const auto& bones = skel->GetBones();
+
+			std::string missing;
+			int count = 0;
+
+			for (const auto& b : bones)
+			{
+				if (h.Find(b.Name, RigElementType::Bone) >= 0)
+					continue;
+
+				++count;
+
+				// Lista so os primeiros: 60 dedos faltando encheriam o console
+				// sem dizer mais do que os primeiros ja dizem.
+				if (count <= 12)
+				{
+					if (!missing.empty())
+						missing += ", ";
+
+					missing += b.Name;
+				}
+			}
+
+			if (count == 0)
+			{
+				AXE_CORE_INFO("Control Rig '{}': cobre os {} ossos do esqueleto.",
+					RigAsset->GetName(), (int)bones.size());
+			}
+			else
+			{
+				AXE_CORE_WARN("Control Rig '{}': {} de {} ossos do esqueleto NAO estao na "
+					"hierarquia do rig e passam intactos pelo solve{}: {}{}",
+					RigAsset->GetName(), count, (int)bones.size(),
+					count > 12 ? " (primeiros 12)" : "",
+					missing, count > 12 ? ", ..." : "");
+			}
+		}
+	}
+
+	void AnimNode_ControlRig::EnsureWorkingCopy()
+	{
+		if (!RigAsset)
+			return;
+
+		// Já clonado E na versão atual do molde? Nada a fazer.
+		if (m_Cloned && m_ClonedVersion == RigAsset->GetVersion())
+			return;
+
+		// Cópia PROFUNDA do molde. RigGraph tem copy-ctor que clona os nós;
+		// RigHierarchy é valor puro (vetor de elementos + caches). A partir
+		// daqui a instância roda a própria cópia, e o asset pode ser editado
+		// sem afetar quem já está na cena até o próximo BumpVersion.
+		m_Hierarchy = RigAsset->GetHierarchy();
+		m_Graph = RigAsset->GetGraph();
+		m_ClonedVersion = RigAsset->GetVersion();
+		m_Cloned = true;
+	}
+
+	void AnimNode_ControlRig::Update(AnimEvalContext& ctx)
+	{
+		// O rig não avança tempo próprio, mas guarda o dt pro Evaluate (que vem
+		// com DeltaTime = 0). Mesma mecânica do Foot IK.
+		m_LastDt = ctx.DeltaTime;
+		UpdateInput(ctx, 0);
+	}
+
+	void AnimNode_ControlRig::Evaluate(AnimEvalContext& ctx, Pose& out)
+	{
+		// 1. A pose que chega (a animação) é o ponto de partida.
+		EvalInput(ctx, 0, out);
+
+		// 2. Sem esqueleto não há como casar ossos por nome — passagem limpa.
+		if (!ctx.Skel)
+			return;
+
+		EnsureWorkingCopy();
+		if (!m_Cloned)
+			return;   // UUID vazio ou asset ausente — já avisado no Resolve.
+
+		const float alpha = glm::clamp(ReadFloat(ctx, 0), 0.0f, 1.0f);
+		if (alpha <= 0.0001f)
+			return;
+
+		// 3. Reset ao repouso e ENTÃO sobrescreve os OSSOS com a pose da
+		//    animação. Os dois passos são necessários:
+		//      - ResetToInitial devolve controles/nulls ao Initial e religa
+		//        Visible — sem ele, um Set num controle escorreria de frame em
+		//        frame, e um Hide Controls deixaria controles sumidos pra sempre;
+		//      - ApplyPose troca só os ossos pela animação (não toca controles).
+		//    ResetToInitial sozinho é o comportamento do PREVIEW; os dois juntos
+		//    são o do runtime.
+		m_Hierarchy.ResetToInitial();
+		m_Hierarchy.ApplyPose(*ctx.Skel, out);
+
+		// 4. Roda o Forwards Solve sobre a hierarquia da instância.
+		RigExecContext rc;
+		rc.Hierarchy = &m_Hierarchy;
+		rc.Skel = ctx.Skel;
+		rc.WorldTransform = ctx.WorldTransform;
+		rc.AllowWorldQueries = ctx.AllowWorldQueries;   // raycast de física só em Play
+		rc.UseEditorGround = false;                    // o chão virtual Y=0 é coisa do preview do rig
+		rc.DeltaTime = m_LastDt;
+		rc.Graph = &m_Graph;
+		m_Graph.Execute(rc, "ForwardsSolve");
+
+		// 5. Le a hierarquia resolvida de volta pra uma pose.
+		//
+		// A base e a pose que CHEGOU, nao a bind pose. WritePose so escreve os
+		// ossos que existem na hierarquia do rig — e um rig quase nunca tem
+		// TODOS os ossos do esqueleto (dedos, twist bones, o que o autor nao
+		// precisou). Partindo da bind pose, cada osso fora do rig era jogado
+		// pra T-pose e a animacao dele MORRIA em silencio. Partindo da pose de
+		// entrada, osso fora do rig simplesmente segue animado.
+		m_Solved = out;
+		m_Hierarchy.WritePose(*ctx.Skel, m_Solved);
+
+		// 6. Blend por Alpha, em espaço LOCAL — o único espaço onde blend de
+		//    pose é correto (interpolar transform global daria shear). Alpha
+		//    cheio evita o slerp osso a osso.
+		if (alpha >= 0.9999f)
+			out = m_Solved;
+		else
+			Pose::Blend(out, m_Solved, alpha, out);
+	}
+
 	std::unique_ptr<AnimNode> CreateAnimNode(const std::string& t)
 	{
 		if (t == "Output")           return std::make_unique<AnimNode_Output>();
@@ -1139,6 +1334,7 @@ namespace axe
 		if (t == "LayeredBlend")     return std::make_unique<AnimNode_LayeredBlend>();
 		if (t == "ApplyAdditive")    return std::make_unique<AnimNode_ApplyAdditive>();
 		if (t == "FootIK")           return std::make_unique<AnimNode_FootIK>();
+		if (t == "ControlRig")       return std::make_unique<AnimNode_ControlRig>();
 		if (t == "StateMachine")     return std::make_unique<AnimNode_StateMachine>();
 
 		AXE_CORE_ERROR("CreateAnimNode: tipo desconhecido '{}'.", t);
