@@ -5,6 +5,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/norm.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace axe
@@ -332,6 +333,31 @@ namespace axe
 		if (a < 0 || b < 0 || c < 0)
 			return;
 
+		// ── DIAGNOSTICO: CADEIA DEGENERADA ───────────────────────────────────
+		//
+		// Root, Middle e Effector tem que ser TRES ossos distintos. Repetir um
+		// deles — o classico e duplicar a perna e trocar so DOIS dos tres
+		// campos — da elo de comprimento ZERO, e o solver cai no early-return
+		// de comprimento minimo logo abaixo, calado.
+		//
+		// O sintoma e cruel: o no PARECE montado, todos os fios estao ligados,
+		// e nada acontece. Nem o Pole Target responde, porque a funcao ja
+		// retornou muito antes de chegar nele.
+		if (a == b || b == c || a == c)
+		{
+			if (!m_WarnedChain)
+			{
+				m_WarnedChain = true;
+
+				AXE_CORE_WARN("Two Bone IK '{}': Root, Middle e Effector precisam ser "
+					"tres ossos DIFERENTES — ha osso repetido entre eles e o no nao fez "
+					"nada. Numa perna: Root = coxa (UpLeg), Middle = canela (Leg), "
+					"Effector = pe (Foot).", Title);
+			}
+
+			return;
+		}
+
 		const float weight = glm::clamp(ReadFloat(ctx, 5), 0.0f, 1.0f);
 
 		if (weight <= 0.0001f)
@@ -347,7 +373,21 @@ namespace axe
 		float lowerLen = glm::length(tipPos - midPos);
 
 		if (upperLen < 1e-5f || lowerLen < 1e-5f)
+		{
+			// Ossos distintos mas COINCIDENTES no espaco. Raro, mas acontece
+			// com osso auxiliar de import que nasce colado no pai — e sem
+			// aviso vira a mesma caca-ao-fantasma do caso acima.
+			if (!m_WarnedChain)
+			{
+				m_WarnedChain = true;
+
+				AXE_CORE_WARN("Two Bone IK '{}': um dos elos tem comprimento ZERO — "
+					"Root/Middle/Effector sao ossos diferentes mas estao na mesma "
+					"posicao. O no nao fez nada.", Title);
+			}
+
 			return;
+		}
 
 		const glm::vec3 targetIn = ReadVector(ctx, 3);
 
@@ -439,6 +479,37 @@ namespace axe
 		const float maxLen = (upperLen + lowerLen) * 0.999f;
 		const float minLen = std::abs(upperLen - lowerLen) * 1.001f + 1e-4f;
 		const float dist = glm::clamp(rawDist, minLen, maxLen);
+
+		// ── DIAGNOSTICO: ALVO FORA DE ALCANCE ────────────────────────────────
+		//
+		// O clamp acima e correto — passar do comprimento total faria o acos
+		// estourar. Mas o efeito colateral e MUDO: o membro fica RETO e o
+		// efetor NAO chega no alvo, sem nenhum sinal de que foi isso.
+		//
+		// E o caso classico da perna de BAIXO numa rampa: o alvo desce abaixo
+		// do pe, a perna precisaria ESTICAR, e uma perna de Mixamo em idle ja
+		// esta a ~98% da extensao. O sintoma na tela e "uma perna faz IK e a
+		// outra nao", com os dois grafos identicos.
+		//
+		// Nao avisamos no primeiro frame ruim. Fora de alcance por um instante
+		// e rotina (o pe em transicao, um Damp ainda esquentando); avisar ali
+		// deixaria no console uma mensagem permanente sobre um estado que ja
+		// passou — o mesmo defeito que o aviso de Target zerado teve.
+		if (!ReadBool(ctx, 6) && rawDist > maxLen)
+			++m_OutOfReach;
+		else
+			m_OutOfReach = 0;
+
+		if (m_OutOfReach == 30 && !m_WarnedOutOfReach)
+		{
+			m_WarnedOutOfReach = true;
+
+			AXE_CORE_WARN("Two Bone IK '{}': o alvo esta FORA DE ALCANCE ha 30 solves "
+				"seguidos ({:.0f}% do comprimento do membro) e Stretch esta "
+				"desligado — o membro ficou RETO e o efetor nao chegou no alvo. "
+				"Abaixe a raiz da cadeia (Pelvis Dip) ou ligue Stretch.",
+				Title, 100.0f * rawDist / (upperLen + lowerLen));
+		}
 
 		const glm::vec3 dir = toTarget / rawDist;
 
@@ -542,6 +613,346 @@ namespace axe
 		aim(b, tipPos, newTip);
 	}
 
+	// ═══ Trace ═══════════════════════════════════════════════════════════════
+
+	RigNode_Trace::RigNode_Trace()
+	{
+		Title = "Trace";
+
+		AddIn("Origin", RigPinType::Vector);       // espaco Global do rig
+		AddIn("Direction", RigPinType::Vector);    // espaco Global do rig
+
+		// Frente do mundo por padrao: um no recem-criado ja aponta pra ALGUM
+		// lugar. Zerado, ele so poderia avisar que nao tem direcao.
+		Inputs[1].Default.Vector = glm::vec3(0.0f, 0.0f, 1.0f);
+
+		AddInFloat("Distance", 1.0f);              // METROS
+		AddInFloat("Start Offset", 0.35f);         // METROS — sai de dentro da capsula
+
+		AddOut("Hit", RigPinType::Bool);
+		AddOut("Location", RigPinType::Vector);    // espaco Global do rig
+		AddOut("Normal", RigPinType::Vector);
+		AddOut("Distance", RigPinType::Float);     // espaco de componente
+	}
+
+	void RigNode_Trace::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		// Sem mundo nao ha o que sondar. Ao contrario do Ground Trace, nao ha
+		// fallback de preview: um chao virtual e uma suposicao razoavel, uma
+		// parede virtual nao e.
+		if (!ctx.AllowWorldQueries)
+			return;
+
+		const glm::vec3 originComp = ReadVector(ctx, 0);
+		const glm::vec3 dirComp = ReadVector(ctx, 1);
+
+		if (glm::length2(dirComp) < 1e-12f)
+		{
+			if (!m_WarnedNoDirection)
+			{
+				m_WarnedNoDirection = true;
+
+				AXE_CORE_WARN("Trace '{}': o pino Direction e um vetor nulo — nao ha "
+					"pra onde disparar. Ligue uma direcao normalizada nele.", Title);
+			}
+
+			return;
+		}
+
+		const glm::mat4& toWorld = ctx.WorldTransform;
+		const glm::mat4  toLocal = glm::inverse(toWorld);
+
+		// Metros do mundo por unidade de componente. Mesma conversao do Ground
+		// Trace, e pela mesma licao do FOOTIK_V5: parametro em metros nunca
+		// encosta em distancia de espaco de componente sem conversao explicita.
+		const float scale = std::max(1e-6f, glm::length(glm::vec3(toWorld[1])));
+
+		const float reach = std::max(0.001f, ReadFloat(ctx, 2));
+		const float start = std::max(0.0f, ReadFloat(ctx, 3));
+
+		// w = 0: direcao, nao ponto. Com w = 1 a translacao do personagem
+		// entraria na conta e o raio apontaria pra origem do mundo.
+		glm::vec3 dirWorld = glm::vec3(toWorld * glm::vec4(dirComp, 0.0f));
+
+		if (glm::length2(dirWorld) < 1e-12f)
+			return;
+
+		dirWorld = glm::normalize(dirWorld);
+
+		const glm::vec3 originWorld =
+			glm::vec3(toWorld * glm::vec4(originComp, 1.0f)) + dirWorld * start;
+
+		const RaycastHit hit = PhysicsSystem::Get().Raycast(originWorld, dirWorld, reach);
+
+		if (!hit.Hit)
+			return;
+
+		switch (pin)
+		{
+		case 0:
+			out.Bool = true;
+			break;
+
+		case 1:
+			out.Vector = glm::vec3(toLocal * glm::vec4(hit.Point, 1.0f));
+			break;
+
+		case 2:
+			out.Vector = glm::normalize(glm::vec3(toLocal * glm::vec4(hit.Normal, 0.0f)));
+			break;
+
+		case 3:
+			// Em espaco de COMPONENTE, como o Height do Ground Trace: e o
+			// espaco em que os outros nos falam de distancia, e devolver
+			// metros aqui obrigaria uma divisao a mao em todo grafo.
+			//
+			// Inclui o Start Offset, senao a distancia mediria a partir de um
+			// ponto que nao e o que voce ligou no Origin.
+			out.Float = (hit.Distance + start) / scale;
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	// ═══ Subgrafo — Entry / Return / Collapsed ═══════════════════════════════
+
+	namespace
+	{
+		// Aninhar mais que isto quase sempre e engano de montagem, e um
+		// subgrafo que contenha a si mesmo nao para nunca.
+		constexpr int kMaxSubgraphDepth = 8;
+	}
+
+	void RigNode_Entry::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		// Sem nivel de fora, este Entry esta solto no grafo raiz. Nao e erro —
+		// e um no que alguem criou pela paleta fora de um subgrafo — mas nao ha
+		// de onde tirar valor.
+		if (!ctx.Caller || !ctx.Caller->Graph || ctx.CallerNodeId < 0)
+			return;
+
+		// EvalPin no grafo de FORA: segue o fio ligado naquele pino do
+		// Collapsed, ou devolve o default digitado nele. E o mesmo pull de
+		// sempre, so que a pergunta parte de dentro.
+		out = ctx.Caller->Graph->EvalPin(*ctx.Caller, ctx.CallerNodeId, pin);
+	}
+
+	void RigNode_Entry::Serialize(nlohmann::json& j) const
+	{
+		j["outs"] = SaveRigPinLayout(Outputs);
+	}
+
+	void RigNode_Entry::Deserialize(const nlohmann::json& j)
+	{
+		if (j.contains("outs"))
+			LoadRigPinLayout(j["outs"], Outputs);
+	}
+
+	void RigNode_Return::Serialize(nlohmann::json& j) const
+	{
+		j["ins"] = SaveRigPinLayout(Inputs);
+	}
+
+	void RigNode_Return::Deserialize(const nlohmann::json& j)
+	{
+		if (j.contains("ins"))
+			LoadRigPinLayout(j["ins"], Inputs);
+	}
+
+	// ═══ Call Function ═══════════════════════════════════════════════════════
+
+	RigNode_CallFunction::RigNode_CallFunction()
+	{
+		Title = "Call Function";
+		HasExecIn = true;
+		ExecOut.push_back("");
+	}
+
+	RigGraph* RigNode_CallFunction::Resolve(RigExecContext& ctx)
+	{
+		if (FunctionName.empty() || !ctx.ResolveFunction)
+			return nullptr;
+
+		RigGraph* g = ctx.ResolveFunction(FunctionName);
+
+		if (!g && !m_WarnedMissing)
+		{
+			m_WarnedMissing = true;
+
+			AXE_CORE_WARN("Call Function '{}': nao existe funcao chamada '{}' — o no "
+				"nao fez nada. Ela foi apagada ou renomeada?", Title, FunctionName);
+		}
+
+		return g;
+	}
+
+	bool RigNode_CallFunction::EnsureInner(RigExecContext& ctx, RigGraph& fn)
+	{
+		if (ctx.Depth >= kMaxSubgraphDepth)
+		{
+			if (!m_WarnedDepth)
+			{
+				m_WarnedDepth = true;
+
+				AXE_CORE_WARN("Call Function '{}': aninhamento passou de {} niveis — a "
+					"funcao '{}' nao rodou. Recursao sem saida cai aqui.",
+					Title, kMaxSubgraphDepth, FunctionName);
+			}
+
+			return false;
+		}
+
+		// Ja rodou neste solve: o cache interno esta quente e reexecutar so
+		// repetiria trabalho — inclusive raycasts.
+		if (m_LastSolve == ctx.SolveId && ctx.SolveId != 0)
+			return true;
+
+		RigExecContext inner = ctx;
+		inner.Graph = &fn;
+		inner.Caller = &ctx;
+		inner.CallerNodeId = Id;
+		inner.Depth = ctx.Depth + 1;
+
+		fn.Execute(inner, "Entry");
+
+		m_LastSolve = ctx.SolveId;
+		return true;
+	}
+
+	void RigNode_CallFunction::Execute(RigExecContext& ctx)
+	{
+		if (RigGraph* fn = Resolve(ctx))
+			EnsureInner(ctx, *fn);
+	}
+
+	void RigNode_CallFunction::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		RigGraph* fn = Resolve(ctx);
+
+		if (!fn || !EnsureInner(ctx, *fn))
+			return;
+
+		const RigNode* ret = fn->FindNodeByType("Return");
+
+		if (!ret)
+			return;
+
+		RigExecContext inner = ctx;
+		inner.Graph = fn;
+		inner.Caller = &ctx;
+		inner.CallerNodeId = Id;
+		inner.Depth = ctx.Depth + 1;
+
+		out = fn->EvalPin(inner, ret->Id, pin);
+	}
+
+	void RigNode_CallFunction::Serialize(nlohmann::json& j) const
+	{
+		j["fn"] = FunctionName;
+
+		// O LAYOUT tambem vai pro disco, e nao so o nome.
+		//
+		// Ele e derivado da definicao da funcao, entao em tese daria pra
+		// reconstruir na carga — mas os fios do .axerig referenciam pino por
+		// INDICE, e se a definicao mudou entre salvar e abrir, reconstruir
+		// primeiro faria os fios pousarem nos pinos errados. Gravando o layout,
+		// os fios voltam certos e a reconciliacao com a definicao acontece
+		// depois, no editor, onde da pra avisar.
+		j["ins"] = SaveRigPinLayout(Inputs);
+		j["outs"] = SaveRigPinLayout(Outputs);
+	}
+
+	void RigNode_CallFunction::Deserialize(const nlohmann::json& j)
+	{
+		FunctionName = j.value("fn", std::string());
+
+		if (j.contains("ins"))
+			LoadRigPinLayout(j["ins"], Inputs);
+
+		if (j.contains("outs"))
+			LoadRigPinLayout(j["outs"], Outputs);
+
+		Title = FunctionName.empty() ? "Call Function" : FunctionName;
+	}
+
+	// ═══ Set Control Pose ════════════════════════════════════════════════════
+
+	RigNode_SetControlPose::RigNode_SetControlPose()
+	{
+		Title = "Set Control Pose";
+		HasExecIn = true;
+		ExecOut.push_back("");
+
+		AddInItem("Control", RigElementType::Control);
+
+		// Em espaco GLOBAL do rig — o mesmo espaco em que o Get Transform de um
+		// osso entrega. Assim "poe o controle onde o osso esta" e um fio so.
+		AddIn("Transform", RigPinType::Transform);
+
+		AddInFloat("Weight", 1.0f);
+	}
+
+	void RigNode_SetControlPose::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const int item = ReadItem(ctx, 0);
+
+		if (item < 0)
+			return;
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		if (h[item].Type == RigElementType::Bone)
+		{
+			// Osso ja RECEBE a animacao via ApplyPose. Aceitar aqui criaria um
+			// segundo dono do mesmo dado, e o ultimo a escrever venceria.
+			if (!m_WarnedBone)
+			{
+				m_WarnedBone = true;
+
+				AXE_CORE_WARN("Set Control Pose '{}': o pino Control aponta pra um "
+					"OSSO. Este no so escreve em Control e Null — pra osso, use o "
+					"Set Transform.", Title);
+			}
+
+			return;
+		}
+
+		const float weight = glm::clamp(ReadFloat(ctx, 2), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		glm::mat4 wanted = Read(ctx, 1).Transform.ToMatrix();
+
+		if (weight < 0.9999f)
+		{
+			// Mistura em TRS, nao na matriz: interpolar matriz linearmente
+			// produz shear e encolhe o elemento.
+			const BoneTransform a = BoneTransform::FromMatrix(h.GetGlobal(item));
+			const BoneTransform b = BoneTransform::FromMatrix(wanted);
+
+			BoneTransform r;
+			r.Translation = glm::mix(a.Translation, b.Translation, weight);
+			r.Rotation = glm::slerp(a.Rotation, b.Rotation, weight);
+			r.Scale = glm::mix(a.Scale, b.Scale, weight);
+
+			wanted = r.ToMatrix();
+		}
+
+		h.SetValueFromGlobal(item, wanted);
+	}
+
 	// ═══ Ground Trace ════════════════════════════════════════════════════════
 
 	RigNode_GroundTrace::RigNode_GroundTrace()
@@ -631,6 +1042,141 @@ namespace axe
 		}
 	}
 
+	// ═══ Pelvis Dip ══════════════════════════════════════════════════════════
+
+	RigNode_PelvisDip::RigNode_PelvisDip()
+	{
+		Title = "Pelvis Dip";
+		HasExecIn = true;
+		ExecOut.push_back("");
+
+		AddInItem("Pelvis", RigElementType::Bone);
+
+		// As duas alturas vem dos Ground Trace dos pes, em ESPACO DE
+		// COMPONENTE — e o mesmo pino Height que alimenta o alvo do IK, entao
+		// nao ha conversao pra fazer aqui.
+		AddInFloat("Height A", 0.0f);
+		AddInFloat("Height B", 0.0f);
+
+		// 12: mesmo default do Damp Float, pra o rig inteiro responder no mesmo
+		// ritmo. Mais alto = quadril mais duro, e a rampa "bate" no personagem.
+		AddInFloat("Speed", 12.0f);
+
+		// ── EM METROS ────────────────────────────────────────────────────────
+		//
+		// Teto de seguranca: uma normal de quina de colisor ou um trace que
+		// pegou o objeto errado nao derruba o personagem no chao. Mesmo papel
+		// do Max Angle do Align To Vector.
+		//
+		// Convertido pra espaco de componente no Execute. A licao do FOOTIK_V5:
+		// parametro em metros nunca encosta em distancia de espaco de
+		// componente sem conversao explicita.
+		AddInFloat("Max Dip", 0.25f);
+
+		AddInFloat("Weight", 1.0f);
+	}
+
+	void RigNode_PelvisDip::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const int pelvis = ReadItem(ctx, 0);
+
+		if (pelvis < 0)
+		{
+			// Politica da casa: item nao resolvido e no-op, nunca crash. Mas
+			// MUDO nao — foi assim que a perna de baixo passou horas sem pista.
+			if (!m_WarnedNoPelvis)
+			{
+				m_WarnedNoPelvis = true;
+
+				AXE_CORE_WARN("Pelvis Dip '{}': o pino Pelvis nao casa com nenhum "
+					"osso da hierarquia — o no nao fez nada.", Title);
+			}
+
+			return;
+		}
+
+		const float weight = glm::clamp(ReadFloat(ctx, 5), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		// ── QUANTO DESCER ────────────────────────────────────────────────────
+		//
+		// O pe que MANDA e o mais baixo: se ele alcanca, o outro alcanca por
+		// construcao (o de cima resolve dobrando o joelho, que o Two Bone IK
+		// faz sem esforco).
+		//
+		// min com 0 porque o no SO DESCE. Com os dois pes acima do plano de
+		// apoio o alvo e zero e o quadril volta pro lugar sozinho, suavizado.
+		const float hA = ReadFloat(ctx, 1);
+		const float hB = ReadFloat(ctx, 2);
+
+		float target = std::min(0.0f, std::min(hA, hB));
+
+		// Metros -> espaco de componente. A escala e o comprimento da coluna Y
+		// da world transform; guarda contra escala zero, que estouraria a
+		// divisao.
+		const float scale = std::max(1e-6f,
+			glm::length(glm::vec3(ctx.WorldTransform[1])));
+
+		const float maxDipComp = std::max(0.0f, ReadFloat(ctx, 4)) / scale;
+
+		// Clampa o ALVO, nao o valor suavizado: assim a perseguicao nunca mira
+		// fora do teto e o quadril nao "puxa" contra o clamp.
+		target = glm::clamp(target, -maxDipComp, 0.0f);
+
+		const float speed = ReadFloat(ctx, 3);
+
+		if (!m_Init)
+		{
+			// PRIMEIRO solve entra direto no valor. Subindo de zero, o
+			// personagem afunda visivelmente no frame em que o Play comeca.
+			m_Dip = target;
+			m_Init = true;
+		}
+		else if (speed <= 0.0f)
+		{
+			// Suavizacao desligada = passa direto. Assim da pra comparar com e
+			// sem suavizacao sem desmontar o fio.
+			m_Dip = target;
+		}
+		else if (ctx.DeltaTime > 0.0f)
+		{
+			// k = 1 - exp(-speed*dt): perseguicao exponencial INDEPENDENTE do
+			// frame rate, identica a do Damp Float.
+			const float k = 1.0f - std::exp(-speed * ctx.DeltaTime);
+			m_Dip += (target - m_Dip) * k;
+		}
+		// dt == 0 (preview pausado): congela onde esta, nao salta.
+
+		const float applied = m_Dip * weight;
+
+		if (std::abs(applied) < 1e-6f)
+			return;
+
+		// O "pra cima" do MUNDO expresso em espaco de componente — e onde a
+		// hierarquia de ossos vive. Mesmo calculo do Ground Trace e do
+		// AnimNode_FootIK.
+		const glm::mat4 toLocal = glm::inverse(ctx.WorldTransform);
+		const glm::vec3 compUp = glm::normalize(
+			glm::vec3(toLocal * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)));
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		// TRANSLADA a global, sem tocar em rotacao nem escala: o quadril desce
+		// de pe. Compor uma matriz nova aqui reintroduziria erro de
+		// decomposicao a cada frame.
+		glm::mat4 g = h.GetGlobal(pelvis);
+		g[3] += glm::vec4(compUp * applied, 0.0f);
+
+		// propagate = true: as duas pernas descem JUNTO. E o ponto inteiro do
+		// no — descer so o quadril deslocaria o corpo dos membros.
+		h.SetGlobal(pelvis, g, true);
+	}
+
 	// ═══ Make / Break Transform ══════════════════════════════════════════════
 
 	RigNode_MakeTransform::RigNode_MakeTransform()
@@ -716,6 +1262,18 @@ namespace axe
 		case Op::Subtract: out.Vector = a - b; break;
 		case Op::Scale:    out.Vector = a * f; break;
 		case Op::Lerp:     out.Vector = glm::mix(a, b, glm::clamp(f, 0.0f, 1.0f)); break;
+
+			// Perpendicular aos dois. E como se extrai uma direcao do
+			// personagem sem depender de eixo de osso: a linha entre os ombros
+			// da o LADO, e o cross dela com o "pra cima" da a FRENTE.
+		case Op::Cross:    out.Vector = glm::cross(a, b); break;
+
+			// Comprimento 1, mantendo a direcao. Vetor nulo nao tem direcao pra
+			// preservar, entao sai nulo em vez de NaN — um NaN aqui contamina a
+			// pose inteira e o sintoma e o personagem SUMIR da tela.
+		case Op::Normalize:
+			out.Vector = (glm::length2(a) > 1e-12f) ? glm::normalize(a) : glm::vec3(0.0f);
+			break;
 		}
 	}
 
@@ -1249,11 +1807,39 @@ namespace axe
 		{
 			if (!m_WarnedDegenerate)
 			{
-				m_WarnedDegenerate = true;
+				// Mesmo raciocinio do Two Bone IK: com um fio LIGADO, um vetor
+				// nulo e quase sempre transitorio — o Ground Trace nao acertou
+				// NESTE frame e devolveu Normal = (0,0,0). O fio esta certo; o
+				// no a montante e que nao tinha o que entregar.
+				//
+				// Avisar assim mesmo era o DEFEITO herdado: como o aviso e
+				// uma-vez-e-nunca-mais, um unico frame ruim deixava no console
+				// uma mensagem que parecia atual e acusava um erro de montagem
+				// que nao existia. So e culpa do AUTOR se o pino estiver SOLTO.
+				auto pinLinked = [&](int pin) -> bool
+					{
+						if (!ctx.Graph)
+							return false;
 
-				AXE_CORE_WARN("Align To Vector '{}': From ou To e um vetor nulo, "
-					"o no nao fez nada. Ligue a Normal de um Ground Trace no pino To.",
-					Title);
+						for (const auto& l : ctx.Graph->GetDataLinks())
+							if (l.ToNode == Id && l.ToPin == pin)
+								return true;
+
+						return false;
+					};
+
+				const bool authoring =
+					(lenFrom < 1e-6f && !pinLinked(1)) ||
+					(lenTo < 1e-6f && !pinLinked(2));
+
+				if (authoring)
+				{
+					m_WarnedDegenerate = true;
+
+					AXE_CORE_WARN("Align To Vector '{}': From ou To e um vetor nulo "
+						"e o pino esta SOLTO — o no nao fez nada. Ligue a Normal de "
+						"um Ground Trace no pino To.", Title);
+				}
 			}
 
 			return;
@@ -1310,99 +1896,17 @@ namespace axe
 		h.SetGlobal(i, ng, true);
 	}
 
-	// ═══ Control Follow Bone ═════════════════════════════════════════════════
-
-	RigNode_ControlFollowBone::RigNode_ControlFollowBone()
-	{
-		Title = "Control Follow Bone";
-		HasExecIn = true;
-		ExecOut.push_back("");
-
-		AddInItem("Control", RigElementType::Control);
-		AddInItem("Bone", RigElementType::Bone);
-
-		// Weight 1 = o controle acompanha o osso inteiro. Em 0 ele fica no
-		// repouso autorado, que e o comportamento antigo — da pra comparar os
-		// dois sem desmontar fio.
-		AddInFloat("Weight", 1.0f);
-	}
-
-	void RigNode_ControlFollowBone::Execute(RigExecContext& ctx)
-	{
-		if (!ctx.Hierarchy)
-			return;
-
-		RigHierarchy& h = *ctx.Hierarchy;
-
-		const int ctrl = ReadItem(ctx, 0);
-
-		if (ctrl < 0)
-			return;
-
-		int bone = ReadItem(ctx, 1);
-
-		if (bone < 0)
-		{
-			// Pino do osso vazio: cai no osso de ORIGEM do controle. Assim o
-			// caso comum ("controle criado sobre o osso") nao pede configuracao.
-			const std::string& src = h.GetElements()[ctrl].SourceBone;
-
-			if (!src.empty())
-				bone = h.Find(src, RigElementType::Bone);
-		}
-
-		if (bone < 0)
-		{
-			if (!m_Warned)
-			{
-				m_Warned = true;
-
-				AXE_CORE_WARN("Control Follow Bone '{}': nenhum osso resolvido. "
-					"Escolha o osso no pino Bone (o controle deste rig nao tem osso "
-					"de origem gravado).", Title);
-			}
-
-			return;
-		}
-
-		const float weight = glm::clamp(ReadFloat(ctx, 2), 0.0f, 1.0f);
-
-		if (weight <= 0.0001f)
-			return;
-
-		// A correcao AUTORADA e a relacao de repouso entre os dois. Ela sai do
-		// Initial de proposito: e ali que o gizmo do editor grava, entao e ali
-		// que vive a intencao do animador.
-		const glm::mat4 delta =
-			glm::inverse(h.GetInitialGlobal(bone)) * h.GetInitialGlobal(ctrl);
-
-		const glm::mat4 target = h.GetGlobal(bone) * delta;
-
-		if (weight >= 0.9999f)
-		{
-			h.SetGlobal(ctrl, target, true);
-			return;
-		}
-
-		// Blend parcial: interpola em TRS, nao na matriz. Interpolar matriz
-		// linearmente produz shear e encolhe o elemento — mesma razao pela qual
-		// a Pose do engine e local e nao mat4.
-		const BoneTransform a = BoneTransform::FromMatrix(h.GetGlobal(ctrl));
-		const BoneTransform b = BoneTransform::FromMatrix(target);
-
-		BoneTransform r;
-		r.Translation = glm::mix(a.Translation, b.Translation, weight);
-		r.Rotation = glm::slerp(a.Rotation, b.Rotation, weight);
-		r.Scale = glm::mix(a.Scale, b.Scale, weight);
-
-		h.SetGlobal(ctrl, r.ToMatrix(), true);
-	}
 
 	// ═══ Fabrica ═════════════════════════════════════════════════════════════
 
 	std::unique_ptr<RigNode> CreateRigNode(const std::string& t)
 	{
 		if (t == "ForwardsSolve")  return std::make_unique<RigNode_ForwardsSolve>();
+		if (t == "BackwardsSolve") return std::make_unique<RigNode_BackwardsSolve>();
+		if (t == "Entry")          return std::make_unique<RigNode_Entry>();
+		if (t == "Return")         return std::make_unique<RigNode_Return>();
+		if (t == "CallFunction")   return std::make_unique<RigNode_CallFunction>();
+		if (t == "SetControlPose") return std::make_unique<RigNode_SetControlPose>();
 		if (t == "Sequence")       return std::make_unique<RigNode_Sequence>();
 		if (t == "Branch")         return std::make_unique<RigNode_Branch>();
 		if (t == "ForEach")        return std::make_unique<RigNode_ForEach>();
@@ -1411,6 +1915,8 @@ namespace axe
 		if (t == "SetTransform")   return std::make_unique<RigNode_SetTransform>();
 		if (t == "TwoBoneIK")      return std::make_unique<RigNode_TwoBoneIK>();
 		if (t == "GroundTrace")    return std::make_unique<RigNode_GroundTrace>();
+		if (t == "Trace")          return std::make_unique<RigNode_Trace>();
+		if (t == "PelvisDip")      return std::make_unique<RigNode_PelvisDip>();
 		if (t == "MakeTransform")  return std::make_unique<RigNode_MakeTransform>();
 		if (t == "BreakTransform") return std::make_unique<RigNode_BreakTransform>();
 		if (t == "VectorOp")       return std::make_unique<RigNode_VectorOp>();
@@ -1419,7 +1925,49 @@ namespace axe
 		if (t == "DampFloat")      return std::make_unique<RigNode_DampFloat>();
 		if (t == "DampVector")     return std::make_unique<RigNode_DampVector>();
 		if (t == "AlignToVector")  return std::make_unique<RigNode_AlignToVector>();
-		if (t == "ControlFollowBone") return std::make_unique<RigNode_ControlFollowBone>();
+		// ── REMOVIDO: Collapsed ──────────────────────────────────────────────
+		//
+		// Era o no-conteiner de subgrafo, anterior as FUNCOES. Nunca chegou a
+		// ter entrada na paleta: quando o sistema de funcoes entrou, ele deixou
+		// de ter uso e ficou orfao no meio do caminho.
+		//
+		// Vira um reroute de execucao pelo mesmo motivo do Control Follow Bone
+		// abaixo — sumir com o tipo faria o FromJson pular o no e matar os fios
+		// ligados nele, em silencio, na abertura do asset.
+		if (t == "Collapsed")
+		{
+			AXE_CORE_WARN("ControlRig: o no 'Collapsed' foi removido do engine e virou "
+				"um reroute. Use Functions (painel Rig Members).");
+
+			auto r = std::make_unique<RigNode_Reroute>();
+			r->SetMode(RigNode_Reroute::Mode::Exec);
+			r->Title = "(Collapsed removido)";
+			return r;
+		}
+
+		// ── OBSOLETO: Control Follow Bone ────────────────────────────────────
+		//
+		// A classe foi removida: ela fazia o trabalho do Backward Solve dentro
+		// do Forward, todo frame, e com isso o controle deixava de ser entrada e
+		// virava entrada-e-saida ao mesmo tempo. O evento Backward Solve resolve
+		// o mesmo problema no lugar certo, sob demanda.
+		//
+		// Mas o tipo NAO pode simplesmente sumir. Um .axerig que ainda tenha o
+		// no cairia no `return nullptr` la embaixo, o FromJson pularia o no, e
+		// os fios ligados nele morreriam junto — em silencio, na abertura.
+		//
+		// Entao vira um Reroute de execucao: um no-op VISIVEL, que mantem a
+		// corrente passando e aparece na tela pra voce apagar quando quiser.
+		if (t == "ControlFollowBone")
+		{
+			AXE_CORE_WARN("ControlRig: o no 'Control Follow Bone' foi removido do "
+				"engine e virou um reroute. Use o evento Backward Solve.");
+
+			auto r = std::make_unique<RigNode_Reroute>();
+			r->SetMode(RigNode_Reroute::Mode::Exec);
+			r->Title = "(Control Follow Bone removido)";
+			return r;
+		}
 		if (t == "ItemArray")      return std::make_unique<RigNode_ItemArray>();
 		if (t == "At")             return std::make_unique<RigNode_At>();
 		if (t == "GetControlValue") return std::make_unique<RigNode_GetControlValue>();

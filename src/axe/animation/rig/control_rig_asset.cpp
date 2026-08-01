@@ -45,71 +45,6 @@ namespace axe
 		}
 	}
 
-	namespace
-	{
-		nlohmann::json SaveTransform(const BoneTransform& t)
-		{
-			return {
-				{ "t", { t.Translation.x, t.Translation.y, t.Translation.z } },
-				{ "r", { t.Rotation.x, t.Rotation.y, t.Rotation.z, t.Rotation.w } },
-				{ "s", { t.Scale.x, t.Scale.y, t.Scale.z } }
-			};
-		}
-
-		BoneTransform LoadTransform(const nlohmann::json& j)
-		{
-			BoneTransform t;
-
-			if (j.contains("t") && j["t"].size() == 3)
-				t.Translation = { j["t"][0], j["t"][1], j["t"][2] };
-
-			if (j.contains("r") && j["r"].size() == 4)
-			{
-				// Ordem no arquivo: x, y, z, w. O construtor do glm::quat pede
-				// w PRIMEIRO — trocar a ordem aqui produz rotacoes tortas que
-				// so aparecem depois de salvar e reabrir.
-				t.Rotation = glm::quat(j["r"][3], j["r"][0], j["r"][1], j["r"][2]);
-			}
-
-			if (j.contains("s") && j["s"].size() == 3)
-				t.Scale = { j["s"][0], j["s"][1], j["s"][2] };
-
-			return t;
-		}
-
-		nlohmann::json SavePinValue(const RigPinValue& v)
-		{
-			// Grava tudo: o tipo do pino pode mudar quando um no e reescrito, e
-			// um campo perdido significa o usuario redigitando o valor.
-			return {
-				{ "b", v.Bool },
-				{ "f", v.Float },
-				{ "v", { v.Vector.x, v.Vector.y, v.Vector.z } },
-				{ "x", SaveTransform(v.Transform) },
-				{ "item", v.ItemName },
-				{ "itype", (int)v.ItemType }
-			};
-		}
-
-		RigPinValue LoadPinValue(const nlohmann::json& j)
-		{
-			RigPinValue v;
-
-			v.Bool = j.value("b", false);
-			v.Float = j.value("f", 0.0f);
-
-			if (j.contains("v") && j["v"].size() == 3)
-				v.Vector = { j["v"][0], j["v"][1], j["v"][2] };
-
-			if (j.contains("x"))
-				v.Transform = LoadTransform(j["x"]);
-
-			v.ItemName = j.value("item", std::string());
-			v.ItemType = (RigElementType)j.value("itype", 0);
-
-			return v;
-		}
-	}
 
 	std::shared_ptr<ControlRigAsset> ControlRigAsset::Create(const std::string& name,
 		const std::string& skeletonUUID, const Skeleton* skeleton)
@@ -172,6 +107,133 @@ namespace axe
 		return added;
 	}
 
+	// ═══ Funcoes ═════════════════════════════════════════════════════════════
+
+	RigFunction* ControlRigAsset::AddFunction(const std::string& name)
+	{
+		RigFunction f;
+
+		// Nome unico: o no Call resolve a funcao POR NOME, entao duas iguais
+		// fariam a chamada apontar pra qualquer uma das duas — e o usuario nao
+		// teria como saber qual.
+		const std::string base = name.empty() ? std::string("NewFunction") : name;
+		std::string unique = base;
+
+		int n = 1;
+
+		while (FindFunction(unique))
+			unique = base + "_" + std::to_string(++n);
+
+		f.Name = unique;
+
+		// Nasce com o par ja ligado. Uma funcao vazia de verdade nao teria como
+		// receber a corrente de execucao, e voce descobriria isso so depois de
+		// entrar nela e nao achar por onde comecar.
+		auto entry = CreateRigNode("Entry");
+		auto ret = CreateRigNode("Return");
+
+		if (entry && ret)
+		{
+			entry->EditorX = 0.0f;
+			entry->EditorY = 0.0f;
+			ret->EditorX = 400.0f;
+			ret->EditorY = 0.0f;
+
+			const int a = f.Graph.AddNode(std::move(entry));
+			const int b = f.Graph.AddNode(std::move(ret));
+
+			f.Graph.LinkExec(a, 0, b);
+		}
+
+		m_Functions.push_back(std::move(f));
+
+		return &m_Functions.back();
+	}
+
+	void ControlRigAsset::BindFunctionLibrary(RigExecContext& ctx)
+	{
+		// `this` no capture e seguro: o contexto vive um solve, e o asset vive
+		// mais que isso — quem executa ja segura um shared_ptr dele.
+		ctx.ResolveFunction = [this](const std::string& name) -> RigGraph*
+			{
+				RigFunction* f = FindFunction(name);
+				return f ? &f->Graph : nullptr;
+			};
+	}
+
+	RigFunction* ControlRigAsset::FindFunction(const std::string& name)
+	{
+		for (auto& f : m_Functions)
+			if (f.Name == name)
+				return &f;
+
+		return nullptr;
+	}
+
+	const RigFunction* ControlRigAsset::FindFunction(const std::string& name) const
+	{
+		for (const auto& f : m_Functions)
+			if (f.Name == name)
+				return &f;
+
+		return nullptr;
+	}
+
+	void ControlRigAsset::RemoveFunction(int index)
+	{
+		if (index < 0 || index >= (int)m_Functions.size())
+			return;
+
+		// Os nos Call orfaos ficam. Sem definicao eles viram no-op e continuam na
+		// tela com o nome que sumiu — visivel, e desfazivel com Ctrl+Z. Apaga-los
+		// seria mexer no grafo do usuario em silencio.
+		m_Functions.erase(m_Functions.begin() + index);
+	}
+
+	bool ControlRigAsset::RenameFunction(int index, const std::string& newName)
+	{
+		if (index < 0 || index >= (int)m_Functions.size() || newName.empty())
+			return false;
+
+		const std::string old = m_Functions[(std::size_t)index].Name;
+
+		if (old == newName)
+			return true;
+
+		if (FindFunction(newName))
+			return false;
+
+		m_Functions[(std::size_t)index].Name = newName;
+
+		// Atualiza as chamadas em TODO grafo do asset — o principal e o de cada
+		// funcao, inclusive o da propria funcao renomeada (recursao e um caso
+		// valido). Sem isto, renomear quebraria as chamadas sem aviso nenhum.
+		const auto fix = [&](RigGraph& g)
+			{
+				for (const auto& n : g.GetNodes())
+				{
+					if (std::string(n->TypeName()) != "CallFunction")
+						continue;
+
+					nlohmann::json j = nlohmann::json::object();
+					n->Serialize(j);
+
+					if (j.value("fn", std::string()) != old)
+						continue;
+
+					j["fn"] = newName;
+					n->Deserialize(j);
+				}
+			};
+
+		fix(m_Graph);
+
+		for (auto& f : m_Functions)
+			fix(f.Graph);
+
+		return true;
+	}
+
 	bool ControlRigAsset::Save(const std::filesystem::path& filepath)
 	{
 		nlohmann::json j;
@@ -183,8 +245,12 @@ namespace axe
 		// ── Hierarquia ───────────────────────────────────────────────────────
 		j["elements"] = nlohmann::json::array();
 
+		int elementIndex = -1;
+
 		for (const auto& e : m_Hierarchy.GetElements())
 		{
+			++elementIndex;
+
 			nlohmann::json je;
 
 			je["name"] = e.Name;
@@ -192,7 +258,26 @@ namespace axe
 			je["parent"] = e.Parent;
 
 			// So o Initial. Ver o comentario do cabecalho do header.
-			je["initial"] = SaveTransform(e.Initial);
+			je["initial"] = SaveRigTransform(e.Initial);
+
+			// ── A POSE NAO VAI PRO DISCO ─────────────────────────────────────
+			//
+			// Value e POSE, e pose nao e definicao de rig. Gravar aqui
+			// significava que deixar um braco pra cima no editor e salvar
+			// levava esse braco pro JOGO, em toda instancia do personagem —
+			// e era exatamente o medo que fazia mexer no rig parecer arriscado.
+			//
+			// Entao a pose e estado de SESSAO: existe enquanto o editor esta
+			// aberto, e o preview trabalha numa copia da hierarquia (ver
+			// ControlRigWindow::PreviewHierarchy). O que persiste e o Initial,
+			// que e onde o controle repousa — isso sim e o rig.
+			//
+			// Quando o Sequencer existir, ele guarda as keys no PROPRIO asset
+			// dele. Pose animada pertence a uma animacao, nao ao rig.
+			//
+			// (void) elementIndex: o indice segue util pro laco e pra qualquer
+			// campo por elemento que venha depois.
+			(void)elementIndex;
 
 			if (e.Type == RigElementType::Control)
 			{
@@ -204,57 +289,56 @@ namespace axe
 				je["shape"] = (int)e.Shape;
 				je["color"] = { e.ShapeColor.r, e.ShapeColor.g, e.ShapeColor.b };
 				je["size"] = e.ShapeSize;
-				je["offset"] = SaveTransform(e.ShapeOffset);
+				je["offset"] = SaveRigTransform(e.ShapeOffset);
 			}
 
 			j["elements"].push_back(std::move(je));
 		}
 
 		// ── Grafo ────────────────────────────────────────────────────────────
-		j["nodes"] = nlohmann::json::array();
+		//
+		// O grafo grava a si mesmo. Ate aqui esta funcao conhecia o formato
+		// interno de no e de fio, e por isso era o UNICO lugar capaz de gravar
+		// um grafo — o que travava qualquer no que quisesse conter um subgrafo.
+		//
+		// Atribuicao chave a chave, e nao update(): o envelope fica explicito, e
+		// nao dependemos de qual versao do nlohmann esta vendorizada. O resto do
+		// arquivo (versao, nome, elementos) continua sendo assunto daqui.
+		nlohmann::json graph = m_Graph.ToJson();
 
-		for (const auto& n : m_Graph.GetNodes())
+		j["nodes"] = std::move(graph["nodes"]);
+		j["exec_links"] = std::move(graph["exec_links"]);
+		j["data_links"] = std::move(graph["data_links"]);
+
+		// ── Funcoes ──────────────────────────────────────────────────────────
+		//
+		// So gravamos a chave quando ha funcao: um rig que nunca criou nenhuma
+		// sai byte a byte igual ao de antes deste recurso existir.
+		if (!m_Functions.empty())
 		{
-			nlohmann::json jn;
+			j["functions"] = nlohmann::json::array();
 
-			jn["type"] = n->TypeName();
-			jn["id"] = n->Id;
-			jn["title"] = n->Title;
-			jn["x"] = n->EditorX;
-			jn["y"] = n->EditorY;
+			for (const auto& f : m_Functions)
+			{
+				nlohmann::json jf;
 
-			// Os defaults dos pinos SAO o conteudo autoral: e onde ficam os
-			// nomes de osso escolhidos e os numeros digitados. Perder isto
-			// esvaziaria o rig mesmo com todos os nos e fios intactos.
-			jn["pins"] = nlohmann::json::array();
+				jf["name"] = f.Name;
+				jf["ins"] = nlohmann::json::array();
+				jf["outs"] = nlohmann::json::array();
 
-			for (const auto& p : n->Inputs)
-				jn["pins"].push_back(SavePinValue(p.Default));
+				for (const auto& p : f.Inputs)
+					jf["ins"].push_back({ { "n", p.Name }, { "t", (int)p.Type } });
 
-			// OBJETO VAZIO, e nao json default-construido.
-			//
-			// `nlohmann::json extra;` nasce NULL, e um no cujo Serialize nao
-			// escreve nada gravaria "data": null. Na volta, contains("data") da
-			// true (a chave existe!) e o Deserialize recebe um null — onde
-			// j.value(...) LANCA type_error, derrubando o editor ao abrir o
-			// asset. Foi exatamente esse o crash.
-			nlohmann::json extra = nlohmann::json::object();
-			n->Serialize(extra);
-			jn["data"] = std::move(extra);
+				for (const auto& p : f.Outputs)
+					jf["outs"].push_back({ { "n", p.Name }, { "t", (int)p.Type } });
 
-			j["nodes"].push_back(std::move(jn));
+				// O grafo da funcao se grava sozinho, no mesmo formato do
+				// principal. E a razao inteira do passo A1 ter existido.
+				jf["graph"] = f.Graph.ToJson();
+
+				j["functions"].push_back(std::move(jf));
+			}
 		}
-
-		j["exec_links"] = nlohmann::json::array();
-
-		for (const auto& l : m_Graph.GetExecLinks())
-			j["exec_links"].push_back({ { "from", l.FromNode }, { "pin", l.FromExec }, { "to", l.ToNode } });
-
-		j["data_links"] = nlohmann::json::array();
-
-		for (const auto& l : m_Graph.GetDataLinks())
-			j["data_links"].push_back({ { "from", l.FromNode }, { "fpin", l.FromPin },
-									   { "to", l.ToNode }, { "tpin", l.ToPin } });
 
 		std::ofstream out(filepath);
 
@@ -343,10 +427,22 @@ namespace axe
 				e.Parent = je.value("parent", -1);
 
 				if (je.contains("initial"))
-					e.Initial = LoadTransform(je["initial"]);
+					e.Initial = LoadRigTransform(je["initial"]);
 
-				// Current nasce do Initial: o rig abre em repouso.
-				e.Current = e.Initial;
+				// A LEITURA fica, mesmo tendo parado de gravar.
+				//
+				// Um .axerig salvo enquanto o Value ainda ia pro disco tem a
+				// chave, e ignora-la faria a pose sumir de um save pro outro sem
+				// explicacao. Lendo, o rig abre igual ao que voce deixou; no
+				// proximo save a chave desaparece sozinha.
+				//
+				// Ausente = identidade, que e o caso de todo arquivo novo.
+				if (je.contains("value"))
+					e.Value = LoadRigTransform(je["value"]);
+
+				// Current nasce do repouso MAIS a pose.
+				e.Current = BoneTransform::FromMatrix(
+					e.Initial.ToMatrix() * e.Value.ToMatrix());
 
 				if (e.Type == RigElementType::Control)
 				{
@@ -363,7 +459,7 @@ namespace axe
 					e.ShapeSize = je.value("size", 1.0f);
 
 					if (je.contains("offset"))
-						e.ShapeOffset = LoadTransform(je["offset"]);
+						e.ShapeOffset = LoadRigTransform(je["offset"]);
 				}
 
 				// Empurramos direto no vetor em vez de usar Add(): Add recusaria
@@ -372,72 +468,49 @@ namespace axe
 			}
 		}
 
-		// ── Grafo ────────────────────────────────────────────────────────────
-		if (j.contains("nodes"))
+		// ── Funcoes ──────────────────────────────────────────────────────────
+		//
+		// ANTES do grafo principal: os nos Call reconstroem os proprios pinos a
+		// partir da definicao, e ela precisa existir quando eles carregarem.
+		if (j.contains("functions") && j["functions"].is_array())
 		{
-			for (const auto& jn : j["nodes"])
+			for (const auto& jf : j["functions"])
 			{
-				auto node = CreateRigNode(jn.value("type", std::string()));
+				RigFunction f;
 
-				// Tipo desconhecido (arquivo de uma versao mais nova, ou no
-				// removido do engine): pula. Os fios dele morrem junto no
-				// passo seguinte, porque o Id nunca vai existir.
-				if (!node)
-					continue;
+				f.Name = jf.value("name", std::string("Function"));
 
-				node->Title = jn.value("title", node->Title);
-				node->EditorX = jn.value("x", 0.0f);
-				node->EditorY = jn.value("y", 0.0f);
+				const auto loadParams = [](const nlohmann::json& arr,
+					std::vector<RigFunctionParam>& out)
+					{
+						if (!arr.is_array())
+							return;
 
-				// is_object() alem do contains: arquivos salvos ANTES do fix
-				// acima tem "data": null, e passar isso pro Deserialize
-				// derruba o editor. Com a checagem, o no simplesmente fica
-				// nos valores padrao.
-				if (jn.contains("data") && jn["data"].is_object())
-					node->Deserialize(jn["data"]);
+						for (const auto& jp : arr)
+						{
+							RigFunctionParam p;
+							p.Name = jp.value("n", std::string("Param"));
+							p.Type = (RigPinType)jp.value("t", (int)RigPinType::Float);
 
-				// Depois do Deserialize: um no pode RECRIAR seus pinos ali (o
-				// Sequence faz isso ao restaurar as saidas), e os defaults
-				// precisam cair nos pinos ja definitivos.
-				if (jn.contains("pins"))
-				{
-					const auto& jp = jn["pins"];
+							out.push_back(std::move(p));
+						}
+					};
 
-					for (std::size_t p = 0; p < node->Inputs.size() && p < jp.size(); ++p)
-						node->Inputs[p].Default = LoadPinValue(jp[p]);
-				}
+				if (jf.contains("ins"))
+					loadParams(jf["ins"], f.Inputs);
 
-				// Preserva o Id gravado: os fios referenciam por ele.
-				const int wantId = jn.value("id", -1);
+				if (jf.contains("outs"))
+					loadParams(jf["outs"], f.Outputs);
 
-				if (wantId > 0)
-					rig->m_Graph.AddNodeWithId(std::move(node), wantId);
-				else
-					rig->m_Graph.AddNode(std::move(node));
+				if (jf.contains("graph") && jf["graph"].is_object())
+					f.Graph.FromJson(jf["graph"]);
+
+				rig->m_Functions.push_back(std::move(f));
 			}
 		}
 
-		auto nodeExists = [&](int id) { return rig->m_Graph.FindNode(id) != nullptr; };
-
-		if (j.contains("exec_links"))
-			for (const auto& jl : j["exec_links"])
-			{
-				const int from = jl.value("from", -1);
-				const int to = jl.value("to", -1);
-
-				if (nodeExists(from) && nodeExists(to))
-					rig->m_Graph.LinkExec(from, jl.value("pin", 0), to);
-			}
-
-		if (j.contains("data_links"))
-			for (const auto& jl : j["data_links"])
-			{
-				const int from = jl.value("from", -1);
-				const int to = jl.value("to", -1);
-
-				if (nodeExists(from) && nodeExists(to))
-					rig->m_Graph.LinkData(from, jl.value("fpin", 0), to, jl.value("tpin", 0));
-			}
+		// ── Grafo ────────────────────────────────────────────────────────────
+		rig->m_Graph.FromJson(j);
 
 		AXE_CORE_INFO("ControlRig - CONTROLRIG_V1: '{}' carregado ({} elementos, {} nos).",
 			rig->m_Name, rig->m_Hierarchy.Size(), rig->m_Graph.GetNodes().size());

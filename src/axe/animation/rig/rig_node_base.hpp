@@ -5,6 +5,8 @@
 
 // O header completo: o vendor traz so o json.hpp single-header, sem json_fwd.
 #include <nlohmann/json.hpp>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -120,7 +122,67 @@ namespace axe
 
 		// Necessario pros nos lerem as proprias entradas (o pull de dados).
 		RigGraph* Graph = nullptr;
+
+		// ── SUBGRAFO ─────────────────────────────────────────────────────────
+		//
+		// Quando este solve roda DENTRO de um no que contem um grafo, estes
+		// campos apontam pro nivel de fora. E como o no Entry le os valores que
+		// entraram: ele nao tem dado proprio nenhum, so repassa o que esta
+		// ligado no no que o contem — e pra isso precisa alcancar o grafo de
+		// fora e perguntar por aquele pino.
+		//
+		// Nulos no nivel raiz.
+		RigExecContext* Caller = nullptr;
+		int CallerNodeId = -1;
+
+		// ── BIBLIOTECA DE FUNCOES ────────────────────────────────────────────
+		//
+		// Como um no Call acha a definicao da funcao que ele chama.
+		//
+		// Um std::function e nao um ponteiro pro asset DE PROPOSITO: rig_nodes
+		// nao pode depender de control_rig_asset (e o asset que contem o grafo,
+		// nao o contrario), e inverter isso criaria include circular. Assim
+		// quem monta o contexto — o asset, ou o AnimNode, ou o editor — resolve
+		// o nome do jeito que quiser, e o no so pergunta.
+		//
+		// Nulo = nao ha biblioteca; todo Call vira no-op e avisa uma vez.
+		std::function<RigGraph* (const std::string&)> ResolveFunction;
+
+		// Profundidade de aninhamento. Um subgrafo que contenha a si mesmo
+		// recursaria pra sempre; a guarda corta antes da pilha estourar.
+		int Depth = 0;
+
+		// Identificador desta execucao, atribuido pelo Execute mais EXTERNO e
+		// herdado por todos os niveis.
+		//
+		// Um no que contem grafo pode ser alcancado de dois jeitos no mesmo
+		// solve: pela corrente de execucao, e por alguem PUXANDO uma saida
+		// dele. Sem saber se o interior ja rodou neste frame, ele rodaria duas
+		// vezes — e um Ground Trace la dentro custaria o dobro de raycasts.
+		std::uint64_t SolveId = 0;
 	};
+
+	// ── Serializacao de valores ──────────────────────────────────────────────
+	//
+	// Moraram um tempo num namespace ANONIMO dentro do control_rig_asset.cpp, o
+	// que os tornava inalcancaveis pra qualquer outro arquivo. Isso passou
+	// despercebido enquanto o asset era o unico a gravar grafo — deixou de ser
+	// quando um no passou a poder conter um subgrafo e precisar gravar o seu.
+	//
+	// Ficam aqui, junto das estruturas que eles serializam, pra existir UMA
+	// forma de gravar um pino. Duas divergem: uma ganha um campo, a outra nao,
+	// e o arquivo que uma grava a outra le pela metade.
+	AXE_API nlohmann::json SaveRigTransform(const BoneTransform& t);
+	AXE_API BoneTransform  LoadRigTransform(const nlohmann::json& j);
+
+	AXE_API nlohmann::json SaveRigPinValue(const RigPinValue& v);
+	AXE_API RigPinValue    LoadRigPinValue(const nlohmann::json& j);
+
+	// Nome e tipo dos pinos. Quase todo no declara os seus no construtor e
+	// pronto — mas os de subgrafo tem pinos que dependem do que foi colapsado,
+	// entao o layout precisa sobreviver ao arquivo.
+	AXE_API nlohmann::json SaveRigPinLayout(const std::vector<RigPin>& pins);
+	AXE_API void           LoadRigPinLayout(const nlohmann::json& j, std::vector<RigPin>& pins);
 
 	class AXE_API RigNode
 	{

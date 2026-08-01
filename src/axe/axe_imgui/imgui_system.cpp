@@ -9,6 +9,8 @@
 #include <GLFW/glfw3.h>
 #include <ImGuizmo.h>
 
+#include <filesystem>
+
 namespace axe
 {
 
@@ -89,6 +91,59 @@ namespace axe
             c[ImGuiCol_ResizeGripHovered] = ImVec4(0.270f, 0.600f, 1.000f, 0.55f);
             c[ImGuiCol_ResizeGripActive] = ImVec4(0.270f, 0.600f, 1.000f, 0.80f);
         }
+        // ── Fonte de icones ──────────────────────────────────────────────────
+        //
+        // MESCLADA na fonte de texto, nao carregada como fonte separada. Com
+        // MergeMode, "\uf0c7  Salvar" desenha o icone e o texto numa chamada so —
+        // sem PushFont/PopFont em volta de cada botao, que e o que faz a
+        // alternativa virar ruido em cada janela.
+        //
+        // A fonte e um SUBSET (assets/fonts/axe_icons.ttf, ~14 KB): so os glifos
+        // que o editor usa de fato. Ver editor_icons.hpp — acrescentar um define
+        // sem regerar o subset produz um retangulo vazio, nao um erro.
+        {
+            io.Fonts->AddFontDefault();
+
+            static const ImWchar kIconRange[] = { 0xe4e2, 0xf84c, 0 };
+
+            ImFontConfig cfg;
+            cfg.MergeMode = true;
+            cfg.PixelSnapH = true;
+
+            // GlyphOffset e GlyphMinAdvanceX ficam ZERADOS de proposito.
+            //
+            // Os dois foram tentados e produziram o mesmo defeito por caminhos
+            // diferentes: o MinAdvance alarga o avanco do glifo sem alargar o
+            // DESENHO, e o ImGui centraliza pelo avanco — entao dentro de um
+            // botao quadrado o icone escorrega pra esquerda. O Offset y era um
+            // chute meu, e empurrava tudo pra baixo.
+            //
+            // A metrica real do glifo e a referencia certa. Onde o icone
+            // precisa de espaco (ICON_X "  Texto"), o espaco esta no literal, e
+            // e visivel a quem escreve; onde precisa de centralizacao exata
+            // (botao quadrado), quem resolve e o ui::IconButton, que sabe o
+            // tamanho da caixa.
+
+            // Em resources/, que o premake ja copia pro lado do executavel no
+            // pos-build. Caminho RELATIVO porque o debugdir do projeto e o
+            // proprio targetdir — a mesma convencao das outras resources.
+            const char* kIconFont = "resources/fonts/axe_icons.ttf";
+
+            if (std::filesystem::exists(kIconFont))
+            {
+                io.Fonts->AddFontFromFileTTF(kIconFont, 13.0f, &cfg, kIconRange);
+            }
+            else
+            {
+                // Sem a fonte o editor CONTINUA funcionando: os defines viram
+                // caracteres desconhecidos e aparecem como retangulos. Avisar
+                // uma vez e melhor que uma tela cheia de quadradinhos sem
+                // explicacao.
+                AXE_CORE_WARN("ImGui: '{}' nao encontrado — os icones do editor vao "
+                    "aparecer como retangulos vazios.", kIconFont);
+            }
+        }
+
         m_NativeWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
 
         if (!ImGui_ImplGlfw_InitForOpenGL(m_NativeWindow, true))

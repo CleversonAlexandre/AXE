@@ -1,9 +1,11 @@
 #include "control_rig_window.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"
 #include "axe/log/log.hpp"
 
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/norm.hpp>
 
+#include <cstdio>
 #include <cstring>
 
 namespace axe
@@ -147,7 +149,75 @@ namespace axe
 		if (ImGui::MenuItem("Add Null child"))
 			m_PendingAddNull = index;
 
+		// ── Espelhar ─────────────────────────────────────────────────────────
+		//
+		// Osso fica de fora: o lado oposto dele ja vem do esqueleto.
+		if (h[index].Type != RigElementType::Bone)
+		{
+			const std::string twin = RigHierarchy::MirrorName(h[index].Name);
+
+			if (ImGui::BeginMenu("Mirror"))
+			{
+				// Mostra o NOME DE DESTINO antes de agir. Espelhamento cria ou
+				// SOBRESCREVE elemento do outro lado — ver o nome primeiro e a
+				// diferenca entre uma operacao previsivel e uma surpresa.
+				if (twin.empty())
+				{
+					ImGui::TextDisabled("'%s' nao tem lado no nome.", h[index].Name.c_str());
+					ImGui::TextDisabled("Use Left/Right, _L/_R, .l/.r ou l_/r_.");
+				}
+				else
+				{
+					ImGui::TextDisabled("-> %s", twin.c_str());
+					ImGui::Separator();
+
+					if (ImGui::MenuItem("X axis  (default)"))
+					{
+						m_PendingMirror = index;
+						m_MirrorAxis = 0;
+					}
+
+					if (ImGui::MenuItem("Y axis"))
+					{
+						m_PendingMirror = index;
+						m_MirrorAxis = 1;
+					}
+
+					if (ImGui::MenuItem("Z axis"))
+					{
+						m_PendingMirror = index;
+						m_MirrorAxis = 2;
+					}
+
+					ImGui::Separator();
+					ImGui::TextDisabled("Leva os filhos junto.");
+					ImGui::TextDisabled("Se o espelho ja existir, ele e ATUALIZADO.");
+				}
+
+				ImGui::EndMenu();
+			}
+		}
+
 		ImGui::Separator();
+
+		// Devolve o controle pra cima do osso de onde ele nasceu. E o desfazer
+		// de "arrastei o gizmo pra alinhar e passei do ponto" — sem ele, a
+		// unica saida seria acertar a posicao de volta no olho.
+		if (h[index].Type != RigElementType::Bone)
+		{
+			const bool hasSource = !h[index].SourceBone.empty();
+
+			if (ImGui::MenuItem("Reset to bind pose", nullptr, false, hasSource))
+				m_PendingResetToBone = index;
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(hasSource
+					? "Volta pra cima de '%s'."
+					: "Este elemento nao nasceu de um osso.",
+					h[index].SourceBone.c_str());
+			}
+		}
 
 		if (ImGui::MenuItem("Rename"))
 		{
@@ -351,6 +421,140 @@ namespace axe
 		ImGui::PopID();
 	}
 
+	// ═══ Rig Members — funcoes ═══════════════════════════════════════════════
+
+	void ControlRigWindow::DrawMembersPanel()
+	{
+		if (!m_Asset)
+			return;
+
+		ui::SectionHeader(ICON_FUNCTION, "Functions", ui::Accent::Add);
+
+		ImGui::Spacing();
+
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 70.0f);
+		ImGui::InputText("##newfn", m_NewFuncName, sizeof(m_NewFuncName));
+
+		ImGui::SameLine(0, 4);
+
+		if (ui::AccentButton(ICON_PLUS "  Func", ui::Accent::Add,
+			"Cria uma funcao com Inputs/Outputs proprios."))
+		{
+			const std::string name =
+				(m_NewFuncName[0] != 0) ? m_NewFuncName : "NewFunction";
+
+			if (RigFunction* f = m_Asset->AddFunction(name))
+			{
+				// Entry e Return nascem sem pinos; o rebuild os alinha com a
+				// assinatura (vazia, por ora) e deixa tudo coerente desde o
+				// primeiro frame.
+				RebuildFunctionCallSites((int)m_Asset->GetFunctions().size() - 1);
+
+				(void)f;
+				m_NewFuncName[0] = 0;
+
+				MarkEdited("Add function");
+			}
+		}
+
+		ImGui::Spacing();
+
+		auto& funcs = m_Asset->GetFunctions();
+
+		if (funcs.empty())
+		{
+			ImGui::TextDisabled("Nenhuma funcao ainda.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Uma funcao vira UMA definicao e varias\nchamadas — em vez de quatro copias\ndo mesmo bloco pra corrigir uma a uma.");
+			return;
+		}
+
+		for (int i = 0; i < (int)funcs.size(); ++i)
+		{
+			ImGui::PushID(200 + i);
+
+			const bool editing = (m_EditingFunction == i);
+
+			if (editing)
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.85f, 0.78f, 1.0f));
+
+			const std::string label = funcs[(std::size_t)i].Name + "  ("
+				+ std::to_string(funcs[(std::size_t)i].Inputs.size()) + " in, "
+				+ std::to_string(funcs[(std::size_t)i].Outputs.size()) + " out)";
+
+			if (ImGui::Selectable(label.c_str(), editing))
+				m_PendingOpenFunction = i;
+
+			if (editing)
+				ImGui::PopStyleColor();
+
+			// ── Arrastar pro grafo ───────────────────────────────────────────
+			//
+			// Mesmo gesto e mesmo mecanismo do arraste de osso da hierarquia:
+			// payload por VALOR (o nome copiado pra um buffer fixo), nunca
+			// ponteiro. O ImGui guarda o payload entre frames, e um ponteiro
+			// pro std::string da funcao morreria assim que o vector realocasse.
+			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+			{
+				char buf[64];
+				std::snprintf(buf, sizeof(buf), "%s",
+					funcs[(std::size_t)i].Name.c_str());
+
+				ImGui::SetDragDropPayload("RIG_FUNCTION", buf, sizeof(buf));
+
+				// Preview junto do cursor: sem ele o gesto nao da retorno
+				// nenhum e parece que nao pegou.
+				ImGui::TextUnformatted(funcs[(std::size_t)i].Name.c_str());
+
+				ImGui::EndDragDropSource();
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Clique pra abrir o grafo desta funcao.\n"
+					"Arraste pro grafo pra criar uma chamada.");
+			}
+
+			// O IconButton e QUADRADO (altura da linha), mais largo que o "x"
+			// de uma letra que estava aqui — o recuo tem que sair da largura
+			// real, senao ele vaza pra fora do painel.
+			ImGui::SameLine(ImGui::GetContentRegionAvail().x
+				- ImGui::GetFrameHeight() - 4.0f);
+
+			if (ui::IconButton(ICON_TRASH, "Apagar esta funcao", ui::Accent::Danger))
+				m_PendingRemoveFunction = i;
+
+			ImGui::PopID();
+		}
+
+		// ── Acoes diferidas ──────────────────────────────────────────────────
+		//
+		// Remover mexe no vector que o laco acima acabou de percorrer, e abrir
+		// troca o grafo desenhado. Nenhuma das duas pode acontecer no meio do
+		// desenho.
+		if (m_PendingOpenFunction >= 0)
+		{
+			SwitchToFunction(m_PendingOpenFunction);
+			m_PendingOpenFunction = -1;
+		}
+
+		if (m_PendingRemoveFunction >= 0)
+		{
+			const int idx = m_PendingRemoveFunction;
+			m_PendingRemoveFunction = -1;
+
+			// Sair antes de remover: se voce estava editando justamente ela, o
+			// canvas ficaria apontando pra um grafo que deixou de existir.
+			if (m_EditingFunction == idx)
+				SwitchToMainGraph();
+			else if (m_EditingFunction > idx)
+				--m_EditingFunction;
+
+			m_Asset->RemoveFunction(idx);
+			MarkEdited("Remove function");
+		}
+	}
+
 	void ControlRigWindow::DrawHierarchyPanel()
 	{
 		if (!m_Asset)
@@ -457,6 +661,43 @@ namespace axe
 		// Executadas so AQUI, depois que a arvore terminou de desenhar. Mexer
 		// na hierarquia no meio do percurso invalidaria os indices e o resto do
 		// frame desenharia lixo.
+
+		if (m_PendingResetToBone >= 0)
+		{
+			const int idx = m_PendingResetToBone;
+			m_PendingResetToBone = -1;
+
+			if (h.ResetToSourceBone(idx))
+				MarkEdited("Reset to bind pose");
+		}
+
+		// ── Espelhar ─────────────────────────────────────────────────────────
+		//
+		// Como as outras, roda DEPOIS do desenho da arvore: Mirror acrescenta
+		// elementos, e mexer na lista no meio do loop que a percorre faria a
+		// arvore desenhar lixo no resto do frame.
+		if (m_PendingMirror >= 0)
+		{
+			const int src = m_PendingMirror;
+			m_PendingMirror = -1;
+
+			RigMirrorSettings ms;
+			ms.Axis = m_MirrorAxis;
+			ms.IncludeChildren = true;
+
+			const int made = h.Mirror(src, ms);
+
+			if (made >= 0)
+			{
+				// Seleciona o ESPELHO: e nele que voce vai mexer em seguida
+				// pra conferir se caiu no lugar.
+				m_SelectedElement = made;
+				m_Selection.assign(1, made);
+				m_SelectedNode = -1;
+
+				MarkEdited("Mirror");
+			}
+		}
 
 		if (m_PendingAddControl >= 0 || m_PendingAddNull >= 0)
 		{

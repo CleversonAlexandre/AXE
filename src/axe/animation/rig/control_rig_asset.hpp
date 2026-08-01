@@ -32,6 +32,47 @@ namespace axe
 	//  da pra reconciliar. Copiar o esqueleto pra dentro do rig faria as duas
 	//  copias divergirem em silencio.
 	// ═════════════════════════════════════════════════════════════════════════
+	// ── Parametro de funcao ──────────────────────────────────────────────────
+	struct AXE_API RigFunctionParam
+	{
+		std::string Name = "Param";
+		RigPinType  Type = RigPinType::Float;
+	};
+
+	// ── Funcao de rig ────────────────────────────────────────────────────────
+	//
+	// Um grafo nomeado, com entradas e saidas declaradas, que pode ser CHAMADO
+	// de qualquer lugar do rig. Mesmo modelo do Script Editor — inclusive na
+	// interface, pra quem aprendeu um nao ter que aprender o outro.
+	//
+	// ── POR QUE ISTO E DIFERENTE DE AGRUPAR NODES ────────────────────────
+	//
+	// Agrupar esconde; funcao ELIMINA. Um rig de personagem tem quatro blocos
+	// quase identicos — perna esquerda, direita, braco esquerdo, direito. Uma
+	// caixa por bloco deixaria a tela limpa e as quatro copias intactas: quatro
+	// lugares pra corrigir o mesmo erro.
+	//
+	// Com funcao, e UMA definicao e quatro chamadas, com os nomes de osso
+	// entrando por pino. Corrigir a definicao corrige as quatro.
+	//
+	// Dentro do grafo da funcao vivem exatamente um Entry (expoe os Inputs como
+	// saidas) e um Return (expoe os Outputs como entradas), criados junto com
+	// ela. Fora, cada uso e um no Call.
+	//
+	// Graph por VALOR, e nao shared_ptr como no ScriptFunction: o RigGraph tem
+	// copia profunda (RigGraph(const RigGraph&), via Clone), entao copiar uma
+	// funcao copia o grafo dela — e o undo, que ja guarda o asset inteiro por
+	// valor, leva as funcoes junto sem nenhum trabalho extra.
+	struct AXE_API RigFunction
+	{
+		std::string Name = "NewFunction";
+
+		std::vector<RigFunctionParam> Inputs;
+		std::vector<RigFunctionParam> Outputs;
+
+		RigGraph Graph;
+	};
+
 	class AXE_API ControlRigAsset
 	{
 	public:
@@ -51,6 +92,37 @@ namespace axe
 
 		RigGraph& GetGraph() { return m_Graph; }
 		const RigGraph& GetGraph() const { return m_Graph; }
+
+		// ── Funcoes ──────────────────────────────────────────────────────────
+
+		std::vector<RigFunction>& GetFunctions() { return m_Functions; }
+		const std::vector<RigFunction>& GetFunctions() const { return m_Functions; }
+
+		// Cria uma funcao ja com Entry e Return ligados. O nome e tornado unico
+		// se preciso: duas funcoes de mesmo nome fariam o no Call apontar pra
+		// qualquer uma das duas.
+		RigFunction* AddFunction(const std::string& name);
+
+		// Preenche ctx.ResolveFunction apontando pra biblioteca DESTE asset.
+		//
+		// Um metodo e nao cada chamador montando o lambda: sao tres lugares que
+		// montam contexto (o AnimNode em jogo, o preview do editor, o backward
+		// solve), e um que esquecesse deixaria as funcoes silenciosamente
+		// mortas naquele caminho.
+		void BindFunctionLibrary(RigExecContext& ctx);
+
+		RigFunction* FindFunction(const std::string& name);
+		const RigFunction* FindFunction(const std::string& name) const;
+
+		// Remove por indice. Os nos Call orfaos NAO sao apagados: eles viram
+		// no-op e continuam na tela mostrando o nome que sumiu — apagar o
+		// trabalho do usuario em silencio seria pior que deixar um no morto
+		// visivel.
+		void RemoveFunction(int index);
+
+		// Renomeia e atualiza TODOS os nos Call, em todos os grafos. Sem isto,
+		// renomear quebraria as chamadas sem aviso.
+		bool RenameFunction(int index, const std::string& newName);
 
 		const std::string& GetName() const { return m_Name; }
 		void SetName(const std::string& n) { m_Name = n; }
@@ -81,6 +153,11 @@ namespace axe
 
 		RigHierarchy m_Hierarchy;
 		RigGraph     m_Graph;
+
+		// Vector e nao map: a ORDEM na lista e autoral (voce arruma as funcoes
+		// como quer ver), e o numero de funcoes num rig e pequeno o bastante
+		// pra busca linear por nome nao pesar.
+		std::vector<RigFunction> m_Functions;
 
 		std::filesystem::path m_Path;
 		uint32_t m_Version = 1;

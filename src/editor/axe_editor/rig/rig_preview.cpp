@@ -15,6 +15,7 @@
 // Unreal faz com os controles dela, e pelo mesmo motivo.
 
 #include "control_rig_window.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"
 
 #include "axe/scene/components.hpp"
 #include "axe/animation/animation_world.hpp"
@@ -46,6 +47,12 @@ namespace axe
 	// "invalid application of sizeof to incomplete type".
 	ControlRigWindow::~ControlRigWindow()
 	{
+		if (m_FuncEdCtx)
+		{
+			ed::DestroyEditor(m_FuncEdCtx);
+			m_FuncEdCtx = nullptr;
+		}
+
 		if (m_EdCtx)
 		{
 			ed::DestroyEditor(m_EdCtx);
@@ -250,6 +257,22 @@ namespace axe
 	// Quando o rig for chamado de DENTRO do AnimGraph (a etapa seguinte), o
 	// unico ponto que muda e este: em vez de ResetToInitial, entra
 	// ApplyPose(pose que veio da animacao). O resto do caminho e identico.
+	RigHierarchy& ControlRigWindow::PreviewHierarchy()
+	{
+		// Reclona quando a DEFINICAO mudou. A pose que estava aqui se perde
+		// junto, e isso e o certo: criar um controle ou espelhar um lado muda a
+		// forma do rig, e manter uma pose antiga sobre uma hierarquia nova
+		// produziria um resultado que nao corresponde a nenhum dos dois.
+		if (!m_PreviewCloned || m_PreviewVersion != m_Asset->GetVersion())
+		{
+			m_PreviewHierarchy = m_Asset->GetHierarchy();
+			m_PreviewVersion = m_Asset->GetVersion();
+			m_PreviewCloned = true;
+		}
+
+		return m_PreviewHierarchy;
+	}
+
 	void ControlRigWindow::SolveRigIntoPreview()
 	{
 		if (!m_Asset || !m_Skeleton || !m_PreviewScene || m_PreviewEntity == entt::null)
@@ -266,7 +289,7 @@ namespace axe
 		if (!sk)
 			return;
 
-		RigHierarchy& h = m_Asset->GetHierarchy();
+		RigHierarchy& h = PreviewHierarchy();
 
 		// Todo frame parte do repouso. Sem isto o resultado do frame anterior
 		// vira entrada do proximo e o rig "escorre" — um Set Transform que
@@ -294,6 +317,10 @@ namespace axe
 		// ficava morto aqui dentro, sem nenhuma pista do motivo.
 		ctx.UseEditorGround = true;
 
+		// Funcoes do asset: no preview nao ha copia de trabalho, entao o
+		// resolvedor aponta direto pra biblioteca.
+		m_Asset->BindFunctionLibrary(ctx);
+
 		m_Asset->GetGraph().Execute(ctx, "ForwardsSolve");
 
 		// Hierarquia -> Pose -> matrizes de skinning.
@@ -319,7 +346,7 @@ namespace axe
 		if (!m_ShowControlGizmos || !m_PreviewRenderer || !m_PreviewRenderer->m_Camera)
 			return -1;
 
-		const auto& h = m_Asset->GetHierarchy();
+		const auto& h = PreviewHierarchy();
 
 		const glm::mat4 vp = m_PreviewRenderer->m_Camera->GetViewProjectionMatrix();
 
@@ -561,7 +588,7 @@ namespace axe
 		if (imgSize.x <= 4.0f || imgSize.y <= 4.0f)
 			return;
 
-		auto& h = m_Asset->GetHierarchy();
+		auto& h = PreviewHierarchy();
 
 		if (m_SelectedElement < 0 || m_SelectedElement >= (int)h.Size())
 			return;
@@ -586,7 +613,13 @@ namespace axe
 			glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, m_PreviewOffsetY, 0.0f))
 			* glm::scale(glm::mat4(1.0f), glm::vec3(m_PreviewScale));
 
-		glm::mat4 model = previewModel * h.GetInitialGlobal(m_SelectedElement);
+		// Em Setup o gizmo pega o REPOUSO; em Pose, onde o elemento esta DE
+		// FATO agora (ja com o solve e com a pose que houver). Sao coisas
+		// diferentes assim que o grafo mexe no elemento, e mostrar a errada
+		// faria o gizmo aparecer longe do desenho do controle.
+		glm::mat4 model = previewModel * (m_PoseMode
+			? h.GetGlobal(m_SelectedElement)
+			: h.GetInitialGlobal(m_SelectedElement));
 
 		m_ManipulatorDrawn = true;
 
@@ -599,13 +632,75 @@ namespace axe
 			return;
 
 		// Volta pro espaco do rig antes de gravar.
-		h.SetInitialGlobal(m_SelectedElement, glm::inverse(previewModel) * model);
+		const glm::mat4 wanted = glm::inverse(previewModel) * model;
+
+		if (m_PoseMode)
+		{
+			// POSE fica so no preview. E o que permite deixar o braco pra cima
+			// aqui sem que o personagem em cena levante o braco junto.
+			h.SetValueFromGlobal(m_SelectedElement, wanted);
+		}
+		else
+		{
+			// SETUP e DEFINICAO do rig: onde o controle repousa. Isso PRECISA
+			// ir pro asset, senao nada do que voce monta se salva.
+			//
+			// Escreve nos DOIS: no asset porque e o molde, e no preview porque
+			// senao voce so veria o resultado depois do reclone — o gizmo
+			// pareceria travado enquanto arrasta.
+			m_Asset->GetHierarchy().SetInitialGlobal(m_SelectedElement, wanted);
+			h.SetInitialGlobal(m_SelectedElement, wanted);
+
+			// A copia continua valida: o valor foi aplicado nos dois lados.
+			m_PreviewVersion = m_Asset->GetVersion();
+		}
 
 		// O campo de rotacao do painel precisa re-derivar o Euler: o valor
 		// mudou por FORA dele, e o cache ainda tem o que estava la antes.
 		m_EulerOwner[0] = -1;
 
-		MarkEdited("Move control");
+		MarkEdited(m_PoseMode ? "Pose control" : "Move control");
+	}
+
+	// ── Backward Solve ───────────────────────────────────────────────────────
+	//
+	// Roda UMA vez, a pedido. Le os ossos e encosta os controles neles, pelo
+	// Set Control Pose — que escreve na pose do controle, nao no Current, e por
+	// isso o resultado sobrevive ao ResetToInitial do proximo frame.
+	//
+	// NAO chama ResetToInitial antes: os ossos precisam estar com a pose que
+	// esta na tela, que e justamente o que queremos capturar. Zerar aqui
+	// encostaria os controles no repouso — o oposto do objetivo.
+	void ControlRigWindow::RunBackwardSolve()
+	{
+		if (!m_Asset)
+			return;
+
+		RigHierarchy& h = PreviewHierarchy();
+
+		RigExecContext ctx;
+		ctx.Hierarchy = &h;
+		ctx.Skel = (m_Skeleton && m_Skeleton->GetSkeleton())
+			? m_Skeleton->GetSkeleton().get()
+			: nullptr;
+
+		// Zero: nao ha "entre dois frames" numa operacao pontual. Os Damp
+		// congelam onde estao em vez de dar um salto proporcional a um dt que
+		// nao existe.
+		ctx.DeltaTime = 0.0f;
+
+		ctx.WorldTransform =
+			glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, m_PreviewOffsetY, 0.0f))
+			* glm::scale(glm::mat4(1.0f), glm::vec3(m_PreviewScale));
+
+		ctx.AllowWorldQueries = false;
+		ctx.UseEditorGround = true;
+
+		m_Asset->BindFunctionLibrary(ctx);
+
+		m_Asset->GetGraph().Execute(ctx, "BackwardsSolve");
+
+		MarkEdited("Backward solve");
 	}
 
 	void ControlRigWindow::HandlePreviewInput()
@@ -679,6 +774,79 @@ namespace axe
 			ImGui::TextDisabled("|");
 			ImGui::SameLine();
 
+			// ── Setup x Pose ─────────────────────────────────────────────────
+			//
+			// Sem isto voce arrasta um gizmo e nada na tela diz que aquilo
+			// gravou no repouso do ASSET, visivel no jogo na hora. O botao e
+			// COLORIDO em Pose de proposito: modo perigoso e modo neutro nao
+			// podem parecer a mesma coisa.
+			{
+				// ── O TOOLTIP ANTIGO MENTIA ──────────────────────────────
+				//
+				// Ele dizia que a pose era "por instancia". Nao e: o Value vai
+				// pro .axerig junto com o resto, entao uma pose SALVA vira o
+				// padrao do asset e aparece no jogo — igual ao repouso.
+				//
+				// O que o modo Pose de fato garante e a separacao dos
+				// SIGNIFICADOS: alinhar o controle (Initial) deixou de ser a
+				// mesma coisa que posa-lo (Value), o delta do rig para de sair
+				// errado, e da pra limpar a pose sem perder o alinhamento.
+				//
+				// O isolamento por personagem so existe quando o Sequencer
+				// escrever no clone de runtime. Ate la, o tooltip descreve o
+				// que a engine faz hoje.
+				const bool pose = m_PoseMode;
+
+				if (ui::ToggleButton(pose ? ICON_PERSON_RUNNING "  Pose"
+					: ICON_BONE "  Setup", true, nullptr,
+					pose ? ui::Accent::Warning : ui::Accent::Primary))
+				{
+					m_PoseMode = !m_PoseMode;
+				}
+
+				// Capturado AGORA, antes de qualquer outro widget: o
+				// IsItemHovered fala sempre do ULTIMO item submetido, e o aviso
+				// abaixo passa a ser esse ultimo item.
+				const bool hoveringButton = ImGui::IsItemHovered();
+
+				// Aviso PERMANENTE ao lado do botao, nao so no tooltip: em Setup
+				// cada arraste do gizmo altera o asset, e o asset e o mesmo
+				// objeto que a cena viva usa. Quem passa por aqui sem querer
+				// precisa ver o risco sem ter que procurar.
+				if (!pose)
+				{
+					ImGui::SameLine(0.0f, 6.0f);
+					ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.20f, 1.0f),
+						ICON_TRIANGLE_EXCLAMATION " asset");
+
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("O gizmo esta alterando a DEFINICAO do rig.\n"
+							"Isso vai pro arquivo e aparece na cena em execucao.");
+					}
+				}
+
+				if (hoveringButton)
+				{
+					ImGui::SetTooltip(pose
+						? "POSE — o gizmo escreve a POSE do controle.\n"
+						"Nao toca no repouso, e da pra limpar depois\n"
+						"(botao 'Clear pose', no Details).\n\n"
+						"ATENCAO: uma pose SALVA vai pro asset e aparece\n"
+						"no jogo, como o repouso. Isso muda quando o\n"
+						"Sequencer existir.\n\n"
+						"Clique pra voltar a Setup."
+						: "SETUP — o gizmo escreve o REPOUSO do controle.\n"
+						"Vai pro asset, vale pra todas as instancias e\n"
+						"aparece no jogo na hora. E o modo de MONTAR o rig.\n\n"
+						"Pra alinhar so o DESENHO do gizmo, use o\n"
+						"Shape offset no Details — nao o repouso.\n\n"
+						"Clique pra passar a Pose.");
+				}
+
+				ImGui::SameLine();
+			}
+
 			// T / R / S como no resto do editor — mesma tecla, mesmo lugar.
 			auto opBtn = [&](const char* label, int op, const char* tip)
 				{
@@ -706,11 +874,11 @@ namespace axe
 			ImGui::TextDisabled("|  Alt + drag = camera  |  wheel = zoom");
 
 			if (m_SelectedElement >= 0 &&
-				m_SelectedElement < (int)m_Asset->GetHierarchy().Size())
+				m_SelectedElement < (int)PreviewHierarchy().Size())
 			{
 				ImGui::SameLine();
 				ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "|  %s",
-					m_Asset->GetHierarchy()[m_SelectedElement].Name.c_str());
+					PreviewHierarchy()[m_SelectedElement].Name.c_str());
 			}
 
 			ImGui::EndChild();

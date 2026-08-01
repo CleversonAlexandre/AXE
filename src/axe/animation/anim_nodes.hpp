@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace axe
@@ -599,6 +600,12 @@ namespace axe
 		// nasce do molde no primeiro Evaluate.
 		RigHierarchy m_Hierarchy;
 		RigGraph     m_Graph;
+
+		// As funcoes tambem sao copia de trabalho. Um no Call resolve por nome
+		// AQUI DENTRO, e nao no asset: se dois personagens dividissem os grafos
+		// de funcao, o cache de solve de um invalidaria o do outro — o mesmo
+		// motivo pelo qual a hierarquia e o grafo principal ja sao clonados.
+		std::vector<std::pair<std::string, RigGraph>> m_Functions;
 		bool         m_Cloned = false;
 		uint32_t     m_ClonedVersion = 0;
 

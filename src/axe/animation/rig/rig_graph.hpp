@@ -68,6 +68,11 @@ namespace axe
 		RigNode* FindNode(int id);
 		const RigNode* FindNode(int id) const;
 
+		// Primeiro no cujo TypeName bate. Serve pra perguntar "este grafo tem
+		// evento Backward Solve?" sem tentar roda-lo e nao saber se o silencio
+		// foi por ausencia do evento ou por a corrente nao fazer nada.
+		const RigNode* FindNodeByType(const char* typeName) const;
+
 		const std::vector<std::unique_ptr<RigNode>>& GetNodes() const { return m_Nodes; }
 		std::vector<std::unique_ptr<RigNode>>& GetNodes() { return m_Nodes; }
 
@@ -85,6 +90,28 @@ namespace axe
 		const std::vector<RigDataLink>& GetDataLinks() const { return m_DataLinks; }
 
 		void Clear();
+
+		// ── Serializacao ─────────────────────────────────────────────────────
+		//
+		// Grava e le APENAS o grafo: as chaves "nodes", "exec_links" e
+		// "data_links". Nao sabe de hierarquia, nome do asset nem versao —
+		// isso e assunto do ControlRigAsset, que envolve este resultado.
+		//
+		// Existe separado porque um grafo pode aparecer em mais de um lugar: no
+		// asset, e dentro de um no que contem um subgrafo. Enquanto isto vivia
+		// dentro do carregador do asset, so o asset conseguia gravar grafo.
+		//
+		// O formato e EXATAMENTE o de antes desta extracao — um .axerig gravado
+		// pela versao anterior sai byte a byte igual.
+		nlohmann::json ToJson() const;
+
+		// LIMPA antes de carregar. Os Ids gravados sao preservados porque os
+		// fios referenciam por eles.
+		//
+		// Fio cujas duas pontas nao existem e descartado em silencio: e o que
+		// acontece quando um tipo de no sumiu da engine, e o alternativo seria
+		// um grafo com fio pendurado no nada.
+		void FromJson(const nlohmann::json& j);
 
 		// ── Execucao ─────────────────────────────────────────────────────────
 
@@ -122,6 +149,9 @@ namespace axe
 		std::vector<RigDataLink>              m_DataLinks;
 
 		int m_NextId = 1;
+
+		// Incrementado a cada Execute do nivel raiz. Ver RigExecContext::SolveId.
+		std::uint64_t m_SolveCounter = 0;
 
 		// Orcamento de passos COMPARTILHADO por toda a execucao, inclusive as
 		// correntes que o Sequence dispara. Fosse por corrente, um laco

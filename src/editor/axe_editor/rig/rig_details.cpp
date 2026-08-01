@@ -1,6 +1,7 @@
 #include "control_rig_window.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include "axe/log/log.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -296,11 +297,42 @@ namespace axe
 
 		if (DrawTransformEditor(1, index, e.ShapeOffset))
 			MarkEdited("Edit shape offset");
+
+		// ── Pose do animador ─────────────────────────────────────────────────
+		//
+		// Um controle posado e um em repouso sao IDENTICOS na tela — mesma
+		// forma, mesma cor. Sem este aviso, "por que este pe nao acompanha a
+		// animacao?" nao tem resposta visivel em lugar nenhum.
+		if (e.Type != RigElementType::Bone)
+		{
+			auto& h = m_Asset->GetHierarchy();
+
+			if (h.HasValue(index))
+			{
+				ImGui::Separator();
+
+				ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.20f, 1.0f), "Posed");
+
+				ImGui::TextDisabled("Este controle foi movido em modo Pose.");
+				ImGui::TextDisabled("A pose soma por cima do repouso.");
+
+				if (ImGui::Button("Clear pose"))
+				{
+					h.ClearValue(index);
+					MarkEdited("Clear pose");
+				}
+
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Volta ao neutro. O repouso nao e tocado.");
+			}
+		}
 	}
 
 	void ControlRigWindow::DrawNodeDetails(int nodeId)
 	{
-		RigGraph& graph = m_Asset->GetGraph();
+		// O no selecionado esta no grafo visivel — dentro de uma funcao, ele
+		// nao existe no principal e o painel ficaria vazio.
+		RigGraph& graph = CurrentGraph();
 		RigNode* n = graph.FindNode(nodeId);
 
 		if (!n)
@@ -382,11 +414,17 @@ namespace axe
 		// ── Vector Op ────────────────────────────────────────────────────────
 		if (auto* v = dynamic_cast<RigNode_VectorOp*>(n))
 		{
-			static const char* kOps[] = { "Add", "Subtract", "Scale", "Lerp" };
+			// A ORDEM tem que espelhar o enum Op, que e serializado como
+			// inteiro. IM_ARRAYSIZE e nao um numero digitado: a contagem a mao
+			// ja escondeu uma entrada de menu neste projeto.
+			static const char* kOps[] =
+			{
+				"Add", "Subtract", "Scale", "Lerp", "Cross", "Normalize"
+			};
 
 			int op = (int)v->Operation;
 
-			if (ImGui::Combo("Operation", &op, kOps, 4))
+			if (ImGui::Combo("Operation", &op, kOps, IM_ARRAYSIZE(kOps)))
 			{
 				v->Operation = (RigNode_VectorOp::Op)op;
 
@@ -398,6 +436,11 @@ namespace axe
 			}
 
 			ImGui::TextDisabled("Scale usa Factor; Lerp usa Factor como alpha.");
+			ImGui::TextDisabled("Cross usa A e B; Normalize usa so A.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Direcao do personagem sem depender de eixo de osso:\n"
+				"  lado   = Normalize(ombroL.Location - ombroR.Location)\n"
+				"  frente = Cross(lado, (0,1,0))");
 			return;
 		}
 
@@ -437,17 +480,6 @@ namespace axe
 			return;
 		}
 
-		if (dynamic_cast<RigNode_ControlFollowBone*>(n))
-		{
-			ImGui::TextWrapped("Faz o controle cavalgar o osso animado, preservando a "
-				"correcao que voce autorou nele. E o que permite o Two Bone IK ler o "
-				"CONTROLE e ainda assim obedecer a animacao em jogo.");
-			ImGui::Spacing();
-			ImGui::TextDisabled("Ponha ANTES do Two Bone IK que le este controle.");
-			ImGui::TextDisabled("No editor de rig nao ha animacao, entao o controle fica\n"
-				"onde voce o largou — este no nao muda nada aqui.");
-			return;
-		}
 
 		if (dynamic_cast<RigNode_AlignToVector*>(n))
 		{
@@ -457,6 +489,205 @@ namespace axe
 			ImGui::Spacing();
 			ImGui::TextDisabled("Nao supoe eixo nenhum do osso — por isso funciona "
 				"em qualquer rig.");
+			return;
+		}
+
+		// ── Entry / Return: a assinatura da funcao ───────────────────────────
+		//
+		// Editavel AQUI, e nao numa janela separada: quando voce esta olhando o
+		// Entry, "quais sao as entradas desta funcao" e exatamente a pergunta
+		// que voce tem. Mexer aqui reconstroi os dois nos e todas as chamadas.
+		if (dynamic_cast<RigNode_Entry*>(n) || dynamic_cast<RigNode_Return*>(n))
+		{
+			const bool isEntry = (dynamic_cast<RigNode_Entry*>(n) != nullptr);
+
+			if (m_EditingFunction < 0
+				|| m_EditingFunction >= (int)m_Asset->GetFunctions().size())
+			{
+				ImGui::TextDisabled("Este no so faz sentido dentro de uma funcao.");
+				return;
+			}
+
+			RigFunction& fn =
+				m_Asset->GetFunctions()[(std::size_t)m_EditingFunction];
+
+			std::vector<RigFunctionParam>& params = isEntry ? fn.Inputs : fn.Outputs;
+
+			ImGui::TextWrapped(isEntry
+				? "As ENTRADAS da funcao. Cada uma vira um pino de saida aqui e um "
+				"pino de entrada em cada chamada."
+				: "As SAIDAS da funcao. Cada uma vira um pino de entrada aqui e um "
+				"pino de saida em cada chamada.");
+
+			ImGui::Spacing();
+			ImGui::Separator();
+
+			static const char* kTypes[] =
+			{
+				"Exec", "Bool", "Float", "Vector", "Transform", "Item",
+				"Wildcard", "ItemArray"
+			};
+
+			int remove = -1;
+			bool changed = false;
+
+			for (int i = 0; i < (int)params.size(); ++i)
+			{
+				ImGui::PushID(700 + i);
+
+				char buf[64];
+				std::snprintf(buf, sizeof(buf), "%s", params[(std::size_t)i].Name.c_str());
+
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+
+				if (ImGui::InputText("##nm", buf, sizeof(buf)))
+				{
+					params[(std::size_t)i].Name = buf;
+					changed = true;
+				}
+
+				ImGui::SameLine();
+
+				int t = (int)params[(std::size_t)i].Type;
+
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 28.0f);
+
+				if (ImGui::Combo("##tp", &t, kTypes, IM_ARRAYSIZE(kTypes)))
+				{
+					params[(std::size_t)i].Type = (RigPinType)t;
+					changed = true;
+				}
+
+				ImGui::SameLine();
+
+				if (ImGui::SmallButton("x"))
+					remove = i;
+
+				ImGui::PopID();
+			}
+
+			if (remove >= 0)
+			{
+				params.erase(params.begin() + remove);
+				changed = true;
+			}
+
+			ImGui::Spacing();
+
+			if (ImGui::SmallButton(isEntry ? "+ Input" : "+ Output"))
+			{
+				RigFunctionParam p;
+				p.Name = isEntry
+					? "In" + std::to_string(params.size())
+					: "Out" + std::to_string(params.size());
+
+				params.push_back(std::move(p));
+				changed = true;
+			}
+
+			if (changed)
+			{
+				// Reconstroi Entry, Return e TODA chamada. Sem isto, mexer na
+				// assinatura deixaria as chamadas com os pinos velhos — e os
+				// fios pousariam nos pinos errados.
+				RebuildFunctionCallSites(m_EditingFunction);
+				MarkEdited("Edit function signature");
+			}
+
+			return;
+		}
+
+		// ── Call Function ────────────────────────────────────────────────────
+		if (auto* call = dynamic_cast<RigNode_CallFunction*>(n))
+		{
+			auto& funcs = m_Asset->GetFunctions();
+
+			ImGui::TextDisabled("Funcao chamada:");
+
+			if (ImGui::BeginCombo("##fn", call->FunctionName.empty()
+				? "(nenhuma)" : call->FunctionName.c_str()))
+			{
+				for (int i = 0; i < (int)funcs.size(); ++i)
+				{
+					const bool sel = (funcs[(std::size_t)i].Name == call->FunctionName);
+
+					if (ImGui::Selectable(funcs[(std::size_t)i].Name.c_str(), sel))
+					{
+						call->FunctionName = funcs[(std::size_t)i].Name;
+						call->Title = call->FunctionName;
+
+						// Os pinos vem da definicao escolhida.
+						RebuildFunctionCallSites(i);
+						MarkEdited("Set called function");
+					}
+				}
+
+				ImGui::EndCombo();
+			}
+
+			ImGui::Spacing();
+
+			if (!call->FunctionName.empty() && !m_Asset->FindFunction(call->FunctionName))
+			{
+				ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.20f, 1.0f), "Funcao nao existe");
+				ImGui::TextDisabled("Ela foi apagada ou renomeada. Este no\nnao faz nada.");
+			}
+
+			return;
+		}
+
+		if (dynamic_cast<RigNode_Trace*>(n))
+		{
+			ImGui::TextWrapped("Raycast em qualquer direcao. Pra sondar o ambiente: "
+				"parede a frente, teto acima, beirada ao lado.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Distance e Start Offset em METROS.");
+			ImGui::TextDisabled("A saida Distance vem em espaco de componente.");
+			ImGui::Spacing();
+			ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.20f, 1.0f), "Start Offset");
+			ImGui::TextDisabled("O raycast NAO ignora o proprio personagem. Um traco\n"
+				"do peito pra frente comeca dentro da capsula e acertaria\n"
+				"ele mesmo. Este offset empurra a origem pra fora — ponha\n"
+				"um pouco mais que o raio da capsula.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("No preview nao ha mundo: devolve sempre 'nao\n"
+				"acertou'. Teste em Play.");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_BackwardsSolve*>(n))
+		{
+			ImGui::TextWrapped("Caminho INVERSO: le os ossos animados e encosta os "
+				"controles neles.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Nao roda por frame. Roda quando voce aperta Backward solve' na barra — e, no futuro, quando o Sequencer carregar uma animacao.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Monte com: Get Transform (osso, Global) -> Set Control Pose (controle).");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_SetControlPose*>(n))
+		{
+			ImGui::TextWrapped("Poe um controle numa posicao e faz GRUDAR.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("O Set Transform comum escreve no Current, que e apagado no comeco de cada solve. Este escreve na pose do controle, que sobrevive.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Transform em espaco GLOBAL do rig.");
+			ImGui::TextDisabled("So Control e Null. Pra osso, use Set Transform.");
+			return;
+		}
+
+		if (dynamic_cast<RigNode_PelvisDip*>(n))
+		{
+			ImGui::TextWrapped("Abaixa o quadril ate o pe MAIS BAIXO alcancar o "
+				"chao. Ligue os pinos Height dos dois Ground Trace dos pes.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Ponha ANTES dos Two Bone IK das pernas.");
+			ImGui::TextDisabled("SO DESCE: levantar o quadril faria o personagem\n"
+				"flutuar, e o pe alto ja e resolvido dobrando o joelho.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Max Dip esta em METROS; Height esta em espaco\n"
+				"de componente. A conversao e feita dentro do no.");
 			return;
 		}
 

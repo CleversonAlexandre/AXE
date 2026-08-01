@@ -41,6 +41,187 @@ namespace axe
 		}
 	};
 
+	// ═════════════════════════════════════════════════════════════════════════
+	//  FRONTEIRA DE FUNCAO — Entry e Return
+	//
+	//  Todo grafo de funcao tem os dois, e so eles: o Entry entrega os valores
+	//  que ENTRARAM na chamada, o Return recolhe os que SAEM. Fora, cada uso e
+	//  um no Call Function (ver mais abaixo).
+	//
+	//  ── COMO O DADO ATRAVESSA A FRONTEIRA ────────────────────────────────
+	//
+	//  O Entry nao tem dado proprio. Quando alguem la dentro le uma saida dele,
+	//  ele pergunta ao grafo de FORA qual o valor daquele pino do no Call —
+	//  pelo RigExecContext::Caller. Ou seja: o fio que voce ligou por fora e
+	//  seguido normalmente, so que a leitura parte de dentro.
+	//
+	//  Na volta, o Call le o pino correspondente do Return, ja no grafo de
+	//  dentro. Nenhum valor e COPIADO na fronteira; os dois lados usam o mesmo
+	//  mecanismo de pull que o grafo plano sempre usou.
+	//
+	//  ── POR QUE O ENTRY E UM EVENTO ──────────────────────────────────────
+	//
+	//  Porque o motor ja sabe rodar uma corrente a partir de um evento nomeado:
+	//  Execute(ctx, "Entry") reaproveita exatamente o mesmo caminho do Forwards
+	//  Solve, com reset de cache e guarda de ciclo inclusos. Um mecanismo novo
+	//  de entrada seria um segundo caminho pra manter em sincronia.
+	// ═════════════════════════════════════════════════════════════════════════
+
+	// ── Entry ────────────────────────────────────────────────────────────────
+	//
+	// As ENTRADAS do subgrafo, vistas de dentro. As saidas dele espelham as
+	// entradas do Collapsed que o contem.
+	class AXE_API RigNode_Entry : public RigNode
+	{
+	public:
+		RigNode_Entry() { Title = "Entry"; ExecOut.push_back(""); }
+
+		const char* TypeName() const override { return "Entry"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_Entry>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+	};
+
+	// ── Return ───────────────────────────────────────────────────────────────
+	//
+	// As SAIDAS do subgrafo. Nao executa nada: e um ponto de coleta, e o
+	// Collapsed puxa dele quando alguem de fora le uma saida.
+	//
+	// Tem entrada de execucao e nenhuma saida — e o fim da corrente de dentro.
+	class AXE_API RigNode_Return : public RigNode
+	{
+	public:
+		RigNode_Return() { Title = "Return"; HasExecIn = true; }
+
+		const char* TypeName() const override { return "Return"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_Return>(*this);
+		}
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+	};
+
+	// ── Call Function ────────────────────────────────────────────────────────
+	//
+	// CHAMA uma funcao do rig. Os pinos espelham os Inputs e Outputs declarados
+	// na definicao — quando ela muda, todo Call e reconstruido.
+	//
+	// A definicao e alcancada POR NOME, via RigExecContext::ResolveFunction. Um
+	// ponteiro pra funcao ficaria pendurado no nada assim que o vector de
+	// funcoes realocasse (adicionar uma funcao faz isso), e o sintoma seria
+	// corrupcao aleatoria em vez de um no-op honesto.
+	class AXE_API RigNode_CallFunction : public RigNode
+	{
+	public:
+		RigNode_CallFunction();
+
+		const char* TypeName() const override { return "CallFunction"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			auto c = std::make_unique<RigNode_CallFunction>(*this);
+			c->m_LastSolve = 0;
+			return c;
+		}
+
+		void Execute(RigExecContext& ctx) override;
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+
+		// Nome da funcao chamada. O editor troca isto pelo combo do Details, e
+		// o RenameFunction do asset o atualiza em massa.
+		std::string FunctionName;
+
+	private:
+		RigGraph* Resolve(RigExecContext& ctx);
+		bool EnsureInner(RigExecContext& ctx, RigGraph& fn);
+
+		std::uint64_t m_LastSolve = 0;
+
+		bool m_WarnedMissing = false;
+		bool m_WarnedDepth = false;
+	};
+
+	// ── Evento: Backward Solve ───────────────────────────────────────────────
+	//
+	// O caminho INVERSO: le os ossos ANIMADOS e poe os controles em cima deles.
+	//
+	// ── POR QUE UM EVENTO SEPARADO, E NAO UM NO ──────────────────────────
+	//
+	// Porque a diferenca nao e o que se faz, e QUANDO. O Forward Solve roda
+	// todo frame; este roda SOB DEMANDA — quando voce carrega uma animacao pra
+	// editar, ou aperta o botao no editor.
+	//
+	// Antes disto a engine tinha so o Forward, e a tentativa de resolver
+	// "controle precisa saber onde a animacao pos o osso" virou um no que fazia
+	// este trabalho DENTRO do Forward, todo frame. Funcionava e confundia: o
+	// controle deixava de ser entrada e virava entrada-e-saida ao mesmo tempo,
+	// e ninguem mais sabia quem mandava em quem.
+	//
+	// Com os dois eventos, o papel fica limpo:
+	//
+	//   Forward  — controle -> osso. O controle e ENTRADA, e fica parado
+	//              esperando o gizmo. Isso e o certo, nao um defeito.
+	//   Backward — osso -> controle. Roda uma vez, encosta os controles na
+	//              pose, e sai da frente.
+	//
+	// Monte a corrente com os nos que ja existem: Get Transform no osso ->
+	// Set Control Pose no controle.
+	class AXE_API RigNode_BackwardsSolve : public RigNode
+	{
+	public:
+		RigNode_BackwardsSolve() { Title = "Backward Solve"; ExecOut.push_back(""); }
+
+		const char* TypeName() const override { return "BackwardsSolve"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_BackwardsSolve>(*this);
+		}
+	};
+
+	// ── Set Control Pose ─────────────────────────────────────────────────────
+	//
+	// Poe um controle numa posicao e faz aquilo GRUDAR.
+	//
+	// O Set Transform comum escreve no Current, e o Current e apagado pelo
+	// ResetToInitial no comeco de cada solve — o que e correto pro Forward
+	// (todo frame parte do repouso) e inutil pro Backward: voce encostaria o
+	// controle na pose e ele voltaria sozinho no frame seguinte.
+	//
+	// Este escreve no Value, que o ResetToInitial COMPOE em vez de apagar. E o
+	// mesmo campo que um Sequencer vai keyar — ou seja, o Backward Solve e o
+	// Sequencer escrevem no mesmo lugar, por construcao.
+	class AXE_API RigNode_SetControlPose : public RigNode
+	{
+	public:
+		RigNode_SetControlPose();
+
+		const char* TypeName() const override { return "SetControlPose"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_SetControlPose>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+	private:
+		bool m_WarnedBone = false;
+	};
+
 	// ── Sequence: roda varias correntes, em ordem ────────────────────────────
 	class AXE_API RigNode_Sequence : public RigNode
 	{
@@ -362,6 +543,25 @@ namespace axe
 		// Ja avisei que o Target esta zerado? Uma vez por no, senao viraria
 		// spam de 60 linhas por segundo no console.
 		bool m_WarnedZeroTarget = false;
+
+		// ── DIAGNOSTICO DE ALVO FORA DE ALCANCE ──────────────────────────────
+		//
+		// O clamp de alcance e correto (passar do comprimento total faria o
+		// acos estourar), mas o efeito colateral e MUDO: o membro fica RETO e o
+		// efetor nao chega no alvo, sem nenhuma pista.
+		//
+		// O contador exige PERSISTENCIA antes de falar. Fora de alcance por um
+		// instante e rotina — o pe em transicao, um Damp ainda esquentando — e
+		// avisar ali deixaria no console uma mensagem permanente sobre um
+		// estado que ja passou. Foi exatamente esse o defeito do aviso de
+		// Target zerado, e nao vamos repeti-lo aqui.
+		bool m_WarnedOutOfReach = false;
+		int  m_OutOfReach = 0;
+
+		// Cadeia degenerada (osso repetido ou elo de comprimento zero). Uma vez
+		// por no: e erro de montagem, nao estado transitorio, entao nao precisa
+		// da contagem de persistencia que o aviso de alcance usa.
+		bool m_WarnedChain = false;
 	};
 
 	// ── Hide Controls ────────────────────────────────────────────────────────
@@ -459,6 +659,117 @@ namespace axe
 		}
 
 		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+	};
+
+	// ── Pelvis Dip ───────────────────────────────────────────────────────────
+	//
+	// ABAIXA a raiz do corpo pra que o pe MAIS BAIXO consiga alcancar o chao.
+	//
+	// ── O PROBLEMA QUE ELE RESOLVE ───────────────────────────────────────
+	//
+	// Numa rampa, os dois pes pedem coisas OPOSTAS: o de cima precisa que a
+	// perna ENCURTE (o joelho dobra, e o Two Bone IK faz isso bem) e o de baixo
+	// precisa que a perna ESTIQUE. Uma perna de Mixamo em idle ja esta a ~98%
+	// da extensao, entao nao ha o que esticar: o clamp de alcance do Two Bone
+	// IK satura, o membro fica RETO e o pe NAO chega no chao — em silencio,
+	// porque o no rodou e resolveu, so nao chegou onde foi mandado.
+	//
+	// O sintoma classico e "uma perna faz IK e a outra nao", com os DOIS grafos
+	// identicos. Nao e espelhamento nem erro de fio: e a perna de baixo.
+	//
+	// ── A SOLUCAO ────────────────────────────────────────────────────────
+	//
+	// A mesma do AnimNode_FootIK: desce o quadril pelo deficit do pe mais
+	// baixo. O de baixo passa a alcancar, o de cima dobra mais — que e
+	// exatamente a postura de quem esta de pe numa rampa.
+	//
+	// SO DESCE, nunca sobe. Levantar o quadril pra "alcancar" um pe alto faz o
+	// personagem flutuar, e o pe alto ja e resolvido dobrando o joelho.
+	//
+	// ── ONDE POR NO GRAFO ────────────────────────────────────────────────
+	//
+	// ANTES dos Two Bone IK das duas pernas. Num Sequence, no Then 0 — que
+	// desde a correcao do fluxo do Sequence roda PRIMEIRO de verdade.
+	//
+	// Ele le os dois Height dentro do proprio Execute, e isso resolve a ordem
+	// de leitura por construcao: o m_Cache do RigGraph memoiza os traces com os
+	// valores de ANTES do quadril descer, que e a referencia correta — o mesmo
+	// motivo de o AnimNode_FootIK guardar footOrig antes do dip.
+	class AXE_API RigNode_PelvisDip : public RigNode
+	{
+	public:
+		RigNode_PelvisDip();
+
+		const char* TypeName() const override { return "PelvisDip"; }
+
+		// A copia nasce FRIA, como a do Damp Float: m_Init falso faz o primeiro
+		// solve SNAPAR no valor em vez de subir de zero. Sem isso o personagem
+		// afundaria visivelmente no instante do Play.
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			auto c = std::make_unique<RigNode_PelvisDip>(*this);
+			c->m_Init = false;
+			return c;
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+		// Serialize / Deserialize NAO sao sobrescritos de proposito: todo o
+		// estado configuravel vive em PINOS, e a base ja cuida deles. m_Dip e
+		// m_Init sao estado de runtime — gravar a suavizacao de um frame no
+		// .axerig seria errado.
+
+	private:
+		float m_Dip = 0.0f;
+		bool  m_Init = false;
+
+		// Item nao resolvido e no-op, nunca crash — mas MUDO nao. Este no
+		// existe justamente pra tornar visivel uma falha silenciosa.
+		bool  m_WarnedNoPelvis = false;
+	};
+
+	// ── Trace (PURO) ─────────────────────────────────────────────────────────
+	//
+	// Raycast em QUALQUER direcao. Irmao do Ground Trace, nao substituto.
+	//
+	// O Ground Trace e um no de CHAO: ele trava a direcao em -Y, comeca o raio
+	// acima do ponto e mede altura relativa ao plano de apoio do personagem.
+	// Esse trabalho extra e util pra pe e inutil pra parede — e generalizar a
+	// direcao dele faria o pino Height passar a mentir.
+	//
+	// Serve pra sondar o ambiente: parede a frente pra o personagem estender a
+	// mao, teto acima, beirada ao lado.
+	//
+	// ── O RAIO PODE ACERTAR O PROPRIO PERSONAGEM ─────────────────────────
+	//
+	// PhysicsSystem::Raycast nao tem filtro nem lista de ignorados: devolve o
+	// corpo mais proximo, inclusive o seu. Um traco do peito pra frente comeca
+	// DENTRO da capsula do personagem e acertaria ele mesmo todo frame.
+	//
+	// Por isso existe o pino Start Offset: ele empurra a origem ao longo da
+	// direcao antes de disparar. Ponha um pouco mais que o raio da capsula.
+	// A solucao definitiva e um parametro de ignore no proprio Raycast, mas
+	// isso e mudanca no modulo de fisica e nao vale sem necessidade provada.
+	//
+	// No PREVIEW do editor nao ha mundo pra consultar e nao existe "parede
+	// virtual" como existe o chao virtual — entao aqui dentro ele devolve
+	// sempre "nao acertou". Isso e esperado; teste em Play.
+	class AXE_API RigNode_Trace : public RigNode
+	{
+	public:
+		RigNode_Trace();
+
+		const char* TypeName() const override { return "Trace"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_Trace>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+	private:
+		bool m_WarnedNoDirection = false;
 	};
 
 	// ── Make / Break Transform (PUROS) ───────────────────────────────────────
@@ -688,7 +999,10 @@ namespace axe
 	class AXE_API RigNode_VectorOp : public RigNode
 	{
 	public:
-		enum class Op { Add, Subtract, Scale, Lerp };
+		// APENDAR no fim, sempre. A operacao vai pro .axerig como INTEIRO
+		// (j["op"] = (int)Operation), entao inserir no meio reinterpretaria
+		// todo arquivo ja salvo: um Lerp viraria Scale em silencio.
+		enum class Op { Add, Subtract, Scale, Lerp, Cross, Normalize };
 
 		RigNode_VectorOp();
 
@@ -851,57 +1165,5 @@ namespace axe
 		bool m_WarnedDegenerate = false;
 	};
 
-	// ── Control Follow Bone ──────────────────────────────────────────────────
-	//
-	// Faz um CONTROLE cavalgar o osso animado, PRESERVANDO a correcao que voce
-	// autorou nele. E a peca que faltava pro mesmo rig servir em jogo e no
-	// editor sem trocar um fio.
-	//
-	// ── O PROBLEMA QUE ELE RESOLVE ───────────────────────────────────────
-	//
-	// Um controle tem UM transform. A manipulacao do gizmo grava no Initial
-	// (SetInitialGlobal), e o solve faz Current = Initial. Ou seja: "repouso" e
-	// "pose autorada" sao o MESMO campo, e nao existe onde guardar "onde a
-	// animacao pos este osso neste frame". Consequencia: se o Two Bone IK le o
-	// OSSO, funciona em jogo mas o controle fica morto; se le o CONTROLE, o
-	// controle manda mas a animacao e ignorada (o controle nao sai do repouso).
-	//
-	// ── COMO ESCAPA DISSO SEM MEXER NA HIERARQUIA ────────────────────────
-	//
-	// A correcao autorada e a relacao de REPOUSO entre controle e osso:
-	//
-	//     delta  = inverse(bone.InitialGlobal) * control.InitialGlobal
-	//     target = bone.CurrentGlobal * delta
-	//
-	// Nao ha campo novo, nao ha composicao nova — so aritmetica com o que a
-	// hierarquia ja expoe. E as duas pontas caem certas de graca:
-	//
-	//   EM JOGO: controle criado sobre o osso => delta = identidade => o
-	//   controle pousa exatamente no osso ANIMADO. O Two Bone IK le o controle
-	//   e obedece a animacao.
-	//
-	//   NO EDITOR DE RIG: nao ha animacao, entao CurrentGlobal == InitialGlobal
-	//   do osso => target == control.InitialGlobal => o controle fica
-	//   EXATAMENTE onde voce o largou. Comportamento identico ao de hoje —
-	//   por isso este no nao pode regredir o editor.
-	//
-	// Rode-o ANTES do Two Bone IK que le o controle.
-	class AXE_API RigNode_ControlFollowBone : public RigNode
-	{
-	public:
-		RigNode_ControlFollowBone();
-
-		const char* TypeName() const override { return "ControlFollowBone"; }
-
-		std::unique_ptr<RigNode> Clone() const override
-		{
-			return std::make_unique<RigNode_ControlFollowBone>(*this);
-		}
-
-		void Execute(RigExecContext& ctx) override;
-
-	private:
-		bool m_Warned = false;
-	};
 
 } // namespace axe

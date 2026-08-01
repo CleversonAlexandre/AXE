@@ -85,6 +85,39 @@ namespace axe
 		BoneTransform   Initial;
 		BoneTransform   Current;
 
+		// ── A POSE QUE O ANIMADOR DEU ────────────────────────────────────────
+		//
+		// Transform LOCAL AO PROPRIO REPOUSO deste elemento — nao ao pai.
+		// Identidade = neutro, e o solve resolve Current = Initial * Value.
+		//
+		// Existe porque Initial acumulava DOIS papeis que nao cabem no mesmo
+		// campo: "onde este controle repousa" (autorado ao montar o rig, vai
+		// pro asset, vale pra todas as instancias) e "onde o animador pos ele
+		// agora" (a pose, keyavel). Enquanto eram um so:
+		//
+		//   - alinhar o gizmo no pe mudava o repouso, e o delta que o Control
+		//     Follow Bone calcula saia errado — o osso deformava;
+		//   - nao havia como dizer "este pe esta PLANTADO, ignore o osso",
+		//     porque plantar e justamente uma pose, nao um repouso;
+		//   - e um futuro Sequencer gravaria no ASSET, aparecendo no jogo ao
+		//     vivo pra todos os personagens.
+		//
+		// Com Value em identidade o comportamento e IDENTICO ao anterior, e
+		// nenhum .axerig precisa migrar.
+		//
+		// ── AINDA NAO E POR INSTANCIA ────────────────────────────────────────
+		//
+		// Value vai pro .axerig junto com Initial, entao uma pose SALVA e a pose
+		// padrao do ASSET e aparece no jogo — exatamente como o repouso. O que
+		// ja esta resolvido e a separacao dos SIGNIFICADOS; o isolamento por
+		// personagem chega quando o Sequencer escrever no clone de runtime (o
+		// AnimNode_ControlRig ja clona hierarquia, grafo e funcoes por
+		// instancia — falta so alguem escrever la).
+		//
+		// Nao confundir com BoolValue/FloatValue: aqueles sao o valor de um
+		// controle de CANAL (um interruptor, um slider). Este e o transform.
+		BoneTransform   Value;
+
 		// ── So para Control ──────────────────────────────────────────────────
 		RigControlValue ValueType = RigControlValue::Transform;
 
@@ -119,6 +152,32 @@ namespace axe
 		// pivo: o controle do pe pivota no tornozelo, mas voce quer clicar na
 		// sola.
 		BoneTransform   ShapeOffset;
+	};
+
+	// ── Espelhamento ─────────────────────────────────────────────────────────
+	//
+	// Montar metade do rig e refletir a outra e o fluxo padrao em Blender e
+	// Unreal, e por um motivo pratico: o lado direito de um personagem nao e
+	// trabalho novo, e trabalho REPETIDO — e trabalho repetido feito a mao
+	// diverge. Um controle com raio 0.14 de um lado e 0.13 do outro nao e um
+	// bug que alguem encontra; e um rig que parece torto sem explicacao.
+	struct AXE_API RigMirrorSettings
+	{
+		// Eixo NORMAL ao plano de simetria: 0=X, 1=Y, 2=Z.
+		//
+		// X e o certo pra personagem em pe com Y pra cima — o plano YZ corta o
+		// corpo ao meio. Os outros existem pra rig de objeto (uma porta dupla
+		// espelha em Z).
+		int Axis = 0;
+
+		// Par de tokens do nome. Vazio = detecta pela tabela de convencoes
+		// conhecidas (Left/Right, _L/_R, .l/.r, ...).
+		std::string Search;
+		std::string Replace;
+
+		// Leva os descendentes junto. Ligado porque um controle raramente
+		// anda sozinho: espelhar so o pai deixaria os filhos do outro lado.
+		bool IncludeChildren = true;
 	};
 
 	class AXE_API RigHierarchy
@@ -162,9 +221,87 @@ namespace axe
 		// Todos os descendentes de `index`, em ordem crescente.
 		std::vector<int> CollectDescendants(int index) const;
 
+		// ── Espelhamento ─────────────────────────────────────────────────────
+
+		// Troca o lado num nome: "PV_LeftLeg" -> "PV_RightLeg", "ctrl_L" ->
+		// "ctrl_R". Funciona nos DOIS sentidos — quem monta pela direita nao
+		// deveria precisar saber que a ferramenta tem um lado preferido.
+		//
+		// Devolve VAZIO quando o nome nao tem lado nenhum. E informacao util,
+		// nao falha: e o que deixa a interface avisar "este elemento nao tem
+		// contraparte" antes de voce clicar, em vez de criar um duplicado
+		// silencioso chamado "Pelvis" numa hierarquia que ja tem "Pelvis".
+		//
+		// Com `search`/`replace` preenchidos, o par explicito manda.
+		static std::string MirrorName(const std::string& name,
+			const std::string& search = std::string(),
+			const std::string& replace = std::string());
+
+		// Cria — ou ATUALIZA, se ja existir — a contraparte espelhada.
+		//
+		// Atualizar em vez de recusar e o que torna a operacao REPETIVEL:
+		// voce ajusta o lado esquerdo, espelha de novo, e o direito acompanha.
+		// Fosse so criar, o segundo espelhamento falharia com "nome ja existe"
+		// e voce teria que apagar o lado inteiro pra refazer.
+		//
+		// Reflete o transform INICIAL em espaco GLOBAL, nao o local. Refletir
+		// o local so daria certo se toda a cadeia de pais ja estivesse
+		// espelhada — e num controle pendurado na raiz, que e o caso do pole
+		// vector, daria simplesmente errado.
+		//
+		// Bone nao se espelha: ele reflete o esqueleto, e o lado direito ja
+		// existe la. Devolve o indice do espelho do PROPRIO `index`, ou -1.
+		int Mirror(int index, const RigMirrorSettings& settings);
+
 		// Copia os ossos do esqueleto para ca, preservando a hierarquia. E o
 		// primeiro passo de "criar Control Rig a partir do esqueleto".
 		void ImportFromSkeleton(const Skeleton& skeleton);
+
+		// ── Voltar ao repouso conhecido ──────────────────────────────────────
+
+		// Devolve os BONES ao repouso do .axeskel. Controls e Nulls NAO sao
+		// tocados — o alinhamento deles e trabalho autoral, e apagar isso junto
+		// transformaria um botao de seguranca na pior perda possivel.
+		//
+		// Existe porque a hierarquia do rig e uma COPIA do esqueleto: um Set
+		// Transform mal ligado, ou um gizmo arrastado sem querer, faz ela
+		// divergir do .axeskel — e como o asset e compartilhado com o jogo (o
+		// mesmo arquivo devolve o mesmo objeto), essa divergencia aparece no
+		// viewport na hora. Devolve quantos ossos foram repostos.
+		int ResetBonesToBindPose(const Skeleton& skeleton);
+
+		// ── Pose do animador (Value) ─────────────────────────────────────────
+		//
+		// A API e em mat4 de proposito: BoneTransform nao e exportado, entao o
+		// editor nao consegue compor nem decompor por conta propria. Toda a
+		// matematica acontece aqui dentro da dll.
+
+		// Grava a pose a partir de ONDE O ELEMENTO DEVE FICAR, em espaco global
+		// do rig. Resolve o Value necessario pra chegar la a partir de onde ele
+		// esta agora:
+		//
+		//     Value' = Value * inverse(GetGlobal(index)) * wanted
+		//
+		// Passar pelo global atual — e nao pelo Initial — e o que faz isto
+		// funcionar mesmo quando o elemento ja foi movido por outro no no mesmo
+		// solve: a pose se SOMA ao que o grafo mandou, em vez de brigar com
+		// ele. E o que o Backward Solve precisa pra encostar um controle num
+		// osso animado sem perder o que ja estava aplicado.
+		void SetValueFromGlobal(int index, const glm::mat4& wanted);
+
+		// Volta ao neutro. E o "tirar a mao" do animador.
+		void ClearValue(int index);
+
+		// Ha pose gravada? Usado pela interface pra mostrar que o elemento saiu
+		// do neutro — sem isso, um controle posado e um em repouso sao
+		// indistinguiveis na tela.
+		bool HasValue(int index) const;
+
+		// Devolve UM Control/Null pra cima do osso de onde ele nasceu.
+		//
+		// Alinha em GLOBAL de proposito: o controle e pendurado no PAI do osso,
+		// nao no osso, entao copiar o local poria ele um elo acima do lugar.
+		bool ResetToSourceBone(int index);
 
 		// ── Consulta ─────────────────────────────────────────────────────────
 

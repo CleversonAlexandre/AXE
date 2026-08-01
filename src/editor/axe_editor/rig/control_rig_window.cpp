@@ -1,4 +1,5 @@
 #include "control_rig_window.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"
 #include "axe/log/log.hpp"
 
 #include <imgui_internal.h>
@@ -38,6 +39,10 @@ namespace axe
 		// rig sem zerar faria os nos nascerem onde estavam os do rig anterior.
 		m_NeedsContextReset = true;
 		m_NodePositionsLoaded = false;
+
+		// A copia do preview e do rig ANTERIOR. Sem zerar, o primeiro frame do
+		// rig novo desenharia o esqueleto do rig velho.
+		InvalidatePreviewHierarchy();
 
 		// Ossos novos no esqueleto entram agora. Um personagem reimportado com
 		// dedos, por exemplo, apareceria sem eles ate alguem reparar.
@@ -95,6 +100,7 @@ namespace axe
 		{
 			snap.Elements = m_Asset->GetHierarchy().GetElements();
 			snap.Graph = m_Asset->GetGraph();
+			snap.Functions = m_Asset->GetFunctions();
 		}
 
 		return snap;
@@ -109,6 +115,13 @@ namespace axe
 		// ser invalidado junto, senao a hierarquia volta mas as matrizes nao.
 		m_Asset->GetHierarchy().SetElements(snap.Elements);
 		m_Asset->GetGraph() = snap.Graph;
+		m_Asset->GetFunctions() = snap.Functions;
+
+		// O undo escreve DIRETO no asset e nao passa pelo MarkEdited — entao a
+		// copia do preview precisa ser invalidada aqui, na mao. Sem isto, um
+		// Ctrl+Z mudaria a hierarquia e o viewport continuaria mostrando a
+		// anterior ate a proxima edicao qualquer.
+		InvalidatePreviewHierarchy();
 
 		// A selecao pode apontar pra algo que nao existe mais.
 		if (m_SelectedElement >= (int)m_Asset->GetHierarchy().Size())
@@ -116,6 +129,14 @@ namespace axe
 
 		if (m_SelectedNode >= 0 && !m_Asset->GetGraph().FindNode(m_SelectedNode))
 			m_SelectedNode = -1;
+
+		// A funcao aberta pode ter deixado de existir — um undo que desfez a
+		// criacao dela. Sem isto o canvas apontaria pra um indice invalido.
+		if (m_EditingFunction >= (int)m_Asset->GetFunctions().size())
+		{
+			m_EditingFunction = -1;
+			m_SelectedNode = -1;
+		}
 
 		// As posicoes dos nos vieram do snapshot; o node-editor ainda tem as
 		// antigas no contexto dele.
@@ -194,7 +215,10 @@ namespace axe
 
 	void ControlRigWindow::DrawToolbar()
 	{
-		if (ImGui::Button("Save"))
+		// Ver editor_widgets.hpp: icone + tooltip em vez de fila de palavras. A
+		// toolbar tinha SEIS botoes de texto lado a lado, e ler seis palavras e
+		// mais lento que reconhecer seis formas.
+		if (ui::IconButton(ICON_SAVE, "Salvar  (Ctrl+S)", ui::Accent::Primary))
 			SaveAsset();
 
 		ImGui::SameLine();
@@ -206,7 +230,7 @@ namespace axe
 
 			ImGui::BeginDisabled(!canUndo);
 
-			if (ImGui::Button("Undo"))
+			if (ui::IconButton(ICON_UNDO, nullptr))
 				DoUndo();
 
 			ImGui::EndDisabled();
@@ -220,7 +244,7 @@ namespace axe
 
 			ImGui::BeginDisabled(!canRedo);
 
-			if (ImGui::Button("Redo"))
+			if (ui::IconButton(ICON_REDO, nullptr))
 				DoRedo();
 
 			ImGui::EndDisabled();
@@ -229,9 +253,81 @@ namespace axe
 				ImGui::SetTooltip("Refazer: %s  (Ctrl+Shift+Z)", m_History.GetRedoName().c_str());
 		}
 
+		ui::ToolbarSeparator();
+
+		// ── Reset pose ───────────────────────────────────────────────────────
+		//
+		// A rede de seguranca. A hierarquia do rig e uma COPIA do esqueleto, e
+		// o asset e COMPARTILHADO com o jogo — mexer aqui aparece no viewport
+		// na hora. Sem um caminho de volta, cada experimento no rig e uma
+		// aposta.
+		//
+		// So os OSSOS. Os controles guardam alinhamento autorado, e leva-los
+		// junto transformaria o botao de seguranca na pior perda possivel —
+		// pra isso existe o "Reset to bind pose" por elemento, no menu de
+		// contexto.
+		{
+			const bool canReset = (m_Skeleton && m_Skeleton->GetSkeleton());
+
+			ImGui::BeginDisabled(!canReset);
+
+			if (ui::IconButton(ICON_ROTATE_LEFT, nullptr, ui::Accent::Warning))
+			{
+				auto& h = m_Asset->GetHierarchy();
+
+				const int n = h.ResetBonesToBindPose(*m_Skeleton->GetSkeleton());
+
+				if (n > 0)
+					MarkEdited("Reset pose");
+
+				AXE_CORE_INFO("Control Rig: {} ossos devolvidos ao repouso do esqueleto.", n);
+			}
+
+			ImGui::EndDisabled();
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(canReset
+					? "Devolve os OSSOS ao repouso do .axeskel.\n"
+					"Controles e Nulls nao sao tocados.\n"
+					"Da pra desfazer com Ctrl+Z."
+					: "Sem esqueleto carregado.");
+			}
+		}
+
 		ImGui::SameLine();
 
-		if (ImGui::Button("Restore layout"))
+		// ── Backward solve ───────────────────────────────────────────────────
+		//
+		// Fica ao lado do Reset pose de proposito: os dois sao operacoes
+		// PONTUAIS sobre a pose, e nao estado que fica ligado. Agrupa-los evita
+		// procura-los em cantos diferentes da janela.
+		{
+			const bool hasEvent = m_Asset
+				&& m_Asset->GetGraph().FindNodeByType("BackwardsSolve") != nullptr;
+
+			ImGui::BeginDisabled(!hasEvent);
+
+			if (ui::IconButton(ICON_ARROW_LEFT, nullptr, ui::Accent::Warning))
+				RunBackwardSolve();
+
+			ImGui::EndDisabled();
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(hasEvent
+					? "Le os ossos e encosta os controles neles.\n"
+					"Roda uma vez. Da pra desfazer com Ctrl+Z."
+					: "O grafo nao tem um no Backward Solve.\n"
+					"Botao direito no grafo -> Events -> Backward Solve.");
+			}
+
+			ImGui::SameLine();
+		}
+
+		ui::ToolbarSeparator();
+
+		if (ui::IconButton(ICON_TABLE_CELLS, "Restaurar o arranjo das janelas"))
 			m_ResetLayout = true;
 
 		if (ImGui::IsItemHovered())
@@ -255,6 +351,16 @@ namespace axe
 
 		if (m_NeedsContextReset)
 		{
+			// O contexto de funcao vai junto: ele guarda posicoes de nos de
+			// OUTRO asset, e reaproveita-lo misturaria os dois.
+			if (m_FuncEdCtx)
+			{
+				ed::DestroyEditor(m_FuncEdCtx);
+				m_FuncEdCtx = nullptr;
+			}
+
+			m_EditingFunction = -1;
+
 			if (m_EdCtx)
 				ed::DestroyEditor(m_EdCtx);
 
@@ -350,6 +456,11 @@ namespace axe
 			DrawGraphCanvas();
 			ImGui::End();
 
+			ImGui::Begin("Rig Members###RigMembers");
+			noteFocus();
+			DrawMembersPanel();
+			ImGui::End();
+
 			ImGui::Begin("Details###RigDetails");
 			noteFocus();
 			DrawDetailsPanel();
@@ -423,7 +534,12 @@ namespace axe
 		ImGuiID leftBottom = left;
 		const ImGuiID leftTop = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Up, 0.55f, nullptr, &leftBottom);
 
+		// Rig Members COM a hierarquia, na mesma aba: as duas listam o que o
+		// rig CONTEM (elementos de um lado, funcoes do outro), e ocupam o mesmo
+		// lugar no fluxo — voce vai la pra escolher no que mexer. E o mesmo
+		// arranjo do Script Members no Script Editor.
 		ImGui::DockBuilderDockWindow("Hierarchy###RigHierarchy", leftTop);
+		ImGui::DockBuilderDockWindow("Rig Members###RigMembers", leftTop);
 		ImGui::DockBuilderDockWindow("Preview###RigPreview", leftBottom);
 		ImGui::DockBuilderDockWindow("Rig Graph###RigGraph", center);
 		ImGui::DockBuilderDockWindow("Details###RigDetails", right);

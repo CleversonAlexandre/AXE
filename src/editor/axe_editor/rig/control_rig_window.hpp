@@ -155,6 +155,14 @@ namespace axe
 		{
 			m_Dirty = true;
 
+			// Qualquer edicao pode ter mexido na DEFINICAO — criar um controle,
+			// espelhar um lado, mudar um pino. A copia do preview pode estar
+			// velha, entao ela reclona no proximo acesso.
+			//
+			// O gizmo em Setup e a excecao: ele ja escreve nos dois lados e
+			// revalida a copia, pra o arraste nao piscar.
+			InvalidatePreviewHierarchy();
+
 			if (action && !m_PendingUndo)
 			{
 				m_PendingUndo = true;
@@ -179,6 +187,14 @@ namespace axe
 		{
 			std::vector<RigElement> Elements;
 			RigGraph                Graph;
+
+			// As FUNCOES tambem. Sem isto, criar uma funcao, mexer na
+			// assinatura ou apagar nao seria desfeito — e pior: um Ctrl+Z
+			// restauraria o grafo principal com nos Call apontando pra uma
+			// definicao que o undo nao trouxe de volta.
+			//
+			// Copiavel por valor porque RigGraph tem copia profunda.
+			std::vector<RigFunction> Functions;
 		};
 
 		RigSnapshot CaptureState() const;
@@ -249,6 +265,54 @@ namespace axe
 		}
 		int m_SelectedNode = -1;
 
+		// ── Area de transferencia do grafo ───────────────────────────────────
+		//
+		// Guarda CLONES, nao Ids.
+		//
+		// Um clipboard de Ids parece mais barato ate voce recortar: os nos
+		// somem do grafo e a colagem passa a apontar pro nada. Guardando o
+		// objeto, Copiar e Recortar viram a mesma operacao com um passo a mais,
+		// e colar continua funcionando depois de apagar o original.
+		//
+		// Clone() ja copia tudo que e autoral — titulo, pinos, defaults (os
+		// nomes de osso escolhidos) e o estado proprio de cada no: o Space do
+		// Get Transform, os Items do Item Array, o modo do Reroute. E o mesmo
+		// mecanismo da copia profunda do RigGraph, entao nao existe um segundo
+		// caminho que possa sair de sincronia com ele.
+		struct RigClipboard
+		{
+			struct Entry
+			{
+				std::unique_ptr<RigNode> Node;
+
+				// Posicao RELATIVA ao canto superior esquerdo do conjunto. E o
+				// que preserva o arranjo: colar oito nos empilhados num ponto
+				// so nao serviria pra nada.
+				float DX = 0.0f;
+				float DY = 0.0f;
+			};
+
+			std::vector<Entry> Nodes;
+
+			// Fios INTERNOS. Os campos FromNode/ToNode aqui sao INDICES no
+			// vetor acima, nao Ids de no — uma colagem cria Ids novos, e
+			// guardar os antigos daria fio apontando pro original.
+			std::vector<RigExecLink> ExecLinks;
+			std::vector<RigDataLink> DataLinks;
+
+			// Canto superior esquerdo de onde o conjunto foi copiado. Serve pro
+			// degrau diagonal do Ctrl+D e do Ctrl+V sem mouse sobre o canvas.
+			float AnchorX = 0.0f;
+			float AnchorY = 0.0f;
+		};
+
+		RigClipboard m_Clipboard;
+
+		// cut = true recorta (copia e depois apaga). Sao a mesma funcao porque
+		// a unica diferenca e um laco de RemoveNode no fim.
+		void CopySelectedNodes(bool cut);
+		void PasteNodes(const ImVec2& canvasPos);
+
 		// ── Estado da arvore ─────────────────────────────────────────────────
 		char m_Filter[64] = {};
 
@@ -275,6 +339,46 @@ namespace axe
 		// entao nao da pra usar -1 como "vazio".
 		int m_PendingReparent = -1;
 		int m_PendingReparentTo = -2;
+
+		// ── Setup x Pose ─────────────────────────────────────────────────────
+		//
+		// O que o gizmo escreve. E o modo em que VOCE esta, nao propriedade de
+		// cada controle — por isso um alternador so, ao lado do T/R/S, e nao um
+		// campo por elemento. Voce olha um lugar e sabe onde esta.
+		//
+		//   Setup — escreve no Initial. Monta o rig: alinha o controle no osso,
+		//           define o repouso. Vai pro ASSET, vale pra toda instancia,
+		//           aparece no jogo na hora.
+		//
+		//   Pose  — escreve no Value. Posa o personagem por cima do repouso.
+		//           E o que um Sequencer vai keyar.
+		//
+		// ── NASCE EM POSE ────────────────────────────────────────────────────
+		//
+		// Nasceu em Setup por um tempo, pra preservar o comportamento anterior
+		// ao modo existir. Foi a escolha errada: Setup escreve no ASSET, e o
+		// asset e compartilhado com a cena viva. Quem so queria conferir uma
+		// pose girava um controle e movia o personagem que estava rodando.
+		//
+		// O padrao tem que ser o modo SEGURO. Pose mexe so na copia do preview;
+		// pra alterar a definicao do rig voce clica e assume — que e como deve
+		// ser pra uma acao que sai do editor.
+		bool m_PoseMode = true;
+
+		// Roda o evento Backward Solve uma vez.
+		void RunBackwardSolve();
+
+		// Devolver um controle pro osso de origem.
+		int m_PendingResetToBone = -1;
+
+		// Espelhar. Mesma razao das outras pendencias: Mirror ACRESCENTA
+		// elementos, e a arvore nao pode crescer no meio do proprio loop.
+		int m_PendingMirror = -1;
+
+		// Eixo normal ao plano de simetria: 0=X (o do corpo humano), 1=Y, 2=Z.
+		// Guardado entre chamadas pra quem espelha um rig inteiro nao ter que
+		// reescolher a cada elemento.
+		int m_MirrorAxis = 0;
 
 
 		// ── Preview ──────────────────────────────────────────────────────────
@@ -332,7 +436,89 @@ namespace axe
 		// todo frame.
 		std::shared_ptr<SkeletalMeshAsset> m_PreviewSynced;
 
+		// ── HIERARQUIA DO PREVIEW ────────────────────────────────────────────
+		//
+		// O preview roda numa COPIA, nao na hierarquia do asset.
+		//
+		// O ControlRigAsset e cacheado por identidade: o mesmo arquivo devolve o
+		// mesmo objeto. Sem esta copia, o editor e a cena viva dividem a MESMA
+		// RigHierarchy — e arrastar um controle aqui movia o personagem que esta
+		// rodando la, na hora. "Deixei o braco pra cima no editor" virava um
+		// braco pra cima no jogo.
+		//
+		// E o mesmo desenho que o AnimNode_ControlRig ja usa: cada consumidor
+		// roda a propria copia, e o asset e so o molde. O editor passa a ser
+		// mais um consumidor.
+		//
+		// O que continua indo pro asset e a DEFINICAO — o gizmo em modo Setup, o
+		// painel de detalhes, a arvore de elementos. Isso e o rig em si e tem
+		// que persistir. O que fica so aqui e a POSE.
+		RigHierarchy m_PreviewHierarchy;
+
+		// Versao do asset de que esta copia nasceu. Diferente = alguem editou a
+		// definicao (criou controle, espelhou, mudou forma) e o clone esta
+		// velho. Mesma tecnica do m_ClonedVersion do AnimNode_ControlRig.
+		uint32_t m_PreviewVersion = 0;
+		bool     m_PreviewCloned = false;
+
+		// Garante que a copia existe e esta na versao do asset. Chamada no
+		// comeco de todo caminho que toca o preview.
+		RigHierarchy& PreviewHierarchy();
+
+		// Forca reclone no proximo acesso. Chamada pelo MarkEdited: qualquer
+		// edicao de definicao invalida a copia.
+		void InvalidatePreviewHierarchy() { m_PreviewCloned = false; }
+
 		ed::EditorContext* m_EdCtx = nullptr;
+
+		// ── FUNCOES ──────────────────────────────────────────────────────────
+		//
+		// INDICE, nao ponteiro. Adicionar ou remover qualquer outra funcao pode
+		// realocar o vector<RigFunction>, e um ponteiro guardado entre frames
+		// passaria a apontar pra lixo — em silencio. Mesma decisao, e pelo
+		// mesmo motivo, do m_EditingFunctionIndex do Script Editor.
+		//
+		// -1 = editando o grafo principal.
+		int m_EditingFunction = -1;
+
+		// Contexto de node-editor PROPRIO pra funcoes.
+		//
+		// Os Ids de no sao por grafo: o no 3 de uma funcao e o no 3 do grafo
+		// principal sao coisas diferentes, e um contexto so misturaria as
+		// posicoes dos dois. Barato porque as posicoes de verdade moram em
+		// EditorX/EditorY no proprio no; o contexto e so cache de interacao.
+		ed::EditorContext* m_FuncEdCtx = nullptr;
+
+		// Grafo que esta na tela: o principal, ou o da funcao aberta.
+		RigGraph& CurrentGraph();
+
+		// Contexto do grafo atual, criando o de funcao se preciso.
+		ed::EditorContext* CurrentEdCtx();
+
+		void SwitchToMainGraph();
+		void SwitchToFunction(int index);
+
+		// Reconstroi os pinos do Entry e do Return da funcao, e de TODO no Call
+		// que a chame — em qualquer grafo do asset, o principal e o das outras
+		// funcoes. Chamar sempre que Inputs/Outputs mudar: sem isto, mexer na
+		// assinatura deixaria as chamadas com os pinos velhos.
+		void RebuildFunctionCallSites(int index);
+
+		// Painel de funcoes, no dock da esquerda.
+		void DrawMembersPanel();
+
+		char m_NewFuncName[64] = "NewFunction";
+
+		// Acoes diferidas: mexem no vector de funcoes ou trocam o grafo
+		// desenhado, e nenhuma das duas pode acontecer no meio do loop que
+		// desenha a lista ou dentro do Begin/End do node-editor.
+		int m_PendingOpenFunction = -1;
+
+		// Funcao solta no grafo, aguardando virar um no Call. String e nao
+		// indice: entre o drop e a criacao o vector de funcoes pode mudar, e um
+		// indice velho criaria a chamada errada.
+		std::string m_DropFunction;
+		int m_PendingRemoveFunction = -1;
 		bool m_NeedsContextReset = false;
 
 		// Pedido explicito de "Restaurar layout". Nao da pra reconstruir o

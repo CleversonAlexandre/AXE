@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <unordered_map>
 
 namespace axe
 {
@@ -88,11 +89,25 @@ namespace axe
 			const std::string t = n.TypeName();
 
 			if (t == "ForwardsSolve")                      return ImVec4(0.55f, 0.20f, 0.20f, 1.0f);
+
+			// Backward tambem e evento, mas de outra COR: os dois nunca rodam
+			// juntos, e confundir qual corrente voce esta olhando e o erro mais
+			// caro que este grafo permite.
+			if (t == "BackwardsSolve")                     return ImVec4(0.20f, 0.40f, 0.55f, 1.0f);
+
+			// Entry e Return sao os eventos DA FUNCAO: mesma familia visual dos
+			// eventos do grafo principal, tom proprio.
+			if (t == "Entry" || t == "Return")             return ImVec4(0.35f, 0.30f, 0.55f, 1.0f);
+
+			// Call nao e nenhuma das categorias — ele CONTEM todas.
+			if (t == "CallFunction")                       return ImVec4(0.13f, 0.38f, 0.35f, 1.0f);
 			if (t == "Sequence" || t == "Branch" || t == "ForEach")
 				return ImVec4(0.32f, 0.32f, 0.36f, 1.0f);
 			if (t == "SetTransform" || t == "TwoBoneIK"
 				|| t == "FKChain" || t == "ParentConstraint"
-				|| t == "AlignToVector" || t == "ControlFollowBone")
+				|| t == "AlignToVector"
+				|| t == "SetControlPose"
+				|| t == "PelvisDip")
 				return ImVec4(0.50f, 0.33f, 0.14f, 1.0f);
 			if (t == "GetTransform" || t == "GroundTrace") return ImVec4(0.16f, 0.34f, 0.50f, 1.0f);
 
@@ -235,19 +250,214 @@ namespace axe
 		ImGui::PopID();
 	}
 
+	// ═══ Funcoes ═════════════════════════════════════════════════════════════
+
+	RigGraph& ControlRigWindow::CurrentGraph()
+	{
+		auto& funcs = m_Asset->GetFunctions();
+
+		// O indice pode ter ficado velho — um undo que desfez a criacao da
+		// funcao, por exemplo. Cair no principal e o comportamento seguro.
+		if (m_EditingFunction >= 0 && m_EditingFunction < (int)funcs.size())
+			return funcs[(std::size_t)m_EditingFunction].Graph;
+
+		m_EditingFunction = -1;
+		return m_Asset->GetGraph();
+	}
+
+	ed::EditorContext* ControlRigWindow::CurrentEdCtx()
+	{
+		if (m_EditingFunction < 0)
+			return m_EdCtx;
+
+		// Sob demanda: quem nunca abre uma funcao nao paga nada.
+		if (!m_FuncEdCtx)
+		{
+			ed::Config cfg;
+
+			// Mesma razao do contexto principal: as posicoes moram no .axerig,
+			// nao num .json solto ao lado do executavel.
+			cfg.SettingsFile = nullptr;
+
+			m_FuncEdCtx = ed::CreateEditor(&cfg);
+		}
+
+		return m_FuncEdCtx;
+	}
+
+	void ControlRigWindow::SwitchToMainGraph()
+	{
+		if (m_EditingFunction < 0)
+			return;
+
+		m_EditingFunction = -1;
+		m_SelectedNode = -1;
+
+		// O contexto do grafo principal ainda tem as posicoes de la, mas a
+		// flag e compartilhada — reaplicar e barato e garante o arranjo certo.
+		m_NodePositionsLoaded = false;
+	}
+
+	void ControlRigWindow::SwitchToFunction(int index)
+	{
+		auto& funcs = m_Asset->GetFunctions();
+
+		if (index < 0 || index >= (int)funcs.size() || m_EditingFunction == index)
+			return;
+
+		m_EditingFunction = index;
+
+		// A selecao era do grafo anterior e nao significa nada aqui.
+		m_SelectedNode = -1;
+		m_NodePositionsLoaded = false;
+	}
+
+	void ControlRigWindow::RebuildFunctionCallSites(int index)
+	{
+		auto& funcs = m_Asset->GetFunctions();
+
+		if (index < 0 || index >= (int)funcs.size())
+			return;
+
+		RigFunction& fn = funcs[(std::size_t)index];
+
+		// ── Entry e Return, dentro da propria funcao ─────────────────────────
+		//
+		// O Entry EXPOE os Inputs como saidas (voce puxa dele o que entrou), e
+		// o Return RECEBE os Outputs como entradas. A inversao e o ponto: visto
+		// de dentro, entrada da funcao e saida de no.
+		for (const auto& n : fn.Graph.GetNodes())
+		{
+			const std::string t = n->TypeName();
+
+			if (t == "Entry")
+			{
+				n->Outputs.clear();
+
+				for (const auto& p : fn.Inputs)
+				{
+					RigPin pin;
+					pin.Name = p.Name;
+					pin.Type = p.Type;
+
+					n->Outputs.push_back(std::move(pin));
+				}
+			}
+			else if (t == "Return")
+			{
+				n->Inputs.clear();
+
+				for (const auto& p : fn.Outputs)
+				{
+					RigPin pin;
+					pin.Name = p.Name;
+					pin.Type = p.Type;
+
+					n->Inputs.push_back(std::move(pin));
+				}
+			}
+		}
+
+		// ── Os nos Call, em TODO grafo do asset ──────────────────────────────
+		//
+		// Inclusive no grafo da propria funcao: recursao e valida, e uma
+		// chamada recursiva com pinos velhos ficaria quebrada em silencio.
+		const auto fix = [&](RigGraph& g)
+			{
+				for (const auto& n : g.GetNodes())
+				{
+					auto* call = dynamic_cast<RigNode_CallFunction*>(n.get());
+
+					if (!call || call->FunctionName != fn.Name)
+						continue;
+
+					// Os DEFAULTS ja digitados sao preservados por NOME. Por
+					// indice, acrescentar um parametro no meio da lista
+					// embaralharia todos os valores seguintes.
+					std::vector<RigPin> old = call->Inputs;
+
+					call->Inputs.clear();
+
+					for (const auto& p : fn.Inputs)
+					{
+						RigPin pin;
+						pin.Name = p.Name;
+						pin.Type = p.Type;
+
+						for (const auto& o : old)
+							if (o.Name == p.Name && o.Type == p.Type)
+							{
+								pin.Default = o.Default;
+								break;
+							}
+
+						call->Inputs.push_back(std::move(pin));
+					}
+
+					call->Outputs.clear();
+
+					for (const auto& p : fn.Outputs)
+					{
+						RigPin pin;
+						pin.Name = p.Name;
+						pin.Type = p.Type;
+
+						call->Outputs.push_back(std::move(pin));
+					}
+
+					call->Title = fn.Name;
+				}
+			};
+
+		fix(m_Asset->GetGraph());
+
+		for (auto& f : m_Asset->GetFunctions())
+			fix(f.Graph);
+	}
+
 	void ControlRigWindow::DrawGraphCanvas()
 	{
 		if (!m_Asset || !m_EdCtx)
 			return;
 
-		RigGraph& graph = m_Asset->GetGraph();
+		// ── Breadcrumb de funcao ─────────────────────────────────────────────
+		//
+		// Sem isto, abrir uma funcao troca o grafo em silencio — e Delete,
+		// Ctrl+V e a paleta passam a agir num lugar diferente do que voce
+		// pensa. Mesmo padrao do Script Editor, de proposito: quem aprendeu la
+		// nao deveria ter que aprender de novo aqui.
+		if (m_EditingFunction >= 0
+			&& m_EditingFunction < (int)m_Asset->GetFunctions().size())
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.85f, 0.78f, 1.0f));
+			ImGui::Text("Function: %s",
+				m_Asset->GetFunctions()[(std::size_t)m_EditingFunction].Name.c_str());
+			ImGui::PopStyleColor();
+
+			ImGui::SameLine(0, 8);
+
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.28f, 0.30f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.38f, 0.38f, 0.40f, 1.0f));
+
+			if (ImGui::SmallButton("< Voltar ao grafo principal"))
+			{
+				ImGui::PopStyleColor(2);
+				SwitchToMainGraph();
+				return;
+			}
+
+			ImGui::PopStyleColor(2);
+			ImGui::Separator();
+		}
+
+		RigGraph& graph = CurrentGraph();
 
 		// Rect do canvas, capturado ANTES do ed::Begin: e a area que aceita o
 		// arrasto vindo da hierarquia.
 		const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
 		const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 
-		ed::SetCurrentEditor(m_EdCtx);
+		ed::SetCurrentEditor(CurrentEdCtx());
 		ed::Begin("RigGraph");
 
 		// Restaura as posicoes salvas no .axerig, uma vez por abertura.
@@ -855,10 +1065,19 @@ namespace axe
 
 				// O evento nao se apaga: sem ele o rig nao roda, e apagar por
 				// acidente daria um rig mudo sem nenhuma pista do motivo.
-				if (n && std::string(n->TypeName()) == "ForwardsSolve")
+				if (n)
 				{
-					ed::RejectDeletedItem();
-					continue;
+					const std::string tn = n->TypeName();
+
+					// Entry e Return sao a FRONTEIRA da funcao: sem eles nao ha
+					// por onde o dado entrar nem sair, e os nos Call ficariam
+					// com pinos sem contraparte.
+					if (tn == "ForwardsSolve" || tn == "BackwardsSolve"
+						|| tn == "Entry" || tn == "Return")
+					{
+						ed::RejectDeletedItem();
+						continue;
+					}
 				}
 
 				if (!ed::AcceptDeletedItem())
@@ -905,7 +1124,57 @@ namespace axe
 					ImGui::OpenPopup("rig_drop_menu");
 				}
 
+				// ── Funcao solta no grafo ────────────────────────────────────
+				//
+				// Sem menu, ao contrario do osso: soltar um osso e ambiguo (Get
+				// ou Set?), soltar uma funcao so pode significar uma coisa —
+				// chamar. Perguntar aqui seria cerimonia sem escolha.
+				if (const ImGuiPayload* pf = ImGui::AcceptDragDropPayload("RIG_FUNCTION"))
+				{
+					m_DropFunction = (const char*)pf->Data;
+					m_DropPos = ed::ScreenToCanvas(ImGui::GetMousePos());
+				}
+
 				ImGui::EndDragDropTarget();
+			}
+		}
+
+		// Fora do bloco de drop: criar o no mexe no grafo, e o RebuildCallSites
+		// percorre todos os grafos do asset — nao no meio do alvo de drag.
+		if (!m_DropFunction.empty())
+		{
+			const std::string fname = m_DropFunction;
+			m_DropFunction.clear();
+
+			if (auto node = CreateRigNode("CallFunction"))
+			{
+				auto* call = static_cast<RigNode_CallFunction*>(node.get());
+
+				call->FunctionName = fname;
+				call->Title = fname;
+
+				node->EditorX = m_DropPos.x;
+				node->EditorY = m_DropPos.y;
+
+				const int id = graph.AddNode(std::move(node));
+
+				ed::SetNodePosition(id, m_DropPos);
+
+				// Os pinos vem da definicao. Sem isto o no nasceria sem nenhum,
+				// e so apareceriam depois de alguem mexer na assinatura.
+				const auto& funcs = m_Asset->GetFunctions();
+
+				for (int i = 0; i < (int)funcs.size(); ++i)
+					if (funcs[(std::size_t)i].Name == fname)
+					{
+						RebuildFunctionCallSites(i);
+						break;
+					}
+
+				m_SelectedNode = id;
+				m_SelectedElement = -1;
+
+				MarkEdited("Add function call");
 			}
 		}
 
@@ -1030,6 +1299,16 @@ namespace axe
 
 		if (ImGui::BeginPopup("rig_palette"))
 		{
+			// Colar no ponto onde o menu foi aberto. So aparece quando ha algo
+			// pra colar: um item permanentemente cinza vira ruido.
+			if (!m_Clipboard.Nodes.empty())
+			{
+				if (ImGui::MenuItem("Colar", "Ctrl+V"))
+					PasteNodes(m_MenuCanvasPos);
+
+				ImGui::Separator();
+			}
+
 			struct Entry { const char* Label; const char* Type; };
 
 			// Agrupada por PAPEL, nao alfabetica: e assim que se procura um no
@@ -1043,20 +1322,30 @@ namespace axe
 			static const Entry kRead[] = {
 				{ "Get Transform", "GetTransform" },
 				{ "Ground Trace",  "GroundTrace" },
+				{ "Trace",         "Trace" },
 				{ "Item Array",    "ItemArray" },
 				{ "At",            "At" },
 				{ "Get Control Value", "GetControlValue" },
 				{ "Project to New Parent", "ProjectToNewParent" },
 			};
 
+			static const Entry kFunc[] = {
+				{ "Call Function", "CallFunction" },
+			};
+
+			static const Entry kEvents[] = {
+				{ "Backward Solve", "BackwardsSolve" },
+			};
+
 			static const Entry kWrite[] = {
 				{ "Set Transform", "SetTransform" },
+				{ "Set Control Pose", "SetControlPose" },
 				{ "Two Bone IK",   "TwoBoneIK" },
 				{ "FK Chain",      "FKChain" },
 				{ "Parent Constraint", "ParentConstraint" },
 				{ "Hide Controls", "HideControls" },
 				{ "Align To Vector", "AlignToVector" },
-				{ "Control Follow Bone", "ControlFollowBone" },
+				{ "Pelvis Dip",    "PelvisDip" },
 			};
 
 			static const Entry kOrganize[] = {
@@ -1108,6 +1397,14 @@ namespace axe
 			// do script editor, que ficou invisivel por meses porque a tabela
 			// dizia 11 com 12 entradas). Agora acrescentar uma linha na tabela
 			// basta.
+			ImGui::TextDisabled("Events");
+			emit(kEvents, IM_ARRAYSIZE(kEvents));
+
+			ImGui::Separator();
+			ImGui::TextDisabled("Functions");
+			emit(kFunc, IM_ARRAYSIZE(kFunc));
+
+			ImGui::Separator();
 			ImGui::TextDisabled("Flow");
 			emit(kFlow, IM_ARRAYSIZE(kFlow));
 
@@ -1130,8 +1427,83 @@ namespace axe
 			ImGui::EndPopup();
 		}
 
+		// ── Duplo clique num Call abre a funcao ──────────────────────────────
+		//
+		// Dentro do Begin/End porque GetDoubleClickedNode e do node-editor; a
+		// TROCA de grafo fica pra depois do End, senao o node-editor passaria
+		// metade do frame apontando pra um grafo e metade pra outro.
+		if (const ed::NodeId dbl = ed::GetDoubleClickedNode())
+		{
+			if (auto* call = dynamic_cast<RigNode_CallFunction*>(
+				graph.FindNode((int)dbl.Get())))
+			{
+				const auto& funcs = m_Asset->GetFunctions();
+
+				for (int i = 0; i < (int)funcs.size(); ++i)
+					if (funcs[(std::size_t)i].Name == call->FunctionName)
+					{
+						m_PendingOpenFunction = i;
+						break;
+					}
+			}
+		}
+
 		ed::Resume();
 		ed::End();
+
+		// DEPOIS do End, pelo motivo acima.
+		if (m_PendingOpenFunction >= 0)
+		{
+			SwitchToFunction(m_PendingOpenFunction);
+			m_PendingOpenFunction = -1;
+			return;
+		}
+
+		// ── Copiar / Recortar / Colar / Duplicar ─────────────────────────────
+		//
+		// DEPOIS do ed::End() de proposito: dentro do Begin/End o node-editor e
+		// dono do teclado — e o mesmo motivo pelo qual o Delete e tratado la
+		// dentro, via QueryDeletedNode, e nao aqui.
+		//
+		// A guarda de foco nao e zelo excessivo: sem ela, um Ctrl+V digitado no
+		// campo "filter..." da hierarquia despejaria nos no grafo. E o
+		// IsAnyItemActive cobre o caso de estar editando um valor de pino
+		// dentro do proprio canvas.
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+			&& !ImGui::IsAnyItemActive())
+		{
+			const ImGuiIO& io = ImGui::GetIO();
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+				CopySelectedNodes(false);
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false))
+				CopySelectedNodes(true);
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false))
+			{
+				// Cola sob o MOUSE quando ele esta sobre o canvas. Fora dele,
+				// cai num degrau diagonal a partir de onde foi copiado — sem
+				// isso a copia nasceria exatamente em cima da original e
+				// pareceria que nada aconteceu.
+				const bool overCanvas =
+					ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
+
+				PasteNodes(overCanvas
+					? ed::ScreenToCanvas(ImGui::GetMousePos())
+					: ImVec2(m_Clipboard.AnchorX + 40.0f, m_Clipboard.AnchorY + 40.0f));
+			}
+
+			// Ctrl+D: duplicar sem passar pela area de transferencia do ponto
+			// de vista do usuario. Internamente E copiar e colar — o que
+			// significa que ele SOBRESCREVE o clipboard, igual ao Blueprint.
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+			{
+				CopySelectedNodes(false);
+				PasteNodes(ImVec2(m_Clipboard.AnchorX + 40.0f,
+					m_Clipboard.AnchorY + 40.0f));
+			}
+		}
 
 		// ── Duplo-clique num fio insere um REROUTE ───────────────────────────
 		//
@@ -1331,6 +1703,229 @@ namespace axe
 		}
 
 		ed::SetCurrentEditor(nullptr);
+	}
+
+	// ═══ Copiar / Recortar ═══════════════════════════════════════════════════
+
+	void ControlRigWindow::CopySelectedNodes(bool cut)
+	{
+		if (!m_Asset)
+			return;
+
+		// O grafo VISIVEL, nao o principal: copiar dentro de uma funcao tem que
+		// pegar os nos que estao na tela.
+		RigGraph& graph = CurrentGraph();
+
+		// GetSelectedObjectCount conta nos E fios; GetSelectedNodes devolve
+		// quantos eram nos de fato. Dimensionamos pelo total e confiamos no
+		// retorno — um vetor curto seria escrita fora dos limites.
+		const int total = ed::GetSelectedObjectCount();
+
+		if (total <= 0)
+			return;
+
+		std::vector<ed::NodeId> sel((std::size_t)total);
+		const int count = ed::GetSelectedNodes(sel.data(), total);
+
+		// ── O QUE ENTRA ──────────────────────────────────────────────────────
+		//
+		// O evento fica de fora. O grafo roda procurando UM no ForwardsSolve;
+		// um segundo faria metade do rig virar codigo morto sem nenhum aviso.
+		// Mesma razao pela qual ele tambem nao se apaga.
+		std::vector<int> ids;
+		ids.reserve((std::size_t)count);
+
+		for (int i = 0; i < count; ++i)
+		{
+			const int id = (int)sel[(std::size_t)i].Get();
+			const RigNode* n = graph.FindNode(id);
+
+			if (!n || std::string(n->TypeName()) == "ForwardsSolve")
+				continue;
+
+			ids.push_back(id);
+		}
+
+		if (ids.empty())
+			return;
+
+		m_Clipboard.Nodes.clear();
+		m_Clipboard.ExecLinks.clear();
+		m_Clipboard.DataLinks.clear();
+
+		// Ancora: canto superior esquerdo do conjunto.
+		float minX = graph.FindNode(ids.front())->EditorX;
+		float minY = graph.FindNode(ids.front())->EditorY;
+
+		for (int id : ids)
+		{
+			const RigNode* n = graph.FindNode(id);
+
+			minX = std::min(minX, n->EditorX);
+			minY = std::min(minY, n->EditorY);
+		}
+
+		m_Clipboard.AnchorX = minX;
+		m_Clipboard.AnchorY = minY;
+
+		// Id do no -> indice no clipboard. Precisamos dele pra reescrever os
+		// fios em termos de posicao na lista, e nao de Id.
+		std::unordered_map<int, int> index;
+
+		for (int id : ids)
+		{
+			const RigNode* n = graph.FindNode(id);
+
+			RigClipboard::Entry e;
+
+			e.Node = n->Clone();
+			e.DX = n->EditorX - minX;
+			e.DY = n->EditorY - minY;
+
+			index[id] = (int)m_Clipboard.Nodes.size();
+			m_Clipboard.Nodes.push_back(std::move(e));
+		}
+
+		// ── OS FIOS ──────────────────────────────────────────────────────────
+		//
+		// So os INTERNOS, com as DUAS pontas na selecao. Reroute nao precisa de
+		// tratamento especial: ele e um no como qualquer outro, entao entra na
+		// selecao e seus fios entram junto.
+		//
+		// Fio que cruza a fronteira fica de fora, e nao por preguica:
+		//
+		//   uma ENTRADA de dados aceita um fio so, entao preservar uma origem
+		//   externa roubaria a ligacao do no original;
+		//
+		//   uma SAIDA de execucao vai pra um lugar so, entao preservar uma
+		//   entrada externa desviaria a corrente do original pra copia.
+		//
+		// Nos dois casos colar MEXERIA no que voce copiou — e colar nao pode
+		// alterar o original. Blueprint e o Material Graph fazem igual.
+		for (const auto& l : graph.GetDataLinks())
+		{
+			const auto a = index.find(l.FromNode);
+			const auto b = index.find(l.ToNode);
+
+			if (a == index.end() || b == index.end())
+				continue;
+
+			m_Clipboard.DataLinks.push_back({ a->second, l.FromPin, b->second, l.ToPin });
+		}
+
+		for (const auto& l : graph.GetExecLinks())
+		{
+			const auto a = index.find(l.FromNode);
+			const auto b = index.find(l.ToNode);
+
+			if (a == index.end() || b == index.end())
+				continue;
+
+			m_Clipboard.ExecLinks.push_back({ a->second, l.FromExec, b->second });
+		}
+
+		if (!cut)
+			return;
+
+		// RemoveNode ja leva os fios do no junto — inclusive os que iam pra
+		// fora da selecao, que e o certo: eles apontariam pro nada.
+		for (int id : ids)
+		{
+			graph.RemoveNode(id);
+
+			if (m_SelectedNode == id)
+				m_SelectedNode = -1;
+		}
+
+		ed::ClearSelection();
+		MarkEdited("Cut nodes");
+	}
+
+	// ═══ Colar ═══════════════════════════════════════════════════════════════
+
+	void ControlRigWindow::PasteNodes(const ImVec2& canvasPos)
+	{
+		if (!m_Asset || m_Clipboard.Nodes.empty())
+			return;
+
+		// Cola no grafo VISIVEL. E o que permite copiar no principal, abrir uma
+		// funcao e colar dentro dela.
+		RigGraph& graph = CurrentGraph();
+
+		// Id novo de cada entrada do clipboard, na mesma ordem. -1 marca as que
+		// falharam, pra um fio nao ser criado apontando pro vazio.
+		std::vector<int> fresh(m_Clipboard.Nodes.size(), -1);
+
+		for (std::size_t i = 0; i < m_Clipboard.Nodes.size(); ++i)
+		{
+			const auto& e = m_Clipboard.Nodes[i];
+
+			// CLONE DO CLONE: o clipboard guarda o MOLDE. Mover o no de dentro
+			// dele esvaziaria a area apos a primeira colagem — e colar duas
+			// vezes e justamente o caso de uso (uma perna, depois a outra).
+			auto copy = e.Node->Clone();
+
+			if (!copy)
+				continue;
+
+			const ImVec2 pos(canvasPos.x + e.DX, canvasPos.y + e.DY);
+
+			copy->EditorX = pos.x;
+			copy->EditorY = pos.y;
+
+			const int id = graph.AddNode(std::move(copy));
+
+			if (id < 0)
+				continue;
+
+			fresh[i] = id;
+
+			// O node-editor guarda a posicao no PROPRIO estado; sem isto o no
+			// nasceria em (0,0) e so iria pro lugar certo na proxima abertura
+			// do asset. Mesmo passo que a paleta ja faz.
+			ed::SetNodePosition(id, pos);
+		}
+
+		for (const auto& l : m_Clipboard.DataLinks)
+		{
+			const int from = fresh[(std::size_t)l.FromNode];
+			const int to = fresh[(std::size_t)l.ToNode];
+
+			if (from >= 0 && to >= 0)
+				graph.LinkData(from, l.FromPin, to, l.ToPin);
+		}
+
+		for (const auto& l : m_Clipboard.ExecLinks)
+		{
+			const int from = fresh[(std::size_t)l.FromNode];
+			const int to = fresh[(std::size_t)l.ToNode];
+
+			if (from >= 0 && to >= 0)
+				graph.LinkExec(from, l.FromExec, to);
+		}
+
+		// A COPIA fica selecionada, nao o original. E ela que voce vai arrastar
+		// e renomear em seguida — e sem isto o proximo Ctrl+D duplicaria a
+		// coisa errada.
+		ed::ClearSelection();
+
+		m_SelectedNode = -1;
+
+		for (int id : fresh)
+		{
+			if (id < 0)
+				continue;
+
+			ed::SelectNode(id, true);
+
+			if (m_SelectedNode < 0)
+			{
+				m_SelectedNode = id;
+				m_SelectedElement = -1;
+			}
+		}
+
+		MarkEdited("Paste nodes");
 	}
 
 } // namespace axed

@@ -1248,6 +1248,15 @@ namespace axe
 		// sem afetar quem já está na cena até o próximo BumpVersion.
 		m_Hierarchy = RigAsset->GetHierarchy();
 		m_Graph = RigAsset->GetGraph();
+
+		// As funcoes vao junto, pela mesma razao: sao grafos com estado de
+		// solve, e dividi-las entre instancias faria o cache de um personagem
+		// responder pelo outro.
+		m_Functions.clear();
+
+		for (const auto& f : RigAsset->GetFunctions())
+			m_Functions.emplace_back(f.Name, f.Graph);
+
 		m_ClonedVersion = RigAsset->GetVersion();
 		m_Cloned = true;
 	}
@@ -1297,6 +1306,18 @@ namespace axe
 		rc.UseEditorGround = false;                    // o chão virtual Y=0 é coisa do preview do rig
 		rc.DeltaTime = m_LastDt;
 		rc.Graph = &m_Graph;
+
+		// Biblioteca de funcoes da INSTANCIA. Sem isto, um no Call nao acha a
+		// definicao e vira no-op: o rig rodaria pela metade, em silencio.
+		rc.ResolveFunction = [this](const std::string& name) -> RigGraph*
+			{
+				for (auto& f : m_Functions)
+					if (f.first == name)
+						return &f.second;
+
+				return nullptr;
+			};
+
 		m_Graph.Execute(rc, "ForwardsSolve");
 
 		// 5. Le a hierarquia resolvida de volta pra uma pose.

@@ -385,9 +385,249 @@ namespace axe
 		std::fill(m_Cached.begin(), m_Cached.end(), false);
 	}
 
+	// ═══ Serializacao de valores ═════════════════════════════════════════════
+	//
+	// Copiadas SEM ALTERACAO do namespace anonimo do control_rig_asset.cpp. O
+	// objetivo deste passo e mover, nao melhorar: qualquer ajuste aqui mudaria
+	// o arquivo gravado e tiraria a unica verificacao barata que existe pra
+	// esta extracao (salvar antes, salvar depois, comparar).
+
+	nlohmann::json SaveRigTransform(const BoneTransform& t)
+	{
+		return {
+			{ "t", { t.Translation.x, t.Translation.y, t.Translation.z } },
+			{ "r", { t.Rotation.x, t.Rotation.y, t.Rotation.z, t.Rotation.w } },
+			{ "s", { t.Scale.x, t.Scale.y, t.Scale.z } }
+		};
+	}
+
+	BoneTransform LoadRigTransform(const nlohmann::json& j)
+	{
+		BoneTransform t;
+
+		if (j.contains("t") && j["t"].size() == 3)
+			t.Translation = { j["t"][0], j["t"][1], j["t"][2] };
+
+		if (j.contains("r") && j["r"].size() == 4)
+		{
+			// Ordem no arquivo: x, y, z, w. O construtor do glm::quat pede
+			// w PRIMEIRO — trocar a ordem aqui produz rotacoes tortas que
+			// so aparecem depois de salvar e reabrir.
+			t.Rotation = glm::quat(j["r"][3], j["r"][0], j["r"][1], j["r"][2]);
+		}
+
+		if (j.contains("s") && j["s"].size() == 3)
+			t.Scale = { j["s"][0], j["s"][1], j["s"][2] };
+
+		return t;
+	}
+
+	nlohmann::json SaveRigPinValue(const RigPinValue& v)
+	{
+		// Grava tudo: o tipo do pino pode mudar quando um no e reescrito, e
+		// um campo perdido significa o usuario redigitando o valor.
+		return {
+			{ "b", v.Bool },
+			{ "f", v.Float },
+			{ "v", { v.Vector.x, v.Vector.y, v.Vector.z } },
+			{ "x", SaveRigTransform(v.Transform) },
+			{ "item", v.ItemName },
+			{ "itype", (int)v.ItemType }
+		};
+	}
+
+	RigPinValue LoadRigPinValue(const nlohmann::json& j)
+	{
+		RigPinValue v;
+
+		v.Bool = j.value("b", false);
+		v.Float = j.value("f", 0.0f);
+
+		if (j.contains("v") && j["v"].size() == 3)
+			v.Vector = { j["v"][0], j["v"][1], j["v"][2] };
+
+		if (j.contains("x"))
+			v.Transform = LoadRigTransform(j["x"]);
+
+		v.ItemName = j.value("item", std::string());
+		v.ItemType = (RigElementType)j.value("itype", 0);
+
+		return v;
+	}
+
+	nlohmann::json SaveRigPinLayout(const std::vector<RigPin>& pins)
+	{
+		nlohmann::json a = nlohmann::json::array();
+
+		for (const auto& p : pins)
+			a.push_back({ { "n", p.Name }, { "t", (int)p.Type } });
+
+		return a;
+	}
+
+	void LoadRigPinLayout(const nlohmann::json& j, std::vector<RigPin>& pins)
+	{
+		pins.clear();
+
+		if (!j.is_array())
+			return;
+
+		for (const auto& jp : j)
+		{
+			RigPin p;
+			p.Name = jp.value("n", std::string());
+			p.Type = (RigPinType)jp.value("t", (int)RigPinType::Float);
+
+			pins.push_back(std::move(p));
+		}
+	}
+
+	// ═══ Serializacao do grafo ═══════════════════════════════════════════════
+
+	nlohmann::json RigGraph::ToJson() const
+	{
+		nlohmann::json j;
+
+		j["nodes"] = nlohmann::json::array();
+
+		for (const auto& n : m_Nodes)
+		{
+			nlohmann::json jn;
+
+			jn["type"] = n->TypeName();
+			jn["id"] = n->Id;
+			jn["title"] = n->Title;
+			jn["x"] = n->EditorX;
+			jn["y"] = n->EditorY;
+
+			// Os defaults dos pinos SAO o conteudo autoral: e onde ficam os
+			// nomes de osso escolhidos e os numeros digitados. Perder isto
+			// esvaziaria o rig mesmo com todos os nos e fios intactos.
+			jn["pins"] = nlohmann::json::array();
+
+			for (const auto& p : n->Inputs)
+				jn["pins"].push_back(SaveRigPinValue(p.Default));
+
+			// OBJETO VAZIO, e nao json default-construido.
+			//
+			// `nlohmann::json extra;` nasce NULL, e um no cujo Serialize nao
+			// escreve nada gravaria "data": null. Na volta, contains("data") da
+			// true (a chave existe!) e o Deserialize recebe um null — onde
+			// j.value(...) LANCA type_error, derrubando o editor ao abrir o
+			// asset. Foi exatamente esse o crash.
+			nlohmann::json extra = nlohmann::json::object();
+			n->Serialize(extra);
+			jn["data"] = std::move(extra);
+
+			j["nodes"].push_back(std::move(jn));
+		}
+
+		j["exec_links"] = nlohmann::json::array();
+
+		for (const auto& l : m_ExecLinks)
+			j["exec_links"].push_back({ { "from", l.FromNode }, { "pin", l.FromExec }, { "to", l.ToNode } });
+
+		j["data_links"] = nlohmann::json::array();
+
+		for (const auto& l : m_DataLinks)
+			j["data_links"].push_back({ { "from", l.FromNode }, { "fpin", l.FromPin },
+									   { "to", l.ToNode }, { "tpin", l.ToPin } });
+
+		return j;
+	}
+
+	void RigGraph::FromJson(const nlohmann::json& j)
+	{
+		Clear();
+
+		if (j.contains("nodes"))
+		{
+			for (const auto& jn : j["nodes"])
+			{
+				auto node = CreateRigNode(jn.value("type", std::string()));
+
+				// Tipo desconhecido (arquivo de uma versao mais nova, ou no
+				// removido do engine): pula. Os fios dele morrem junto no
+				// passo seguinte, porque o Id nunca vai existir.
+				if (!node)
+					continue;
+
+				node->Title = jn.value("title", node->Title);
+				node->EditorX = jn.value("x", 0.0f);
+				node->EditorY = jn.value("y", 0.0f);
+
+				// is_object() alem do contains: arquivos salvos ANTES do fix
+				// acima tem "data": null, e passar isso pro Deserialize
+				// derruba o editor. Com a checagem, o no simplesmente fica
+				// nos valores padrao.
+				if (jn.contains("data") && jn["data"].is_object())
+					node->Deserialize(jn["data"]);
+
+				// Depois do Deserialize: um no pode RECRIAR seus pinos ali (o
+				// Sequence faz isso ao restaurar as saidas), e os defaults
+				// precisam cair nos pinos ja definitivos.
+				if (jn.contains("pins"))
+				{
+					const auto& jp = jn["pins"];
+
+					for (std::size_t p = 0; p < node->Inputs.size() && p < jp.size(); ++p)
+						node->Inputs[p].Default = LoadRigPinValue(jp[p]);
+				}
+
+				// Preserva o Id gravado: os fios referenciam por ele.
+				const int wantId = jn.value("id", -1);
+
+				if (wantId > 0)
+					AddNodeWithId(std::move(node), wantId);
+				else
+					AddNode(std::move(node));
+			}
+		}
+
+		const auto nodeExists = [&](int id) { return FindNode(id) != nullptr; };
+
+		if (j.contains("exec_links"))
+			for (const auto& jl : j["exec_links"])
+			{
+				const int from = jl.value("from", -1);
+				const int to = jl.value("to", -1);
+
+				if (nodeExists(from) && nodeExists(to))
+					LinkExec(from, jl.value("pin", 0), to);
+			}
+
+		if (j.contains("data_links"))
+			for (const auto& jl : j["data_links"])
+			{
+				const int from = jl.value("from", -1);
+				const int to = jl.value("to", -1);
+
+				if (nodeExists(from) && nodeExists(to))
+					LinkData(from, jl.value("fpin", 0), to, jl.value("tpin", 0));
+			}
+	}
+
+	const RigNode* RigGraph::FindNodeByType(const char* typeName) const
+	{
+		if (!typeName)
+			return nullptr;
+
+		for (const auto& n : m_Nodes)
+			if (n && std::string(n->TypeName()) == typeName)
+				return n.get();
+
+		return nullptr;
+	}
+
 	void RigGraph::Execute(RigExecContext& ctx, const char* eventType)
 	{
 		ctx.Graph = this;
+
+		// Zero = ninguem atribuiu ainda, logo ESTE e o Execute mais externo.
+		// Um subgrafo herda o valor pela copia do contexto e nao sobrescreve —
+		// e assim que todos os niveis compartilham a identidade do solve.
+		if (ctx.SolveId == 0)
+			ctx.SolveId = ++m_SolveCounter;
 
 		// Cache e guardas valem por UMA execucao. Um trace de chao do frame
 		// anterior nao pode vazar pro proximo.
@@ -397,21 +637,15 @@ namespace axe
 		m_CycleReported = false;
 		m_Steps = 0;
 
-		int eventId = -1;
-
-		for (const auto& n : m_Nodes)
-			if (std::string(n->TypeName()) == eventType)
-			{
-				eventId = n->Id;
-				break;
-			}
+		const RigNode* event = FindNodeByType(eventType);
 
 		// Sem o evento, nao ha o que rodar. Um rig recem-criado cai aqui, e o
-		// certo e o personagem seguir animado normalmente.
-		if (eventId < 0)
+		// certo e o personagem seguir animado normalmente. Um rig sem Backward
+		// Solve tambem cai aqui, e o botao do editor simplesmente nao faz nada.
+		if (!event)
 			return;
 
-		RunExecPin(ctx, eventId, 0);
+		RunExecPin(ctx, event->Id, 0);
 	}
 
 } // namespace axe

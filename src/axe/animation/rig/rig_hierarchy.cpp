@@ -14,6 +14,27 @@ namespace axe
 			const std::size_t p = s.find_last_of(":|");
 			return (p == std::string::npos) ? s : s.substr(p + 1);
 		}
+
+		// Comparacao EXATA de proposito: Value so sai da identidade por
+		// atribuicao (gizmo, load do asset, Sequencer), nunca por acumulo
+		// numerico. Uma tolerancia aqui so serviria pra mascarar um bug de
+		// outro lugar.
+		//
+		// Precisa morar AQUI, no topo: HasValue e ResetToInitial usam esta
+		// funcao e estao em pontos distantes do arquivo. Definida junto do
+		// segundo uso, o primeiro nao a enxerga — em C++ isso e erro duro, e o
+		// sintoma no MSVC e enganoso: a TU inteira falha, a dll e linkada a
+		// partir do .obj ANTERIOR, e o editor reclama de "unresolved external"
+		// nos simbolos novos, apontando pra um problema de link que nao existe.
+		bool IsIdentityTransform(const BoneTransform& t)
+		{
+			return t.Translation == glm::vec3(0.0f)
+				&& t.Scale == glm::vec3(1.0f)
+				&& t.Rotation.w == 1.0f
+				&& t.Rotation.x == 0.0f
+				&& t.Rotation.y == 0.0f
+				&& t.Rotation.z == 0.0f;
+		}
 	}
 
 	int RigHierarchy::Add(const std::string& name, RigElementType type, int parent)
@@ -81,6 +102,388 @@ namespace axe
 
 		return out;
 	}
+
+	// ═══ Pose do animador (Value) ════════════════════════════════════════════
+
+	void RigHierarchy::SetValueFromGlobal(int index, const glm::mat4& wanted)
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return;
+
+		// Osso nao tem pose de animador: ele RECEBE a animacao via ApplyPose e
+		// e saida do solve. Aceitar aqui criaria um segundo dono do mesmo dado.
+		if (m_Elements[(std::size_t)index].Type == RigElementType::Bone)
+			return;
+
+		const glm::mat4 now = GetGlobal(index);
+		const glm::mat4 val = m_Elements[(std::size_t)index].Value.ToMatrix();
+
+		m_Elements[(std::size_t)index].Value =
+			BoneTransform::FromMatrix(val * glm::inverse(now) * wanted);
+
+		// Current acompanha na hora, senao o gizmo "escorregaria" ate o proximo
+		// solve — voce arrastaria e a forma ficaria pra tras um frame.
+		m_Elements[(std::size_t)index].Current = BoneTransform::FromMatrix(
+			m_Elements[(std::size_t)index].Initial.ToMatrix()
+			* m_Elements[(std::size_t)index].Value.ToMatrix());
+
+		MarkDirty();
+	}
+
+	void RigHierarchy::ClearValue(int index)
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return;
+
+		m_Elements[(std::size_t)index].Value = BoneTransform{};
+		m_Elements[(std::size_t)index].Current = m_Elements[(std::size_t)index].Initial;
+
+		MarkDirty();
+	}
+
+	bool RigHierarchy::HasValue(int index) const
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return false;
+
+		return !IsIdentityTransform(m_Elements[(std::size_t)index].Value);
+	}
+
+	// ═══ Voltar ao repouso conhecido ═════════════════════════════════════════
+
+	int RigHierarchy::ResetBonesToBindPose(const Skeleton& skeleton)
+	{
+		const std::vector<Bone>& bones = skeleton.GetBones();
+
+		int restored = 0;
+
+		for (RigElement& e : m_Elements)
+		{
+			if (e.Type != RigElementType::Bone)
+				continue;
+
+			int b = skeleton.FindBone(e.Name);
+
+			// Tolerante a prefixo de namespace, pela mesma razao do
+			// FindFlexible: o rig pode ter sido montado com "LeftFoot" e o
+			// esqueleto trazer "mixamorig:LeftFoot".
+			if (b < 0)
+			{
+				for (std::size_t k = 0; k < bones.size(); ++k)
+				{
+					const std::string& bn = bones[k].Name;
+					const std::size_t  at = bn.rfind(':');
+
+					if (at != std::string::npos && bn.substr(at + 1) == e.Name)
+					{
+						b = (int)k;
+						break;
+					}
+				}
+			}
+
+			if (b < 0)
+				continue;
+
+			e.Initial = BoneTransform::FromMatrix(bones[(std::size_t)b].LocalBindPose);
+			e.Current = e.Initial;
+
+			++restored;
+		}
+
+		MarkDirty();
+		return restored;
+	}
+
+	bool RigHierarchy::ResetToSourceBone(int index)
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return false;
+
+		RigElement& e = m_Elements[index];
+
+		if (e.Type == RigElementType::Bone || e.SourceBone.empty())
+			return false;
+
+		const int bone = Find(e.SourceBone, RigElementType::Bone);
+
+		if (bone < 0)
+		{
+			AXE_CORE_WARN("RigHierarchy: '{}' nasceu do osso '{}', que nao existe "
+				"mais na hierarquia.", e.Name, e.SourceBone);
+			return false;
+		}
+
+		SetInitialGlobal(index, GetInitialGlobal(bone));
+
+		m_Elements[index].Current = m_Elements[index].Initial;
+
+		MarkDirty();
+		return true;
+	}
+
+	// ═══ Espelhamento ════════════════════════════════════════════════════════
+
+	namespace
+	{
+		// ONDE o token pode aparecer. Nao e preciosismo: "l_" solto no meio de
+		// um nome casa dentro de "Null_1", e o espelho viraria "Nulr_1". Um
+		// prefixo so vale no comeco; um sufixo, so no fim.
+		enum class MirrorWhere
+		{
+			Anywhere,
+			Prefix,
+			Suffix
+		};
+
+		struct MirrorToken
+		{
+			const char* A;
+			const char* B;
+			MirrorWhere Where;
+		};
+
+		// Testados NESTA ORDEM — do mais especifico pro mais curto. As
+		// palavras inteiras precisam ganhar dos sufixos de uma letra, senao
+		// "Left_arm" seria resolvido pelo "_l" errado.
+		//
+		// Cobre as convencoes que aparecem na pratica: Mixamo e Unreal usam
+		// Left/Right, Blender usa .L/.R, e rig de estudio costuma usar _L/_R
+		// ou l_/r_.
+		const MirrorToken kMirrorTokens[] =
+		{
+			{ "Left",  "Right", MirrorWhere::Anywhere },
+			{ "left",  "right", MirrorWhere::Anywhere },
+			{ "LEFT",  "RIGHT", MirrorWhere::Anywhere },
+			{ "_L",    "_R",    MirrorWhere::Suffix   },
+			{ "_l",    "_r",    MirrorWhere::Suffix   },
+			{ ".L",    ".R",    MirrorWhere::Suffix   },
+			{ ".l",    ".r",    MirrorWhere::Suffix   },
+			{ "L_",    "R_",    MirrorWhere::Prefix   },
+			{ "l_",    "r_",    MirrorWhere::Prefix   },
+		};
+
+		// Troca `a` por `b` respeitando a posicao exigida. Devolve vazio quando
+		// nao houve troca — e assim que o chamador sabe que este par nao serve
+		// e pode tentar o proximo.
+		std::string SwapToken(const std::string& in, const std::string& a,
+			const std::string& b, MirrorWhere where)
+		{
+			if (a.empty() || in.size() < a.size())
+				return std::string();
+
+			if (where == MirrorWhere::Prefix)
+			{
+				if (in.compare(0, a.size(), a) != 0)
+					return std::string();
+
+				return b + in.substr(a.size());
+			}
+
+			if (where == MirrorWhere::Suffix)
+			{
+				const std::size_t at = in.size() - a.size();
+
+				if (in.compare(at, a.size(), a) != 0)
+					return std::string();
+
+				return in.substr(0, at) + b;
+			}
+
+			if (in.find(a) == std::string::npos)
+				return std::string();
+
+			// TODAS as ocorrencias. "LeftHandLeftThumb" tem lado nos dois
+			// pedacos, e trocar so o primeiro daria um nome hibrido que nao
+			// corresponde a nada.
+			std::string out;
+			out.reserve(in.size());
+
+			std::size_t i = 0;
+
+			while (i < in.size())
+			{
+				if (i + a.size() <= in.size() && in.compare(i, a.size(), a) == 0)
+				{
+					out += b;
+					i += a.size();
+				}
+				else
+				{
+					out += in[i];
+					++i;
+				}
+			}
+
+			return out;
+		}
+	}
+
+	std::string RigHierarchy::MirrorName(const std::string& name,
+		const std::string& search, const std::string& replace)
+	{
+		if (name.empty())
+			return std::string();
+
+		// Par explicito manda, e vale nos dois sentidos.
+		if (!search.empty() && !replace.empty())
+		{
+			std::string r = SwapToken(name, search, replace, MirrorWhere::Anywhere);
+
+			if (!r.empty())
+				return r;
+
+			return SwapToken(name, replace, search, MirrorWhere::Anywhere);
+		}
+
+		for (const auto& t : kMirrorTokens)
+		{
+			std::string r = SwapToken(name, t.A, t.B, t.Where);
+
+			if (!r.empty())
+				return r;
+
+			r = SwapToken(name, t.B, t.A, t.Where);
+
+			if (!r.empty())
+				return r;
+		}
+
+		return std::string();
+	}
+
+	int RigHierarchy::Mirror(int index, const RigMirrorSettings& settings)
+	{
+		if (index < 0 || index >= (int)m_Elements.size())
+			return -1;
+
+		if (m_Elements[index].Type == RigElementType::Bone)
+		{
+			AXE_CORE_WARN("RigHierarchy: Bone nao se espelha — o lado oposto ja "
+				"vem do esqueleto.");
+			return -1;
+		}
+
+		const int axis = glm::clamp(settings.Axis, 0, 2);
+
+		// ── A REFLEXAO ───────────────────────────────────────────────────────
+		//
+		// S troca o sinal de um eixo. G' = S * G * S reflete o frame INTEIRO:
+		// a translacao vira S*t, e a rotacao vira S*R*S — que continua sendo
+		// uma rotacao propria (o determinante -1 do S aparece duas vezes e se
+		// cancela).
+		//
+		// So espelhar a POSICAO daria o controle do outro lado apontando pro
+		// lado errado: o anel do pe direito nasceria virado ao contrario.
+		glm::mat4 S(1.0f);
+		S[axis][axis] = -1.0f;
+
+		// Ordem topologica garantida: `index` primeiro, descendentes em ordem
+		// crescente. Isso importa porque o espelho de um filho precisa que o
+		// espelho do PAI ja exista pra se pendurar nele.
+		std::vector<int> sources;
+		sources.push_back(index);
+
+		if (settings.IncludeChildren)
+		{
+			const std::vector<int> kids = CollectDescendants(index);
+			sources.insert(sources.end(), kids.begin(), kids.end());
+		}
+
+		int result = -1;
+
+		for (const int src : sources)
+		{
+			// Add() so ACRESCENTA no fim, entao os indices de origem seguem
+			// validos durante o laco inteiro. Se um dia Add passar a inserir
+			// no meio, isto aqui quebra — e o comentario existe pra que a
+			// quebra seja encontrada.
+			const RigElement source = m_Elements[src];
+
+			if (source.Type == RigElementType::Bone)
+				continue;
+
+			const std::string name =
+				MirrorName(source.Name, settings.Search, settings.Replace);
+
+			if (name.empty() || name == source.Name)
+			{
+				AXE_CORE_WARN("RigHierarchy: '{}' nao tem lado no nome (Left/Right, "
+					"_L/_R, .l/.r) — nao da pra espelhar.", source.Name);
+				continue;
+			}
+
+			// ── ONDE PENDURAR O ESPELHO ──────────────────────────────────────
+			//
+			// No espelho do pai, quando existir. Um controle de pe esquerdo
+			// pendurado no osso LeftFoot tem que virar um controle de pe
+			// direito pendurado no RightFoot — herdar o pai original deixaria
+			// o lado direito preso ao esquerdo, e o rig andaria de lado.
+			//
+			// Sem contraparte (o pai e a raiz, ou o Hips), fica no mesmo pai.
+			int parent = source.Parent;
+
+			if (parent >= 0)
+			{
+				const std::string mirroredParent =
+					MirrorName(m_Elements[parent].Name, settings.Search, settings.Replace);
+
+				if (!mirroredParent.empty() && mirroredParent != m_Elements[parent].Name)
+				{
+					const int p = Find(mirroredParent, m_Elements[parent].Type);
+
+					if (p >= 0)
+						parent = p;
+				}
+			}
+
+			int dst = Find(name, source.Type);
+
+			if (dst < 0)
+				dst = Add(name, source.Type, parent);
+
+			if (dst < 0)
+				continue;
+
+			// Tudo que e autoral vem junto: forma, cor, tamanho e o offset do
+			// desenho. O offset NAO e refletido — ele e local ao elemento, e o
+			// elemento ja esta espelhado, entao refletir de novo desfaria.
+			RigElement& mirror = m_Elements[dst];
+
+			mirror.ValueType = source.ValueType;
+			mirror.BoolValue = source.BoolValue;
+			mirror.FloatValue = source.FloatValue;
+			mirror.Shape = source.Shape;
+			mirror.ShapeColor = source.ShapeColor;
+			mirror.ShapeSize = source.ShapeSize;
+			mirror.ShapeOffset = source.ShapeOffset;
+
+			// O osso de origem tambem tem lado.
+			if (!source.SourceBone.empty())
+			{
+				const std::string bone =
+					MirrorName(source.SourceBone, settings.Search, settings.Replace);
+
+				mirror.SourceBone = bone.empty() ? source.SourceBone : bone;
+			}
+
+			// Reflete o GLOBAL e deixa o SetInitialGlobal converter de volta
+			// pro local do pai novo — que e o passo que faz o espelho cair no
+			// lugar certo mesmo com pai diferente.
+			const glm::mat4 g = GetInitialGlobal(src);
+
+			SetInitialGlobal(dst, S * g * S);
+
+			m_Elements[dst].Current = m_Elements[dst].Initial;
+
+			if (src == index)
+				result = dst;
+		}
+
+		MarkDirty();
+		return result;
+	}
+
 
 	int RigHierarchy::Remove(int index)
 	{
@@ -431,7 +834,22 @@ namespace axe
 	{
 		for (auto& e : m_Elements)
 		{
-			e.Current = e.Initial;
+			// Caminho rapido: sem pose, Current = Initial, exatamente como
+			// antes de Value existir. E o caso de TODO osso e de todo controle
+			// que ninguem posou — ou seja, quase tudo, quase sempre.
+			if (IsIdentityTransform(e.Value))
+			{
+				e.Current = e.Initial;
+			}
+			else
+			{
+				// Value e local ao REPOUSO, entao entra a direita: primeiro o
+				// elemento vai pro lugar dele, depois a pose se aplica no
+				// referencial dele mesmo. Trocar a ordem faria a pose girar em
+				// torno do pai, e o controle sairia num arco.
+				e.Current = BoneTransform::FromMatrix(
+					e.Initial.ToMatrix() * e.Value.ToMatrix());
+			}
 
 			// Todo mundo volta a aparecer no comeco do solve; quem quiser
 			// esconder alguem tem que dizer isso TODO frame. Sem esse reset,
