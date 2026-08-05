@@ -94,6 +94,77 @@ namespace axe
 	};
 
 	// Tudo que um no precisa saber do mundo durante o solve.
+	// ── BLACKBOARD DO GAMEPLAY ───────────────────────────────────────────────
+	//
+	// O que o jogo sabe e o rig nao tem como descobrir sozinho: velocidade, se
+	// esta no chao, o quanto o personagem esta agachado, o peso de uma mira. O
+	// AnimGraph ja tem esse quadro (AnimParameters) e a State Machine ja o le
+	// pra decidir transicoes — o rig so nao alcancava.
+	//
+	// ── SO LEITURA, DE PROPOSITO ─────────────────────────────────────────
+	//
+	// Nao ha Set aqui, e nao e esquecimento. O rig CONSULTA a engine e nunca a
+	// comanda: a unica coisa que ele escreve e a pose. Um rig que escrevesse no
+	// blackboard viraria logica de jogo no lugar errado, e o AnimGraph ja tem
+	// maquina de estados pra isso.
+	//
+	// Trigger tambem fica de fora. Consumir um trigger e efeito colateral, e o
+	// rig pode ser avaliado DUAS VEZES no mesmo frame (a corrente de execucao e
+	// um pull de saida). O segundo solve encontraria o pulso ja gasto.
+	//
+	// ── POR QUE UMA INTERFACE, E NAO AnimParameters* ──────────────────────
+	//
+	// rig_node_base nao pode depender de anim_parameters: o rig e um subsistema
+	// proprio, e o AnimGraph e so UM dos seus consumidores (o outro e o editor).
+	// Com a interface, quem monta o contexto decide de onde os valores vem — do
+	// blackboard em jogo, de valores de teste no preview, e amanha do Sequencer.
+	struct AXE_API RigBlackboard
+	{
+		virtual ~RigBlackboard() = default;
+
+		// Ausente devolve 0/false, nunca erro: um grafo que le uma variavel que o
+		// gameplay ainda nao escreveu tem que continuar rodando.
+		virtual float GetFloat(const std::string& name) const = 0;
+		virtual bool  GetBool(const std::string& name) const = 0;
+
+		// Pra interface poder avisar "esse nome nao existe" antes de o usuario
+		// cacar um zero que nao devia ser zero.
+		virtual bool  Has(const std::string& name) const = 0;
+	};
+
+	// ── VISAO ────────────────────────────────────────────────────────────────
+	//
+	// De onde a cena esta sendo observada. Nulo = ninguem informou (preview do
+	// editor, ou avaliacao fora de um contexto com camera).
+	//
+	// ── POR QUE O RIG PRECISA DISSO ──────────────────────────────────────
+	//
+	// Ha coisas que so fazem sentido em relacao a QUEM OLHA: a cabeca que
+	// acompanha a camera, o torso que gira conforme a mira, o rig que se
+	// desliga quando o personagem esta longe demais pra alguem notar.
+	//
+	// Nada disso e derivavel da pose — a pose nao sabe onde esta a camera.
+	//
+	// ── SO LEITURA, COMO O BLACKBOARD ────────────────────────────────────
+	//
+	// O rig LE a camera e nunca a move. Mover a camera e trabalho de gameplay
+	// ou do Sequencer; um rig que empurrasse a camera seria efeito colateral
+	// numa avaliacao que pode rodar duas vezes no mesmo frame.
+	struct AXE_API RigView
+	{
+		virtual ~RigView() = default;
+
+		// Transform da camera em espaco de MUNDO. Quem consome converte pro
+		// espaco do rig com a WorldTransform do contexto — a mesma conversao
+		// que o Ground Trace ja faz.
+		virtual glm::mat4 GetCameraWorld() const = 0;
+
+		// Campo de visao vertical, em graus. Serve pra decidir LOD com base no
+		// tamanho aparente, e nao so na distancia: um personagem longe com FOV
+		// fechado ocupa a tela inteira.
+		virtual float GetFovDegrees() const = 0;
+	};
+
 	struct AXE_API RigExecContext
 	{
 		RigHierarchy* Hierarchy = nullptr;
@@ -134,6 +205,15 @@ namespace axe
 		// Nulos no nivel raiz.
 		RigExecContext* Caller = nullptr;
 		int CallerNodeId = -1;
+
+		// O que o jogo sabe e o rig nao descobre sozinho. Nulo = sem blackboard
+		// (preview do editor, ou qualquer avaliacao fora do AnimGraph).
+		// Ver RigBlackboard, acima.
+		const RigBlackboard* Blackboard = nullptr;
+
+		// De onde a cena esta sendo vista. Nulo = sem camera informada.
+		// Ver RigView, acima.
+		const RigView* View = nullptr;
 
 		// ── BIBLIOTECA DE FUNCOES ────────────────────────────────────────────
 		//

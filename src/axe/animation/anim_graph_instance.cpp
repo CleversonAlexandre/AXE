@@ -61,6 +61,7 @@ namespace axe
 		ctx.Pool = &m_Pool;
 		ctx.WorldTransform = worldTransform;
 		ctx.AllowWorldQueries = allowWorldQueries;
+		ctx.View = View;
 
 		m_Graph.Update(ctx);
 
@@ -90,6 +91,7 @@ namespace axe
 		ctx.Pool = &m_Pool;
 		ctx.WorldTransform = worldTransform;
 		ctx.AllowWorldQueries = allowWorldQueries;
+		ctx.View = View;
 
 		m_Graph.Evaluate(ctx, out);
 

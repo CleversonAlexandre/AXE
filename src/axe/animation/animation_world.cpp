@@ -3,6 +3,11 @@
 #include "axe/animation/animation_sampler.hpp"
 #include "axe/animation/pose.hpp"
 #include "axe/animation/anim_graph_instance.hpp"
+
+// RigView chega ao anim_node.hpp so como declaracao adiantada (animation nao
+// deve depender do subsistema de rig no header). Aqui ela e HERDADA, entao
+// precisa do tipo completo — e este e o unico .cpp que precisa.
+#include "axe/animation/rig/rig_node_base.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/asset/asset_database.hpp"
@@ -16,9 +21,64 @@
 
 namespace axe
 {
+	namespace
+	{
+		// Adaptador entre a camera da cena e a interface que o rig conhece.
+		//
+		// Existe porque animation nao deve depender de scene no HEADER — a
+		// dependencia so vale aqui, no .cpp, onde o AnimationWorld ja tem a
+		// cena em maos por natureza.
+		struct SceneView final : RigView
+		{
+			glm::mat4 Cam{ 1.0f };
+			float     Fov = 60.0f;
+
+			glm::mat4 GetCameraWorld() const override { return Cam; }
+			float     GetFovDegrees() const override { return Fov; }
+		};
+
+		// A camera PRIMARIA da cena. Mesma regra que o editor ja usa pra
+		// escolher a camera de Play — a primeira com IsPrimary vence.
+		//
+		// Devolve false quando nao ha nenhuma: cena so de preview, ou uma em
+		// que ninguem marcou a camera ainda. Os nos de camera do rig viram
+		// no-op e o pino Valid sai false, que e o comportamento certo.
+		bool FindPrimaryCamera(entt::registry& reg, SceneView& out)
+		{
+			for (auto e : reg.view<CameraComponent>())
+			{
+				const auto& cam = reg.get<CameraComponent>(e);
+
+				if (!cam.IsPrimary)
+					continue;
+
+				const auto* tc = reg.try_get<TransformComponent>(e);
+
+				if (!tc)
+					continue;
+
+				out.Cam = tc->Data.GetMatrix();
+				out.Fov = cam.Fov;
+
+				return true;
+			}
+
+			return false;
+		}
+	}
+
 	void AnimationWorld::OnUpdate(Scene& scene, float deltaTime, bool inPlay)
 	{
 		auto& registry = scene.GetRegistry();
+
+		// UMA busca por frame, e nao uma por personagem: a camera e a mesma
+		// pra todo mundo na cena.
+		// Nome distinto de propósito: mais abaixo há um `auto view =
+		// registry.view<SkeletalMeshComponent>()`, e duas variáveis `view` no
+		// mesmo escopo fazem a segunda esconder a primeira — o erro real vira
+		// "SceneView não tem begin()", que aponta pro lugar errado.
+		SceneView sceneView;
+		const bool hasCamera = FindPrimaryCamera(registry, sceneView);
 
 		// FX de notify expiram por conta propria. O guard de valid() cobre o
 		// Stop: o restore do snapshot ja destruiu as entidades de Play, e a
@@ -98,6 +158,10 @@ namespace axe
 				// ativa pro Foot IK consultar. No preview do editor (inPlay
 				// false) o raycast cairia no mundo Jolt da cena principal —
 				// então o IK fica inerte lá, e a pose passa intacta.
+				// Sem camera na cena, fica nulo — o rig trata isso e nao inventa
+				// uma posicao de observador que nao existe.
+				skel.GraphInstance.View = hasCamera ? &sceneView : nullptr;
+
 				skel.GraphInstance.Update(*skeleton, deltaTime, advance, worldXform, inPlay);
 				skel.GraphInstance.Evaluate(*skeleton, m_ScratchPose, worldXform, inPlay);
 

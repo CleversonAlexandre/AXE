@@ -509,6 +509,17 @@ namespace axe
 
 		char m_NewFuncName[64] = "NewFunction";
 
+		// ── PALETA ───────────────────────────────────────────────────────────
+		//
+		// O menu passou de trinta nos. Sem busca, achar "Vector Length" no meio
+		// virou rolagem — e a lista so cresce.
+		char m_PaletteFilter[64] = "";
+
+		// Estado aberto/fechado por categoria, LEMBRADO entre aberturas: quem
+		// trabalha em Math nao quer reabrir Math toda vez. Sete = o numero de
+		// categorias; se acrescentar uma, aumente aqui.
+		bool m_PaletteOpen[8] = { true, true, true, true, true, true, true, true };
+
 		// Acoes diferidas: mexem no vector de funcoes ou trocam o grafo
 		// desenhado, e nenhuma das duas pode acontecer no meio do loop que
 		// desenha a lista ou dentro do Begin/End do node-editor.

@@ -5,6 +5,8 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cctype>
+#include <string>
 #include <cstdio>
 #include <unordered_map>
 
@@ -99,6 +101,17 @@ namespace axe
 			// eventos do grafo principal, tom proprio.
 			if (t == "Entry" || t == "Return")             return ImVec4(0.35f, 0.30f, 0.55f, 1.0f);
 
+			// Evaluate e de FLUXO: nao le nem escreve pose, ordena leitura. Cor
+			// propria pra nao ser confundido com os nos que produzem valor.
+			if (t == "Evaluate")                           return ImVec4(0.30f, 0.34f, 0.42f, 1.0f);
+
+			// Le de FORA do rig — nem hierarquia nem mundo, mas o estado do
+			// jogo. Tom proprio pra ficar claro de onde o valor vem.
+			if (t == "GetGameplayVariable")                return ImVec4(0.42f, 0.30f, 0.42f, 1.0f);
+
+			// Le de FORA do rig, como o blackboard — mesma familia de cor.
+			if (t == "GetCameraTransform")                 return ImVec4(0.42f, 0.30f, 0.42f, 1.0f);
+
 			// Call nao e nenhuma das categorias — ele CONTEM todas.
 			if (t == "CallFunction")                       return ImVec4(0.13f, 0.38f, 0.35f, 1.0f);
 			if (t == "Sequence" || t == "Branch" || t == "ForEach")
@@ -107,6 +120,7 @@ namespace axe
 				|| t == "FKChain" || t == "ParentConstraint"
 				|| t == "AlignToVector"
 				|| t == "SetControlPose"
+				|| t == "OffsetLocation"
 				|| t == "PelvisDip")
 				return ImVec4(0.50f, 0.33f, 0.14f, 1.0f);
 			if (t == "GetTransform" || t == "GroundTrace") return ImVec4(0.16f, 0.34f, 0.50f, 1.0f);
@@ -1299,9 +1313,25 @@ namespace axe
 
 		if (ImGui::BeginPopup("rig_palette"))
 		{
+			// ── Busca ────────────────────────────────────────────────────────
+			//
+			// Foco automatico ao abrir: o gesto vira "botao direito, digita" —
+			// sem clicar no campo. Mesmo comportamento do Script Editor.
+			ImGui::SetNextItemWidth(-1.0f);
+
+			if (ImGui::IsWindowAppearing())
+				ImGui::SetKeyboardFocusHere();
+
+			ImGui::InputTextWithHint("##palfilter", "Buscar no...",
+				m_PaletteFilter, sizeof(m_PaletteFilter));
+
+			ImGui::Separator();
+
 			// Colar no ponto onde o menu foi aberto. So aparece quando ha algo
-			// pra colar: um item permanentemente cinza vira ruido.
-			if (!m_Clipboard.Nodes.empty())
+			// pra colar (item permanentemente cinza vira ruido) e quando NAO ha
+			// busca ativa — quem digitou esta procurando um no, e um "Colar"
+			// no meio do resultado nao pertence ali.
+			if (!m_Clipboard.Nodes.empty() && m_PaletteFilter[0] == 0)
 			{
 				if (ImGui::MenuItem("Colar", "Ctrl+V"))
 					PasteNodes(m_MenuCanvasPos);
@@ -1315,11 +1345,14 @@ namespace axe
 			// ("preciso escrever num osso"), nao pela letra inicial.
 			static const Entry kFlow[] = {
 				{ "Sequence", "Sequence" },
+				{ "Evaluate", "Evaluate" },
 				{ "Branch",   "Branch" },
 				{ "For Each", "ForEach" },
 			};
 
 			static const Entry kRead[] = {
+				{ "Get Gameplay Variable", "GetGameplayVariable" },
+				{ "Get Camera Transform",  "GetCameraTransform" },
 				{ "Get Transform", "GetTransform" },
 				{ "Ground Trace",  "GroundTrace" },
 				{ "Trace",         "Trace" },
@@ -1339,6 +1372,7 @@ namespace axe
 
 			static const Entry kWrite[] = {
 				{ "Set Transform", "SetTransform" },
+				{ "Offset Location", "OffsetLocation" },
 				{ "Set Control Pose", "SetControlPose" },
 				{ "Two Bone IK",   "TwoBoneIK" },
 				{ "FK Chain",      "FKChain" },
@@ -1357,72 +1391,154 @@ namespace axe
 				{ "Make Transform",  "MakeTransform" },
 				{ "Break Transform", "BreakTransform" },
 				{ "Vector Op",       "VectorOp" },
+				{ "Vector Length",   "VectorToFloat" },
+				{ "Meters To Component", "MetersToComponent" },
 				{ "Float Math",      "FloatMath" },
 				{ "Select Float",    "SelectFloat" },
 				{ "Damp Float",      "DampFloat" },
 				{ "Damp Vector",     "DampVector" },
 			};
 
-			auto emit = [&](const Entry* list, int count)
+			// Criar e DESENHAR ficaram separados: o desenho do item de menu
+			// mora no laco das categorias (que precisa filtrar por busca), e
+			// aqui fica so o que acontece no clique.
+			auto spawn = [&](const char* type)
 				{
-					for (int i = 0; i < count; ++i)
-					{
-						if (!ImGui::MenuItem(list[i].Label))
-							continue;
+					auto node = CreateRigNode(type);
 
-						auto node = CreateRigNode(list[i].Type);
+					if (!node)
+						return;
 
-						if (!node)
-							continue;
+					node->EditorX = m_MenuCanvasPos.x;
+					node->EditorY = m_MenuCanvasPos.y;
 
-						node->EditorX = m_MenuCanvasPos.x;
-						node->EditorY = m_MenuCanvasPos.y;
+					const int id = graph.AddNode(std::move(node));
 
-						const int id = graph.AddNode(std::move(node));
+					// Posiciona SO o no novo. Nao mexemos na flag global de
+					// posicoes, que reposicionaria todos e desfaria o arranjo
+					// que voce ja montou.
+					ed::SetNodePosition(id, m_MenuCanvasPos);
 
-						// Posiciona SO o no novo. Nao mexemos na flag global de
-						// posicoes, que reposicionaria todos e desfaria o
-						// arranjo que voce ja montou.
-						ed::SetNodePosition(id, m_MenuCanvasPos);
+					m_SelectedNode = id;
+					m_SelectedElement = -1;
 
-						m_SelectedNode = id;
-						m_SelectedElement = -1;
-
-						MarkEdited("Add node");
-					}
+					MarkEdited("Add node");
 				};
 
-			// IM_ARRAYSIZE e nao um numero digitado: a contagem a mao ja
-			// escondeu uma entrada de menu neste projeto (o "Particle Burst"
-			// do script editor, que ficou invisivel por meses porque a tabela
-			// dizia 11 com 12 entradas). Agora acrescentar uma linha na tabela
-			// basta.
-			ImGui::TextDisabled("Events");
-			emit(kEvents, IM_ARRAYSIZE(kEvents));
+			// ── Categorias ───────────────────────────────────────────────────
+			//
+			// IM_ARRAYSIZE e nao um numero digitado: a contagem a mao ja escondeu
+			// uma entrada de menu neste projeto (o "Particle Burst" do script
+			// editor, invisivel por meses porque a tabela dizia 11 com 12
+			// entradas). Acrescentar uma linha na tabela basta.
+			struct Cat
+			{
+				const char* Name;
+				const Entry* Items;
+				int Count;
+				ImVec4 Color;
+			};
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Functions");
-			emit(kFunc, IM_ARRAYSIZE(kFunc));
+			// As cores ecoam as do NO no canvas: a categoria de onde voce tirou o
+			// no e a cor que ele tem na tela.
+			const Cat kCats[] =
+			{
+				{ "Events",    kEvents,   IM_ARRAYSIZE(kEvents),   ImVec4(0.55f, 0.28f, 0.28f, 1.0f) },
+				{ "Functions", kFunc,     IM_ARRAYSIZE(kFunc),     ImVec4(0.18f, 0.48f, 0.44f, 1.0f) },
+				{ "Flow",      kFlow,     IM_ARRAYSIZE(kFlow),     ImVec4(0.38f, 0.42f, 0.50f, 1.0f) },
+				{ "Read",      kRead,     IM_ARRAYSIZE(kRead),     ImVec4(0.28f, 0.42f, 0.62f, 1.0f) },
+				{ "Write",     kWrite,    IM_ARRAYSIZE(kWrite),    ImVec4(0.62f, 0.42f, 0.24f, 1.0f) },
+				{ "Math",      kMath,     IM_ARRAYSIZE(kMath),     ImVec4(0.38f, 0.38f, 0.44f, 1.0f) },
+				{ "Organize",  kOrganize, IM_ARRAYSIZE(kOrganize), ImVec4(0.45f, 0.42f, 0.30f, 1.0f) },
+			};
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Flow");
-			emit(kFlow, IM_ARRAYSIZE(kFlow));
+			// Busca em minusculas, dos dois lados. Sem isto "trace" nao acharia
+			// "Ground Trace" — e ninguem digita com a caixa certa.
+			std::string needle = m_PaletteFilter;
+			std::transform(needle.begin(), needle.end(), needle.begin(),
+				[](unsigned char c) { return (char)std::tolower(c); });
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Read");
-			emit(kRead, IM_ARRAYSIZE(kRead));
+			const bool filtering = !needle.empty();
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Write");
-			emit(kWrite, IM_ARRAYSIZE(kWrite));
+			const auto matches = [&](const char* label)
+				{
+					if (!filtering)
+						return true;
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Math");
-			emit(kMath, IM_ARRAYSIZE(kMath));
+					std::string low = label;
+					std::transform(low.begin(), low.end(), low.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Organize");
-			emit(kOrganize, IM_ARRAYSIZE(kOrganize));
+					return low.find(needle) != std::string::npos;
+				};
+
+			int shown = 0;
+
+			for (int ci = 0; ci < IM_ARRAYSIZE(kCats); ++ci)
+			{
+				const Cat& cat = kCats[ci];
+
+				// Categoria sem nenhum item que case some inteira — filtrar e
+				// mostrar sete cabecalhos vazios nao ajuda ninguem.
+				int hits = 0;
+
+				for (int i = 0; i < cat.Count; ++i)
+					if (matches(cat.Items[i].Label))
+						++hits;
+
+				if (!hits)
+					continue;
+
+				shown += hits;
+
+				ImGui::PushStyleColor(ImGuiCol_Header, cat.Color);
+				ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+					ImVec4(cat.Color.x * 1.35f, cat.Color.y * 1.35f, cat.Color.z * 1.35f, 1.0f));
+
+				// Filtrando, tudo abre: voce buscou justamente pra ver o
+				// resultado, nao pra abrir categoria por categoria.
+				const bool open = filtering
+					|| ImGui::CollapsingHeader(cat.Name,
+						m_PaletteOpen[ci] ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+
+				// So memoriza o estado quando NAO esta filtrando — senao a busca
+				// deixaria todas as categorias abertas pra sempre.
+				if (!filtering)
+					m_PaletteOpen[ci] = open;
+
+				ImGui::PopStyleColor(2);
+
+				if (!open)
+					continue;
+
+				ImGui::Indent(8.0f);
+
+				for (int i = 0; i < cat.Count; ++i)
+				{
+					if (!matches(cat.Items[i].Label))
+						continue;
+
+					// Cor do texto igual a da categoria: o item carrega a
+					// mesma identidade visual do no que vai criar.
+					ImGui::PushStyleColor(ImGuiCol_Text, cat.Color);
+					const bool clicked = ImGui::MenuItem(cat.Items[i].Label);
+					ImGui::PopStyleColor();
+
+					if (clicked)
+					{
+						spawn(cat.Items[i].Type);
+
+						// Limpa a busca: o menu fecha ao clicar, e reabrir com
+						// o filtro anterior escondendo tudo confunde.
+						m_PaletteFilter[0] = 0;
+					}
+				}
+
+				ImGui::Unindent(8.0f);
+			}
+
+			if (!shown)
+				ImGui::TextDisabled("Nenhum no com \"%s\".", m_PaletteFilter);
 
 			ImGui::EndPopup();
 		}

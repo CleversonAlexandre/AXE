@@ -82,6 +82,11 @@ namespace axe
 		std::size_t m_Used = 0;
 	};
 
+	// Declarado la, em rig_node_base.hpp. Ponteiro pra tipo incompleto e legal
+	// e evita que animation passe a depender do subsistema de rig — a
+	// dependencia correta e a inversa: o rig e um consumidor da animacao.
+	struct RigView;
+
 	struct AXE_API AnimEvalContext
 	{
 		const Skeleton* Skel = nullptr;
@@ -101,6 +106,17 @@ namespace axe
 		// preview antes de posicionar, um teste) continua funcionando — o IK
 		// simplesmente trabalha como se o personagem estivesse na origem.
 		glm::mat4 WorldTransform{ 1.0f };
+
+		// De onde a cena está sendo vista. Nulo = ninguém informou.
+		//
+		// Só o Control Rig usa hoje — animação em espaço local não tem por que
+		// saber da câmera. Mas o contexto é o caminho por onde tudo que vem de
+		// FORA do grafo chega, e a câmera é uma dessas coisas: look-at, aim
+		// procedural e LOD de rig dependem dela e não são deriváveis da pose.
+		//
+		// Interface e não CameraComponent*: animation não deve depender de
+		// scene. Quem monta o contexto decide de onde o valor vem.
+		const RigView* View = nullptr;
 
 		// O grafo pode consultar o MUNDO (raycast de física)?
 		//

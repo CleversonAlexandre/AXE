@@ -1307,6 +1307,49 @@ namespace axe
 		rc.DeltaTime = m_LastDt;
 		rc.Graph = &m_Graph;
 
+		// ── Blackboard ───────────────────────────────────────────────────────
+		//
+		// Adaptador entre AnimParameters e a interface que o rig conhece. Ele
+		// existe porque rig_node_base nao pode depender de anim_parameters — o
+		// rig e subsistema proprio, e o AnimGraph e so um dos consumidores.
+		//
+		// Local (na pilha): o contexto vive UM solve, e o adaptador junto. Sem
+		// alocacao, sem estado, sem dono pra gerenciar.
+		//
+		// SO os getters. ConsumeTrigger fica de fora de proposito: consumir e
+		// efeito colateral, e o rig pode rodar duas vezes no mesmo frame.
+		struct ParamsBridge final : RigBlackboard
+		{
+			const AnimParameters* P = nullptr;
+
+			float GetFloat(const std::string& n) const override
+			{
+				return P ? P->GetFloat(n) : 0.0f;
+			}
+
+			bool GetBool(const std::string& n) const override
+			{
+				return P ? P->GetBool(n) : false;
+			}
+
+			bool Has(const std::string& n) const override
+			{
+				return P && P->Has(n);
+			}
+		};
+
+		ParamsBridge bridge;
+		bridge.P = ctx.Params;
+
+		// Nulo quando o AnimGraph roda sem blackboard — o no de leitura vira
+		// no-op silencioso, que e o certo.
+		rc.Blackboard = ctx.Params ? &bridge : nullptr;
+
+		// A visao atravessa sem adaptador: a MESMA interface ja viaja no
+		// contexto de animacao. Quem monta o AnimEvalContext (o AnimationWorld,
+		// que tem a cena em maos) e quem sabe qual camera esta ativa.
+		rc.View = ctx.View;
+
 		// Biblioteca de funcoes da INSTANCIA. Sem isto, um no Call nao acha a
 		// definicao e vira no-op: o rig rodaria pela metade, em silencio.
 		rc.ResolveFunction = [this](const std::string& name) -> RigGraph*

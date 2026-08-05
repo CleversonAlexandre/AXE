@@ -411,6 +411,86 @@ namespace axe
 			return;
 		}
 
+		// ── Offset Location ──────────────────────────────────────────────────
+		if (auto* ol = dynamic_cast<RigNode_OffsetLocation*>(n))
+		{
+			ImGui::TextWrapped("Desloca um elemento por um vetor. Rotacao e escala "
+				"NAO sao tocadas.");
+			ImGui::Spacing();
+
+			int sp = (int)ol->Space;
+			static const char* kOlSpaces[] = { "Global", "Local" };
+
+			if (ImGui::Combo("Space", &sp, kOlSpaces, IM_ARRAYSIZE(kOlSpaces)))
+			{
+				ol->Space = (RigSpace)sp;
+				MarkEdited("Change space");
+			}
+
+			if (ol->Space == RigSpace::Global)
+			{
+				if (ImGui::Checkbox("Propagate to children", &ol->PropagateToChildren))
+					MarkEdited("Toggle propagate");
+			}
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextDisabled("Sem este no, deslocar um osso custava quatro:\nGet Transform + Vector Add + Make Transform + Set\nTransform — e o Make DESCARTA a rotacao original.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Dip do quadril, recuo da mao antes da parede,\nqualquer 'a pose esta certa, so precisa sair do lugar'.");
+			return;
+		}
+
+		// ── Meters To Component ──────────────────────────────────────────────
+		if (dynamic_cast<RigNode_MetersToComponent*>(n))
+		{
+			ImGui::TextWrapped("Converte METROS do mundo em unidades de espaco de "
+				"componente. Invert faz o contrario.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("O rig fala duas linguas: Ground Trace e Trace\nrecebem metros (falam com a fisica), e todo o resto\ntrabalha em espaco de componente.");
+			ImGui::Spacing();
+			ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.20f, 1.0f), "Por que isso importa");
+			ImGui::TextDisabled("Sem converter, um limiar em metros funciona no\npersonagem em escala 1 e desanda em qualquer outro —\nsem nada apontar pra causa.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("A saida Scale expoe a escala crua, pra quem\nprecisar comparar tamanhos.");
+			return;
+		}
+
+		// ── Vector To Float ──────────────────────────────────────────────────
+		if (auto* vf = dynamic_cast<RigNode_VectorToFloat*>(n))
+		{
+			// A ORDEM espelha o enum Op, que e serializado como inteiro.
+			static const char* kVfOps[] =
+			{
+				"Length", "Distance", "Dot", "X", "Y", "Z"
+			};
+
+			int op = (int)vf->Operation;
+
+			if (ImGui::Combo("Operation", &op, kVfOps, IM_ARRAYSIZE(kVfOps)))
+			{
+				vf->Operation = (RigNode_VectorToFloat::Op)op;
+
+				// O titulo segue a operacao enquanto voce nao renomear.
+				vf->Title = std::string("Vector ") + kVfOps[op];
+
+				MarkEdited("Change operation");
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("Length e X/Y/Z usam so A. Distance e Dot usam os dois.");
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextWrapped("Medir e o que permite resposta GRADUAL. O Hit de um "
+				"trace e bool: o braco sobe inteiro ou nao sobe. Com Distance + "
+				"Float Math (Clamp), ele sobe conforme a parede se aproxima.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Dot com dois vetores unitarios da o cosseno:\n"
+				"  1 = mesma direcao   0 = perpendicular   -1 = opostos\n"
+				"Normalize antes, se precisar do angulo.");
+			return;
+		}
+
 		// ── Vector Op ────────────────────────────────────────────────────────
 		if (auto* v = dynamic_cast<RigNode_VectorOp*>(n))
 		{
@@ -660,9 +740,12 @@ namespace axe
 			ImGui::TextWrapped("Caminho INVERSO: le os ossos animados e encosta os "
 				"controles neles.");
 			ImGui::Spacing();
-			ImGui::TextDisabled("Nao roda por frame. Roda quando voce aperta Backward solve' na barra — e, no futuro, quando o Sequencer carregar uma animacao.");
+			ImGui::TextDisabled("Nao roda por frame. Roda quando voce aperta\n"
+				"'Backward solve' na barra — e, no futuro, quando o\n"
+				"Sequencer carregar uma animacao.");
 			ImGui::Spacing();
-			ImGui::TextDisabled("Monte com: Get Transform (osso, Global) -> Set Control Pose (controle).");
+			ImGui::TextDisabled("Monte com: Get Transform (osso, Global)\n"
+				"             -> Set Control Pose (controle).");
 			return;
 		}
 
@@ -670,7 +753,9 @@ namespace axe
 		{
 			ImGui::TextWrapped("Poe um controle numa posicao e faz GRUDAR.");
 			ImGui::Spacing();
-			ImGui::TextDisabled("O Set Transform comum escreve no Current, que e apagado no comeco de cada solve. Este escreve na pose do controle, que sobrevive.");
+			ImGui::TextDisabled("O Set Transform comum escreve no Current, que e\n"
+				"apagado no comeco de cada solve. Este escreve na pose\n"
+				"do controle, que sobrevive.");
 			ImGui::Spacing();
 			ImGui::TextDisabled("Transform em espaco GLOBAL do rig.");
 			ImGui::TextDisabled("So Control e Null. Pra osso, use Set Transform.");
@@ -871,6 +956,137 @@ namespace axe
 			ImGui::Spacing();
 			ImGui::TextWrapped("Ligue duas listas num FK Chain — ossos de um lado, "
 				"controles do outro, na MESMA ordem.");
+
+			return;
+		}
+
+		// ── Get Camera Transform ─────────────────────────────────────────────
+		if (dynamic_cast<RigNode_GetCameraTransform*>(n))
+		{
+			ImGui::TextWrapped("Onde esta a camera. Ja no espaco do rig — ligue "
+				"direto, sem conversao no meio.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Forward e o 'pra frente' da camera, normalizado.\n"
+				"E o que se liga num Align To Vector.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Valid diz se ha camera. Sem ela as saidas ficam\n"
+				"em zero — e o personagem olharia pra origem do rig.");
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextDisabled("Look-at: Align To Vector no pescoco, To = a direcao\n"
+				"ate a camera (Location - Location da cabeca).");
+			ImGui::Spacing();
+			ImGui::TextDisabled("LOD de rig: Vector Distance da camera ate o quadril,\n"
+				"um Clamp, e o peso dos IKs cai sozinho com a distancia.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("No preview nao ha camera de cena: teste em Play.");
+			return;
+		}
+
+		// ── Get Gameplay Variable ────────────────────────────────────────────
+		if (auto* gv = dynamic_cast<RigNode_GetGameplayVariable*>(n))
+		{
+			ImGui::TextWrapped("Le uma variavel do blackboard do AnimGraph — o mesmo "
+				"quadro que a State Machine usa.");
+			ImGui::Spacing();
+
+			char buf[64];
+			std::snprintf(buf, sizeof(buf), "%s", gv->VariableName.c_str());
+
+			ImGui::TextDisabled("Nome da variavel");
+
+			if (ImGui::InputText("##var", buf, sizeof(buf)))
+			{
+				gv->VariableName = buf;
+
+				// O titulo segue o nome: cinco "Get Gameplay Variable" na tela
+				// nao dizem nada.
+				gv->Title = gv->VariableName.empty()
+					? "Get Gameplay Variable" : gv->VariableName;
+
+				MarkEdited("Set variable name");
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("Escreva o nome EXATO que o gameplay usa\n"
+				"(o mesmo do Set Float / Set Bool no script).");
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextDisabled("Float e Bool sempre respondem: um Int escrito\n"
+				"pelo gameplay lido como float da o valor, nao zero.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Found diz se a variavel EXISTE no quadro —\n"
+				"e como distinguir 'nao achei' de um zero legitimo.");
+			ImGui::Spacing();
+			ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.20f, 1.0f), "Estado, nao intencao");
+			ImGui::TextDisabled("Velocidade, se esta no chao, peso de mira: sim.\n"
+				"AttackState, CurrentCombo: nao — decisao mora na\n"
+				"maquina de estados, nao no rig.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("No preview nao ha blackboard: as saidas ficam\n"
+				"em zero. Teste em Play.");
+			return;
+		}
+
+		// ── Evaluate ─────────────────────────────────────────────────────────
+		if (dynamic_cast<RigNode_Evaluate*>(n))
+		{
+			ImGui::TextWrapped("Le os pinos ligados nele e joga fora. O efeito e o "
+				"MOMENTO da leitura.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Um valor e calculado na PRIMEIRA leitura do solve\n"
+				"e reaproveitado depois. Este no captura o valor agora,\n"
+				"antes de algo mais adiante mudar a hierarquia.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Foot IK: leia as alturas dos dois pes ANTES de\n"
+				"mover o quadril, senao os traces respondem a partir\n"
+				"de pes ja deslocados.");
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextDisabled("Inputs");
+			ImGui::Spacing();
+
+			for (std::size_t i = 0; i < n->Inputs.size(); ++i)
+				ImGui::BulletText("%s", n->Inputs[i].Name.c_str());
+
+			ImGui::Spacing();
+
+			if (ImGui::Button("Add input", ImVec2(-1, 0)))
+			{
+				RigPin p;
+
+				// Nome por LETRA, na ordem: A, B, C... Depois de Z volta a
+				// numerar — ninguem vai alcancar, mas nao produz nome repetido
+				// se alcancar.
+				const std::size_t k = n->Inputs.size();
+
+				p.Name = (k < 26)
+					? std::string(1, (char)('A' + k))
+					: ("In" + std::to_string(k));
+
+				p.Type = RigPinType::Wildcard;
+
+				n->Inputs.push_back(std::move(p));
+				MarkEdited("Add input");
+			}
+
+			// Nunca abaixo de um: um Evaluate sem pino nao le nada, e nao teria
+			// como voltar a ter pino a nao ser por aqui.
+			const bool canRemoveIn = n->Inputs.size() > 1;
+
+			if (ImGui::Button("Remove last", ImVec2(-1, 0)) && canRemoveIn)
+			{
+				// O fio que chegava nele morre JUNTO — mesmo motivo do Sequence:
+				// fio apontando pra pino inexistente e a origem classica do
+				// "apaguei algo e o editor ficou estranho".
+				graph.UnlinkDataInput(n->Id, (int)n->Inputs.size() - 1);
+
+				n->Inputs.pop_back();
+				MarkEdited("Remove input");
+			}
+
+			if (!canRemoveIn)
+				ImGui::TextDisabled("(minimo de um pino)");
 
 			return;
 		}

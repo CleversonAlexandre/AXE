@@ -90,6 +90,109 @@ namespace axe
 		ctx.Graph->RunExecPin(ctx, Id, 1);
 	}
 
+	void RigNode_GetCameraTransform::EvalOutput(RigExecContext& ctx, int pin,
+		RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		// Sem visao: preview do editor, ou avaliacao fora de um contexto com
+		// camera. Devolve zeros e NAO avisa — no preview isso e o normal, e o
+		// pino Valid existe pra quem quiser tratar no grafo.
+		if (!ctx.View)
+			return;
+
+		if (pin == 4)
+		{
+			out.Bool = true;
+			return;
+		}
+
+		if (pin == 3)
+		{
+			out.Float = ctx.View->GetFovDegrees();
+			return;
+		}
+
+		// Mundo -> espaco do rig. Mesma conversao do Ground Trace, e o motivo
+		// de ela morar aqui: o no e a fronteira, entao ele paga o custo de
+		// traduzir. Quem consome trabalha no espaco de sempre.
+		const glm::mat4 toLocal = glm::inverse(ctx.WorldTransform);
+		const glm::mat4 camWorld = ctx.View->GetCameraWorld();
+		const glm::mat4 camLocal = toLocal * camWorld;
+
+		switch (pin)
+		{
+		case 0:
+			out.Transform = BoneTransform::FromMatrix(camLocal);
+			break;
+
+		case 1:
+			out.Vector = glm::vec3(camLocal[3]);
+			break;
+
+		case 2:
+		{
+			// -Z e o "pra frente" da convencao de camera (OpenGL/glm): a camera
+			// olha pro -Z do proprio espaco. Usar +Z aqui daria um look-at que
+			// funciona ao contrario, e o sintoma seria o personagem virando as
+			// costas pra quem olha.
+			const glm::vec3 fwd = -glm::vec3(camLocal[2]);
+
+			out.Vector = (glm::length2(fwd) > 1e-12f)
+				? glm::normalize(fwd) : glm::vec3(0.0f, 0.0f, 1.0f);
+			break;
+		}
+
+		default:
+			break;
+		}
+	}
+
+	void RigNode_GetGameplayVariable::EvalOutput(RigExecContext& ctx, int pin,
+		RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		// Sem blackboard: preview do editor, ou qualquer avaliacao fora do
+		// AnimGraph. Devolve zero e NAO avisa — no preview isso e o normal, e
+		// um aviso a cada abertura de rig seria ruido.
+		if (!ctx.Blackboard || VariableName.empty())
+			return;
+
+		const bool found = ctx.Blackboard->Has(VariableName);
+
+		if (pin == 2)
+		{
+			out.Bool = found;
+			return;
+		}
+
+		// Nome que nao existe no quadro quase sempre e erro de digitacao — e o
+		// sintoma seria um zero indistinguivel de um zero legitimo. Avisa UMA
+		// vez por no; o pino Found existe pra quem quiser tratar no grafo.
+		if (!found)
+		{
+			if (!m_WarnedMissing)
+			{
+				m_WarnedMissing = true;
+
+				AXE_CORE_WARN("Get Gameplay Variable '{}': o blackboard nao tem "
+					"nenhuma variavel chamada '{}' — as saidas ficam em zero. "
+					"Confira o nome, ou use o pino Found.", Title, VariableName);
+			}
+
+			return;
+		}
+
+		// Os getters do AnimParameters ja convertem entre tipos: um Int escrito
+		// pelo gameplay lido como float da o valor, nao zero. Entao as duas
+		// saidas sempre respondem, e ligar a que voce precisa faz o esperado.
+		if (pin == 0)
+			out.Float = ctx.Blackboard->GetFloat(VariableName);
+		else
+			out.Bool = ctx.Blackboard->GetBool(VariableName);
+	}
+
 	void RigNode_At::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
 	{
 		(void)pin;
@@ -289,6 +392,91 @@ namespace axe
 	{
 		Space = (RigSpace)j.value("space", 0);
 		PropagateToChildren = j.value("propagate", true);
+	}
+
+	// ═══ Offset Location ═════════════════════════════════════════════════════
+
+	RigNode_OffsetLocation::RigNode_OffsetLocation()
+	{
+		Title = "Offset Location";
+		HasExecIn = true;
+		ExecOut.push_back("");
+
+		AddInItem("Item", RigElementType::Bone);
+		AddIn("Offset", RigPinType::Vector);
+		AddInFloat("Weight", 1.0f);
+	}
+
+	void RigNode_OffsetLocation::Execute(RigExecContext& ctx)
+	{
+		if (!ctx.Hierarchy)
+			return;
+
+		const int item = ReadItem(ctx, 0);
+
+		if (item < 0)
+			return;
+
+		const float weight = glm::clamp(ReadFloat(ctx, 2), 0.0f, 1.0f);
+
+		if (weight <= 0.0001f)
+			return;
+
+		const glm::vec3 offset = ReadVector(ctx, 1) * weight;
+
+		if (glm::length2(offset) < 1e-12f)
+			return;
+
+		RigHierarchy& h = *ctx.Hierarchy;
+
+		if (Space == RigSpace::Local)
+		{
+			// Local: soma direto na translacao. Rotacao e escala nao sao
+			// tocadas — e o ponto inteiro deste no.
+			BoneTransform t = h.GetLocal(item);
+			t.Translation += offset;
+
+			h.SetLocal(item, t);
+			return;
+		}
+
+		// Global: TRANSLADA a matriz, sem decompor.
+		//
+		// Compor um transform novo aqui (Make Transform) reintroduziria erro de
+		// decomposicao a cada frame, e um osso com escala nao-uniforme sofreria
+		// deformacao acumulada. Somar na coluna de translacao nao toca nas
+		// outras tres.
+		glm::mat4 g = h.GetGlobal(item);
+		g[3] += glm::vec4(offset, 0.0f);
+
+		h.SetGlobal(item, g, PropagateToChildren);
+	}
+
+	// ═══ Meters To Component ═════════════════════════════════════════════════
+
+	void RigNode_MetersToComponent::EvalOutput(RigExecContext& ctx, int pin,
+		RigPinValue& out)
+	{
+		out = RigPinValue{};
+
+		// Quantos metros do mundo valem 1 unidade de componente. E o
+		// comprimento da coluna Y da world transform — a MESMA conta que o
+		// Ground Trace e o Trace fazem por dentro.
+		//
+		// Guarda contra escala zero: um personagem com escala 0 nao existe, mas
+		// a divisao seguinte estouraria.
+		const float scale = std::max(1e-6f,
+			glm::length(glm::vec3(ctx.WorldTransform[1])));
+
+		if (pin == 1)
+		{
+			out.Float = scale;
+			return;
+		}
+
+		const float value = ReadFloat(ctx, 0);
+
+		out.Float = ReadBool(ctx, 1) ? (value * scale) : (value / scale);
 	}
 
 	// ═══ Two Bone IK ═════════════════════════════════════════════════════════
@@ -1287,6 +1475,36 @@ namespace axe
 		Operation = (Op)j.value("op", 0);
 	}
 
+	// ═══ Vector To Float ═════════════════════════════════════════════════════
+
+	void RigNode_VectorToFloat::EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out)
+	{
+		(void)pin;
+
+		out = RigPinValue{};
+
+		const glm::vec3 a = ReadVector(ctx, 0);
+		const glm::vec3 b = ReadVector(ctx, 1);
+
+		switch (Operation)
+		{
+		case Op::Length:   out.Float = glm::length(a); break;
+		case Op::Distance: out.Float = glm::length(b - a); break;
+
+			// SEM normalizar por dentro. Dot de unitarios da o cosseno do
+			// angulo, que e o uso comum — mas normalizar aqui esconderia a
+			// escala de quem quiser a projecao de verdade. Normalize antes, se
+			// for o caso: e um no, e fica visivel no grafo.
+		case Op::Dot:      out.Float = glm::dot(a, b); break;
+
+			// Componentes soltos. Break Transform desmonta um transform; nao
+			// havia como tirar UM eixo de um vetor sem passar por Make/Break.
+		case Op::X:        out.Float = a.x; break;
+		case Op::Y:        out.Float = a.y; break;
+		case Op::Z:        out.Float = a.z; break;
+		}
+	}
+
 	// ═══ Reroute / Comment ═══════════════════════════════════════════════════
 
 	void RigNode_Reroute::Serialize(nlohmann::json& j) const
@@ -1908,11 +2126,14 @@ namespace axe
 		if (t == "CallFunction")   return std::make_unique<RigNode_CallFunction>();
 		if (t == "SetControlPose") return std::make_unique<RigNode_SetControlPose>();
 		if (t == "Sequence")       return std::make_unique<RigNode_Sequence>();
+		if (t == "Evaluate")       return std::make_unique<RigNode_Evaluate>();
 		if (t == "Branch")         return std::make_unique<RigNode_Branch>();
 		if (t == "ForEach")        return std::make_unique<RigNode_ForEach>();
 		if (t == "ProjectToNewParent") return std::make_unique<RigNode_ProjectToNewParent>();
 		if (t == "GetTransform")   return std::make_unique<RigNode_GetTransform>();
 		if (t == "SetTransform")   return std::make_unique<RigNode_SetTransform>();
+		if (t == "OffsetLocation") return std::make_unique<RigNode_OffsetLocation>();
+		if (t == "MetersToComponent") return std::make_unique<RigNode_MetersToComponent>();
 		if (t == "TwoBoneIK")      return std::make_unique<RigNode_TwoBoneIK>();
 		if (t == "GroundTrace")    return std::make_unique<RigNode_GroundTrace>();
 		if (t == "Trace")          return std::make_unique<RigNode_Trace>();
@@ -1920,6 +2141,7 @@ namespace axe
 		if (t == "MakeTransform")  return std::make_unique<RigNode_MakeTransform>();
 		if (t == "BreakTransform") return std::make_unique<RigNode_BreakTransform>();
 		if (t == "VectorOp")       return std::make_unique<RigNode_VectorOp>();
+		if (t == "VectorToFloat")  return std::make_unique<RigNode_VectorToFloat>();
 		if (t == "FloatMath")      return std::make_unique<RigNode_FloatMath>();
 		if (t == "SelectFloat")    return std::make_unique<RigNode_SelectFloat>();
 		if (t == "DampFloat")      return std::make_unique<RigNode_DampFloat>();
@@ -1971,6 +2193,8 @@ namespace axe
 		if (t == "ItemArray")      return std::make_unique<RigNode_ItemArray>();
 		if (t == "At")             return std::make_unique<RigNode_At>();
 		if (t == "GetControlValue") return std::make_unique<RigNode_GetControlValue>();
+		if (t == "GetGameplayVariable") return std::make_unique<RigNode_GetGameplayVariable>();
+		if (t == "GetCameraTransform") return std::make_unique<RigNode_GetCameraTransform>();
 		if (t == "FKChain")        return std::make_unique<RigNode_FKChain>();
 		if (t == "ParentConstraint") return std::make_unique<RigNode_ParentConstraint>();
 		if (t == "HideControls")   return std::make_unique<RigNode_HideControls>();

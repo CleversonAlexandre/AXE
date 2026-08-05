@@ -54,6 +54,14 @@ namespace axe
 		void Update(const Skeleton& skeleton, float deltaTime, bool advanceTime = true,
 			const glm::mat4& worldTransform = glm::mat4(1.0f),
 			bool allowWorldQueries = false);
+		// De onde a cena esta sendo vista. Nulo = sem camera; os nos de camera
+		// do Control Rig viram no-op e o pino Valid sai false.
+		//
+		// Membro e nao parametro: as assinaturas de Update/Evaluate ja tem
+		// quatro argumentos, e a visao muda por CENA, nao por frame — quem
+		// aponta uma vez nao quer repetir em toda chamada.
+		const RigView* View = nullptr;
+
 		void Evaluate(const Skeleton& skeleton, Pose& out,
 			const glm::mat4& worldTransform = glm::mat4(1.0f),
 			bool allowWorldQueries = false);

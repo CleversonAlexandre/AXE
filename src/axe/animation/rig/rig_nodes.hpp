@@ -249,6 +249,97 @@ namespace axe
 		void Deserialize(const nlohmann::json& j) override;
 	};
 
+	// ── Evaluate ─────────────────────────────────────────────────────────────
+	//
+	// LE os pinos ligados nele e joga o resultado fora.
+	//
+	// Parece um no que nao faz nada, e do ponto de vista da POSE ele nao faz
+	// mesmo. O que ele controla e QUANDO um valor e lido.
+	//
+	// ── POR QUE ISSO E UMA PRIMITIVA ─────────────────────────────────────
+	//
+	// O grafo tem dois mecanismos: execucao empurra (o evento chama o primeiro
+	// no, que chama o proximo) e dado PUXA sob demanda, com memoizacao — a
+	// primeira leitura calcula, as seguintes reaproveitam, ate o fim do solve.
+	//
+	// A memoizacao e o que faz um Ground Trace lido por tres nos custar UM
+	// raycast. Mas ela tambem significa que o valor de um pino depende de
+	// QUANDO ele foi lido pela primeira vez. E ate aqui nao havia como dizer
+	// "leia isto agora": voce so conseguia forcar uma leitura escrevendo em
+	// algum lugar, com um Set Transform num Null descartavel.
+	//
+	// Esse truque funcionava e era invisivel — ninguem descobre sozinho que um
+	// no de escrita inutil e a forma de ordenar leituras. Um caminho que existe
+	// mas nao pode ser encontrado esta fechado na pratica.
+	//
+	// ── O CASO CONCRETO ──────────────────────────────────────────────────
+	//
+	// Foot IK numa rampa: o quadril precisa descer pelo deficit do pe mais
+	// baixo, e as alturas precisam ser lidas ANTES de o quadril se mover —
+	// senao os traces respondem a partir de pes ja deslocados e o efeito conta
+	// duas vezes.
+	//
+	//     Sequence
+	//       Then 0 ─► Evaluate  (Height esquerdo, Height direito)
+	//       Then 1 ─► Set Transform (Hips)
+	//       Then 2 ─► Two Bone IK esquerda
+	//       Then 3 ─► Two Bone IK direita
+	//
+	// E por causa desta lacuna que o RigNode_PelvisDip existe em C++: ele le as
+	// alturas dentro do proprio Execute pra resolver a ordem por construcao.
+	// Com o Evaluate, aquele no pode virar uma funcao de cinco nos.
+	//
+	// ── NAO CONFUNDIR COM O SEQUENCE ─────────────────────────────────────
+	//
+	// O Sequence ordena EXECUCAO: quem escreve primeiro. O Evaluate ordena
+	// LEITURA: quando um valor e capturado. Sao eixos diferentes, e juntar os
+	// dois no mesmo no faria o mais usado do grafo carregar um conceito que
+	// quase nenhum grafo precisa.
+	class AXE_API RigNode_Evaluate : public RigNode
+	{
+	public:
+		RigNode_Evaluate()
+		{
+			Title = "Evaluate";
+			HasExecIn = true;
+			ExecOut.push_back("");
+
+			// Wildcard: o no nao se importa com o TIPO do que le. Dois pinos
+			// porque um so quase nunca e o caso — a ordenacao costuma envolver
+			// um par (dois pes, duas maos).
+			AddIn("A", RigPinType::Wildcard);
+			AddIn("B", RigPinType::Wildcard);
+		}
+
+		const char* TypeName() const override { return "Evaluate"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_Evaluate>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override
+		{
+			// Le e descarta. A leitura em si e o efeito: ela grava no cache do
+			// grafo, e quem ler depois recebe ESTE valor, capturado agora.
+			for (std::size_t i = 0; i < Inputs.size(); ++i)
+				(void)Read(ctx, (int)i);
+		}
+
+		// O numero de pinos e autoral, entao precisa sobreviver ao arquivo.
+		// Mesmo motivo do exec_out do Sequence.
+		void Serialize(nlohmann::json& j) const override
+		{
+			j["ins"] = SaveRigPinLayout(Inputs);
+		}
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			if (j.contains("ins"))
+				LoadRigPinLayout(j["ins"], Inputs);
+		}
+	};
+
 	// ── Branch ───────────────────────────────────────────────────────────────
 	//
 	// Segue UMA das duas saidas conforme a condicao. E o que permite ter IK e
@@ -394,6 +485,141 @@ namespace axe
 		}
 	};
 
+	// ── Get Camera Transform (PURO) ──────────────────────────────────────────
+	//
+	// Onde esta a camera?
+	//
+	// Ja convertido pro espaco do rig, como todo o resto — voce liga a Location
+	// direto num Two Bone IK ou a Forward num Align To Vector, sem conversao no
+	// meio. O no cuida disso porque e ele quem sabe que o valor veio de fora.
+	//
+	// ── O QUE ISSO DESTRAVA ──────────────────────────────────────────────
+	//
+	// Look-at: a cabeca acompanha quem olha. Align To Vector no pescoco, From =
+	// o "pra frente" da cabeca em repouso, To = a direcao ate a camera.
+	//
+	// Aim offset procedural: o torso gira conforme a mira, em qualquer angulo —
+	// e nao so nos que alguem animou.
+	//
+	// LOD de rig: Distance entre a camera e o quadril, um Clamp, e o peso dos
+	// IKs cai sozinho quando o personagem esta longe. Performance expressa em
+	// tres nos, sem nenhum sistema novo.
+	//
+	// Correcao de silhueta: a arma que atravessa o ombro num certo angulo, so
+	// naquele angulo.
+	//
+	// ── SO LEITURA ───────────────────────────────────────────────────────
+	//
+	// Nao existe Set Camera Transform. O rig consulta a engine e nunca a
+	// comanda — mover a camera e trabalho do gameplay ou do Sequencer.
+	class AXE_API RigNode_GetCameraTransform : public RigNode
+	{
+	public:
+		RigNode_GetCameraTransform()
+		{
+			Title = "Get Camera Transform";
+
+			AddOut("Transform", RigPinType::Transform);
+			AddOut("Location", RigPinType::Vector);
+
+			// O "pra frente" da camera, ja normalizado. E o que se liga num
+			// Align To Vector; tira-lo do Transform exigiria Break + montar a
+			// coluna a mao, que ninguem faz sem errar o sinal.
+			AddOut("Forward", RigPinType::Vector);
+
+			AddOut("Fov", RigPinType::Float);
+
+			// Ha camera? Sem isto, um preview sem camera devolve zeros e o
+			// personagem olha pra origem do rig sem que nada explique.
+			AddOut("Valid", RigPinType::Bool);
+		}
+
+		const char* TypeName() const override { return "GetCameraTransform"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_GetCameraTransform>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+	};
+
+	// ── Get Gameplay Variable (PURO) ─────────────────────────────────────────
+	//
+	// Le uma variavel do blackboard do AnimGraph — o mesmo quadro que a State
+	// Machine usa pra decidir transicoes, onde o gameplay escreve "Speed = 320",
+	// "IsGrounded = false", "AimWeight = 0.7".
+	//
+	// ── QUAL PERGUNTA ELE RESPONDE ───────────────────────────────────────
+	//
+	// "Qual o estado atual do corpo?" — e nao "o que o personagem deveria
+	// fazer". A distincao decide o que pode entrar aqui:
+	//
+	//   BOM: velocidade, se esta no chao, altura do agachamento, peso de mira.
+	//        Descrevem o corpo AGORA. O rig usa pra ajustar a pose.
+	//
+	//   RUIM: AttackState, CurrentCombo, "vai pular no proximo frame". Sao
+	//         DECISAO, e decisao mora na maquina de estados do AnimGraph. Um
+	//         Branch num estado de combate dentro do rig e regra de negocio no
+	//         lugar errado.
+	//
+	// O teste que separa os dois: este valor ainda faria sentido se o rig fosse
+	// avaliado DUAS VEZES no mesmo frame, ou num preview sem jogo rodando?
+	// Velocidade sim; "acabou de disparar" nao.
+	//
+	// ── SO LEITURA ───────────────────────────────────────────────────────
+	//
+	// Nao existe Set Gameplay Variable, e nao vai existir. O rig consulta a
+	// engine e nunca a comanda — a unica coisa que ele escreve e a pose.
+	// Triggers tambem ficam de fora: consumi-los e efeito colateral, e um rig
+	// avaliado duas vezes no mesmo frame acharia o pulso ja gasto na segunda.
+	class AXE_API RigNode_GetGameplayVariable : public RigNode
+	{
+	public:
+		RigNode_GetGameplayVariable()
+		{
+			Title = "Get Gameplay Variable";
+
+			// O nome vem de um pino, e nao de um campo no Details, pra poder
+			// ser CALCULADO — um For Each sobre uma lista de nomes, por
+			// exemplo. Pino de texto ainda nao existe no grafo, entao por ora
+			// e um campo; quando existir, vira pino sem quebrar nada.
+			AddOut("Float", RigPinType::Float);
+			AddOut("Bool", RigPinType::Bool);
+
+			// "Existe no blackboard?" separado do valor. Sem isto, um nome
+			// digitado errado devolve 0 e voce nao tem como distinguir de um
+			// zero legitimo — o tipo de silencio que este rig evita.
+			AddOut("Found", RigPinType::Bool);
+		}
+
+		const char* TypeName() const override { return "GetGameplayVariable"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_GetGameplayVariable>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+		void Serialize(nlohmann::json& j) const override { j["var"] = VariableName; }
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			VariableName = j.value("var", std::string());
+
+			// O titulo segue o nome enquanto voce nao renomear: cinco "Get
+			// Gameplay Variable" na tela nao dizem nada.
+			if (!VariableName.empty())
+				Title = VariableName;
+		}
+
+		std::string VariableName;
+
+	private:
+		bool m_WarnedMissing = false;
+	};
+
 	// ── At (PURO) ────────────────────────────────────────────────────────────
 	//
 	// Devolve o elemento de uma lista numa posicao. Sozinho parece pouco; o
@@ -519,6 +745,107 @@ namespace axe
 
 		// Levar os filhos junto. Ver RigHierarchy::SetGlobal.
 		bool PropagateToChildren = true;
+	};
+
+	// ── Offset Location ──────────────────────────────────────────────────────
+	//
+	// DESLOCA um elemento por um vetor, sem tocar em rotacao nem escala.
+	//
+	// ── POR QUE ISTO E PRIMITIVA, E NAO ATALHO ───────────────────────────
+	//
+	// Deslocar um osso exigia quatro nos: Get Transform, Vector Add, Make
+	// Transform e Set Transform. Nao era so verbosidade — o Make Transform
+	// CONSTROI um transform novo a partir de zero, entao a rotacao e a escala
+	// que o elemento tinha se perdem, a nao ser que voce as leia e reponha a
+	// mao com um Break Transform no meio.
+	//
+	// O que se quer dizer e "empurre isto um pouco pra la". Nenhuma composicao
+	// dos nos existentes diz isso sem tambem dizer, sem querer, "e esqueca como
+	// ele estava girado".
+	//
+	// ── ONDE APARECE ─────────────────────────────────────────────────────
+	//
+	// O dip do quadril numa rampa, o recuo da mao antes da parede, qualquer
+	// correcao de altura. Tudo que e "a pose esta certa, so precisa sair um
+	// pouco do lugar".
+	class AXE_API RigNode_OffsetLocation : public RigNode
+	{
+	public:
+		RigNode_OffsetLocation();
+
+		const char* TypeName() const override { return "OffsetLocation"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_OffsetLocation>(*this);
+		}
+
+		void Execute(RigExecContext& ctx) override;
+
+		void Serialize(nlohmann::json& j) const override
+		{
+			j["space"] = (int)Space;
+			j["propagate"] = PropagateToChildren;
+		}
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			Space = (RigSpace)j.value("space", 0);
+			PropagateToChildren = j.value("propagate", true);
+		}
+
+		RigSpace Space = RigSpace::Global;
+
+		// Ligado por padrao: deslocar o quadril tem que levar as pernas junto.
+		bool PropagateToChildren = true;
+	};
+
+	// ── Meters To Component (PURO) ───────────────────────────────────────────
+	//
+	// Converte METROS do mundo em unidades de ESPACO DE COMPONENTE.
+	//
+	// ── POR QUE ISTO PRECISA EXISTIR ─────────────────────────────────────
+	//
+	// O rig fala duas linguas. Ground Trace e Trace recebem distancia em
+	// METROS, porque conversam com a fisica; todo o resto trabalha em espaco de
+	// componente, onde 1 unidade depende da escala do personagem.
+	//
+	// Os nos que atravessam a fronteira ja fazem a conversao por dentro — o
+	// Ground Trace divide pela escala antes de devolver o Height. Mas quando
+	// VOCE monta a mesma logica em grafo, nao ha como fazer a conta: a escala
+	// do personagem nao esta exposta em lugar nenhum.
+	//
+	// O sintoma sem este no e cruel: funciona no personagem em escala 1 e
+	// desanda em qualquer outro, sem nada apontar pra causa. Foi o unico ponto
+	// em que a versao em grafo do Pelvis Dip nao empatava com o no em C++.
+	//
+	// Componente -> metros e o mesmo no com Invert ligado.
+	class AXE_API RigNode_MetersToComponent : public RigNode
+	{
+	public:
+		RigNode_MetersToComponent()
+		{
+			Title = "Meters To Component";
+
+			AddInFloat("Meters", 1.0f);
+			AddInBool("Invert", false);
+
+			AddOut("Result", RigPinType::Float);
+
+			// A escala do personagem, exposta pra quem precisar dela crua —
+			// comparar tamanhos, normalizar um limiar. Sem isto ela continuaria
+			// escondida dentro dos nos de fronteira.
+			AddOut("Scale", RigPinType::Float);
+		}
+
+		const char* TypeName() const override { return "MetersToComponent"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_MetersToComponent>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
 	};
 
 	// ── Two Bone IK ──────────────────────────────────────────────────────────
@@ -695,6 +1022,30 @@ namespace axe
 	// de leitura por construcao: o m_Cache do RigGraph memoiza os traces com os
 	// valores de ANTES do quadril descer, que e a referencia correta — o mesmo
 	// motivo de o AnimNode_FootIK guardar footOrig antes do dip.
+	//
+	// ── DIVIDA CONHECIDA ─────────────────────────────────────────────────
+	//
+	// Este no SABE DEMAIS: que existem dois pes, que o mais baixo manda, e que
+	// descer e certo mas subir nao. Isso e conhecimento de bipede em terreno
+	// irregular — uma SOLUCAO, nao uma capacidade do motor. Pelo criterio de
+	// nos novos ("a composicao equivalente seria correta e legivel?"), ele nao
+	// deveria existir: Float Math (Min) + Get Transform + Vector Add + Set
+	// Transform fazem o mesmo, de forma legivel.
+	//
+	// Ele nasceu porque faltava uma primitiva de ORDENACAO DE LEITURA — e a
+	// unica forma de forcar a captura das alturas era um Set Transform num Null
+	// descartavel, truque que ninguem descobre sozinho.
+	//
+	// Essa primitiva agora existe: o no Evaluate. A rota de saida esta aberta:
+	//
+	//   1. reimplementar como FUNCAO EMBARCADA (cinco nos, usando Evaluate);
+	//   2. depreciar este no com migracao no load, virando reroute — o mesmo
+	//      caminho ja usado com ControlFollowBone e Collapsed, que aposentam um
+	//      tipo sem quebrar nenhum .axerig.
+	//
+	// Ate la ele fica: remove-lo hoje fecharia um caminho na pratica, e a
+	// premissa do rig e nunca fechar caminho. Mas NAO use este no como modelo
+	// pra nos novos — ele e a excecao registrada, nao o padrao.
 	class AXE_API RigNode_PelvisDip : public RigNode
 	{
 	public:
@@ -1019,6 +1370,59 @@ namespace axe
 		void Deserialize(const nlohmann::json& j) override;
 
 		Op Operation = Op::Add;
+	};
+
+	// ── Vector To Float (PURO) ───────────────────────────────────────────────
+	//
+	// Mede vetores. Entra vetor, sai NUMERO — e e por isso que nao cabe no
+	// Vector Op: la a saida e sempre Vector, e fazer o tipo dela mudar conforme
+	// a operacao quebraria os fios ja ligados a cada troca no combo.
+	//
+	// ── O QUE ELE DESTRAVA ───────────────────────────────────────────────
+	//
+	// Sem medir distancia, o rig so consegue liga-desliga: o Hit de um trace e
+	// bool, entao o braco sobe inteiro ou nao sobe. Com Distance + Float Math
+	// (Clamp), o braco sobe PROPORCIONALMENTE conforme a parede se aproxima —
+	// e a diferenca entre um IK que "pipoca" e um que responde.
+	//
+	// Dot resolve a outra classe de pergunta: "o quanto estas duas direcoes
+	// concordam?". Com dois vetores unitarios ele vale 1 apontando junto, 0
+	// perpendicular, -1 opostos. E como se pergunta se a parede esta a frente
+	// ou atras, ou o quanto o chao esta inclinado.
+	class AXE_API RigNode_VectorToFloat : public RigNode
+	{
+	public:
+		enum class Op { Length, Distance, Dot, X, Y, Z };
+
+		RigNode_VectorToFloat()
+		{
+			Title = "Vector Length";
+
+			AddIn("A", RigPinType::Vector);
+			AddIn("B", RigPinType::Vector);
+
+			AddOut("Result", RigPinType::Float);
+		}
+
+		const char* TypeName() const override { return "VectorToFloat"; }
+
+		std::unique_ptr<RigNode> Clone() const override
+		{
+			return std::make_unique<RigNode_VectorToFloat>(*this);
+		}
+
+		void EvalOutput(RigExecContext& ctx, int pin, RigPinValue& out) override;
+
+		void Serialize(nlohmann::json& j) const override { j["op"] = (int)Operation; }
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			Operation = (Op)j.value("op", 0);
+		}
+
+		// APENDAR no fim, sempre: a operacao vai pro .axerig como INTEIRO, e
+		// inserir no meio reinterpretaria todo arquivo ja salvo.
+		Op Operation = Op::Length;
 	};
 
 	// ── Float Math (PURO) ────────────────────────────────────────────────────
