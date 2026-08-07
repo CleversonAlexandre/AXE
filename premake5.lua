@@ -43,6 +43,11 @@ IncludeDir["nlohmann"] = "src/vendor"
 IncludeDir["stb"] = "src/vendor/stb"
 IncludeDir["imguinodeeditor"] = "src/vendor/imgui-node-editor"
 IncludeDir["Jolt"] = "src/vendor/JoltPhysics"
+-- miniaudio: header unico, dominio publico / MIT-0. Sem submodulo, sem
+-- CMake, sem .lib e sem DLL pra copiar no post-build — so o include.
+-- Entra APENAS no projeto `axe`: o editor nunca ve o backend de audio,
+-- do mesmo jeito que nao ve Glad fora do backend grafico.
+IncludeDir["miniaudio"] = "src/vendor/miniaudio"
 
 
 include "src/vendor/simdjson/singleheader"
@@ -111,6 +116,7 @@ project "axe"
         "%{IncludeDir.stb}",
         "%{IncludeDir.imguinodeeditor}",
         "%{IncludeDir.Jolt}",
+        "%{IncludeDir.miniaudio}",
 
     }
    libdirs

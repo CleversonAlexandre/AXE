@@ -1,4 +1,5 @@
 #include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "axe/audio/audio_engine.hpp"
 #include "axe/log/log.hpp"
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/graphics/editor_camera.hpp"
@@ -438,6 +439,45 @@ namespace axe
 				*m_Scene,
 				m_Camera->GetViewMatrix(),
 				m_Camera->GetProjectionMatrix());
+
+		// ── Visualizacao de som ─────────────────────────────────────────────────
+		//
+		// SEM a guarda `!m_GameCamera` que os dois debug renderers acima usam:
+		// eles sao gizmo de autoria e nao podem aparecer no jogo; este e
+		// recurso de acessibilidade e existe PRA aparecer no jogo.
+		//
+		// A camera usada e a ativa — GameCamera em Play, editor no viewport —
+		// porque o anel e billboard e precisa encarar quem esta olhando.
+		if (ShowSoundVisualization)
+		{
+			const glm::mat4 v = m_GameCamera
+				? m_GameCamera->GetViewMatrix()
+				: (m_Camera ? m_Camera->GetViewMatrix() : glm::mat4(1.0f));
+
+			// GameCamera::GetProjectionMatrix EXIGE o aspect: ela nao guarda o
+			// tamanho do alvo, ao contrario da EditorCamera. Mesma forma que
+			// as outras chamadas deste arquivo ja usam.
+			const glm::mat4 p = m_GameCamera
+				? m_GameCamera->GetProjectionMatrix((float)width / (float)height)
+				: (m_Camera ? m_Camera->GetProjectionMatrix() : glm::mat4(1.0f));
+
+			const glm::vec3 eye = m_GameCamera
+				? m_GameCamera->GetPosition()
+				: (m_Camera ? m_Camera->GetPosition() : glm::vec3(0.0f));
+
+			// Depth desligado de proposito: o pulso tem que ser visivel
+			// ATRAVES da parede. Um anel oculto pelo cenario nao informaria
+			// nada sobre o inimigo do outro lado — que e o caso de uso.
+			RenderCommand::SetDepthTest(false);
+			RenderCommand::SetBlend(true);
+			RenderCommand::SetBlendFunc(RendererAPI::BlendFactor::SrcAlpha,
+				RendererAPI::BlendFactor::OneMinusSrcAlpha);
+
+			m_SoundVisualization.Render(AudioEngine::GetActiveSounds(), v, p, eye);
+
+			RenderCommand::SetBlend(false);
+			RenderCommand::SetDepthTest(true);
+		}
 
 		// ── Ghost preview de drag & drop ────────────────────────────────────────
 		// Renderizado no framebuffer final com blending, sobre tudo

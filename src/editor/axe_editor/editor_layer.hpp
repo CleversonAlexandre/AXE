@@ -6,6 +6,7 @@
 #include "axe/core/command_history.hpp"
 #include "axe/physics/physics_world.hpp"
 #include "axe/particles/particle_world.hpp"
+#include "axe/audio/audio_world.hpp"
 
 
 #include "axe/graphics/renderer/viewport_renderer.hpp"
@@ -91,6 +92,11 @@ namespace axe
         PhysicsWorld  m_PhysicsWorld;
         ScriptWorld   m_ScriptWorld;
         ParticleWorld m_ParticleWorld;
+
+        // Voices persistentes das AudioSourceComponent + pose do listener.
+        // One-shot (AnimNotify, script) NAO passa por aqui — dispara direto
+        // no AudioEngine, no instante da chamada.
+        AudioWorld    m_AudioWorld;
 
         // Avança o tempo dos clipes e recalcula as palettes de bone.
         // Sem estado próprio — tudo vive nos SkeletalMeshComponent.

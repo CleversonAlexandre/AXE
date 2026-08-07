@@ -13,6 +13,7 @@
 #include "axe/asset/asset_database.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/audio/audio_engine.hpp"
 #include "axe/log/log.hpp"
 
 #include <entt/entt.hpp>
@@ -344,8 +345,61 @@ namespace axe
 				break;
 
 			case AnimNotify::Kind::Sound:
-				AXE_CORE_INFO("AnimNotify (sound): '{}' — sistema de audio ainda nao existe.", n.Name);
+			{
+				if (n.Payload.empty())
+					break;
+
+				// Dispara AQUI, no frame do cruzamento, e nao numa fila
+				// consumida por algum tick depois.
+				//
+				// Som de passo atrasado um frame em relacao ao pe tocando o
+				// chao e audivel — e acertar esse instante e literalmente
+				// pra isso que a timeline de notify existe. One-shot nao
+				// espera mundo nenhum; voice persistente (AudioSourceComponent)
+				// e que sera atualizada pelo AudioWorld, no A2.
+				//
+				// Toca em Edit TAMBEM, ao contrario do notify de particula.
+				// A regra la e "so em Play" porque particula CRIA ENTIDADE na
+				// cena e sujaria o arquivo salvo. Som nao cria nada: e
+				// fire-and-forget. Silenciar o preview do Animation Editor
+				// seria tirar do usuario justamente o feedback que ele abriu
+				// a janela pra ter.
+				//
+				// Agora ESPACIAL: o AudioWorld alimenta a pose do listener
+				// todo frame (camera ativa, ou AudioListenerComponent), e
+				// o som sai de onde o personagem esta.
+				//
+				// A posicao segue exatamente a mesma regra do notify de
+				// particula, logo acima: base do personagem + LocationOffset
+				// escalado pela escala DELE. Um personagem em 0.015 nao pode
+				// ter o som deslocado a metros por um offset autorado em
+				// centimetros.
+				//
+				// Ancoragem no OSSO (Socket/Attached) continua pendente —
+				// para som E para particula. Fazer so para um dos dois
+				// deixaria o efeito visual e o efeito sonoro do MESMO notify
+				// em lugares diferentes, que e pior do que os dois estarem
+				// igualmente aproximados.
+				glm::vec3 soundPos{ 0.0f };
+				glm::vec3 soundScale{ 1.0f };
+
+				if (auto* charTc = registry.try_get<TransformComponent>(character))
+				{
+					soundPos = charTc->Data.Position;
+					soundScale = charTc->Data.Scale;
+				}
+
+				soundPos += n.LocationOffset * soundScale;
+
+				// Em janela de preview, 2D: ver comentario de
+				// SetSoundAudition. No jogo, espacializado normalmente.
+				if (m_SoundAudition)
+					AudioEngine::PlayOneShot(n.Payload, n.Volume, n.Pitch);
+				else
+					AudioEngine::PlayOneShotAt(n.Payload, soundPos, n.Volume, n.Pitch);
+
 				break;
+			}
 			}
 		}
 	}

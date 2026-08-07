@@ -74,6 +74,20 @@ namespace axe
 		glm::vec3   Scale{ 1.0f };
 		bool        Attached = true;             // segue o osso vs solta no mundo
 
+		// ── Som (Kind::Sound) ────────────────────────────────────────────
+		//
+		// MULTIPLICADORES, nao valores absolutos: compoem com o que o Sound
+		// Cue produziu, do mesmo jeito que o volume do AudioSourceComponent
+		// compoe. O cue diz "este passo saiu 8% mais baixo"; o notify diz
+		// "passo nesta animacao e mais forte".
+		//
+		// Existem porque o notify era o unico ponto do sistema que tocava som
+		// sem NENHUM controle — chamava PlayOneShotAt com 1.0 fixo, e a unica
+		// saida era editar o cue, que e compartilhado por todas as animacoes
+		// que o usam.
+		float       Volume = 1.0f;
+		float       Pitch = 1.0f;
+
 		// Cor do losango na timeline. Nasce com a cor do TIPO e o usuario
 		// pode personalizar — igual ao Notify Color da Unreal.
 		glm::vec3   Color{ 0.47f, 0.75f, 1.0f };

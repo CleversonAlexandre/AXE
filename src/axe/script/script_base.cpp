@@ -23,6 +23,8 @@
 #include "axe/physics/physics_components.hpp"
 #include "axe/physics/physics_system.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/audio/audio_source_component.hpp"
+#include "axe/audio/audio_engine.hpp"
 #include "axe/graphics/game_camera.hpp"
 #include <vector>
 #include <algorithm>
@@ -149,6 +151,87 @@ namespace axe
     ScriptParticleProxy ScriptBase::GetParticleSystem()
     {
         return ScriptParticleProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    ScriptAudioProxy ScriptBase::GetAudio()
+    {
+        return ScriptAudioProxy{ m_Context.Entity, m_Context.ScenePtr };
+    }
+
+    // ── ScriptAudioProxy ──────────────────────────────────────────────────────
+
+    void ScriptAudioProxy::Play()
+    {
+        if (!ScenePtr) return;
+        auto* src = ScenePtr->GetRegistry().try_get<AudioSourceComponent>(Entity);
+        if (!src) return;
+
+        src->_PlayRequested = true;
+        src->_StopRequested = false;
+    }
+
+    void ScriptAudioProxy::Stop()
+    {
+        if (!ScenePtr) return;
+        auto* src = ScenePtr->GetRegistry().try_get<AudioSourceComponent>(Entity);
+        if (!src) return;
+
+        src->_StopRequested = true;
+        src->_PlayRequested = false;
+    }
+
+    void ScriptAudioProxy::SetVolume(float volume)
+    {
+        if (!ScenePtr) return;
+        auto* src = ScenePtr->GetRegistry().try_get<AudioSourceComponent>(Entity);
+        if (!src) return;
+
+        // So escreve no componente. O AudioWorld reenvia os parametros da
+        // voice a cada frame, entao mexer aqui altera um som JA TOCANDO no
+        // proximo tick — e e por isso que fade por script funciona sem API
+        // de fade nenhuma.
+        src->Volume = volume;
+    }
+
+    void ScriptAudioProxy::SetPitch(float pitch)
+    {
+        if (!ScenePtr) return;
+        auto* src = ScenePtr->GetRegistry().try_get<AudioSourceComponent>(Entity);
+        if (!src) return;
+
+        src->Pitch = pitch;
+    }
+
+    bool ScriptAudioProxy::IsPlaying() const
+    {
+        if (!ScenePtr) return false;
+        auto* src = ScenePtr->GetRegistry().try_get<AudioSourceComponent>(Entity);
+        if (!src) return false;
+
+        // Considera tambem o pedido pendente: entre o Play() e o tick do
+        // AudioWorld, a fonte esta logicamente tocando. Sem isso, um
+        // Play() seguido de IsPlaying() na mesma funcao devolveria false.
+        if (src->_PlayRequested) return true;
+        if (src->_StopRequested) return false;
+
+        return src->_Voice != InvalidVoice && AudioEngine::IsPlaying(src->_Voice);
+    }
+
+    void ScriptBase::PlaySound2D(const std::string& sound, float volume, float pitch)
+    {
+        const std::string uuid = AudioEngine::ResolveAudioAsset(sound);
+        if (uuid.empty()) return;
+
+        AudioEngine::PlayOneShot(uuid, volume, pitch);
+    }
+
+    void ScriptBase::PlaySoundAtLocation(const std::string& sound,
+        const glm::vec3& location, float volume, float pitch)
+    {
+        const std::string uuid = AudioEngine::ResolveAudioAsset(sound);
+        if (uuid.empty()) return;
+
+        AudioEngine::PlayOneShotAt(uuid, location, volume, pitch);
     }
 
     ScriptCameraProxy ScriptBase::GetCamera()

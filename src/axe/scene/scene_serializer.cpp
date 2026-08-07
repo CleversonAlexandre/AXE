@@ -7,6 +7,8 @@
 #include "axe/log/log.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/audio/audio_source_component.hpp"
+#include "axe/audio/audio_listener_component.hpp"
 #include "axe/lighting/reflection_probe.hpp"
 
 #include <nlohmann/json.hpp>
@@ -302,6 +304,34 @@ namespace axe
 			{
 				components["ParticleSystem"]["particle_asset_uuid"] = c->ParticleAssetUUID;
 				components["ParticleSystem"]["playing"] = c->Playing;
+			}
+
+			if (auto* c = registry.try_get<AudioSourceComponent>(entity))
+			{
+				// So o que foi AUTORADO. `Data` e um cache e `_Voice` e
+				// estado de execucao — gravar qualquer um deles poria no
+				// .axescene um dado que so faz sentido dentro da sessao que
+				// o produziu.
+				components["AudioSource"]["clip_uuid"] = c->ClipAssetUUID;
+				components["AudioSource"]["volume"] = c->Volume;
+				components["AudioSource"]["pitch"] = c->Pitch;
+				components["AudioSource"]["loop"] = c->Loop;
+				components["AudioSource"]["play_on_start"] = c->PlayOnStart;
+				components["AudioSource"]["is_3d"] = c->Is3D;
+				components["AudioSource"]["min_distance"] = c->MinDistance;
+				components["AudioSource"]["max_distance"] = c->MaxDistance;
+				components["AudioSource"]["category"] = SoundCategoryToString(c->Category);
+				components["AudioSource"]["bus"] = AudioBusToString(c->Bus);
+				components["AudioSource"]["priority"] = c->Priority;
+				components["AudioSource"]["doppler"] = c->DopplerFactor;
+				components["AudioSource"]["fade_in"] = c->FadeInTime;
+				components["AudioSource"]["fade_out"] = c->FadeOutTime;
+			}
+
+			if (auto* c = registry.try_get<AudioListenerComponent>(entity))
+			{
+				components["AudioListener"]["is_primary"] = c->IsPrimary;
+				components["AudioListener"]["use_camera_orientation"] = c->UseCameraOrientation;
 			}
 
 			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
@@ -801,6 +831,47 @@ namespace axe
 				sc.ScriptName = t.value("name", "");
 				sc.IsCompiled = t.value("compiled", false);
 				registry.emplace<ScriptComponent>(entity, sc);
+			}
+
+			if (components.contains("AudioSource"))
+			{
+				auto& t = components["AudioSource"];
+				AudioSourceComponent src;
+				src.ClipAssetUUID = t.value("clip_uuid", "");
+				src.Volume = t.value("volume", 1.0f);
+				src.Pitch = t.value("pitch", 1.0f);
+				src.Loop = t.value("loop", false);
+				src.PlayOnStart = t.value("play_on_start", true);
+				src.Is3D = t.value("is_3d", true);
+				src.MinDistance = t.value("min_distance", 1.0f);
+				src.MaxDistance = t.value("max_distance", 100.0f);
+				src.Category = SoundCategoryFromString(t.value("category", "Generic").c_str());
+				src.Bus = AudioBusFromString(t.value("bus", "SFX").c_str());
+				src.Priority = t.value("priority", 0.5f);
+				src.DopplerFactor = t.value("doppler", 1.0f);
+				src.FadeInTime = t.value("fade_in", 0.0f);
+				src.FadeOutTime = t.value("fade_out", 0.0f);
+
+				// `Data` fica NULO de proposito — o AudioWorld resolve no
+				// primeiro uso. Decodificar aqui faria o tempo de abertura
+				// da cena crescer com o numero de fontes, e exigiria que o
+				// device de audio ja existisse durante o load, o que amarra
+				// o serializer a um subsistema de que ele nao precisa.
+				registry.emplace<AudioSourceComponent>(entity, src);
+			}
+
+			if (components.contains("AudioListener"))
+			{
+				AudioListenerComponent lc;
+				lc.IsPrimary = components["AudioListener"].value("is_primary", true);
+
+				// Default true: cena salva antes do A8 passa a usar a
+				// orientacao da camera. E mudanca de comportamento, mas na
+				// direcao certa — quem tinha listener no personagem estava
+				// com o panning presso a ele sem ter escolhido isso.
+				lc.UseCameraOrientation =
+					components["AudioListener"].value("use_camera_orientation", true);
+				registry.emplace<AudioListenerComponent>(entity, lc);
 			}
 
 			if (components.contains("ParticleSystem"))

@@ -9,6 +9,8 @@
 #include "editor/axe_editor/editor_app.hpp"
 #include "axe/script/script_base.hpp"
 #include "axe/physics/physics_system.hpp"
+#include "axe/audio/audio_engine.hpp"
+#include "axe/audio/sound_cue.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cctype>
@@ -25,6 +27,11 @@ namespace axe
         AXE_EDITOR_INFO("EditorLayer attached");
 
         axe::Input::Init(&EditorApp::Get().GetWindow());
+
+        // Audio sobe junto com a layer, e nao no primeiro som tocado.
+        // Abrir o device custa alguns milissegundos: pagar isso no attach e
+        // invisivel; pagar no primeiro tiro e um engasgo no meio do jogo.
+        AudioEngine::Init();
 
         m_Scene = std::make_unique<Scene>();
         m_Context.ActiveScene = m_Scene.get();
@@ -201,6 +208,13 @@ namespace axe
                     auto particleAsset = ParticleSystemAsset::LoadFromFile(record.FilePath);
                     if (particleAsset)
                         m_EditorUI->m_ParticleEditorWindow.OpenAsset(particleAsset);
+                }
+                else if (record.Type == AssetType::SoundCue)
+                {
+                    if (auto cue = SoundCueAsset::LoadFromFile(record.FilePath))
+                        m_EditorUI->m_SoundCueEditorWindow.OpenAsset(cue, record.FilePath);
+                    else
+                        AXE_EDITOR_ERROR("Sound Cue '{}': arquivo invalido.", record.Name);
                 }
             });
 
@@ -397,6 +411,20 @@ namespace axe
                 // caminho.
                 if (TryOpenAnimationFile(*record))
                     return;
+
+                // Audio e Sound Cue tambem nao viram mesh.
+                //
+                // Sem esta guarda, o caminho terminava em MeshLoader::Load
+                // sobre um .axecue e o assimp cuspia "DXF: no data blocks
+                // loaded" — erro sem relacao nenhuma com o problema real, que
+                // e o pior tipo de mensagem de erro que existe.
+                if (record->Type == AssetType::SoundCue ||
+                    record->Type == AssetType::Audio)
+                {
+                    AXE_EDITOR_INFO("'{}' e um asset de audio: use-o no Audio Source, "
+                        "no notify de som ou num no de script.", record->Name);
+                    return;
+                }
 
                 LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
                 if (!asset.MeshData) return;
@@ -758,6 +786,10 @@ namespace axe
     void EditorLayer::OnDetach()
     {
         m_EditorUI.reset();
+
+        // Antes do device morrer: se sobrar voice viva, ela ainda segura o
+        // PCM de um clip e o backend fecharia com dado em uso.
+        AudioEngine::Shutdown();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -859,6 +891,67 @@ namespace axe
         {
             m_EscWasPressed = false;
         }
+
+        // ── AUDIO: o ULTIMO do OnUpdate, de proposito ─────────────────────
+        //
+        // Ordem do frame:
+        //   Particle -> Animation -> [Play] Script -> [Play] Physics
+        //     -> AUDIO -> (OnRender: SceneCollector -> SceneRenderer)
+        //
+        // Uma fonte 3D presa a um personagem le a posicao do transform. Se
+        // o audio rodasse antes da fisica, usaria a posicao do frame
+        // anterior — audivel como panning atrasado em movimento rapido. O
+        // render nao depende do audio, entao o audio pode ser o ultimo.
+        //
+        // FORA do bloco de Play: o AudioWorld tambem precisa rodar em Edit
+        // para alimentar o listener (preview do Animation Editor) e para
+        // servir o botao Play do Inspector. Ele proprio decide o que fica
+        // mudo, via `inPlay`.
+        if (m_Scene)
+        {
+            const bool inPlay = (m_EditorState == EditorState::Play);
+            const bool paused = (m_EditorState == EditorState::Pause);
+
+            // Pose de fallback do listener: a camera ativa. Em Play e a
+            // GameCamera; em Edit, a do viewport. Extraida da view matrix
+            // porque e a unica coisa que as duas expoem em comum — e a
+            // view matrix ja e a inversa da pose, entao transpor a parte
+            // rotacional devolve os eixos do mundo.
+            glm::vec3 lisPos(0.0f);
+            glm::vec3 lisFwd(0.0f, 0.0f, -1.0f);
+            glm::vec3 lisUp(0.0f, 1.0f, 0.0f);
+
+            glm::mat4 view(1.0f);
+            bool haveView = false;
+
+            if (inPlay)
+            {
+                lisPos = m_GameCamera.GetPosition();
+                view = m_GameCamera.GetViewMatrix();
+                haveView = true;
+            }
+            else if (m_ViewportRenderer && m_ViewportRenderer->m_Camera)
+            {
+                lisPos = m_ViewportRenderer->m_Camera->GetPosition();
+                view = m_ViewportRenderer->m_Camera->GetViewMatrix();
+                haveView = true;
+            }
+
+            if (haveView)
+            {
+                const glm::mat3 r = glm::transpose(glm::mat3(view));
+                lisFwd = -r[2];
+                lisUp = r[1];
+            }
+
+            m_AudioWorld.OnUpdate(*m_Scene, deltaTime, inPlay, paused,
+                lisPos, lisFwd, lisUp);
+        }
+
+        // Recolhe as voices que terminaram. Depois do AudioWorld: uma voice
+        // que acabou de ser criada neste frame nao pode ser recolhida antes
+        // de tocar.
+        AudioEngine::Update(deltaTime);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1380,6 +1473,11 @@ namespace axe
         m_ScriptWorld.SetActiveCamera(&m_GameCamera); // injeta câmera pra scripts
         m_ScriptWorld.OnSceneStart(*m_Scene);
 
+        // DEPOIS do Capture, sempre: o snapshot precisa guardar a cena sem
+        // nenhuma voice viva, para que o Restore devolva handles limpos em
+        // vez de handles de voices que ja morreram.
+        m_AudioWorld.OnScenePlay(*m_Scene);
+
         m_PlayerEntity = entt::null;
         if (ProjectManager::Get().HasProject())
         {
@@ -1493,6 +1591,16 @@ namespace axe
 
         m_ScriptWorld.OnSceneStop(*m_Scene);
         m_ParticleWorld.OnSceneStop(*m_Scene);
+
+        // Stop mata todo som do jogo. Sem isso, um loop disparado em Play
+        // continuaria tocando por cima do editor — e so sumiria fechando o
+        // programa.
+        //
+        // O AudioWorld zera tambem os handles nos componentes; o StopAll
+        // cobre o que nao pertence a fonte nenhuma (one-shot de notify em
+        // voo no momento do Stop).
+        m_AudioWorld.OnSceneStop(*m_Scene);
+        AudioEngine::StopAll();
         m_GameCamera.CameraMode = GameCamera::Mode::FreeFly;
         m_GameCamera.ClearTarget();
         m_PlayerEntity = entt::null;

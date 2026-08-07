@@ -194,6 +194,16 @@ namespace axe
             }
         }
 
+        // ── Audio (data node) ─────────────────────────────────────────────────
+        if (nodeName == "Audio Is Playing" && srcPin->Name == "Playing")
+        {
+            std::string target = "m_Context.Entity";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+
+            return "ScriptAudioProxy{" + target + ", m_Context.ScenePtr}.IsPlaying()";
+        }
+
         if (nodeName == "Array Get")
         {
             // node->IntValue == -1 = pin Array nunca conectado a um array real
@@ -1467,6 +1477,110 @@ namespace axe
             GenerateNode(ctx, next, deltaTimeVar, depth + 1);
             ctx.indent--;
             ctx.Line("  }");
+            ctx.Line("}");
+            return;
+        }
+
+        // ── Audio nodes ───────────────────────────────────────────────────────
+        // Mesmo padrão dos nós de partícula: resolve Target, chama método no
+        // proxy. O proxy faz try_get<AudioSourceComponent> em runtime — se a
+        // entity não tiver Audio Source, é no-op silencioso.
+
+        else if (name == "Audio Play" || name == "Audio Stop")
+        {
+            std::string target = "m_Context.Entity";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+
+            const std::string method = (name == "Audio Play") ? "Play()" : "Stop()";
+
+            ctx.Line("{ // " + name);
+            ctx.Line("  auto _auTarget = " + target + ";");
+            ctx.Line("  if (_auTarget != entt::null)");
+            ctx.Line("  {");
+            ctx.Line("    ScriptAudioProxy{_auTarget, m_Context.ScenePtr}." + method + ";");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("  }");
+            ctx.Line("}");
+            return;
+        }
+
+        else if (name == "Audio Set Volume" || name == "Audio Set Pitch")
+        {
+            std::string target = "m_Context.Entity";
+            std::string value = "1.0f";
+            const bool isVolume = (name == "Audio Set Volume");
+
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Target") target = ResolvePin(ctx, inp);
+                if (inp.Name == (isVolume ? "Volume" : "Pitch")) value = ResolvePin(ctx, inp);
+            }
+
+            const std::string method = isVolume ? "SetVolume" : "SetPitch";
+
+            ctx.Line("{ // " + name);
+            ctx.Line("  auto _auTarget = " + target + ";");
+            ctx.Line("  if (_auTarget != entt::null)");
+            ctx.Line("  {");
+            ctx.Line("    ScriptAudioProxy{_auTarget, m_Context.ScenePtr}." + method + "(" + value + ");");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("  }");
+            ctx.Line("}");
+            return;
+        }
+
+        else if (name == "Play Sound 2D")
+        {
+            std::string sound = "\"\"";
+            std::string volume = "1.0f";
+            std::string pitch = "1.0f";
+
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Sound")  sound = ResolvePin(ctx, inp);
+                if (inp.Name == "Volume") volume = ResolvePin(ctx, inp);
+                if (inp.Name == "Pitch")  pitch = ResolvePin(ctx, inp);
+            }
+
+            ctx.Line("{ // Play Sound 2D");
+            ctx.Line("  ScriptBase::PlaySound2D(" + sound + ", " + volume + ", " + pitch + ");");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("}");
+            return;
+        }
+
+        else if (name == "Play Sound At Location")
+        {
+            std::string sound = "\"\"";
+            std::string loc = "glm::vec3(0.0f)";
+            std::string volume = "1.0f";
+            std::string pitch = "1.0f";
+
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Sound")    sound = ResolvePin(ctx, inp);
+                if (inp.Name == "Location") loc = ResolvePin(ctx, inp);
+                if (inp.Name == "Volume")   volume = ResolvePin(ctx, inp);
+                if (inp.Name == "Pitch")    pitch = ResolvePin(ctx, inp);
+            }
+
+            ctx.Line("{ // Play Sound At Location");
+            ctx.Line("  ScriptBase::PlaySoundAtLocation(" + sound + ", " + loc
+                + ", " + volume + ", " + pitch + ");");
+            ctx.indent++;
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            ctx.indent--;
             ctx.Line("}");
             return;
         }

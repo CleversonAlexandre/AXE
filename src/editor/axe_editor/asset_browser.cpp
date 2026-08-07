@@ -1,6 +1,11 @@
 #include "asset_browser.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
+#include "axe/audio/sound_cue.hpp"
+#include "editor/axe_editor/ui/editor_icons.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"
+#include "axe/audio/audio_clip.hpp"
+#include "axe/audio/audio_engine.hpp"
 #include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/log/log.hpp"
 #include "axe/asset/asset_database.hpp"
@@ -24,8 +29,21 @@ namespace axe
         ".gltf", ".glb", ".obj", ".fbx", ".dae",   // .fbx: formato da Mixamo
         ".png", ".jpg", ".jpeg",
         ".axemat", ".axescene", ".axeskel", ".axeanim",  // .axeskel: personagem | .axeanim: state machine
-        ".axerig"                                        // .axerig: control rig
+        ".axerig",                                       // .axerig: control rig
+        ".wav", ".mp3", ".flac",                         // audio
+        ".axecue"                                        // sound cue
     };
+
+    // NOTA sobre esta lista: ela e um SEGUNDO portao de extensoes, paralelo
+    // ao AssetTypeFromExtension do asset.hpp. O AssetDatabase::Scan ja
+    // reconhecia audio ha muito tempo — o que barrava era esta lista aqui,
+    // que decide o que o drag-and-drop e o "Import Asset..." aceitam.
+    //
+    // Ter duas listas e a causa raiz: acrescentar um tipo em asset.hpp nao
+    // o torna importavel, e o sintoma e "o arquivo simplesmente nao entra",
+    // sem log e sem erro. Unificar as duas e trabalho para um patch proprio
+    // (mexe no contrato de quem decide o que e asset); registrado aqui para
+    // nao virar folclore.
 
 
 
@@ -1308,6 +1326,55 @@ namespace axe
         // So aparece em arquivos de MALHA (fbx/gltf/dae/obj). O .fbx e uma
         // FONTE, nao um asset: este item gera o .axeskel ao lado dele, que e
         // o asset de verdade — e e o .axeskel que voce arrasta pra cena.
+        // ── Criar Sound Cue a partir de um .wav ──────────────────────────
+        //
+        // Nasce a partir da wave, como o AnimGraph nasce do .axeskel: um cue
+        // vazio nao teria nada pra tocar, e a primeira coisa que o usuario
+        // faria seria arrastar uma wave pra dentro.
+        //
+        // Chaveado pela EXTENSAO, nao por record.Type — mesma razao ja
+        // documentada abaixo: Type e estado derivado e pode estar velho.
+        {
+            // Pergunta ao AssetTypeFromExtension em vez de comparar literais.
+            //
+            // A versao anterior tinha `ext == ".wav" || ...` — que ignorava
+            // "Step4_1.WAV" (o Windows preserva a caixa do nome) e criava uma
+            // TERCEIRA lista de extensoes de audio no projeto, depois da do
+            // asset.hpp e da s_SupportedExtensions logo acima. Uma funcao ja
+            // sabe responder isso, e ja normaliza a caixa.
+            if (AssetTypeFromExtension(record.FilePath.extension().string())
+                == AssetType::Audio)
+            {
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Criar Sound Cue"))
+                {
+                    auto cue = SoundCueAsset::Create(record.Name, record.UUID);
+
+                    std::filesystem::path out = record.FilePath;
+                    out.replace_extension(".axecue");
+
+                    if (cue->Save(out))
+                    {
+                        const std::string newUuid = AssetDatabase::Get().Register(out);
+
+                        if (auto* newRec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(newUuid)))
+                            newRec->VirtualFolder = record.VirtualFolder;
+
+                        if (ProjectManager::Get().HasProject())
+                            AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+
+                        AXE_EDITOR_INFO("Sound Cue '{}' criado ja com variacao de pitch. "
+                            "Aponte um Audio Source para ele.", record.Name);
+                    }
+                }
+
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Cria um .axecue com Random + Modulator sobre este som.\n"
+                        "Serve em qualquer lugar que aceite um audio.");
+            }
+        }
+
         // ── Criar AnimGraph a partir de um personagem ────────────────────
         //
         // Nasce a partir do .axeskel, e nao do nada, porque um AnimGraph SEM
@@ -1613,7 +1680,9 @@ namespace axe
         if (ImGui::MenuItem("Import Asset..."))
         {
             auto path = FileDialog::Open(
-                "Assets\0*.png;*.jpg;*.jpeg;*.gltf;*.glb;*.obj;*.axemat\0All Files\0*.*\0",
+                "Assets\0*.png;*.jpg;*.jpeg;*.gltf;*.glb;*.obj;*.fbx;*.dae;*.axemat;*.wav;*.mp3;*.flac\0"
+                "Audio\0*.wav;*.mp3;*.flac\0"
+                "All Files\0*.*\0",
                 "Import Asset");
             if (!path.empty())
                 OnFileDrop(path.string());
@@ -1846,6 +1915,7 @@ namespace axe
             case AssetType::Scene:    icon = icons.GetScene();                                   break;
             case AssetType::Script:   icon = icons.GetScriptForClass(record.ScriptClassType);  break;
             case AssetType::Audio:    icon = icons.GetAudio();                                  break;
+            case AssetType::SoundCue: icon = icons.GetAudio(); /* TODO: icone dedicado */      break;
             case AssetType::GameMode: icon = icons.GetScene();                                  break;
             case AssetType::ParticleSystem: icon = icons.GetMesh(); /* TODO: ícone dedicado */ break;
             default:                  icon = icons.GetMesh();                                   break;
@@ -1863,23 +1933,99 @@ namespace axe
         float  textBlockH = lineHeight * kMaxNameLines + 4.0f;
         float  totalH = iconBlockH + textBlockH;
 
-        bool selected = (m_SelectedUUID == record.UUID);
+        bool selected = IsSelected(record.UUID);
 
         ImGui::InvisibleButton("##item", ImVec2(totalW, totalH));
 
         bool hovered = ImGui::IsItemHovered();
         bool dclicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
-        if (ImGui::IsItemClicked()) m_SelectedUUID = record.UUID;
+        // Clique sobre o botao de tocar nao seleciona nem abre: e um gesto
+        // proprio. Testado ANTES da selecao porque quem clica no play quer
+        // ouvir, e nao navegar.
+        const bool overPlay = (record.Type == AssetType::Audio)
+            && (hovered || selected)
+            && [&]()
+            {
+                const ImVec2 c(itemPos.x + padding + m_IconSize * 0.5f,
+                    itemPos.y + padding + m_IconSize * 0.5f);
+                const float r = std::max(12.0f, m_IconSize * 0.28f);
+                const ImVec2 m = ImGui::GetIO().MousePos;
+                const float dx = m.x - c.x, dy = m.y - c.y;
+
+                return (dx * dx + dy * dy) <= r * r;
+            }();
+
+        if (overPlay && ImGui::IsItemClicked())
+        {
+            TogglePreview(record);
+        }
+        else if (ImGui::IsItemClicked())
+        {
+            // Ctrl+clique acumula; clique simples recomeca a selecao. E o
+            // gesto que todo gerenciador de arquivos usa, entao ninguem
+            // precisa aprender.
+            if (ImGui::GetIO().KeyCtrl)
+            {
+                auto it = std::find(m_SelectedUUIDs.begin(), m_SelectedUUIDs.end(), record.UUID);
+
+                if (it != m_SelectedUUIDs.end())
+                    m_SelectedUUIDs.erase(it);
+                else
+                    m_SelectedUUIDs.push_back(record.UUID);
+            }
+            else
+            {
+                m_SelectedUUIDs.clear();
+            }
+
+            m_SelectedUUID = record.UUID;
+        }
 
         // Drag source
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
         {
-            ImGui::SetDragDropPayload("ASSET_UUID", record.UUID.c_str(), record.UUID.size() + 1);
-            if (icon && icon->IsLoaded())
-                ImGui::Image((ImTextureID)(uintptr_t)icon->GetRendererID(),
-                    ImVec2(32, 32), ImVec2(0, 1), ImVec2(1, 0));
-            ImGui::Text("%s", record.Name.c_str());
+            // Monta a lista arrastada: os multi-selecionados MAIS o item sob o
+            // cursor, que pode nao estar na lista (arrastar um item sem
+            // clicar nele antes e comum).
+            std::vector<std::string> dragged = m_SelectedUUIDs;
+
+            if (std::find(dragged.begin(), dragged.end(), record.UUID) == dragged.end())
+                dragged.push_back(record.UUID);
+
+            if (dragged.size() > 1)
+            {
+                // Payload de LISTA: UUIDs separados por '\n'.
+                //
+                // Tipo distinto de proposito. O ImGui so permite UM payload
+                // por arrasto, e todos os alvos existentes (viewport, pastas,
+                // slots de material) esperam ASSET_UUID e recebem UM asset.
+                // Se a lista viesse com o mesmo nome, eles leriam a string
+                // inteira como se fosse um UUID so. Com nome proprio, quem
+                // nao entende simplesmente ignora — arrastar varios pra um
+                // alvo de um nao faz nada, em vez de fazer errado.
+                std::string joined;
+
+                for (const auto& u : dragged)
+                {
+                    if (!joined.empty()) joined += '\n';
+                    joined += u;
+                }
+
+                ImGui::SetDragDropPayload("ASSET_UUID_LIST", joined.c_str(), joined.size() + 1);
+                ImGui::Text("%d assets", (int)dragged.size());
+            }
+            else
+            {
+                ImGui::SetDragDropPayload("ASSET_UUID", record.UUID.c_str(), record.UUID.size() + 1);
+
+                if (icon && icon->IsLoaded())
+                    ImGui::Image((ImTextureID)(uintptr_t)icon->GetRendererID(),
+                        ImVec2(32, 32), ImVec2(0, 1), ImVec2(1, 0));
+
+                ImGui::Text("%s", record.Name.c_str());
+            }
+
             ImGui::EndDragDropSource();
         }
 
@@ -1949,6 +2095,10 @@ namespace axe
                 iconMin, iconMax, ImVec2(0, 1), ImVec2(1, 0));
         else
             draw->AddRectFilled(iconMin, iconMax, IM_COL32(60, 60, 60, 255), 4.0f);
+
+        // Botao de tocar por cima do icone, so para audio.
+        if (record.Type == AssetType::Audio)
+            DrawAudioPlayOverlay(record, iconMin, iconMax, hovered, selected);
 
         // Nome — rename inline ou texto (com quebra de linha, sem truncar)
         float textBlockY = itemPos.y + iconBlockH + 2.0f;
@@ -2027,5 +2177,100 @@ namespace axe
     }
 
 
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Preview de audio no icone
+    // ─────────────────────────────────────────────────────────────────────────
+    void AssetBrowser::TogglePreview(const AssetRecord& record)
+    {
+        // Ja tocando ESTE som: para.
+        if (m_PreviewVoice != 0 && m_PreviewUUID == record.UUID
+            && AudioEngine::IsPlaying(m_PreviewVoice))
+        {
+            AudioEngine::Stop(m_PreviewVoice);
+            m_PreviewVoice = 0;
+            return;
+        }
+
+        // Tocando outro: para o anterior. Dois sons ao mesmo tempo aqui nao
+        // ajudam a comparar nada — atrapalham.
+        if (m_PreviewVoice != 0)
+        {
+            AudioEngine::Stop(m_PreviewVoice);
+            m_PreviewVoice = 0;
+        }
+
+        // Guarda de tipo antes de decodificar: GetClip manda o arquivo direto
+        // pro decoder do miniaudio, e um .axecue (que e JSON) faria ele falhar
+        // com dois erros vermelhos que nao dizem nada sobre a causa.
+        if (AssetTypeFromExtension(record.FilePath.extension().string()) != AssetType::Audio)
+            return;
+
+        auto clip = AudioEngine::GetClip(record.UUID);
+
+        if (!clip || !clip->IsValid())
+            return;
+
+        // 2D e no bus Master: preview e escuta, nao mixagem. Passando pelo bus
+        // de SFX, o volume mudaria conforme o slider do Mixer — e voce ouviria
+        // "baixo" um arquivo que esta correto.
+        VoiceParams p;
+        p.Spatialized = false;
+        p.Bus = AudioBus::Master;
+
+        m_PreviewVoice = AudioEngine::Play(clip, p, false);
+        m_PreviewUUID = record.UUID;
+    }
+
+    bool AssetBrowser::DrawAudioPlayOverlay(const AssetRecord& record,
+        const ImVec2& iconMin, const ImVec2& iconMax,
+        bool hovered, bool selected)
+    {
+        const bool playing = m_PreviewVoice != 0 && m_PreviewUUID == record.UUID
+            && AudioEngine::IsPlaying(m_PreviewVoice);
+
+        // Aparece no hover, na selecao, ou enquanto toca. O ultimo caso
+        // importa: sem ele o botao de parar sumiria assim que o mouse saisse,
+        // e o som continuaria sem controle visivel.
+        if (!hovered && !selected && !playing)
+            return false;
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+
+        const ImVec2 c((iconMin.x + iconMax.x) * 0.5f, (iconMin.y + iconMax.y) * 0.5f);
+        const float  r = std::max(12.0f, m_IconSize * 0.28f);
+
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        const float  dx = mouse.x - c.x, dy = mouse.y - c.y;
+        const bool   over = (dx * dx + dy * dy) <= r * r;
+
+        // Escurece o icone atras do botao: o alto-falante branco por baixo
+        // engoliria o simbolo.
+        draw->AddCircleFilled(c, r, IM_COL32(10, 12, 16, over ? 235 : 195), 32);
+        draw->AddCircle(c, r, over ? IM_COL32(120, 190, 255, 255)
+            : IM_COL32(200, 210, 225, 180), 32, 1.5f);
+
+        const ImU32 fg = over ? IM_COL32(150, 210, 255, 255) : IM_COL32(235, 240, 250, 230);
+
+        if (playing)
+        {
+            // Stop: quadrado. Formas diferentes em vez de so cores, pra
+            // funcionar tambem pra quem nao distingue bem cor.
+            const float h = r * 0.42f;
+            draw->AddRectFilled(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), fg, 1.5f);
+        }
+        else
+        {
+            // Play: triangulo, deslocado meio pixel a direita porque um
+            // triangulo centrado no centroide parece torto pra esquerda.
+            const float h = r * 0.46f;
+            draw->AddTriangleFilled(
+                ImVec2(c.x - h * 0.6f + 1.0f, c.y - h),
+                ImVec2(c.x - h * 0.6f + 1.0f, c.y + h),
+                ImVec2(c.x + h + 1.0f, c.y), fg);
+        }
+
+        return over;
+    }
 
 } // namespace axe

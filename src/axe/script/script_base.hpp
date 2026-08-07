@@ -149,6 +149,31 @@ namespace axe
         void Burst(int emitterIndex, int count); // dispara N partículas num emitter específico
     };
 
+    // ── Proxy de Audio ───────────────────────────────────────────────────────
+    //
+    // Opera sobre o AudioSourceComponent da entidade. Como todo proxy daqui,
+    // faz try_get em runtime: chamar num objeto sem Audio Source e no-op
+    // silencioso, nao crash.
+    //
+    // Play/Stop NAO falam com o AudioEngine direto — marcam a intencao no
+    // componente e o AudioWorld executa. Nao e burocracia: quem chama nao
+    // sabe (e nao deve saber) se ja existe voice viva, se a cena esta
+    // pausada, ou se o clipe ja foi decodificado. Quem sabe e o AudioWorld.
+    //
+    // E nao custa latencia: no frame, o script roda ANTES do audio, entao a
+    // marca posta aqui e consumida no MESMO frame.
+    struct AXE_API ScriptAudioProxy
+    {
+        entt::entity Entity;
+        Scene* ScenePtr;
+
+        void Play();
+        void Stop();
+        void SetVolume(float volume);
+        void SetPitch(float pitch);
+        bool IsPlaying() const;
+    };
+
     // ── Proxy de CharacterController ─────────────────────────────────────────
     struct AXE_API ScriptCharacterProxy
     {
@@ -198,6 +223,25 @@ namespace axe
         // Usa const char* para evitar incompatibilidade de layout de std::string
         // cross-DLL quando script DLL e axe.dll usam CRTs diferentes.
         static void PrintOnScreen(const char* msg, float duration = 3.0f);
+
+        // ── Som avulso ────────────────────────────────────────────────────────
+        //
+        // Fire-and-forget: nao precisa de entidade, nao precisa de
+        // AudioSourceComponent, e nao ha nada para guardar. Tiro, passo,
+        // clique de UI.
+        //
+        // `sound` e o NOME do asset ("Explosion"), nao o UUID — ninguem
+        // digita UUID em codigo de gameplay. UUID tambem funciona.
+        //
+        // Toca no INSTANTE da chamada, sem passar pelo AudioWorld: deferir
+        // um tiro para o fim do frame o atrasaria em relacao ao efeito
+        // visual disparado na mesma linha.
+        static void PlaySound2D(const std::string& sound,
+            float volume = 1.0f, float pitch = 1.0f);
+
+        static void PlaySoundAtLocation(const std::string& sound,
+            const glm::vec3& location,
+            float volume = 1.0f, float pitch = 1.0f);
         static const std::vector<ScriptScreenMessage>& GetScreenMessages();
         static void TickScreenMessages(float dt);
         static void ClearScreenMessages();
@@ -242,6 +286,7 @@ namespace axe
         ScriptRigidbodyProxy  GetRigidbody();
         ScriptAnimProxy       GetAnim();
         ScriptParticleProxy   GetParticleSystem();
+        ScriptAudioProxy      GetAudio();
         ScriptCameraProxy     GetCamera();
 
         // Chamado pelo ScriptWorld antes de cada OnUpdate pra manter

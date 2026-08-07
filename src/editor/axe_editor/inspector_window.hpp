@@ -64,6 +64,8 @@ namespace axe
         void DrawCollider(entt::entity entity, entt::registry& registry);
         void DrawCharacterController(entt::entity entity, entt::registry& registry);
         void DrawParticleSystem(entt::entity entity);
+        void DrawAudioSource(entt::entity entity);
+        void DrawAudioListener(entt::entity entity);
 
         EditorContext* m_Context = nullptr;
 

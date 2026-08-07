@@ -2,6 +2,7 @@
 #include "editor_icons.hpp"
 
 #include <imgui.h>
+#include <vector>
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  WIDGETS COMPARTILHADOS DO EDITOR
@@ -62,6 +63,20 @@ namespace axe::ui
 	// Cabecalho de secao com faixa colorida. E o "Functions" e o "Variables" dos
 	// paineis de membros.
 	void SectionHeader(const char* icon, const char* label, Accent accent);
+
+	// ── Forma de onda ────────────────────────────────────────────────────────
+	//
+	// Desenha o envelope de um som (a tabela de picos do AudioClip) espelhado
+	// no eixo horizontal, com um cursor opcional de reproducao.
+	//
+	// Espelhado, e nao meia onda: e como todo editor de audio desenha, e a
+	// simetria e o que faz o olho ler "isso e som" em vez de "isso e um
+	// grafico de barras".
+	//
+	// playhead01 < 0 esconde o cursor. Nao ha animacao interna: quem chama
+	// passa a posicao a cada frame, porque so ele sabe se ha voice tocando.
+	void Waveform(const char* id, const std::vector<float>& peaks,
+		const ImVec2& size, const ImVec4& color, float playhead01 = -1.0f);
 
 	// Separador vertical entre grupos da toolbar. Sem ele, dez botoes em fila
 	// viram uma parede indistinguivel.

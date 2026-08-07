@@ -59,6 +59,7 @@ namespace axe
             case AssetType::Scene:    icon = icons.GetScene();    break;
             case AssetType::Script:   icon = icons.GetScript();   break;
             case AssetType::Audio:    icon = icons.GetAudio();    break;
+            case AssetType::SoundCue: icon = icons.GetAudio();    break;
             default:                  icon = icons.GetMesh();     break;
             }
         }

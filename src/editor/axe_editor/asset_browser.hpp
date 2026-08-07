@@ -1,4 +1,6 @@
 #pragma once
+#include "axe/audio/audio_device.hpp"   // VoiceHandle
+#include <algorithm>
 #include "axe/core/types.hpp"
 #include "editor_context.hpp"
 #include "editor_icon_library.hpp"
@@ -67,6 +69,22 @@ namespace axe
         void DrawFolderTree();
         void DrawFolderNode(const std::string& folderPath);
         void DrawAssetGrid();
+
+        // Botao de tocar sobreposto ao icone de um asset de audio.
+        //
+        // Desenhado sobre a miniatura, no hover ou na selecao — do jeito que
+        // a Unreal faz. E o gesto certo porque a pergunta "como e este som?"
+        // nasce olhando pro icone: qualquer painel separado obriga o olho a
+        // ir e voltar.
+        //
+        // Devolve true se ele consumiu o clique, para que o item nao trate o
+        // mesmo clique como abertura.
+        // Toca ou para o preview deste asset.
+        void TogglePreview(const AssetRecord& record);
+
+        bool DrawAudioPlayOverlay(const AssetRecord& record,
+            const ImVec2& iconMin, const ImVec2& iconMax,
+            bool hovered, bool selected);
         void DrawAssetItem(const AssetRecord& record);
         void DrawFolderItem(const VirtualFolderDef& folder);
 
@@ -140,6 +158,26 @@ namespace axe
 
         // Seleção
         std::string m_SelectedUUID = "";
+
+        // Selecao MULTIPLA, para arrastar varios assets de uma vez.
+        //
+        // Vive ao lado de m_SelectedUUID em vez de substitui-lo: rename,
+        // delete, "Move to" e o menu de contexto continuam operando sobre UM
+        // asset, e reescrever todos eles seria um patch por si so. Aqui a
+        // lista serve so ao arrasto e ao realce.
+        std::vector<std::string> m_SelectedUUIDs;
+
+        // Voice do preview. Uma so: ouvir dois sons ao mesmo tempo aqui nao
+        // ajuda a comparar nada.
+        VoiceHandle m_PreviewVoice = 0;
+        std::string m_PreviewUUID;
+
+        bool IsSelected(const std::string& uuid) const
+        {
+            return uuid == m_SelectedUUID
+                || std::find(m_SelectedUUIDs.begin(), m_SelectedUUIDs.end(), uuid)
+                != m_SelectedUUIDs.end();
+        }
 
         // Popup de cor de pasta
         std::string m_ColorPickerFolder = "";

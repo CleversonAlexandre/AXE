@@ -41,6 +41,30 @@ namespace axe
 
 		std::vector<NotifyFx> m_NotifyFx;
 
+	public:
+		// ── Modo audicao ─────────────────────────────────────────────────
+		//
+		// Liga o som dos notifies em 2D, sem posicao e sem atenuacao.
+		//
+		// Existe porque as janelas de preview (Animation Editor) rodam a
+		// propria cena, com a propria camera — mas o LISTENER e global e
+		// mora na camera do viewport principal. O personagem do preview toca
+		// num canto do mundo e o ouvido esta em outro, entao a distancia
+		// entre os dois derruba o volume, e o usuario ouve baixo um som que
+		// no jogo esta correto.
+		//
+		// Espacializar num preview nao teria sentido de qualquer forma: ali
+		// voce esta CONFERINDO o som, nao posicionando-o. Mesma escolha do
+		// Preview do Sound Cue.
+		//
+		// Por INSTANCIA, e nao global: a AnimationWorld do jogo continua
+		// espacializando normalmente.
+		void SetSoundAudition(bool audition) { m_SoundAudition = audition; }
+		bool IsSoundAudition() const { return m_SoundAudition; }
+
+	private:
+		bool m_SoundAudition = false;
+
 		void DispatchNotifies(Scene& scene, entt::entity character,
 			const std::vector<AnimNotify>& fired, bool inPlay);
 

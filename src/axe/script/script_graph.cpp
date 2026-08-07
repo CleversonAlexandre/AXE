@@ -871,6 +871,89 @@ namespace axe
             return node;
         }
 
+        // ── Audio nodes ───────────────────────────────────────────────────────
+        //
+        // Dois grupos, com semanticas diferentes:
+        //
+        //   Audio Play/Stop/Set*  -> operam na AudioSourceComponent de uma
+        //                            entidade (Target). Som que PERTENCE a
+        //                            um objeto: motor, radio, chuveiro.
+        //
+        //   Play Sound 2D/At Loc  -> one-shot sem dono. Nao precisa de
+        //                            entidade nem de componente.
+        //
+        // O pin "Sound" e String e recebe o NOME do asset. Um pin de asset
+        // seria melhor, mas nao existe no grafo ainda — criar um tipo de pin
+        // novo mexe em renderizacao, serializacao e cast, e e patch proprio.
+        if (t == "AudioPlay")
+        {
+            auto node = makeNode(baseId, "Audio Play", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "AudioStop")
+        {
+            auto node = makeNode(baseId, "Audio Stop", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "AudioSetVolume")
+        {
+            auto node = makeNode(baseId, "Audio Set Volume", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
+            v.DefaultFloat = 1.0f;
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "AudioSetPitch")
+        {
+            auto node = makeNode(baseId, "Audio Set Pitch", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
+            pi.DefaultFloat = 1.0f;
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "AudioIsPlaying")
+        {
+            auto node = makeNode(baseId, "Audio Is Playing", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Playing", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "PlaySound2D")
+        {
+            auto node = makeNode(baseId, "Play Sound 2D", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Sound", ScriptPinType::String, ed::PinKind::Input);
+            auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
+            v.DefaultFloat = 1.0f;
+            auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
+            pi.DefaultFloat = 1.0f;
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "PlaySoundAtLocation")
+        {
+            auto node = makeNode(baseId, "Play Sound At Location", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Sound", ScriptPinType::String, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Location", ScriptPinType::Vec3, ed::PinKind::Input);
+            auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
+            v.DefaultFloat = 1.0f;
+            auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
+            pi.DefaultFloat = 1.0f;
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         // ── Transform de outras entities ──────────────────────────────────────
         // "Get*" — dados puro (sem Flow). "Set*" — action com Flow.
         // Todos recebem "Target" (Object) — diferente dos existentes que

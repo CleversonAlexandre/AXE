@@ -482,6 +482,8 @@ namespace axe
 					e["rot"] = { n.RotationOffset.x, n.RotationOffset.y, n.RotationOffset.z };
 					e["scale"] = { n.Scale.x, n.Scale.y, n.Scale.z };
 					e["attached"] = n.Attached;
+					e["volume"] = n.Volume;
+					e["pitch"] = n.Pitch;
 					e["color"] = { n.Color.x, n.Color.y, n.Color.z };
 					jn.push_back(e);
 				}
@@ -632,6 +634,11 @@ namespace axe
 						n.Track = jn.value("track", 0);
 						n.Socket = jn.value("socket", std::string{});
 						n.Attached = jn.value("attached", true);
+
+						// Default 1.0: notify salvo antes deste campo existir
+						// continua soando exatamente como soava.
+						n.Volume = jn.value("volume", 1.0f);
+						n.Pitch = jn.value("pitch", 1.0f);
 
 						auto readV3 = [&jn](const char* key, glm::vec3 def) -> glm::vec3
 							{

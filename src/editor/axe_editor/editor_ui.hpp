@@ -6,6 +6,7 @@
 #include "editor_context.hpp"
 #include "editor/axe_editor/material/material_editor_window.hpp"
 #include "editor/axe_editor/particles/particle_editor_window.hpp"
+#include "editor/axe_editor/audio/sound_cue_editor_window.hpp"
 #include "animation/anim_graph_window.hpp"
 #include "rig/control_rig_window.hpp"
 #include "animation/anim_clip_window.hpp"
@@ -29,6 +30,12 @@ namespace axe
         AssetBrowser* GetAssetBrowser() { return &m_AssetBowserWindow; }
         MaterialEditorWindow m_MaterialEditorWindow;
         ParticleEditorWindow m_ParticleEditorWindow;
+        SoundCueEditorWindow m_SoundCueEditorWindow;
+
+        // Mixer de buses. Janela pequena demais para arquivo proprio, e o
+        // conteudo e cinco sliders — separar so criaria indireção.
+        bool m_ShowAudioMixer = false;
+        void DrawAudioMixer();
         ScriptGraphWindow    m_ScriptGraphWindow;
         AnimGraphWindow      m_AnimGraphWindow;
         ControlRigWindow     m_ControlRigWindow;

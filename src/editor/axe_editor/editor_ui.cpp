@@ -1,4 +1,5 @@
 #include "editor_ui.hpp"
+#include "axe/audio/audio_engine.hpp"
 #include "axe/project/project_manager.hpp"
 #include "axe/project/project.hpp"
 #include "axe/asset/asset_database.hpp"
@@ -21,6 +22,8 @@ namespace axe
 		m_ViewportWindow.Draw();
 		m_MaterialEditorWindow.Draw();
 		m_ParticleEditorWindow.Draw();
+		m_SoundCueEditorWindow.Draw();
+		DrawAudioMixer();
 
 		// Input Settings — carrega o InputConfig.json do projeto atual na
 		// primeira vez que detecta o projeto (ou troca de projeto). Evita
@@ -178,6 +181,7 @@ namespace axe
 		m_AssetBowserWindow.SetContext(context);
 		m_MaterialEditorWindow.SetContext(context);
 		m_ParticleEditorWindow.SetContext(context);
+		m_SoundCueEditorWindow.SetContext(context);
 	}
 
 	void EditorUI::SetViewportRenderer(ViewportRenderer* renderer)
@@ -293,6 +297,8 @@ namespace axe
 			{
 				if (ImGui::MenuItem("Input Settings"))
 					m_InputSettingsWindow.Open();
+
+				ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
 				ImGui::EndMenu();
 			}
 
@@ -351,4 +357,94 @@ namespace axe
 
 
 
+
+	// ─────────────────────────────────────────────────────────────────────────
+	//  Audio Mixer
+	//
+	//  Um slider por bus. E o que um menu de opcoes do JOGO vai chamar por
+	//  baixo — aqui serve para ouvir a mixagem enquanto se edita, sem ter que
+	//  construir a tela de opcoes antes.
+	//
+	//  Os valores NAO sao salvos no projeto, de proposito: mixagem de sessao e
+	//  ferramenta de escuta, nao autoria. Volume que deve persistir e decisao
+	//  do jogo e mora nas preferencias dele.
+	// ─────────────────────────────────────────────────────────────────────────
+	void EditorUI::DrawAudioMixer()
+	{
+		if (!m_ShowAudioMixer)
+			return;
+
+		ImGui::SetNextWindowSize(ImVec2(300, 230), ImGuiCond_FirstUseEver);
+
+		if (!ImGui::Begin("Audio Mixer", &m_ShowAudioMixer))
+		{
+			ImGui::End();
+			return;
+		}
+
+		if (!AudioEngine::IsInitialized())
+		{
+			ImGui::TextDisabled("Audio nao inicializado.");
+			ImGui::End();
+			return;
+		}
+
+		for (int i = 0; i < (int)AudioBus::Count; ++i)
+		{
+			const AudioBus bus = (AudioBus)i;
+
+			float v = AudioEngine::GetBusVolume(bus);
+
+			ImGui::PushID(i);
+
+			if (ImGui::SliderFloat(AudioBusToString(bus), &v, 0.0f, 1.5f, "%.2f"))
+				AudioEngine::SetBusVolume(bus, v);
+
+			ImGui::PopID();
+
+			// Master separado dos demais: ele nao e um grupo irmao, e sim o
+			// volume final por onde todos passam.
+			if (bus == AudioBus::Master)
+				ImGui::Separator();
+		}
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		// ── Vozes ────────────────────────────────────────────────────────
+		//
+		// O medidor existe para o limite nao ser magico. Sem ele, "meu som
+		// sumiu" e um misterio; com ele, voce ve o contador colado no teto e
+		// sabe exatamente o que aconteceu.
+		const int active = AudioEngine::GetActiveVoiceCount();
+		const int maxV = AudioEngine::GetMaxVoices();
+
+		ImGui::Text("Vozes: %d / %d", active, maxV);
+
+		if (maxV > 0)
+		{
+			const float frac = (float)active / (float)maxV;
+
+			ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+				frac > 0.9f ? ImVec4(0.90f, 0.35f, 0.30f, 1.0f)
+				: frac > 0.6f ? ImVec4(0.90f, 0.70f, 0.25f, 1.0f)
+				: ImVec4(0.35f, 0.70f, 0.45f, 1.0f));
+
+			ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
+			ImGui::PopStyleColor();
+		}
+
+		int cap = maxV;
+
+		if (ImGui::SliderInt("Teto", &cap, 0, 128))
+			AudioEngine::SetMaxVoices(cap);
+
+		ImGui::TextDisabled("Zero desliga o limite.");
+
+		ImGui::Spacing();
+		ImGui::TextDisabled("Sessao apenas — nao e salvo no projeto.");
+
+		ImGui::End();
+	}
 }

@@ -5,6 +5,8 @@
 #include "axe/physics/physics_components.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/audio/audio_source_component.hpp"
+#include "axe/audio/audio_listener_component.hpp"
 
 #include <entt/entt.hpp>
 
@@ -51,7 +53,10 @@ namespace axe
 		TriggerComponent,
 
 		ScriptComponent,
-		ParticleSystemComponent
+		ParticleSystemComponent,
+
+		AudioSourceComponent,
+		AudioListenerComponent
 	> ;
 
 	// Snapshot de Play/Stop.

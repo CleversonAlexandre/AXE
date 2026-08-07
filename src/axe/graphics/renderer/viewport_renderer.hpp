@@ -17,6 +17,7 @@
 
 #include "axe/graphics/renderer/grid_renderer.hpp"
 #include "axe/graphics/renderer/collider_debug_renderer.hpp"
+#include "axe/graphics/renderer/sound_visualization_renderer.hpp"
 #include "axe/graphics/game_camera.hpp"
 #include "skybox_renderer.hpp"
 #include "axe/scene/scene_environment.hpp"
@@ -57,6 +58,15 @@ namespace axe
 		bool  ShowGrid = true;
 		bool  ShowColliders = true; // wireframe dos colliders no editor
 		bool  ShowLights = true;    // wireframe do raio das Point Lights no editor
+
+		// Visualizacao de som (acessibilidade).
+		//
+		// Ao contrario de ShowColliders e ShowLights, isto NAO e gizmo de
+		// editor: e recurso de jogo, e por isso desenha tambem sob a
+		// GameCamera. Fica desligado por padrao porque a maioria dos
+		// jogadores nao precisa dele — quem precisa liga, e a partir dai vale
+		// em Play tambem.
+		bool  ShowSoundVisualization = false;
 		bool  SnapEnabled = false;
 		float SnapValue = 0.5f;   // unidades para translate
 		float SnapAngle = 15.0f;  // graus para rotate
@@ -118,6 +128,7 @@ namespace axe
 		SkyboxRenderer   m_SkyboxRenderer;
 		GridRenderer            m_GridRenderer;
 		ColliderDebugRenderer   m_ColliderDebugRenderer;
+		SoundVisualizationRenderer m_SoundVisualization;
 		SceneEnvironment* m_Environment = nullptr;
 
 		std::shared_ptr<PostProcessPass>  m_PostProcess;

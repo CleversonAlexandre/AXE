@@ -18,6 +18,10 @@
 #include "axe/scene/scene_serializer.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/audio/audio_source_component.hpp"
+#include "axe/audio/audio_listener_component.hpp"
+#include "axe/audio/audio_engine.hpp"
+#include "axe/audio/audio_clip.hpp"
 #include "axe/project/project_manager.hpp"
 
 #include "asset/asset_picker.hpp"
@@ -375,6 +379,10 @@ namespace axe
 
 		// Particle System
 		DrawParticleSystem(entity);
+
+		// Audio
+		DrawAudioSource(entity);
+		DrawAudioListener(entity);
 
 		// ─────────────────────────────────────────────────────────────────
 		// Skeletal Mesh
@@ -822,6 +830,34 @@ namespace axe
 				ImGui::CloseCurrentPopup();
 			}
 
+			ImGui::Spacing();
+			ImGui::TextDisabled("Audio");
+			ImGui::Separator();
+
+			if (registry.any_of<AudioSourceComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Audio Source (ja adicionado)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Audio Source"))
+			{
+				registry.emplace<AudioSourceComponent>(entity);
+				ImGui::CloseCurrentPopup();
+			}
+
+			if (registry.any_of<AudioListenerComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Audio Listener (ja adicionado)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Audio Listener"))
+			{
+				registry.emplace<AudioListenerComponent>(entity);
+				ImGui::CloseCurrentPopup();
+			}
+
 			ImGui::EndPopup();
 		}
 		ImGui::PopID();
@@ -1102,6 +1138,190 @@ namespace axe
 			else
 				DrawMaterialParams(*mc->Data);
 		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Audio Source
+	// ─────────────────────────────────────────────────────────────────────
+	void InspectorWindow::DrawAudioSource(entt::entity entity)
+	{
+		auto& registry = m_Context->ActiveScene->GetRegistry();
+		auto* src = registry.try_get<AudioSourceComponent>(entity);
+		if (!src) return;
+
+		ImGui::Separator();
+
+		bool removeSrc = false;
+		const bool open = DrawComponentHeader("Audio Source", entity, 7, &removeSrc);
+
+		if (removeSrc)
+		{
+			// Parar ANTES de remover: sem isso a voice fica orfa — nao ha
+			// mais componente para pedir o Stop, e ela toca ate o fim (ou
+			// para sempre, se for loop).
+			if (src->_Voice != InvalidVoice)
+				AudioEngine::Stop(src->_Voice);
+
+			registry.remove<AudioSourceComponent>(entity);
+			return;
+		}
+
+		if (!open) return;
+
+		std::string uuid = src->ClipAssetUUID;
+
+		// Aceita .wav cru E .axecue: para o componente nao existe diferenca —
+		// o AudioEngine::ResolveSound resolve os dois.
+		if (AssetPicker::Draw("Clip", uuid, { AssetType::Audio, AssetType::SoundCue },
+			[&](const AssetRecord& record)
+			{
+				src->ClipAssetUUID = record.UUID;
+				src->Data = nullptr;   // AudioWorld resolve no proximo tick
+			}))
+		{
+			if (uuid.empty()) { src->ClipAssetUUID.clear(); src->Data = nullptr; }
+			else { src->ClipAssetUUID = uuid;  src->Data = nullptr; }
+		}
+
+		if (src->ClipAssetUUID.empty())
+		{
+			ImGui::TextDisabled("No Audio Clip assigned.");
+			return;
+		}
+
+		ImGui::SliderFloat("Volume", &src->Volume, 0.0f, 2.0f, "%.2f");
+		ImGui::SliderFloat("Pitch", &src->Pitch, 0.25f, 4.0f, "%.2f");
+		ImGui::Checkbox("Loop", &src->Loop);
+		ImGui::SameLine();
+		ImGui::Checkbox("Play On Start", &src->PlayOnStart);
+
+		ImGui::Checkbox("3D", &src->Is3D);
+
+		if (src->Is3D)
+		{
+			ImGui::DragFloat("Min Distance", &src->MinDistance, 0.1f, 0.01f, 10000.0f, "%.2f");
+			ImGui::DragFloat("Max Distance", &src->MaxDistance, 0.5f, 0.02f, 100000.0f, "%.2f");
+			ImGui::SliderFloat("Doppler", &src->DopplerFactor, 0.0f, 3.0f, "%.2f");
+			ImGui::TextDisabled("0 desliga. 1 e o efeito correto.\n"
+				"Fonte parada nao muda nada.");
+
+			// Min > Max nao e "quase certo": no miniaudio a atenuacao fica
+			// indefinida e o som some ou estoura sem aviso. Corrigir na
+			// hora e melhor do que deixar o usuario caçar isso de ouvido.
+			if (src->MaxDistance <= src->MinDistance)
+				src->MaxDistance = src->MinDistance + 0.01f;
+		}
+		else
+		{
+			ImGui::TextDisabled("2D: ignora posicao e listener.");
+		}
+
+		// Categoria: usada pela visualizacao de som. Fica desabilitada quando
+		// ha um Sound Cue, porque o cue manda — mostrar um combo editavel que
+		// nao tem efeito seria pior que nao mostrar nada.
+		{
+			const bool fromCue = !src->ClipAssetUUID.empty()
+				&& AssetDatabase::Get().GetByUUID(src->ClipAssetUUID)
+				&& AssetDatabase::Get().GetByUUID(src->ClipAssetUUID)
+				->FilePath.extension() == ".axecue";
+
+			ImGui::BeginDisabled(fromCue);
+
+			int cat = (int)src->Category;
+			const char* names[(int)SoundCategory::Count];
+
+			for (int i = 0; i < (int)SoundCategory::Count; ++i)
+				names[i] = SoundCategoryToString((SoundCategory)i);
+
+			if (ImGui::Combo("Categoria", &cat, names, (int)SoundCategory::Count))
+				src->Category = (SoundCategory)cat;
+
+			ImGui::EndDisabled();
+
+			int bus = (int)src->Bus;
+			const char* buses[(int)AudioBus::Count];
+
+			for (int i = 0; i < (int)AudioBus::Count; ++i)
+				buses[i] = AudioBusToString((AudioBus)i);
+
+			ImGui::BeginDisabled(fromCue);
+
+			if (ImGui::Combo("Bus", &bus, buses, (int)AudioBus::Count))
+				src->Bus = (AudioBus)bus;
+
+			ImGui::EndDisabled();
+
+			if (fromCue)
+				ImGui::TextDisabled("Categoria e Bus definidos pelo Sound Cue.");
+		}
+
+		ImGui::SliderFloat("Prioridade", &src->Priority, 0.0f, 1.0f, "%.2f");
+		ImGui::TextDisabled("No limite de vozes, a mais baixa cede lugar primeiro.");
+
+		ImGui::Spacing();
+		ImGui::DragFloat("Fade In", &src->FadeInTime, 0.05f, 0.0f, 30.0f, "%.2f s");
+		ImGui::DragFloat("Fade Out", &src->FadeOutTime, 0.05f, 0.0f, 30.0f, "%.2f s");
+		ImGui::TextDisabled("Zero = corte seco.");
+
+		// ── Preview ──────────────────────────────────────────────────────
+		//
+		// Funciona em Edit. E a UNICA forma de som da cena tocar fora do
+		// Play, e e deliberado: o usuario pediu explicitamente, clicando.
+		const bool playing = src->_Voice != InvalidVoice
+			&& AudioEngine::IsPlaying(src->_Voice);
+
+		if (ImGui::SmallButton(playing ? "Stop##audio_prev" : "Play##audio_prev"))
+		{
+			if (playing) src->_StopRequested = true;
+			else         src->_PlayRequested = true;
+		}
+
+		ImGui::SameLine();
+
+		if (src->Data && src->Data->IsValid())
+		{
+			ImGui::TextDisabled("%.2fs | %u ch | %u Hz%s",
+				src->Data->GetDuration(),
+				src->Data->GetChannels(),
+				src->Data->GetSampleRate(),
+				playing ? " | tocando" : "");
+		}
+		else
+		{
+			ImGui::TextDisabled("clipe ainda nao carregado");
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Audio Listener
+	// ─────────────────────────────────────────────────────────────────────
+	void InspectorWindow::DrawAudioListener(entt::entity entity)
+	{
+		auto& registry = m_Context->ActiveScene->GetRegistry();
+		auto* lc = registry.try_get<AudioListenerComponent>(entity);
+		if (!lc) return;
+
+		ImGui::Separator();
+
+		bool removeLc = false;
+		bool open = DrawComponentHeader("Audio Listener", entity, 8, &removeLc);
+
+		if (removeLc) { registry.remove<AudioListenerComponent>(entity); return; }
+		if (!open) return;
+
+		ImGui::Checkbox("Is Primary", &lc->IsPrimary);
+		ImGui::TextDisabled("Sem nenhum listener na cena, a camera ativa e usada.");
+
+		ImGui::Spacing();
+
+		ImGui::Checkbox("Usar orientacao da camera", &lc->UseCameraOrientation);
+
+		if (lc->UseCameraOrientation)
+			ImGui::TextDisabled("Distancia medida daqui, panning seguindo a tela.\n"
+				"Padrao para terceira pessoa.");
+		else
+			ImGui::TextDisabled("Distancia e panning daqui. Orbitar a camera nao\n"
+				"muda os lados. Para primeira pessoa.");
 	}
 
 	// Particle System — referência a um ParticleSystemAsset (.axepart),

@@ -60,6 +60,12 @@ namespace axe
         {"Get Scale","GetOtherScale"},{"Set Scale","SetOtherScale"},
         {"Get Forward Vector","GetForwardVector"},
         {"Get Right Vector","GetRightVector"} };
+    static const NE sAud[] = {
+        {"Audio Play","AudioPlay"},{"Audio Stop","AudioStop"},
+        {"Audio Set Volume","AudioSetVolume"},{"Audio Set Pitch","AudioSetPitch"},
+        {"Audio Is Playing","AudioIsPlaying"},
+        {"Play Sound 2D","PlaySound2D"},
+        {"Play Sound At Location","PlaySoundAtLocation"} };
     static const NE sCam[] = {
         {"Get Camera Direction","GetCameraDirection"},
         {"Camera Shake","CameraShake"},{"Camera Follow","CameraFollow"},
@@ -104,6 +110,7 @@ namespace axe
         {"Actions",       sAc,   NECount(sAc),   {0.2f, 0.7f,0.45f, 1}},
         {"Transform",     sTr,   NECount(sTr),   {0.9f, 0.65f,0.2f, 1}},
         {"Camera",        sCam,  NECount(sCam),  {0.3f, 0.7f,0.95f, 1}},
+        {"Audio",         sAud,  NECount(sAud),  {0.85f,0.5f,0.85f, 1}},
         {"Logic",         sLo,   NECount(sLo),   {0.8f, 0.6f,0.1f,  1}},
         {"Math",          sMa,   NECount(sMa),   {0.3f, 0.5f,0.9f,  1}},
         {"Input",         sIn,   NECount(sIn),   {0.7f, 0.2f,0.6f,  1}},
@@ -111,10 +118,12 @@ namespace axe
         {"Flow Control",  sFlow, NECount(sFlow), {0.45f,0.6f,0.75f, 1}},
         {"Cast",          sCast, NECount(sCast), {0.5f, 0.8f,0.8f,  1}},
     };
+    // Uma cor por categoria de s_Cats, na MESMA ordem. Inserir categoria
+    // sem inserir cor aqui le fora do array.
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
-        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.3f,0.75f,1},{0.7f,0.6f,0.95f,1},
-        {0.55f,0.75f,0.95f,1},{0.5f,0.9f,0.9f,1}
+        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.5f,0.85f,1},{0.85f,0.3f,0.75f,1},
+        {0.7f,0.6f,0.95f,1},{0.55f,0.75f,0.95f,1},{0.5f,0.9f,0.9f,1}
     };
 
     struct CompNodeEntry { const char* label; const char* type; };
@@ -1128,9 +1137,18 @@ namespace axe
                 std::string("reroute").find(s) != std::string::npos)
                 ImGui::Separator();
 
-            // Categorias estáticas (Cast fica fora — índice 7 — porque é
-            // auto-inserida ao conectar pins incompatíveis, não criada à mão)
-            for (int ci = 0; ci < 7; ci++)
+            // Categorias estáticas deste menu. NÃO é "todas menos Cast": o
+            // limite corta em Input, e Array / Flow Control / Cast ficam
+            // fora de propósito (o comentário anterior dizia "Cast, índice
+            // 7" e estava errado nos dois números — Cast é o último de dez).
+            //
+            // O valor era 7 e virou 8 porque "Audio" entrou no índice 4,
+            // empurrando Input de 6 para 7. Continua sendo um número escrito
+            // à mão, e continua sendo frágil — mas derivá-lo do tamanho do
+            // array mudaria o COMPORTAMENTO, passando a listar categorias
+            // que hoje não aparecem aqui. Isso é decisão de UI, não faxina
+            // de patch de áudio.
+            for (int ci = 0; ci < 8; ci++)
             {
                 auto& cat = s_Cats[ci];
                 ImVec4 col = s_CtxCols[ci];

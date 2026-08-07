@@ -240,6 +240,13 @@ namespace axe
 			sr->SetEnvironment(m_PreviewEnvironment.get());
 
 		m_PreviewAnim = std::make_unique<AnimationWorld>();
+
+		// Som dos notifies em 2D nesta janela: a cena de preview e a camera
+		// daqui nao alimentam o listener global, entao espacializar mediria a
+		// distancia ate a camera do viewport PRINCIPAL — e o som sairia
+		// baixo por um motivo que nao tem nada a ver com o que se esta
+		// editando.
+		m_PreviewAnim->SetSoundAudition(true);
 		m_PreviewParticles = std::make_unique<ParticleWorld>();
 
 		m_PreviewInit = true;
@@ -1179,8 +1186,14 @@ namespace axe
 			// mesma moeda que materiais e cenas usam.
 			const bool isSound = (n.Type == AnimNotify::Kind::Sound);
 
-			const std::vector<AssetType> filter = {
+			// Notify de som aceita .wav cru E Sound Cue. E o caso de uso mais
+			// forte que o cue tem: cinco variacoes de passo num asset so,
+			// sem mexer na timeline.
+			std::vector<AssetType> filter = {
 				isSound ? AssetType::Audio : AssetType::ParticleSystem };
+
+			if (isSound)
+				filter.push_back(AssetType::SoundCue);
 
 			if (AssetPicker::Draw(isSound ? "Sound" : "Particle", n.Payload, filter,
 				[](const AssetRecord&) {}))
@@ -1240,6 +1253,23 @@ namespace axe
 			ImGui::TextDisabled("(?)");
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("Attached: follows the bone while playing.\nUnchecked: spawns and stays in the world.");
+
+			// Volume/Pitch so para som — para particula nao significam nada.
+			//
+			// Ficam ANTES do transform de propósito: sao o que o usuario mais
+			// mexe num notify de som, e enterra-los abaixo de nove floats de
+			// Location/Rotation/Scale os tornaria invisiveis.
+			if (isSound)
+			{
+				if (ImGui::SliderFloat("Volume##notify", &n.Volume, 0.0f, 2.0f, "%.2f"))
+					m_Dirty = true;
+
+				if (ImGui::SliderFloat("Pitch##notify", &n.Pitch, 0.25f, 4.0f, "%.2f"))
+					m_Dirty = true;
+
+				ImGui::TextDisabled("Multiplicam o Sound Cue, nao o substituem.");
+				ImGui::Separator();
+			}
 
 			if (ImGui::DragFloat3("Location", &n.LocationOffset.x, 0.01f))  m_Dirty = true;
 			if (ImGui::IsItemDeactivatedAfterEdit()) MarkMetaEdited();

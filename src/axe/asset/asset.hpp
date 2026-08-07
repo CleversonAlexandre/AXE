@@ -2,6 +2,7 @@
 #include "axe/core/types.hpp"
 #include <string>
 #include <filesystem>
+#include <cctype>
 
 namespace axe
 {
@@ -19,19 +20,30 @@ namespace axe
 		ParticleSystem, // .axepart
 		SkeletalMesh,   // .axeskel — personagem animado (aponta pro FBX + lista de animacoes)
 		AnimGraph,      // .axeanim — state machine de animacao
-		ControlRig      // .axerig — hierarquia + grafo de rig (Forwards Solve)
+		ControlRig,     // .axerig — hierarquia + grafo de rig (Forwards Solve)
+		SoundCue        // .axecue — grafo de selecao/parametros de som
 	};
 
 	// Converte extensão para tipo
-	static AssetType AssetTypeFromExtension(const std::string& ext)
+	static AssetType AssetTypeFromExtension(const std::string& extension)
 	{
+		// Normaliza o caso ANTES de comparar. O Windows preserva o caso do
+		// nome do arquivo, e "Explosion.WAV" ou "Rock.PNG" chegavam aqui
+		// exatamente assim — davam Unknown e eram PULADOS pelo
+		// AssetDatabase::Scan, sem log e sem erro. O arquivo estava na pasta
+		// Assets e simplesmente nao existia para o editor.
+		std::string ext = extension;
+		for (char& c : ext)
+			c = (char)std::tolower((unsigned char)c);
+
 		// .fbx e .dae entram como Mesh: sao FONTES. Clicar com o direito
 		// num deles oferece "Importar como Skeletal Mesh", que gera o .axeskel.
 		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" ||
 			ext == ".fbx" || ext == ".dae")                  return AssetType::Mesh;
 		if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")return AssetType::Texture;
 		if (ext == ".axescene")                              return AssetType::Scene;
-		if (ext == ".wav" || ext == ".mp3")                  return AssetType::Audio;
+		if (ext == ".wav" || ext == ".mp3" ||
+			ext == ".flac")                                  return AssetType::Audio;
 		if (ext == ".lua" || ext == ".axescript")           return AssetType::Script;
 		if (ext == ".axemat")                                return AssetType::Material;
 		if (ext == ".axegamemode")                           return AssetType::GameMode;
@@ -39,6 +51,7 @@ namespace axe
 		if (ext == ".axeskel")                                return AssetType::SkeletalMesh;
 		if (ext == ".axeanim")                                return AssetType::AnimGraph;
 		if (ext == ".axerig")                                 return AssetType::ControlRig;
+		if (ext == ".axecue")                                 return AssetType::SoundCue;
 		return AssetType::Unknown;
 	}
 
@@ -57,6 +70,7 @@ namespace axe
 		case AssetType::SkeletalMesh:   return "SkeletalMesh";
 		case AssetType::AnimGraph:      return "AnimGraph";
 		case AssetType::ControlRig:     return "ControlRig";
+		case AssetType::SoundCue:       return "SoundCue";
 
 		default:					return "Unknown";
 		}
@@ -72,6 +86,21 @@ namespace axe
 		if (str == "Material")  return AssetType::Material;
 		if (str == "GameMode")  return AssetType::GameMode;
 		if (str == "ParticleSystem") return AssetType::ParticleSystem;
+
+		// Estes tres faltavam. O sintoma nao era erro de compilacao nem
+		// warning: era o AssetDatabase reler o proprio arquivo e devolver
+		// Unknown para todo .axeskel, .axeanim e .axerig — ou seja, todo
+		// asset de personagem e de rig perdia o tipo no load, e sumia dos
+		// filtros do AssetPicker e do Asset Browser.
+		//
+		// AssetTypeToString ja escrevia os tres corretamente; so o caminho
+		// de volta estava incompleto. Round-trip so quebra num sentido, que
+		// e o jeito mais silencioso possivel de quebrar.
+		if (str == "SkeletalMesh")   return AssetType::SkeletalMesh;
+		if (str == "AnimGraph")      return AssetType::AnimGraph;
+		if (str == "ControlRig")     return AssetType::ControlRig;
+		if (str == "SoundCue")       return AssetType::SoundCue;
+
 		return AssetType::Unknown;
 	}
 

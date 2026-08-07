@@ -1,5 +1,6 @@
 #include "editor_widgets.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -179,6 +180,70 @@ namespace axe::ui
 		ImGui::SameLine(0.0f, 8.0f);
 		ImGui::TextDisabled("|");
 		ImGui::SameLine(0.0f, 8.0f);
+	}
+
+
+	void Waveform(const char* id, const std::vector<float>& peaks,
+		const ImVec2& size, const ImVec4& color, float playhead01)
+	{
+		ImGui::PushID(id);
+
+		const ImVec2 p0 = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(size);
+
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		const ImU32 bg = ImGui::ColorConvertFloat4ToU32(ImVec4(0.07f, 0.075f, 0.09f, 1.0f));
+		const ImU32 mid = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.10f));
+		const ImU32 wave = ImGui::ColorConvertFloat4ToU32(color);
+
+		const ImVec2 p1(p0.x + size.x, p0.y + size.y);
+
+		dl->AddRectFilled(p0, p1, bg, 3.0f);
+
+		const float cy = p0.y + size.y * 0.5f;
+		dl->AddLine(ImVec2(p0.x, cy), ImVec2(p1.x, cy), mid, 1.0f);
+
+		if (peaks.empty() || size.x < 2.0f)
+		{
+			// Sem dado, uma linha vazia e mais honesto que um retangulo
+			// cheio: diz "nao ha onda aqui" em vez de "o som e silencio".
+			dl->AddRect(p0, p1, mid, 3.0f);
+			ImGui::PopID();
+			return;
+		}
+
+		// Uma coluna por PIXEL, e nao por balde: com mais baldes que pixels o
+		// desenho perderia picos por subamostragem; com menos, ficaria
+		// serrilhado. Percorrer por pixel e pegar o maximo do intervalo
+		// preserva os transientes, que sao o que da forma ao som.
+		const int columns = (int)size.x;
+		const float half = size.y * 0.5f - 1.0f;
+
+		for (int x = 0; x < columns; ++x)
+		{
+			const std::size_t a = (std::size_t)((float)x / (float)columns * peaks.size());
+			const std::size_t b = (std::size_t)((float)(x + 1) / (float)columns * peaks.size());
+
+			float v = 0.0f;
+
+			for (std::size_t i = a; i < std::max(a + 1, std::min(b, peaks.size())); ++i)
+				v = std::max(v, peaks[i]);
+
+			const float h = std::max(1.0f, v * half);
+			const float px = p0.x + (float)x + 0.5f;
+
+			dl->AddLine(ImVec2(px, cy - h), ImVec2(px, cy + h), wave, 1.0f);
+		}
+
+		if (playhead01 >= 0.0f && playhead01 <= 1.0f)
+		{
+			const float px = p0.x + size.x * playhead01;
+			dl->AddLine(ImVec2(px, p0.y), ImVec2(px, p1.y),
+				ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, 0.9f)), 1.5f);
+		}
+
+		ImGui::PopID();
 	}
 
 } // namespace axe::ui
