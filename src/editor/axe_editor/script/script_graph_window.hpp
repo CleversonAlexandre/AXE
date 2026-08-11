@@ -176,8 +176,10 @@ namespace axe
             const std::string& newName);
         void Shutdown();
 
-        void OpenForEntity(entt::entity entity, ScriptComponent* comp,
-            entt::registry* registry);
+        // S0a — OpenForEntity foi removido. Editar um grafo que vivia dentro
+        // da entidade era o fluxo anterior ao .axescript; o grafo nunca era
+        // gravado em disco, entao nao havia o que preservar. Tudo entra por
+        // OpenForAsset.
         void SetInspectorWindow(InspectorWindow* insp) { m_InspectorWindow = insp; }
         void OpenForAsset(std::shared_ptr<ScriptAsset> asset);
         void Close();
@@ -244,6 +246,16 @@ namespace axe
         // (ImGui::SetNextItemWidth(-1)); width >= 0 usa esse valor exato.
         void DrawSetVariableLocalValueEditor(ScriptNode* node, ScriptVarType varType, float width);
         void DrawComponentFields(ScriptComponentDef& def, int i); // campos por tipo de componente — usado por DrawScriptDetails e pelo collapse inline no Scene Graph
+
+        // SC44 — combo "Parent Socket". Fora do switch de tipos: anexo e
+        // propriedade de ser filho de um esqueleto, nao de ser malha.
+        void DrawParentSocketField(ScriptComponentDef& def);
+
+        // SC44 — recria as entidades de anexo no preview e mantem o transform
+        // local delas em dia. Ver a nota no script_preview.cpp.
+        void SyncSocketAttachmentsToPreview();
+        std::vector<entt::entity> m_SocketAttachEntities;
+        std::string               m_SocketAttachSig;
         void DrawMyBlueprintWindow();  // painel Variables / Events / Dispatchers
         void CompileScript();
         void InitPreviewScene();
@@ -262,7 +274,7 @@ namespace axe
         // mesma regra ja aplicada no preview do AnimGraph.
         void FramePreviewCamera();
         const void* m_CameraFramedFor = nullptr;
-        void SyncMeshFromSource();
+        void SeedPreviewMesh();   // S0a (era SyncMeshFromSource)
         void SyncMeshFromAsset();
         void SyncComponentsToPreview();  // espelha ScriptComponentDef → componentes reais no preview
 
@@ -315,9 +327,13 @@ namespace axe
         // o que invalidaria/trocaria silenciosamente o que um ponteiro
         // estaria apontando.
         int m_EditingFunctionIndex = -1;
-        ScriptComponent* m_Component = nullptr;
-        entt::entity       m_Entity = entt::null;
-        entt::registry* m_SourceRegistry = nullptr;
+        // S0a — m_Component / m_Entity / m_SourceRegistry sairam daqui.
+        //
+        // Os tres so eram escritos por OpenForEntity, que foi removido junto
+        // com o ScriptComponent::Graph. Ficariam nulos para sempre, e todo
+        // ramo que os testava era codigo morto que ainda assim precisava ser
+        // lido por quem viesse depois. Estado que nao pode mudar nao e
+        // estado.
         InspectorWindow* m_InspectorWindow = nullptr;  // para DrawMaterialGraphParams
         std::shared_ptr<ScriptAsset> m_ScriptAsset;
 

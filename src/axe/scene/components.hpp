@@ -20,7 +20,6 @@
 #include "axe/physics/physics_components.hpp"
 #include <memory>
 #include <string>
-#include <imgui.h>
 #include <entt/entt.hpp>
 
 #include "axe/graphics/renderer/post_process_pass.hpp"
@@ -164,10 +163,22 @@ namespace axe
 		bool ShowSkeleton = false;
 
 		// Matrizes GLOBAIS dos ossos (model-space), preenchidas pelo
-		// AnimationWorld so quando ShowSkeleton esta ligado. Sao diferentes
-		// da BonePalette: a palette ja tem a InverseBindPose aplicada e nao
-		// serve pra saber ONDE o osso esta.
+		// AnimationWorld. Sao diferentes da BonePalette: a palette ja tem a
+		// InverseBindPose aplicada e nao serve pra saber ONDE o osso esta.
 		std::vector<glm::mat4> BoneGlobals;
+
+		// SC43 — alguem esta ANEXADO a um socket deste personagem?
+		//
+		// As globals custam uma passada extra pela hierarquia e por muito
+		// tempo so o desenho do esqueleto (ShowSkeleton) as pedia. Agora um
+		// anexo tambem precisa delas, e ele nao tem como ligar ShowSkeleton
+		// (isso acenderia o wireframe dos ossos no jogo).
+		//
+		// Recontado do zero a cada frame pelo AnimationWorld, antes do laco
+		// principal: um contador persistente ficaria devendo o decremento no
+		// dia em que a arma fosse destruida fora do caminho previsto, e o
+		// personagem pagaria as globals para sempre.
+		bool _WantsBoneGlobals = false;
 
 		const Skeleton* GetSkeleton() const
 		{
@@ -194,15 +205,87 @@ namespace axe
 		std::shared_ptr<PointLight> Data;
 	};
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  S0a — a cor era ImVec4, e era o ULTIMO imgui no nucleo da cena.
+	//
+	//  Depois de tirar o ScriptGraph do ScriptComponent, esta unica linha
+	//  ainda obrigava components.hpp — e portanto TODA entidade da engine — a
+	//  incluir <imgui.h>. Uma cor de pasta na hierarquia do editor nao e
+	//  motivo para o runtime conhecer a biblioteca de interface.
+	//
+	//  glm::vec4 tem os mesmos .x/.y/.z/.w, entao os tres pontos do editor que
+	//  a consomem continuam identicos; so a origem do tipo mudou. O editor
+	//  converte para ImVec4 no ponto de desenho, que e onde a conversao
+	//  pertence.
+	// ═══════════════════════════════════════════════════════════════════════
 	struct FolderComponent
 	{
-		ImVec4 Color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+		glm::vec4 Color = glm::vec4(1.0f, 0.8f, 0.2f, 1.0f);
 	};
 
 	struct RelationshipComponent
 	{
 		entt::entity Parent = entt::null;
 		std::vector<entt::entity> Children;
+	};
+
+	// ═══════════════════════════════════════════════════════════════════════
+	//  SC43 — ANEXO A SOCKET
+	//
+	//  A arma na mao, a mochila nas costas, o efeito no pe. A entidade segue
+	//  um SOCKET de outra entidade animada, e nao o transform dela.
+	//
+	//  ── POR QUE UM COMPONENTE, E NAO UM CAMPO NO RELATIONSHIP ─────────────
+	//
+	//  RelationshipComponent responde "quem e meu pai" — hierarquia, que vale
+	//  para toda entidade e e o que a Hierarchy Window desenha e o que o
+	//  destroy em cascata segue. Anexo a osso e OUTRA pergunta: "de onde vem
+	//  o meu transform". A esmagadora maioria das entidades parenteadas nao
+	//  quer isso, e enfiar SocketName no Relationship faria toda entidade da
+	//  cena carregar uma string vazia.
+	//
+	//  Os dois convivem: o anexo normalmente TAMBEM e filho do personagem
+	//  (para aparecer aninhado na hierarquia e morrer junto). Quem manda no
+	//  transform e este componente; o Relationship segue sendo so parentesco.
+	//
+	//  ── COMO O TRANSFORM CHEGA AQUI ──────────────────────────────────────
+	//
+	//  O AnimationWorld — unico lugar do frame onde a pose e sabidamente
+	//  fresca — calcula a matriz do socket em espaco de mundo e a deposita em
+	//  _SocketWorld. O Scene::GetWorldTransform, que ja e o unico ponto por
+	//  onde todo mundo pergunta "onde isto esta", usa essa matriz no lugar da
+	//  cadeia de pais.
+	//
+	//  A interface entre os dois lados e uma mat4 pura: a animacao nao
+	//  aprende a compor cena, e a cena nao aprende a amostrar pose.
+	//
+	//  ── MODO DE FALHA ────────────────────────────────────────────────────
+	//
+	//  _Valid falso (socket apagado, osso renomeado no reimport, personagem
+	//  sem pose ainda) faz o GetWorldTransform cair na cadeia de pais normal:
+	//  a arma aparece na ORIGEM do personagem, visivelmente errada mas
+	//  visivel. Sumir seria pior — "nao renderizou" e "esta no lugar errado"
+	//  tem causas diferentes e a primeira nao se diagnostica de olho.
+	// ═══════════════════════════════════════════════════════════════════════
+	struct SocketAttachmentComponent
+	{
+		// Entidade com SkeletalMeshComponent. entt::null = anexo inerte.
+		entt::entity Target = entt::null;
+
+		// Nome do socket no .axeskel do Target (SkeletalMeshAsset::Socket).
+		// Vazio = segue o OSSO cru, se BoneName estiver preenchido.
+		std::string SocketName;
+
+		// ── Preenchidos pelo AnimationWorld, por frame ────────────────────
+		glm::mat4 _SocketWorld{ 1.0f };
+		bool      _Valid = false;
+
+		// Cache do indice do osso. A resolucao por nome varre a lista de
+		// bones; refazer isso por frame, por anexo, e um custo que nao compra
+		// nada — o esqueleto nao muda entre frames. Invalidado quando o nome
+		// do socket muda.
+		int         _BoneIndex = -1;
+		std::string _ResolvedFor;
 	};
 
 	struct PostProcessComponent

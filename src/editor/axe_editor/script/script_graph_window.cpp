@@ -61,53 +61,12 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    void ScriptGraphWindow::OpenForEntity(entt::entity entity, ScriptComponent* comp,
-        entt::registry* registry)
-    {
-        m_Entity = entity;
-        m_Component = comp;
-        m_Graph = comp ? comp->Graph.get() : nullptr;
-        m_EditingFunctionIndex = -1; // abrir um novo alvo sempre começa no grafo principal
-        m_SourceRegistry = registry;
-        m_IsOpen = true;
-        m_FirstFrame = true;
-        m_CtxBuf[0] = m_CompSearchBuf[0] = '\0';
-
-        // SC6 — abre sempre em ambar, mesmo que exista .dll no disco. O editor
-        // nao tem como provar que aquela DLL foi gerada A PARTIR deste grafo:
-        // o arquivo pode ser de antes da ultima edicao, de outra maquina, ou
-        // de um Save sem Compilar. Pedir uma compilacao e barato; afirmar "em
-        // dia" sem evidencia e o tipo de mentira que custa uma sessao de
-        // depuracao atras de um comportamento que nao esta no C++ rodando.
-        m_GraphDirty = true;
-        m_LastCompileFailed = false;
-
-        // SC7 — baseline do asset recem-aberto. Sem isto, a primeira edicao
-        // teria como "antes" o estado do asset ANTERIOR (ou nada), e o Ctrl+Z
-        // saltaria para um grafo que nem esta na tela.
-        m_History.Clear();
-        m_Baseline.clear();
-        m_PendingUndo = false;
-        m_PendingUndoName.clear();
-
-        m_ConsoleLines.clear();
-        m_ConsoleLines.push_back("[Script Editor] Ready.");
-
-        if (!m_PreviewRenderer)
-            InitPreviewScene();
-        else
-            SyncMeshFromSource();
-    }
-
     void ScriptGraphWindow::OpenForAsset(std::shared_ptr<ScriptAsset> asset)
     {
         if (!asset) return;
         m_ScriptAsset = asset;
         m_Graph = asset->GetGraph().get();
         m_EditingFunctionIndex = -1; // abrir um novo asset sempre começa no grafo principal
-        m_Entity = entt::null;
-        m_Component = nullptr;
-        m_SourceRegistry = nullptr;
         m_IsOpen = true;
         m_FirstFrame = true;
         m_CtxBuf[0] = m_CompSearchBuf[0] = '\0';
@@ -207,9 +166,6 @@ namespace axe
         m_IsOpen = false;
         m_Graph = nullptr;
         m_EditingFunctionIndex = -1;
-        m_Component = nullptr;
-        m_Entity = entt::null;
-        m_SourceRegistry = nullptr;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -229,9 +185,10 @@ namespace axe
         // de longo prazo e carregar uma TTF de texto de verdade em
         // resources/fonts e trocar o AddFontDefault por ela — enquanto isso,
         // ASCII.
+        // S0a — o fallback para m_Component saiu junto com OpenForEntity: sem
+        // asset nao ha grafo, e sem grafo o Draw ja retornou la em cima.
         std::string title = "Script Editor - " +
-            (m_ScriptAsset ? m_ScriptAsset->GetName() :
-                m_Component ? m_Component->ScriptName : "?") + "###ScriptEditorHost";
+            (m_ScriptAsset ? m_ScriptAsset->GetName() : "?") + "###ScriptEditorHost";
 
         // SC9 — a toolbar saiu da MENU BAR e passou para o CORPO da janela.
         //
@@ -380,7 +337,7 @@ namespace axe
             // sai como "?" na tela (era o "Script Editor ? BP_Player" do
             // titulo e o "BP_Player ? Character" do console). Ver o comentario
             // no titulo, mais acima.
-            ImGui::TextDisabled("%s", m_Component ? m_Component->ScriptName.c_str() : "-");
+            ImGui::TextDisabled("%s", m_ScriptAsset ? m_ScriptAsset->GetName().c_str() : "-");
 
             // ── Breadcrumb de Function ───────────────────────────────────────────
             // Sem isso, trocar de grafo ao clicar numa Function no Script Members
@@ -1140,10 +1097,9 @@ namespace axe
         }
 
         if (!m_Graph) return;
-        if (!m_Component && !m_ScriptAsset) return;
+        if (!m_ScriptAsset) return;   // S0a: compilar sempre parte de um asset
 
-        std::string scriptName = m_ScriptAsset ? m_ScriptAsset->GetName() :
-            m_Component ? m_Component->ScriptName : "Script";
+        std::string scriptName = m_ScriptAsset->GetName();
 
         char exeBuf[MAX_PATH] = {};
         GetModuleFileNameA(nullptr, exeBuf, MAX_PATH);
@@ -1251,7 +1207,6 @@ namespace axe
 
         if (ok)
         {
-            if (m_Component) { m_Component->DllPath = dll; m_Component->IsCompiled = true; }
             if (m_ScriptAsset) { m_ScriptAsset->DllPath = dll; m_ScriptAsset->IsCompiled = true; }
         }
     }

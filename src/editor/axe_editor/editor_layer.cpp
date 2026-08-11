@@ -803,12 +803,30 @@ namespace axe
 
         m_EditorUI->m_InspectorWindow.m_OnOpenScript = [this](entt::entity e, ScriptComponent* sc, entt::registry* registry)
             {
-                if (!sc->ScriptAssetPath.empty())
+                // S0a — o fallback para OpenForEntity saiu. Ele existia para
+                // entidades cujo grafo morava DENTRO do componente, fluxo
+                // anterior ao .axescript. Como esse grafo nunca foi gravado
+                // pelo SceneSerializer, uma entidade nesse estado ja abria
+                // vazia — o fallback so escondia isso atras de um canvas em
+                // branco.
+                //
+                // Agora a entidade sem asset recebe uma frase que diz o que
+                // fazer, em vez de um editor que nao edita nada.
+                if (sc->ScriptAssetPath.empty())
                 {
-                    auto asset = ScriptAsset::LoadFromFile(sc->ScriptAssetPath);
-                    if (asset) { m_EditorUI->m_ScriptGraphWindow.OpenForAsset(asset); return; }
+                    AXE_EDITOR_WARN("Esta entidade tem um Script Component sem asset. "
+                        "Escolha um .axescript no Inspector para abrir o editor.");
+                    return;
                 }
-                m_EditorUI->m_ScriptGraphWindow.OpenForEntity(e, sc, registry);
+
+                if (auto asset = ScriptAsset::LoadFromFile(sc->ScriptAssetPath))
+                {
+                    m_EditorUI->m_ScriptGraphWindow.OpenForAsset(asset);
+                    return;
+                }
+
+                AXE_EDITOR_WARN("Nao foi possivel abrir o script '{}': o arquivo "
+                    "nao carregou.", sc->ScriptAssetPath);
             };
 
         m_EditorUI->m_InspectorWindow.m_OnOpenParticleSystem = [this](std::shared_ptr<ParticleSystemAsset> asset)
@@ -1701,6 +1719,156 @@ namespace axe
     //     sao colocacao POR INSTANCIA — reescrever isso empilharia todos os
     //     inimigos na origem a cada save.
     // ═══════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════
+    //  SC46 — RECONCILIA OS ANEXOS DE UMA INSTANCIA JA NA CENA
+    //
+    //  ── O BURACO QUE ISTO FECHA ────────────────────────────────────────
+    //
+    //  O SC44 ensinou o InstantiateScriptAsset a criar entidades-filhas para
+    //  componentes com Parent Socket. O SyncScriptInstances — que roda quando
+    //  o Blueprint e salvo — nao sabia que elas existiam.
+    //
+    //  Resultado: trocar o socket, trocar a malha da arma ou remover o anexo
+    //  nao mudava NADA no personagem que ja estava na cena. A unica forma de
+    //  ver o efeito era apagar e reinstanciar — que e o que a gente acabava
+    //  fazendo por instinto, sem perceber que era um sintoma.
+    //
+    //  ── RECONCILIAR, E NAO RECRIAR ─────────────────────────────────────
+    //
+    //  Seria mais curto destruir todos os filhos e criar de novo. Seria
+    //  errado: a entidade-filha e um objeto de cena como qualquer outro — ela
+    //  pode ter sido selecionada, renomeada, ou ter ganhado componentes a
+    //  mao. Recriar joga isso fora a cada Ctrl+S do Blueprint.
+    //
+    //  Entao o casamento e por NOME DE SOCKET, que e a identidade estavel do
+    //  anexo: um socket e um lugar no corpo, e a arma que esta na mao
+    //  continua sendo a arma que esta na mao mesmo que a malha mude.
+    //
+    //  ── O QUE NAO SE TOCA ──────────────────────────────────────────────
+    //
+    //  O Transform do filho SO e escrito quando a entidade acabou de nascer.
+    //  Mesma regra que o sync ja aplica a entidade raiz e pela mesma razao:
+    //  offset e colocacao por instancia. Se o autor ajustou 2cm na arma de um
+    //  inimigo especifico, o save do Blueprint nao pode desfazer isso.
+    // ═══════════════════════════════════════════════════════════════════
+    void EditorLayer::SyncSocketAttachments(entt::entity root, ScriptAsset& scriptAsset)
+    {
+        auto& registry = m_Scene->GetRegistry();
+        const auto& comps = scriptAsset.GetComponents();
+
+        // ── 1) O que o Blueprint pede agora ─────────────────────────────
+        std::unordered_map<std::string, const ScriptComponentDef*> wanted;
+
+        for (const auto& def : comps)
+        {
+            if (def.ParentSocket.empty())
+                continue;
+
+            // Mesma reconferencia da instanciacao: Parent Socket sem pai
+            // esqueleto nao vira anexo. Ver InstantiateScriptAsset.
+            if (def.ParentIndex < 0 || def.ParentIndex >= (int)comps.size())
+                continue;
+
+            if (comps[def.ParentIndex].Type != "SkeletalMesh")
+                continue;
+
+            if (def.Type != "Mesh" && def.Type != "Camera")
+                continue;
+
+            wanted[def.ParentSocket] = &def;
+        }
+
+        // ── 2) O que a cena tem hoje ────────────────────────────────────
+        std::unordered_map<std::string, entt::entity> existing;
+        std::vector<entt::entity> orphans;
+
+        auto view = registry.view<SocketAttachmentComponent>();
+
+        for (auto e : view)
+        {
+            const auto& att = view.get<SocketAttachmentComponent>(e);
+
+            if (att.Target != root)
+                continue;   // anexo de OUTRO personagem
+
+            if (wanted.count(att.SocketName) != 0)
+                existing[att.SocketName] = e;
+            else
+                orphans.push_back(e);   // socket saiu do Blueprint
+        }
+
+        // ── 3) Some o que nao e mais pedido ─────────────────────────────
+        for (auto e : orphans)
+        {
+            AXE_EDITOR_INFO("BP sync: anexo removido (socket nao esta mais no Blueprint).");
+            m_Scene->DestroyEntity(e);
+        }
+
+        // ── 4) Cria o que falta, atualiza o que ja esta la ──────────────
+        for (const auto& [socketName, def] : wanted)
+        {
+            entt::entity child = entt::null;
+            bool isNew = false;
+
+            const auto it = existing.find(socketName);
+
+            if (it != existing.end())
+            {
+                child = it->second;
+            }
+            else
+            {
+                child = m_Scene->CreateEntity(scriptAsset.GetName() + "_" + socketName);
+                isNew = true;
+
+                auto& att = registry.emplace<SocketAttachmentComponent>(child);
+                att.Target = root;
+                att.SocketName = socketName;
+
+                m_Scene->SetParent(child, root, false);
+            }
+
+            if (def->Type == "Mesh")
+            {
+                auto& mc = registry.get_or_emplace<MeshComponent>(child);
+
+                // So recarrega quando a malha MUDOU: ResolveByUUID reabre o
+                // arquivo, e o sync roda a cada save do Blueprint.
+                if (mc.AssetUUID != def->AssetUUID || !mc.Data)
+                {
+                    mc.AssetUUID = def->AssetUUID;
+                    mc.Data = MeshFactory::ResolveByUUID(def->AssetUUID);
+
+                    if (!mc.Data)
+                        AXE_EDITOR_WARN("BP sync: malha do anexo '{}' nao resolveu.",
+                            socketName);
+                }
+            }
+            else if (def->Type == "Camera")
+            {
+                auto& cam = registry.get_or_emplace<CameraComponent>(child);
+                cam.Fov = def->CamFov;
+                cam.NearClip = def->CamNearClip;
+                cam.FarClip = def->CamFarClip;
+                cam.Sensitivity = def->CamSensitivity;
+                cam.IsPrimary = def->CamIsPrimary;
+            }
+
+            // Ver a nota do cabecalho: transform so no nascimento.
+            if (isNew)
+            {
+                if (auto* tc = registry.try_get<TransformComponent>(child))
+                {
+                    tc->Data.Position = glm::vec3(def->PosX, def->PosY, def->PosZ);
+                    tc->Data.Rotation = glm::radians(glm::vec3(def->RotX, def->RotY, def->RotZ));
+                    tc->Data.Scale = glm::vec3(def->ScaleX, def->ScaleY, def->ScaleZ);
+                }
+
+                AXE_EDITOR_INFO("BP sync: anexo criado no socket '{}'.", socketName);
+            }
+        }
+    }
+
     int EditorLayer::SyncScriptInstances(const std::filesystem::path& scriptPath)
     {
         if (!m_Scene || scriptPath.empty())
@@ -1779,8 +1947,16 @@ namespace axe
                     return;
                 }
 
+                SyncSocketAttachments(entity, *scriptAsset);   // SC46
+
                 for (const auto& def : scriptAsset->GetComponents())
                 {
+                    // SC46 — componente anexado nao mora na entidade raiz.
+                    // Sem este skip, o Material de uma arma anexada seria
+                    // aplicado no PERSONAGEM no proximo save do Blueprint.
+                    if (!def.ParentSocket.empty())
+                        continue;
+
                     if (def.Type == "CharacterController")
                     {
                         auto& cc = registry.get_or_emplace<CharacterControllerComponent>(entity);
@@ -1855,6 +2031,13 @@ namespace axe
                                 {
                                     mc.Data = ma->GetMaterial();
                                     mc.MaterialAssetUUID = def.AssetUUID;
+
+                                    // SC45 — mesmo buraco do caminho de
+                                    // instanciacao: trocar o material do BP
+                                    // propagava um material sem shader para
+                                    // as instancias ja na cena.
+                                    if (auto cb = SceneSerializer::GetMaterialRecompileCallback())
+                                        cb(def.AssetUUID, mc.Data.get());
                                 }
                             }
                         }
@@ -1920,8 +2103,68 @@ namespace axe
                 scriptAsset->RootScaleX, scriptAsset->RootScaleY, scriptAsset->RootScaleZ);
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        //  SC44 — quem vai virar ENTIDADE PROPRIA
+        //
+        //  Historicamente TODO componente do script colapsa na entidade raiz:
+        //  Mesh, Rigidbody, Collider, Camera, tudo junto. Isso funciona
+        //  enquanto os componentes compartilham o mesmo transform.
+        //
+        //  Um anexo a socket nao compartilha: a arma precisa do transform da
+        //  MAO, e a entidade raiz ja e a do personagem. Duas posicoes, uma
+        //  entidade — nao cabe.
+        //
+        //  Entao a excecao e ESTREITA de proposito: so componentes com
+        //  ParentSocket preenchido saem para entidades proprias. Todo script
+        //  ja existente continua nascendo exatamente como antes, sem migracao
+        //  de asset e sem mudanca de comportamento.
+        // ═══════════════════════════════════════════════════════════════════
+        const auto& comps = scriptAsset->GetComponents();
+        std::vector<bool> isAttached(comps.size(), false);
+
+        for (std::size_t ci = 0; ci < comps.size(); ++ci)
+        {
+            const auto& d = comps[ci];
+
+            if (d.ParentSocket.empty())
+                continue;
+
+            // Reconfere a hierarquia em vez de confiar no arquivo: um
+            // .axescript editado a mao pode ter ParentSocket num componente
+            // sem pai, ou com pai que nao e esqueleto. Ignorar em silencio
+            // seria pior — o componente sumiria da cena; aqui ele so volta a
+            // colapsar na raiz, como antes de existir socket.
+            if (d.ParentIndex < 0 || d.ParentIndex >= (int)comps.size())
+            {
+                AXE_EDITOR_WARN("Script '{}': componente '{}' tem Parent Socket "
+                    "mas nao tem pai — anexo ignorado.",
+                    scriptAsset->GetName(), d.Type);
+                continue;
+            }
+
+            if (comps[d.ParentIndex].Type != "SkeletalMesh")
+            {
+                AXE_EDITOR_WARN("Script '{}': componente '{}' tem Parent Socket "
+                    "mas o pai e '{}', nao um Skeletal Mesh — anexo ignorado.",
+                    scriptAsset->GetName(), d.Type, comps[d.ParentIndex].Type);
+                continue;
+            }
+
+            isAttached[ci] = true;
+        }
+
+        std::size_t _defIndex = (std::size_t)-1;
+
         for (const auto& def : scriptAsset->GetComponents())
         {
+            ++_defIndex;
+
+            // Anexado: nao entra na raiz. Sai para entidade propria no passo
+            // de baixo, DEPOIS que o SkeletalMeshComponent do personagem ja
+            // existir — senao o alvo do anexo estaria vazio no mesmo frame.
+            if (_defIndex < isAttached.size() && isAttached[_defIndex])
+                continue;
+
             if (def.Type == "Mesh")
             {
                 auto& mc = registry.emplace<MeshComponent>(entity);
@@ -2051,6 +2294,24 @@ namespace axe
                     {
                         MaterialComponent mc{ ma->GetMaterial() };
                         mc.MaterialAssetUUID = def.AssetUUID;
+
+                        // ── SC45: o material precisa do SHADER ───────────
+                        //
+                        // LoadFromFile le o .axemat — parametros, texturas,
+                        // nome. O SHADER nao esta la: ele e COMPILADO do
+                        // .axegraph ao lado. Sem esta chamada o material
+                        // chegava na cena sem shader, e o personagem nascia
+                        // com a aparencia padrao — o sintoma de "instancia
+                        // sem material", ainda que o MaterialComponent
+                        // estivesse a rigor presente.
+                        //
+                        // A callback e a MESMA que o load de cena usa
+                        // (registrada em OnAttach). Recompilar aqui na mao
+                        // seria uma terceira copia da mesma rotina — ja ha
+                        // duas, e o preview do Script Editor e uma delas.
+                        if (auto cb = SceneSerializer::GetMaterialRecompileCallback())
+                            cb(def.AssetUUID, mc.Data.get());
+
                         registry.emplace<MaterialComponent>(entity, mc);
                     }
                     else
@@ -2065,6 +2326,76 @@ namespace axe
                         scriptAsset->GetName(), def.AssetUUID);
                 }
             }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  SC44 — os anexos, agora que o personagem existe
+        //
+        //  O Target e sempre a entidade RAIZ, e nao "a entidade do componente
+        //  pai": como todo componente colapsa na raiz, e nela que o
+        //  SkeletalMeshComponent mora. No dia em que um script puder ter dois
+        //  esqueletos, esta linha e a que muda — e o resto continua valendo.
+        //
+        //  Filho tambem no Relationship, e nao so no anexo: e o que faz a arma
+        //  aparecer aninhada na Hierarchy e morrer junto com o personagem. O
+        //  transform vem do socket (Scene::GetWorldTransform prioriza o
+        //  anexo), entao os dois nao brigam.
+        // ═══════════════════════════════════════════════════════════════════
+        for (std::size_t ci = 0; ci < comps.size(); ++ci)
+        {
+            if (!isAttached[ci])
+                continue;
+
+            const auto& def = comps[ci];
+
+            const std::string childName =
+                scriptAsset->GetName() + "_" + def.ParentSocket;
+
+            auto child = m_Scene->CreateEntity(childName);
+
+            // Transform LOCAL relativo ao socket. E o mesmo campo que o painel
+            // do Script Editor edita: um ajuste fino por cima do socket, sem
+            // ter de reabrir o Animation Editor para corrigir 2cm.
+            if (auto* ctc = registry.try_get<TransformComponent>(child))
+            {
+                ctc->Data.Position = glm::vec3(def.PosX, def.PosY, def.PosZ);
+                ctc->Data.Rotation = glm::radians(glm::vec3(def.RotX, def.RotY, def.RotZ));
+                ctc->Data.Scale = glm::vec3(def.ScaleX, def.ScaleY, def.ScaleZ);
+            }
+
+            if (def.Type == "Mesh")
+            {
+                auto& mc = registry.emplace<MeshComponent>(child);
+                mc.AssetUUID = def.AssetUUID;
+                mc.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
+
+                if (!mc.Data)
+                    AXE_EDITOR_WARN("Script '{}': malha do anexo '{}' nao resolveu.",
+                        scriptAsset->GetName(), def.ParentSocket);
+            }
+            else if (def.Type == "Camera")
+            {
+                auto& cam = registry.emplace<CameraComponent>(child);
+                cam.Fov = def.CamFov;
+                cam.NearClip = def.CamNearClip;
+                cam.FarClip = def.CamFarClip;
+                cam.Sensitivity = def.CamSensitivity;
+                cam.IsPrimary = def.CamIsPrimary;
+            }
+            // Outros tipos entram aqui conforme fizerem sentido anexados.
+            // Rigidbody num socket, por exemplo, precisa de uma decisao que
+            // ainda nao foi tomada: o corpo obedece a fisica ou ao osso? As
+            // duas respostas sao defensaveis e nenhuma e obvia, entao o tipo
+            // fica de fora ate a pergunta ser respondida.
+
+            auto& att = registry.emplace<SocketAttachmentComponent>(child);
+            att.Target = entity;
+            att.SocketName = def.ParentSocket;
+
+            m_Scene->SetParent(child, entity, false);   // transform ja e local
+
+            AXE_EDITOR_INFO("Script '{}': '{}' anexado ao socket '{}'.",
+                scriptAsset->GetName(), def.Type, def.ParentSocket);
         }
 
         ScriptComponent sc;

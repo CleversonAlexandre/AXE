@@ -32,6 +32,14 @@ namespace axe
 		RelationshipComponent,
 		FolderComponent,
 
+		// SC45 — sem esta linha, a arma anexada ao socket sobrevivia ao
+		// primeiro Play (a entidade nasceu na instanciacao) e morria no
+		// Stop: o clone devolvia a entidade FILHA, com a malha e o
+		// parentesco, mas sem o anexo. O transform caia na cadeia de pais e
+		// a arma voltava para a origem do personagem — e no Play seguinte ja
+		// nao havia anexo nenhum para resolver.
+		SocketAttachmentComponent,
+
 		MeshComponent,
 		SkeletalMeshComponent,
 		MaterialComponent,

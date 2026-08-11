@@ -14,7 +14,6 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <random>
-#include <imgui.h>
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 #include "axe/scene/scene_environment.hpp"
@@ -339,6 +338,17 @@ namespace axe
 				components["AudioListener"]["use_camera_orientation"] = c->UseCameraOrientation;
 			}
 
+			// SC43 — anexo a socket. O Target e um id de ENTIDADE, entao ele
+			// so pode ser religado no segundo passo (idMap), junto com o
+			// parent — ver ApplySocketAttachmentTargets abaixo.
+			if (auto* att = registry.try_get<SocketAttachmentComponent>(entity))
+			{
+				components["SocketAttachment"]["socket"] = att->SocketName;
+
+				if (att->Target != entt::null)
+					components["SocketAttachment"]["target"] = (uint32_t)att->Target;
+			}
+
 			if (auto* rel = registry.try_get<RelationshipComponent>(entity))
 			{
 				if (rel->Parent != entt::null)
@@ -356,6 +366,45 @@ namespace axe
 			return e;
 		}
 
+		// ── SC43: religa o Target do anexo ───────────────────────────────
+		//
+		// Mesmo problema do parent: o id gravado e o da SESSAO em que a cena
+		// foi salva, e o EnTT nao promete reproduzi-lo. So depois que todas
+		// as entidades existem e o idMap esta completo da para traduzir.
+		//
+		// Alvo fora do idMap (a arma foi salva, o personagem nao — copiar so
+		// a arma para outra cena, por exemplo) deixa Target nulo: o anexo
+		// fica inerte e a entidade vira um objeto solto, em vez de apontar
+		// para um handle reciclado que hoje e outra coisa qualquer.
+		static void ApplySocketAttachmentTarget(Scene& scene, entt::entity entity,
+			const nlohmann::json& components,
+			const std::unordered_map<uint32_t, entt::entity>& idMap)
+		{
+			if (!components.contains("SocketAttachment"))
+				return;
+
+			const auto& j = components["SocketAttachment"];
+
+			auto& att = scene.GetRegistry().get_or_emplace<SocketAttachmentComponent>(entity);
+			att.SocketName = j.value("socket", std::string{});
+			att.Target = entt::null;
+			att._Valid = false;
+			att._BoneIndex = -1;
+			att._ResolvedFor.clear();
+
+			if (!j.contains("target"))
+				return;
+
+			const uint32_t oldTarget = j["target"];
+			const auto it = idMap.find(oldTarget);
+
+			if (it != idMap.end())
+				att.Target = it->second;
+			else
+				AXE_CORE_WARN("SceneSerializer: anexo ao socket '{}' perdeu o alvo "
+					"(entidade {} nao esta nesta cena).", att.SocketName, oldTarget);
+		}
+
 		// Aplica TODOS os componentes (menos Relationship, que é 2º passo do
 		// caller via idMap) numa entity JÁ criada.
 		void DeserializeEntityComponents(const json& components, entt::entity entity, entt::registry& registry)
@@ -364,7 +413,7 @@ namespace axe
 				if (auto* f = registry.try_get<FolderComponent>(entity))
 				{
 					auto& t = components["Folder"]["color"];
-					f->Color = ImVec4(t[0], t[1], t[2], t[3]);
+					f->Color = glm::vec4(t[0], t[1], t[2], t[3]);   // S0a
 				}
 
 			if (components.contains("Name"))
@@ -1101,6 +1150,8 @@ namespace axe
 						scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 				}
 			}
+
+			ApplySocketAttachmentTarget(scene, entity, components, idMap);   // SC43
 		}
 
 		// ── .axeprobes — tenta abrir a cena com o GI já pronto ──────────
@@ -1222,6 +1273,8 @@ namespace axe
 							scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 					}
 				}
+
+				ApplySocketAttachmentTarget(scene, entity, components, idMap);   // SC43
 			}
 
 			AXE_CORE_INFO("SceneSerializer: snapshot restaurado.");
@@ -1327,6 +1380,8 @@ namespace axe
 							scene.SetParent(entity, idMap[oldParent], false); // load: transform ja esta em local space
 					}
 				}
+
+				ApplySocketAttachmentTarget(scene, entity, components, idMap);   // SC43
 			}
 			catch (...) {}
 		}

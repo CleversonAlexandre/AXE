@@ -175,6 +175,11 @@ namespace axe
         // Hierarquia
         j["parent_index"] = ParentIndex;
 
+        // SC44 — so grava quando ha socket, para nao poluir todo componente do
+        // arquivo com uma chave vazia (mesma regra do type_qualifier no SC30).
+        if (!ParentSocket.empty())
+            j["parent_socket"] = ParentSocket;
+
         return j;
     }
 
@@ -269,6 +274,7 @@ namespace axe
 
         // Hierarquia
         ParentIndex = j.value("parent_index", -1);
+        ParentSocket = j.value("parent_socket", std::string{});   // SC44
     }
 
     // ── ScriptFunction (serialização) ────────────────────────────────────────

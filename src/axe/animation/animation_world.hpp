@@ -68,6 +68,11 @@ namespace axe
 		void DispatchNotifies(Scene& scene, entt::entity character,
 			const std::vector<AnimNotify>& fired, bool inPlay);
 
+		// SC43 — deposita a matriz de mundo do socket em cada
+		// SocketAttachmentComponent da cena. Roda no FIM do OnUpdate, quando
+		// toda pose do frame ja existe. Ver a nota no .cpp.
+		void UpdateSocketAttachments(Scene& scene);
+
 		// Buffer de pose reusado entre personagens.
 		//
 		// Um vector<BoneTransform> alocado por personagem, por frame, seria

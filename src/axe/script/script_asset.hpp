@@ -129,6 +129,23 @@ namespace axe
         // ── Hierarquia — índice do componente pai (-1 = raiz) ─────────────────
         int   ParentIndex = -1;
 
+        // ── SC44: Parent Socket ───────────────────────────────────────────────
+        //
+        // Nome de um socket JA EXISTENTE no .axeskel do componente pai. O socket
+        // e criado e posicionado no Animation Editor, com gizmo e malha de
+        // preview; aqui so se ESCOLHE qual deles usar. Mesma divisao da Unreal, e
+        // pela mesma razao: posicionar uma arma na mao e trabalho visual sobre o
+        // esqueleto, nao um formulario dentro do script.
+        //
+        // Vazio = sem anexo (comportamento historico, todo componente colapsa na
+        // entidade raiz). Preenchido = este componente vira uma entidade FILHA
+        // com SocketAttachmentComponent.
+        //
+        // So tem sentido quando ParentIndex aponta para um componente
+        // SkeletalMesh. O painel so oferece o campo nesse caso, e a instanciacao
+        // reconfere — um asset editado a mao nao pode derrubar o editor.
+        std::string ParentSocket;
+
         // Transform local do componente
         float PosX = 0, PosY = 0, PosZ = 0;
         float RotX = 0, RotY = 0, RotZ = 0;

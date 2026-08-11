@@ -35,6 +35,76 @@ namespace axe
         ".axecue"                                        // sound cue
     };
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SC41 — FAIXA DE TIPO NA MINIATURA
+    //
+    //  ── O PROBLEMA ────────────────────────────────────────────────────────
+    //
+    //  Um personagem gera arquivos que sao a MESMA silhueta branca em fundo
+    //  cinza: o .axeskel, o .axeanim, o FBX de origem e cada FBX de animacao.
+    //  O rotulo com extensao (build M5) resolveu metade do problema — mas ler
+    //  texto e um ato deliberado, e escolher um asset numa grade e um ato de
+    //  RECONHECIMENTO. Cor se reconhece com o olho parado; texto, nao.
+    //
+    //  ── POR QUE UMA FAIXA, E NAO A BORDA OU O FUNDO ───────────────────────
+    //
+    //  A borda ja carrega SELECAO e HOVER. Somar tipo nela significaria que
+    //  um item selecionado perde a cor de tipo, ou que a selecao deixa de ser
+    //  obvia — e a selecao e a informacao mais urgente das duas. A faixa
+    //  inferior e um canal proprio, que nao disputa com nada.
+    //
+    //  ── POR QUE SO ALGUNS TIPOS TEM COR ───────────────────────────────────
+    //
+    //  Colorir tudo e o mesmo que nao colorir nada. A faixa marca a familia
+    //  ANIMACAO/LOGICA, que e onde a confusao acontece de verdade. Malha,
+    //  textura, material e som ja se distinguem pela propria miniatura.
+    //
+    //  ── ONDE ISTO MORA ────────────────────────────────────────────────────
+    //
+    //  Local a este arquivo, de proposito. A regra do editor_widgets.hpp e
+    //  promover o que tem DOIS usos reais; hoje o unico desenho de grade de
+    //  assets e este. Quando o AssetPicker adotar a mesma faixa, a tabela
+    //  sobe para axe::ui sem mudar de forma.
+    // ═════════════════════════════════════════════════════════════════════════
+    namespace
+    {
+        // Cores de FAMILIA, nao de arquivo. Os nomes dizem o papel do asset
+        // no fluxo de animacao — e o que o autor tem na cabeca quando procura.
+        constexpr ImU32 kAccentAnimation = IM_COL32(92, 201, 76, 255);   // clipe (FBX de animacao)
+        constexpr ImU32 kAccentAnimLogic = IM_COL32(196, 104, 22, 255);  // .axeanim — state machine
+        constexpr ImU32 kAccentControlRig = IM_COL32(224, 198, 44, 255);  // .axerig
+        constexpr ImU32 kAccentScript = IM_COL32(62, 132, 224, 255);  // .axescript
+        constexpr ImU32 kAccentSkeleton = IM_COL32(72, 178, 192, 255);  // .axeskel — o personagem
+
+        // Reservadas: os conceitos existem na engine, mas ainda nao como ASSET
+        // proprio. O BlendSpace1D e um NO dentro do AnimGraph; Montage/Slot e
+        // um no planejado (ver anim_node.hpp). Ficam aqui escritas para que,
+        // no dia em que virarem arquivo, a cor ja esteja decidida e nao seja
+        // sorteada de novo.
+        // constexpr ImU32 kAccentBlendSpace = IM_COL32(232, 142, 32,  255);
+        // constexpr ImU32 kAccentMontage    = IM_COL32(152,  92, 204, 255);
+
+        // 0 = SEM faixa. Nao e "transparente": o chamador pula o desenho.
+        ImU32 AssetAccentColor(const AssetRecord& record, bool isAnimationSource)
+        {
+            // A animacao vem PRIMEIRO porque um FBX de animacao e, para o
+            // AssetDatabase, um Mesh como qualquer outro — a classificacao
+            // por extensao nunca chegaria nela.
+            if (isAnimationSource)
+                return kAccentAnimation;
+
+            const std::string ext = record.FilePath.extension().string();
+
+            if (ext == ".axeanim") return kAccentAnimLogic;
+            if (ext == ".axerig")  return kAccentControlRig;
+            if (ext == ".axeskel") return kAccentSkeleton;
+
+            if (record.Type == AssetType::Script) return kAccentScript;
+
+            return 0;
+        }
+    }
+
     // NOTA sobre esta lista: ela e um SEGUNDO portao de extensoes, paralelo
     // ao AssetTypeFromExtension do asset.hpp. O AssetDatabase::Scan ja
     // reconhecia audio ha muito tempo — o que barrava era esta lista aqui,
@@ -216,6 +286,9 @@ namespace axe
 
     void AssetBrowser::RelocateAssets(const std::vector<std::string>& uuids)
     {
+        // SC41: o conjunto de animacoes pode ter mudado.
+        InvalidateAnimationSources();
+
         m_RelocateErrorMessages.clear();
         m_RelocateSuccessCount = 0;
 
@@ -278,6 +351,9 @@ namespace axe
 
     void AssetBrowser::OnFileDrop(const std::string& filepath)
     {
+        // SC41: o conjunto de animacoes pode ter mudado.
+        InvalidateAnimationSources();
+
         if (!IsSupported(filepath)) return;
 
         std::filesystem::path srcPath = std::filesystem::absolute(filepath);
@@ -353,6 +429,9 @@ namespace axe
 
     void AssetBrowser::DeleteAsset(const AssetRecord& record)
     {
+        // SC41: o conjunto de animacoes pode ter mudado.
+        InvalidateAnimationSources();
+
         // Copia os dados necessários ANTES de remover do AssetDatabase —
         // 'record' é uma referência para dentro do map; depois do Unregister()
         // ela fica pendurada (dangling) e não pode mais ser usada.
@@ -416,6 +495,9 @@ namespace axe
 
     void AssetBrowser::RenameAsset(const AssetRecord& record, const std::string& newName)
     {
+        // SC41: o conjunto de animacoes pode ter mudado.
+        InvalidateAnimationSources();
+
         if (newName.empty() || newName == record.Name) return;
 
         auto newPath = record.FilePath.parent_path() / (newName + record.FilePath.extension().string());
@@ -522,6 +604,9 @@ namespace axe
 
     void AssetBrowser::DuplicateAsset(const AssetRecord& record)
     {
+        // SC41: o conjunto de animacoes pode ter mudado.
+        InvalidateAnimationSources();
+
         auto newPath = record.FilePath.parent_path() /
             (record.Name + "_copy" + record.FilePath.extension().string());
 
@@ -1533,6 +1618,13 @@ namespace axe
                             {
                                 AXE_EDITOR_INFO("{} clipe(s) de '{}' importado(s) em '{}'.",
                                     added, record.Name, rec.Name);
+
+                                // SC41 — o FBX acabou de VIRAR animacao sem que
+                                // nenhum arquivo tenha nascido ou morrido: o
+                                // carimbo por tamanho do banco nao veria isso.
+                                // A faixa verde precisa aparecer no mesmo gesto
+                                // que a importou.
+                                InvalidateAnimationSources();
                             }
                             else
                             {
@@ -1781,8 +1873,97 @@ namespace axe
 
     // ==================== Asset Grid ====================
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC41 — cruzamento .axeskel -> FBX de animacao
+    //
+    //  Um FBX so e "animacao" porque ALGUM personagem o lista como tal. Nao ha
+    //  como saber isso pelo arquivo: um FBX de animacao da Mixamo e um FBX
+    //  normal, sem malha. A verdade mora no .axeskel — entao e ele que se le.
+    //
+    //  ── SC42: por que NAO se compara o caminho na mao ─────────────────────
+    //
+    //  A primeira versao casava `entry.SourceFile` contra `record.FilePath` por
+    //  string. Nunca casava nada: o .axeskel grava o caminho RELATIVO ao
+    //  projeto (ver RelativizePath no Save), e o AssetRecord guarda o ABSOLUTO.
+    //  Todas as animacoes ficavam sem faixa, e o sintoma — "so o verde nao
+    //  aparece" — nao apontava para lugar nenhum, porque os outros tipos casam
+    //  por extensao e nunca tocam em caminho.
+    //
+    //  Agora quem responde e o proprio asset, via FindAnimationEntryBySource:
+    //  ele ja resolve relativo->absoluto, ja normaliza caixa e separador, e
+    //  ainda casa por NOME DE ARQUIVO quando o FBX mudou de pasta. Reescrever
+    //  essas tres regras aqui seria manter duas verdades sobre o mesmo assunto
+    //  — e esta seria a que ninguem lembra de atualizar.
+    //
+    //  O FBX de origem do PROPRIO personagem (GetSourceFile) fica de fora de
+    //  proposito: ele e a malha com skin, nao um clipe. Marcar os dois de
+    //  verde reintroduziria exatamente a confusao que a faixa veio resolver —
+    //  e ele fica de fora sozinho, porque nao esta em m_Animations.
+    // ─────────────────────────────────────────────────────────────────────────
+    void AssetBrowser::EnsureAnimationSources()
+    {
+        auto& db = AssetDatabase::Get();
+        const std::size_t stamp = db.GetAll().size();
+
+        if (stamp == m_AnimSourcesStamp)
+            return;
+
+        m_AnimSourcesStamp = stamp;
+        m_AnimationSourceUUIDs.clear();
+
+        // Os esqueletos, uma vez. LoadFromFile so le JSON — o FBX so entra no
+        // Resolve(), que nao acontece aqui e nao e necessario: as entradas de
+        // animacao ja vem do arquivo.
+        std::vector<std::shared_ptr<SkeletalMeshAsset>> skeletons;
+
+        for (const auto& kv : db.GetAll())
+        {
+            if (kv.second.FilePath.extension() != ".axeskel")
+                continue;
+
+            if (auto skel = SkeletalMeshAsset::LoadFromFile(kv.second.FilePath))
+                skeletons.push_back(skel);
+            // .axeskel quebrado nao aborta a varredura: o personagem seguinte
+            // pode estar inteiro.
+        }
+
+        if (skeletons.empty())
+            return;
+
+        for (const auto& kv : db.GetAll())
+        {
+            const AssetRecord& rec = kv.second;
+
+            // So arquivo de modelo e candidato. Poupa uma varredura de
+            // animacoes por textura, material e som do projeto.
+            std::string ext = rec.FilePath.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                [](unsigned char ch) { return (char)std::tolower(ch); });
+
+            if (ext != ".fbx" && ext != ".dae" && ext != ".gltf" && ext != ".glb")
+                continue;
+
+            for (const auto& skel : skeletons)
+            {
+                if (skel->FindAnimationEntryBySource(rec.FilePath) >= 0)
+                {
+                    m_AnimationSourceUUIDs.insert(rec.UUID);
+                    break;   // um dono basta: a faixa e a mesma
+                }
+            }
+        }
+
+        AXE_EDITOR_INFO("AssetBrowser [SC42]: {} arquivo(s) marcado(s) como animacao "
+            "({} esqueleto(s) consultado(s)).",
+            (int)m_AnimationSourceUUIDs.size(), (int)skeletons.size());
+    }
+
     void AssetBrowser::DrawAssetGrid()
     {
+        // Antes de qualquer tile: a faixa de tipo precisa saber quais FBX sao
+        // animacao. Sai por um `if` na maioria esmagadora dos frames.
+        EnsureAnimationSources();
+
         // Atalhos de teclado — só quando o painel está com foco e há seleção
         if (ImGui::IsWindowFocused() && !m_SelectedUUID.empty())
         {
@@ -2224,6 +2405,22 @@ namespace axe
                 iconMin, iconMax, ImVec2(0, 1), ImVec2(1, 0));
         else
             draw->AddRectFilled(iconMin, iconMax, IM_COL32(60, 60, 60, 255), 4.0f);
+
+        // ── SC41: faixa de tipo ──────────────────────────────────────────
+        //
+        // DEPOIS da imagem, para ficar por cima dela; DENTRO do retangulo do
+        // icone, para nao invadir o espaco do nome. Cantos arredondados so
+        // embaixo, acompanhando a moldura.
+        if (const ImU32 accent = AssetAccentColor(record,
+            m_AnimationSourceUUIDs.count(record.UUID) > 0))
+        {
+            const float barH = std::max(3.0f, m_IconSize * 0.045f);
+
+            draw->AddRectFilled(
+                ImVec2(iconMin.x, iconMax.y - barH),
+                ImVec2(iconMax.x, iconMax.y),
+                accent, 4.0f, ImDrawFlags_RoundCornersBottom);
+        }
 
         // Botao de tocar por cima do icone, so para audio.
         if (record.Type == AssetType::Audio)

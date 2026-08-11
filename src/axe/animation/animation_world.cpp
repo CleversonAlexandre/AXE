@@ -104,6 +104,32 @@ namespace axe
 				m_NotifyFx.end());
 		}
 
+		// ── SC43: quem precisa das globals neste frame ───────────────────
+		//
+		// Recontado do zero, sempre. Um contador incremental teria de ser
+		// decrementado quando a arma some — e ha mais formas de uma entidade
+		// sumir do que caminhos que lembrariam de decrementar. Custa uma
+		// varredura de dois views curtos.
+		{
+			auto skels = registry.view<SkeletalMeshComponent>();
+
+			for (auto e : skels)
+				skels.get<SkeletalMeshComponent>(e)._WantsBoneGlobals = false;
+
+			auto attached = registry.view<SocketAttachmentComponent>();
+
+			for (auto e : attached)
+			{
+				const auto& att = attached.get<SocketAttachmentComponent>(e);
+
+				if (att.Target == entt::null || !registry.valid(att.Target))
+					continue;
+
+				if (auto* t = registry.try_get<SkeletalMeshComponent>(att.Target))
+					t->_WantsBoneGlobals = true;
+			}
+		}
+
 		auto view = registry.view<SkeletalMeshComponent>();
 
 		for (auto entity : view)
@@ -172,7 +198,7 @@ namespace axe
 				AnimationSampler::BuildSkinningMatrices(*skeleton,
 					m_ScratchPose,
 					skel.BonePalette,
-					skel.ShowSkeleton ? &skel.BoneGlobals : nullptr);
+					(skel.ShowSkeleton || skel._WantsBoneGlobals) ? &skel.BoneGlobals : nullptr);
 				continue;
 			}
 
@@ -191,7 +217,7 @@ namespace axe
 					s_Pose);
 
 				AnimationSampler::BuildSkinningMatrices(*skeleton, s_Pose, skel.BonePalette,
-					skel.ShowSkeleton ? &skel.BoneGlobals : nullptr);
+					(skel.ShowSkeleton || skel._WantsBoneGlobals) ? &skel.BoneGlobals : nullptr);
 				continue;
 			}
 
@@ -257,7 +283,91 @@ namespace axe
 			AnimationSampler::BuildSkinningMatrices(*skeleton,
 				skel.Player.GetPose(),
 				skel.BonePalette,
-				skel.ShowSkeleton ? &skel.BoneGlobals : nullptr);
+				(skel.ShowSkeleton || skel._WantsBoneGlobals) ? &skel.BoneGlobals : nullptr);
+		}
+
+		UpdateSocketAttachments(scene);
+	}
+
+	// ═════════════════════════════════════════════════════════════════════
+	//  SC43 — resolve os anexos a socket
+	//
+	//  DEPOIS do laco de personagens, e nao dentro dele: um anexo pode
+	//  apontar para um personagem que ainda nao foi visitado, e a ordem de um
+	//  view do EnTT nao e a ordem em que voce criou as entidades. Rodar tudo
+	//  no fim garante que TODA pose do frame ja existe, seja qual for a
+	//  ordem — e nao ha nada aqui que se beneficie de rodar antes.
+	//
+	//  Este metodo nao move ninguem. Ele so DEPOSITA a matriz do socket no
+	//  componente; quem a usa e o Scene::GetWorldTransform, no momento em que
+	//  alguem pergunta onde a entidade esta. Escrever direto no
+	//  TransformComponent seria mais curto e estaria errado: o transform da
+	//  entidade e o offset LOCAL que o autor editou, e sobrescreve-lo faria o
+	//  offset se perder no primeiro frame.
+	// ═════════════════════════════════════════════════════════════════════
+	void AnimationWorld::UpdateSocketAttachments(Scene& scene)
+	{
+		auto& registry = scene.GetRegistry();
+		auto view = registry.view<SocketAttachmentComponent>();
+
+		for (auto entity : view)
+		{
+			auto& att = view.get<SocketAttachmentComponent>(entity);
+
+			// Pessimista por padrao: qualquer saida antecipada abaixo deixa
+			// _Valid falso, e o GetWorldTransform cai na cadeia de pais.
+			att._Valid = false;
+
+			if (att.Target == entt::null || !registry.valid(att.Target))
+				continue;
+
+			auto* target = registry.try_get<SkeletalMeshComponent>(att.Target);
+
+			if (!target || !target->Asset)
+				continue;
+
+			const Skeleton* skeleton = target->GetSkeleton();
+
+			if (!skeleton || target->BoneGlobals.empty())
+				continue;   // pose ainda nao foi calculada neste frame
+
+			// ── Socket -> osso ───────────────────────────────────────────
+			const auto* sock = target->Asset->FindSocket(att.SocketName);
+
+			if (!sock)
+				continue;   // socket apagado no .axeskel — nao se adivinha
+
+			if (att._ResolvedFor != att.SocketName || att._BoneIndex < 0)
+			{
+				att._BoneIndex = -1;
+
+				const auto& bones = skeleton->GetBones();
+
+				for (int i = 0; i < (int)bones.size(); ++i)
+				{
+					if (bones[i].Name == sock->BoneName)
+					{
+						att._BoneIndex = i;
+						break;
+					}
+				}
+
+				att._ResolvedFor = att.SocketName;
+			}
+
+			if (att._BoneIndex < 0 || att._BoneIndex >= (int)target->BoneGlobals.size())
+				continue;
+
+			// A MESMA composicao do preview do Animation Editor
+			// (UpdateSocketPreview): mundo do personagem, matriz do osso na
+			// pose corrente, transform local do socket. Se as duas contas
+			// divergirem, a arma some no jogo depois de ter sido posicionada
+			// certinha no editor — e esse e o pior tipo de bug que existe.
+			att._SocketWorld = scene.GetWorldTransform(att.Target)
+				* target->BoneGlobals[att._BoneIndex]
+				* target->Asset->GetSocketLocalTransform(*sock);
+
+			att._Valid = true;
 		}
 	}
 

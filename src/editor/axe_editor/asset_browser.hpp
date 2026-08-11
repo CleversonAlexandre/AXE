@@ -63,6 +63,17 @@ namespace axe
         // Compat
         void DrawContextMenuEmpty();
 
+        // ── SC41: quais FBX sao ANIMACAO ─────────────────────────────────
+        //
+        // Para o AssetDatabase, o FBX do 'Running' e um Mesh igual a qualquer
+        // outro — quem sabe que ele e uma animacao e o .axeskel que o
+        // referencia. A faixa verde na miniatura depende desse cruzamento.
+        //
+        // Derruba o cache. Chame depois de importar, mover ou apagar um
+        // .axeskel (o proprio browser ja chama nos seus caminhos; o Animation
+        // Editor pode chamar ao gravar uma entrada nova).
+        void InvalidateAnimationSources() { m_AnimSourcesStamp = (std::size_t)-1; }
+
         MaterialThumbnailRenderer* m_ThumbnailRenderer = nullptr;
         MeshThumbnailRenderer* m_MeshThumbnails = nullptr;
 
@@ -148,6 +159,22 @@ namespace axe
         std::unordered_map<std::string, std::shared_ptr<Texture2D>> m_TextureCache;
         std::unordered_set<std::string> m_TexturesPendingLoad;
         std::unordered_set<std::string> m_TexturesFailedLoad;
+
+        // ── SC41: cache de "este FBX e uma animacao" ─────────────────────
+        //
+        // Reconstruido por VARREDURA dos .axeskel, que sao poucos (um por
+        // personagem) e cujo LoadFromFile so le JSON — o FBX so entra no
+        // Resolve(), que nao acontece aqui.
+        //
+        // O carimbo e o tamanho do banco: barato, e o unico evento que
+        // importa e "apareceu/sumiu asset". Renomear em cima nao muda o
+        // tamanho — por isso os caminhos de import/rename/delete chamam
+        // InvalidateAnimationSources() explicitamente, em vez de confiar so
+        // no carimbo.
+        std::unordered_set<std::string> m_AnimationSourceUUIDs;
+        std::size_t m_AnimSourcesStamp = (std::size_t)-1;
+
+        void EnsureAnimationSources();
         int m_FramesSinceStart = 0;
 
         // Rename inline

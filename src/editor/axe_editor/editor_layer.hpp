@@ -140,6 +140,11 @@ namespace axe
         // Devolve quantas entidades foram atualizadas.
         int SyncScriptInstances(const std::filesystem::path& scriptPath);
 
+        // SC46 — reconcilia as entidades-filhas de anexo a socket de UMA
+        // instancia com o que o Blueprint pede. Casamento por nome de socket;
+        // cria o que falta, remove o que saiu, preserva o que ja existe.
+        void SyncSocketAttachments(entt::entity root, ScriptAsset& scriptAsset);
+
         // FBX/DAE/GLTF de animacao -> abre o Animation Editor no clipe.
         // Chamado por TODOS os caminhos de abrir/instanciar asset.
         // true = abriu (o chamador deve retornar).

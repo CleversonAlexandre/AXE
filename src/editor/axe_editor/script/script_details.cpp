@@ -403,6 +403,134 @@ namespace axe
             cam.IsPrimary = def.CamIsPrimary;
             ImGui::TextDisabled("Parent index: %d", def.ParentIndex);
         }
+
+        DrawParentSocketField(def);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC44 — PARENT SOCKET
+    //
+    //  O campo do painel de detalhes da Unreal: um componente filho de um
+    //  Skeletal Mesh escolhe em QUAL socket dele quer morar.
+    //
+    //  ── O QUE ESTE CAMPO NAO FAZ ─────────────────────────────────────────
+    //
+    //  Ele nao cria socket, nao posiciona socket e nao edita socket. Isso e
+    //  trabalho do Animation Editor, que tem o esqueleto, o gizmo, a pose
+    //  animada e a malha de preview — as quatro coisas necessarias para
+    //  decidir onde o cabo da arma encosta na palma. Aqui so se ESCOLHE um
+    //  socket que ja existe, pelo nome.
+    //
+    //  Duplicar a autoria aqui daria dois lugares para editar a mesma coisa e
+    //  um deles seria pior. Um combo e a forma honesta de dizer "isto vem de
+    //  outro lugar".
+    //
+    //  ── POR QUE FORA DO SWITCH DE TIPOS ──────────────────────────────────
+    //
+    //  Anexo nao e propriedade de Mesh, nem de Camera, nem de Collider: e
+    //  propriedade de SER FILHO DE UM ESQUELETO. Uma camera na cabeca, um
+    //  collider na mao e uma malha na mao usam o mesmo mecanismo. Por isso o
+    //  campo roda depois de todos os tipos e depende so da hierarquia.
+    // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::DrawParentSocketField(ScriptComponentDef& def)
+    {
+        if (!m_ScriptAsset) return;
+
+        auto& comps = m_ScriptAsset->GetComponents();
+
+        // Sem pai, pai fora da faixa (asset editado a mao), ou pai que nao e
+        // esqueleto: o campo nem aparece. Um combo vazio e pior que campo
+        // nenhum — sugere que falta escolher algo.
+        if (def.ParentIndex < 0 || def.ParentIndex >= (int)comps.size())
+            return;
+
+        const ScriptComponentDef& parent = comps[def.ParentIndex];
+
+        if (parent.Type != "SkeletalMesh")
+            return;
+
+        ImGui::Spacing();
+        ImGui::TextDisabled("Sockets");
+        ImGui::Separator();
+
+        // O pai ainda nao escolheu esqueleto. Dizer isso e melhor do que
+        // mostrar um combo vazio: a acao que destrava esta em OUTRO
+        // componente, e sem a frase ninguem descobre qual.
+        if (parent.AssetUUID.empty())
+        {
+            ImGui::TextWrapped("The parent Skeletal Mesh has no skeleton assigned yet.");
+            return;
+        }
+
+        const AssetRecord* rec = AssetDatabase::Get().GetByUUID(parent.AssetUUID);
+        auto skel = rec ? SkeletalMeshAsset::LoadFromFile(rec->FilePath) : nullptr;
+
+        if (!skel)
+        {
+            ImGui::TextWrapped("Could not read the parent skeleton asset.");
+            return;
+        }
+
+        // Resolve() NAO e chamado: ele carrega o FBX inteiro, e os sockets ja
+        // vieram do JSON. Um painel que roda por frame nao pode abrir malha.
+        const auto& sockets = skel->GetSockets();
+
+        const char* current = def.ParentSocket.empty()
+            ? "(none)" : def.ParentSocket.c_str();
+
+        ImGui::TextDisabled("Parent socket");
+        ImGui::SetNextItemWidth(-1);
+
+        if (ImGui::BeginCombo("##parentsocket", current))
+        {
+            if (ImGui::Selectable("(none)", def.ParentSocket.empty()))
+            {
+                def.ParentSocket.clear();
+                SyncComponentsToPreview();   // a malha volta pra raiz na hora
+            }
+
+            for (const auto& sk : sockets)
+            {
+                const bool sel = (sk.Name == def.ParentSocket);
+                const std::string label = sk.Name + "   [" + sk.BoneName + "]";
+
+                if (ImGui::Selectable(label.c_str(), sel))
+                {
+                    def.ParentSocket = sk.Name;
+                    SyncComponentsToPreview();   // a malha salta pro osso na hora
+                }
+
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+
+            ImGui::EndCombo();
+        }
+
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Attach this component to a socket of the parent skeleton.\n"
+                "Sockets are created and positioned in the Animation Editor.");
+
+        if (sockets.empty())
+            ImGui::TextWrapped("This skeleton has no sockets. Open it in the Animation "
+                "Editor and add one.");
+
+        // O socket gravado sumiu do .axeskel (renomeado ou apagado depois que
+        // este script foi autorado). Nao se apaga a escolha sozinho: talvez o
+        // .axeskel e que esteja errado, e apagar em silencio destruiria a
+        // informacao de qual era a intencao. Avisa e deixa a decisao com quem
+        // sabe.
+        if (!def.ParentSocket.empty())
+        {
+            bool found = false;
+
+            for (const auto& sk : sockets)
+                if (sk.Name == def.ParentSocket) { found = true; break; }
+
+            if (!found)
+                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                    "Socket '%s' no longer exists in the skeleton.",
+                    def.ParentSocket.c_str());
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1393,12 +1521,6 @@ namespace axe
                 ImGui::TextUnformatted(m_ScriptAsset->GetName().c_str());
                 ImGui::PopStyleColor();
             }
-            else if (m_Component)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 0.6f, 1));
-                ImGui::TextUnformatted(m_Component->ScriptName.c_str());
-                ImGui::PopStyleColor();
-            }
             else
             {
                 ImGui::TextDisabled("No script open.");
@@ -1856,23 +1978,10 @@ namespace axe
                     m_ConsoleLines.push_back("[Info] Component removed.");
                 }
             }
-            else if (m_SourceRegistry && m_Entity != entt::null && m_SourceRegistry->valid(m_Entity))
-            {
-                auto& reg = *m_SourceRegistry;
-                auto dc = [&](const char* n, ImVec4 col) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    ImGui::BulletText("%s", n); ImGui::PopStyleColor();
-                    };
-                if (reg.all_of<TransformComponent>(m_Entity))           dc("Transform", { 0.8f,0.8f,0.8f,1 });
-                if (reg.all_of<MeshComponent>(m_Entity))                dc("Mesh", { 0.6f,0.9f,1.f, 1 });
-                if (reg.all_of<MaterialComponent>(m_Entity))            dc("Material", { 1.f, 0.7f,0.4f,1 });
-                if (reg.all_of<RigidbodyComponent>(m_Entity))           dc("Rigidbody", { 0.4f,0.8f,1.f, 1 });
-                if (reg.all_of<ColliderComponent>(m_Entity))            dc("Collider", { 0.4f,1.f, 0.6f,1 });
-                if (reg.all_of<CharacterControllerComponent>(m_Entity)) dc("CharacterController", { 1.f, 0.8f,0.2f,1 });
-                if (reg.all_of<LightComponent>(m_Entity))               dc("Light", { 1.f, 0.95f,0.4f,1 });
-                if (reg.all_of<CameraComponent>(m_Entity))              dc("Camera", { 0.7f,0.5f,1.f, 1 });
-                if (reg.all_of<ScriptComponent>(m_Entity))              dc("Script", { 1.f, 0.5f,0.7f,1 });
-            }
+            // S0a — aqui havia um segundo ramo que listava os componentes da
+            // ENTIDADE de origem, para quando o editor tinha sido aberto por
+            // OpenForEntity. Esse caminho deixou de existir: sem asset nao ha
+            // grafo e a janela nem abre. O ramo virou codigo que nunca roda.
 
             ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             ImGui::TextDisabled("Nodes: %d", m_Graph ? (int)m_Graph->GetNodes().size() : 0);

@@ -58,6 +58,12 @@ namespace axe
 	{
 		AXE_EDITOR_INFO("Animation Editor — ANIMCLIP_EDITOR_V6B (clip list refresh)");
 
+		// Trocou de PERSONAGEM? A selecao de socket precisa cair junto (ver
+		// abaixo). Reabrir o MESMO esqueleto — que e o que acontece ao dar
+		// duplo-clique noutra animacao dele — preserva o socket em que se
+		// estava trabalhando.
+		const bool changedSkeleton = (m_Skeleton != skeleton);
+
 		m_Skeleton = skeleton;
 		m_Open = (skeleton != nullptr);
 		m_Dirty = false;
@@ -68,16 +74,24 @@ namespace axe
 		// numa pergunta ("e agora?").
 		m_SelectedClip = (m_Skeleton && !m_Skeleton->GetClips().empty()) ? 0 : -1;
 
+		// SC40 — a selecao de socket e POR ESQUELETO.
+		//
+		// m_SelectedSocket e um indice em GetSockets(). Abrir outro
+		// personagem sem zerar deixava o indice apontando para a lista
+		// ANTIGA: com dois sockets no Y Bot e nenhum no personagem novo, o
+		// painel lia fora do vetor.
+		if (changedSkeleton)
+		{
+			m_SelectedSocket = -1;
+			m_SocketPreviewLogged = -2;
+		}
+
 		SyncPreviewCharacter();
 
-		// SC37 — AQUI, e nao no DrawPreviewPanel.
-		//
-		// O painel roda na fase de UI, que acontece DEPOIS de
-		// RenderToFramebuffer: o transform escrito la so seria visto no frame
-		// seguinte, e a entidade criada no frame N so entraria na cena a tempo
-		// do render N+1. Com o socket sendo destruido e recriado conforme a
-		// selecao, dava para nunca alcancar um frame em que ela existisse no
-		// momento certo.
+		// SC37/SC40 — primeira aparicao, ainda antes do primeiro
+		// RenderPreview. O refresh CONTINUO mora no RenderPreview (ver a nota
+		// la): esta chamada existe so para que a malha ja esteja na cena no
+		// frame em que a janela aparece, em vez de piscar um frame vazia.
 		UpdateSocketPreview();
 	}
 
@@ -451,6 +465,24 @@ namespace axe
 				[](const FiredNotify& f) { return ImGui::GetTime() - f.At > 1.2; }),
 			m_RecentFired.end());
 
+		// ── SC40: a malha do socket, TODO FRAME ──────────────────────────
+		//
+		// Ate aqui UpdateSocketPreview() so era chamado no OpenForAsset. O
+		// efeito pratico: a entidade da malha nascia no instante em que a
+		// janela abria e nunca mais era tocada. Anexar uma malha ao socket
+		// com a janela ja aberta nao criava entidade nenhuma (a arma "nao
+		// aparecia"), e mexer em Location/Rotation/Scale so mudava numeros —
+		// a unica forma de ver o resultado era fechar e reabrir, que e o
+		// unico caminho que passava por OpenForAsset outra vez.
+		//
+		// AQUI, e nao no DrawPreviewPanel: o painel roda na fase de UI, que
+		// acontece DEPOIS do RenderToFramebuffer — o transform escrito la so
+		// seria visto no frame seguinte. E DEPOIS do AnimationWorld::OnUpdate
+		// acima, para que a matriz do osso amostrada seja a da MESMA pose que
+		// este frame vai desenhar; antes dele, a arma ficaria um frame atras
+		// da mao em toda animacao.
+		UpdateSocketPreview();
+
 		if (auto* sr = m_PreviewRenderer->GetSceneRenderer())
 		{
 			sr->SetDeferredEnabled(false);
@@ -651,7 +683,7 @@ namespace axe
 		}
 
 		ImGui::SameLine();
-		ImGui::TextDisabled("|  double-click / right-click a lane = add notify  |  drag diamond = move / change track  |  Alt+drag in viewport = camera");
+		ImGui::TextDisabled("|  double-click / right-click a lane = add notify  |  drag diamond = move / change track  |  Alt+drag in viewport = camera  |  T / R / S = move / rotate / scale socket");
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -819,7 +851,7 @@ namespace axe
 	//  matriz do osso — sem isso, mover o socket com o personagem em qualquer
 	//  pose que nao a bind gravaria um offset que so vale naquela pose.
 	//
-	//  Atalhos W/E/R, os mesmos do viewport principal: um editor onde cada
+	//  Atalhos T/R/S, os mesmos do viewport principal: um editor onde cada
 	//  janela tem a sua tecla obriga a lembrar de qual janela se esta.
 	// ─────────────────────────────────────────────────────────────────────────
 	void AnimClipWindow::DrawSocketGizmo()
@@ -841,13 +873,22 @@ namespace axe
 
 		if (boneIdx < 0) return;
 
-		// Teclas so quando o mouse esta sobre o preview: W num campo de texto
-		// do painel ao lado nao pode trocar o modo do gizmo.
+		// SC42 — T/R/S, as MESMAS teclas do viewport principal
+		// (editor_layer.cpp, bloco de viewport->IsFocused).
+		//
+		// Estavam em W/E/R, que e o padrao da Unreal — mas o padrao que vale
+		// aqui e o da AXE, e o viewport ja tinha escolhido T/R/S ha muito
+		// tempo. Duas convencoes no mesmo editor custam mais do que qualquer
+		// uma delas isolada: a mao erra na janela em que se esta menos, e o
+		// erro e silencioso (voce arrasta escala achando que e translacao).
+		//
+		// Teclas so quando o mouse esta sobre o preview: um S digitado num
+		// campo de texto do painel ao lado nao pode trocar o modo do gizmo.
 		if (m_PreviewHovered && !ImGui::IsAnyItemActive())
 		{
-			if (ImGui::IsKeyPressed(ImGuiKey_W)) m_SocketGizmoOp = ImGuizmo::TRANSLATE;
-			if (ImGui::IsKeyPressed(ImGuiKey_E)) m_SocketGizmoOp = ImGuizmo::ROTATE;
-			if (ImGui::IsKeyPressed(ImGuiKey_R)) m_SocketGizmoOp = ImGuizmo::SCALE;
+			if (ImGui::IsKeyPressed(ImGuiKey_T)) m_SocketGizmoOp = ImGuizmo::TRANSLATE;
+			if (ImGui::IsKeyPressed(ImGuiKey_R)) m_SocketGizmoOp = ImGuizmo::ROTATE;
+			if (ImGui::IsKeyPressed(ImGuiKey_S)) m_SocketGizmoOp = ImGuizmo::SCALE;
 		}
 
 		std::vector<glm::mat4> skinning, globals;
@@ -1184,7 +1225,19 @@ namespace axe
 		auto& sockets = m_Skeleton->GetSockets();
 		auto& s = sockets[m_SelectedSocket];
 
+		// SC40 — dois estados, nao um.
+		//
+		//  dirty  = o valor EM MEMORIA mudou. O preview le o asset todo frame
+		//           (UpdateSocketPreview no RenderPreview), entao isto sozinho
+		//           ja e o que faz o arrasto aparecer na hora.
+		//  commit = hora de GRAVAR. Um DragFloat3 dispara a cada frame de
+		//           arrasto; gravar ali reescrevia o .axeskel dezenas de vezes
+		//           por segundo. O gizmo (DrawSocketGizmo) ja tratava isso
+		//           corretamente — o painel numerico e que estava fora de
+		//           passo. Disco nao e onde se guarda estado intermediario de
+		//           um gesto.
 		bool dirty = false;
+		bool commit = false;
 
 		// ── Nome ─────────────────────────────────────────────────────────────
 		char nameBuf[128] = {};
@@ -1206,8 +1259,13 @@ namespace axe
 			if (!taken) { s.Name = candidate; dirty = true; }
 		}
 
-		if (ImGui::IsItemDeactivatedAfterEdit() && s.Name != nameBuf)
-			ImGui::SetTooltip("Name must be unique and non-empty.");
+		if (ImGui::IsItemDeactivatedAfterEdit())
+		{
+			commit = true;
+
+			if (s.Name != nameBuf)
+				ImGui::SetTooltip("Name must be unique and non-empty.");
+		}
 
 		// ── Osso pai ─────────────────────────────────────────────────────────
 		//
@@ -1228,6 +1286,7 @@ namespace axe
 					{
 						s.BoneName = b.Name;
 						dirty = true;
+						commit = true;   // escolha discreta: grava na hora
 					}
 					if (selB) ImGui::SetItemDefaultFocus();
 				}
@@ -1243,7 +1302,11 @@ namespace axe
 			{
 				ImGui::TextDisabled("%s", label);
 				ImGui::SetNextItemWidth(-1);
+
+				// dirty por frame de arrasto (o preview acompanha ao vivo),
+				// commit so quando o arrasto termina (um Save por gesto).
 				if (ImGui::DragFloat3(id, &v.x, step, 0.0f, 0.0f, "%.3f")) dirty = true;
+				if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
 			};
 
 		vec3Row("Location", "##sockloc", s.Location, 0.01f);
@@ -1295,6 +1358,7 @@ namespace axe
 							cs.z != 0.0f ? 1.0f / cs.z : 1.0f
 						};
 						dirty = true;
+						commit = true;
 					}
 
 					if (ImGui::IsItemHovered())
@@ -1313,18 +1377,25 @@ namespace axe
 		ImGui::TextDisabled("Preview mesh (editor only)");
 
 		if (AssetPicker::Draw("Mesh", s.PreviewMeshUUID,
-			{ AssetType::Mesh }, [&](const AssetRecord&) { dirty = true; }))
+			{ AssetType::Mesh }, [&](const AssetRecord&) { dirty = true; commit = true; }))
 		{
 			dirty = true;
+			commit = true;
 		}
 
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("Shown here so you can position the socket.\n"
 				"It is not attached at runtime.");
 
-		// Grava so quando algo mudou de fato: este painel roda por frame, e um
-		// Save por frame reescreveria o .axeskel continuamente.
-		if (dirty) m_Skeleton->Save();
+		// Grava so quando algo mudou de fato E o gesto acabou: este painel roda
+		// por frame, e um Save por frame reescreveria o .axeskel continuamente.
+		//
+		// `dirty` sem `commit` NAO e perda de dado: o valor ja esta no asset em
+		// memoria, o preview ja o reflete, e o proximo commit (soltar o mouse,
+		// trocar de campo, Ctrl+S) o leva ao disco.
+		(void)dirty;
+
+		if (commit) m_Skeleton->Save();
 	}
 
 	// ── Centro: preview + timeline ───────────────────────────────────────	// ── Centro: preview + timeline ───────────────────────────────────────

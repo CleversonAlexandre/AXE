@@ -49,7 +49,7 @@ namespace axe
 
         m_PreviewScene = std::make_unique<Scene>();
         m_PreviewEntity = m_PreviewScene->CreateEntity("ScriptPreview");
-        SyncMeshFromSource();
+        SeedPreviewMesh();
 
         auto& reg = m_PreviewScene->GetRegistry();
         auto light = m_PreviewScene->CreateEntity("PreviewLight");
@@ -70,30 +70,29 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    void ScriptGraphWindow::SyncMeshFromSource()
+    // ─────────────────────────────────────────────────────────────────────────
+    //  S0a — SyncMeshFromSource virou SeedPreviewMesh.
+    //
+    //  A versao antiga copiava a malha e o material da ENTIDADE de origem,
+    //  quando o editor tinha sido aberto por OpenForEntity. Esse caminho saiu
+    //  junto com o ScriptComponent::Graph — a janela so abre a partir de um
+    //  asset, e o SyncComponentsToPreview logo em seguida define a malha de
+    //  verdade a partir dos componentes do script.
+    //
+    //  O que sobra e o unico trabalho que ainda importava: garantir que a
+    //  entidade de preview tenha ALGUMA malha entre o InitPreviewScene e o
+    //  primeiro Sync. Sem isso o preview abre com a entidade vazia e o
+    //  enquadramento de camera mede bounds de nada.
+    // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::SeedPreviewMesh()
     {
         if (!m_PreviewScene) return;
-        auto& pr = m_PreviewScene->GetRegistry();
 
-        if (m_SourceRegistry && m_Entity != entt::null &&
-            m_SourceRegistry->valid(m_Entity) &&
-            m_SourceRegistry->all_of<MeshComponent>(m_Entity))
-        {
-            auto& sm = m_SourceRegistry->get<MeshComponent>(m_Entity);
-            auto& dm = pr.get_or_emplace<MeshComponent>(m_PreviewEntity);
-            dm.Data = sm.Data;
-            if (m_SourceRegistry->all_of<MaterialComponent>(m_Entity))
-            {
-                auto& smat = m_SourceRegistry->get<MaterialComponent>(m_Entity);
-                auto& dmat = pr.get_or_emplace<MaterialComponent>(m_PreviewEntity);
-                dmat.Data = smat.Data;
-            }
-        }
-        else
-        {
-            auto& mc = pr.get_or_emplace<MeshComponent>(m_PreviewEntity);
-            if (!mc.Data) mc.Data = MeshFactory::CreateSphere(32);
-        }
+        auto& pr = m_PreviewScene->GetRegistry();
+        auto& mc = pr.get_or_emplace<MeshComponent>(m_PreviewEntity);
+
+        if (!mc.Data)
+            mc.Data = MeshFactory::CreateSphere(32);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -230,8 +229,13 @@ namespace axe
         bool hasMesh = false;
         bool hasSkeletal = false;
 
+        // SC44 — um componente ANEXADO a socket nao mora na entidade raiz: ele
+        // tem entidade propria (ver SyncSocketAttachmentsToPreview). Conta-lo
+        // aqui faria a malha da arma virar a malha do personagem.
         for (auto& def : m_ScriptAsset->GetComponents())
         {
+            if (!def.ParentSocket.empty()) continue;
+
             if (def.Type == "Mesh")         hasMesh = true;
             if (def.Type == "SkeletalMesh") hasSkeletal = true;
         }
@@ -244,6 +248,10 @@ namespace axe
 
         for (auto& def : m_ScriptAsset->GetComponents())
         {
+            // SC44 — anexados sao tratados no passo proprio, no fim.
+            if (!def.ParentSocket.empty())
+                continue;
+
             // ── SpringArm ─────────────────────────────────────────────────────
             if (def.Type == "SpringArm" && !m_SpringArmDragging)
             {
@@ -452,6 +460,109 @@ namespace axe
             FramePreviewCamera();
             m_CameraFramedFor = m_ScriptAsset.get();
         }
+
+        SyncSocketAttachmentsToPreview();   // SC44
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC44 — anexos a socket no PREVIEW
+    //
+    //  A mesma coisa que o InstantiateScriptAsset faz na cena, com a mesma
+    //  forma: entidade filha + SocketAttachmentComponent, e o AnimationWorld
+    //  (que ja roda neste preview) resolve o transform.
+    //
+    //  Escrever a matriz na mao aqui teria sido mais curto e teria criado uma
+    //  SEGUNDA implementacao de "onde fica o socket". Duas contas para a mesma
+    //  pergunta divergem — e a divergencia so aparece no jogo, depois de o
+    //  autor ter jurado que estava certo no editor.
+    //
+    //  As entidades sao RECRIADAS quando a lista muda, e nao reaproveitadas
+    //  por indice: um componente removido no meio deslocaria todos os indices
+    //  seguintes, e o anexo do 'GunSocket' passaria a apontar para a malha do
+    //  vizinho sem que nada avisasse.
+    // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::SyncSocketAttachmentsToPreview()
+    {
+        if (!m_PreviewScene || !m_ScriptAsset) return;
+
+        auto& reg = m_PreviewScene->GetRegistry();
+        const auto& comps = m_ScriptAsset->GetComponents();
+
+        // Assinatura do estado atual. Barata de calcular e suficiente: se ela
+        // nao mudou, nenhuma entidade precisa nascer ou morrer.
+        std::string sig;
+
+        for (const auto& def : comps)
+        {
+            if (def.ParentSocket.empty()) continue;
+
+            sig += def.Type + "|" + def.ParentSocket + "|" + def.AssetUUID + ";";
+        }
+
+        if (sig != m_SocketAttachSig)
+        {
+            m_SocketAttachSig = sig;
+
+            for (auto e : m_SocketAttachEntities)
+                if (e != entt::null && reg.valid(e))
+                    m_PreviewScene->DestroyEntity(e);
+
+            m_SocketAttachEntities.clear();
+
+            for (const auto& def : comps)
+            {
+                if (def.ParentSocket.empty()) continue;
+
+                // Mesma reconferencia da instanciacao: sem pai esqueleto, sem
+                // anexo. O componente simplesmente nao aparece no preview —
+                // coerente com o que aconteceria na cena.
+                if (def.ParentIndex < 0 || def.ParentIndex >= (int)comps.size())
+                    continue;
+
+                if (comps[def.ParentIndex].Type != "SkeletalMesh")
+                    continue;
+
+                if (def.Type != "Mesh")
+                    continue;   // so malha tem o que mostrar num preview
+
+                auto child = m_PreviewScene->CreateEntity("SocketAttach_" + def.ParentSocket);
+
+                auto& mc = reg.emplace<MeshComponent>(child);
+                mc.AssetUUID = def.AssetUUID;
+                mc.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
+
+                auto& att = reg.emplace<SocketAttachmentComponent>(child);
+                att.Target = m_PreviewEntity;
+                att.SocketName = def.ParentSocket;
+
+                m_SocketAttachEntities.push_back(child);
+            }
+        }
+
+        // Transform local: fora do bloco acima porque arrastar Location no
+        // painel muda o valor sem mudar a assinatura — e e justamente o ajuste
+        // que precisa aparecer ao vivo.
+        std::size_t k = 0;
+
+        for (const auto& def : comps)
+        {
+            if (def.ParentSocket.empty()) continue;
+            if (k >= m_SocketAttachEntities.size()) break;
+
+            const entt::entity e = m_SocketAttachEntities[k];
+
+            if (e != entt::null && reg.valid(e))
+            {
+                if (auto* tc = reg.try_get<TransformComponent>(e))
+                {
+                    tc->Data.Position = glm::vec3(def.PosX, def.PosY, def.PosZ);
+                    tc->Data.Rotation = glm::radians(glm::vec3(def.RotX, def.RotY, def.RotZ));
+                    tc->Data.Scale = glm::vec3(def.ScaleX, def.ScaleY, def.ScaleZ);
+                }
+            }
+
+            ++k;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -549,8 +660,7 @@ namespace axe
             dl->AddText(ImVec2(wp.x + 6, m_PreviewBoundsMax.y - 18),
                 ImColor(180, 180, 180, 120), "Alt+LMB orbitar | Scroll zoom | T/R/S gizmo");
 
-            const char* lbl = m_ScriptAsset ? m_ScriptAsset->GetName().c_str() :
-                m_Component ? m_Component->ScriptName.c_str() : nullptr;
+            const char* lbl = m_ScriptAsset ? m_ScriptAsset->GetName().c_str() : nullptr;
             if (lbl)
             {
                 float tw = ImGui::CalcTextSize(lbl).x;

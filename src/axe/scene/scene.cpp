@@ -163,6 +163,25 @@ namespace axe
 		auto* tc = m_Registry.try_get<TransformComponent>(entity);
 		glm::mat4 local = tc ? tc->Data.GetMatrix() : glm::mat4(1.0f);
 
+		// ── SC43: anexo a socket ─────────────────────────────────────────
+		//
+		// Vem ANTES do pai: quando ha socket resolvido, e ele que substitui a
+		// cadeia — nao se soma aos dois, senao o transform do personagem
+		// entraria duas vezes (uma pelo pai, outra dentro do _SocketWorld,
+		// que ja e mundo).
+		//
+		// _Valid falso cai de proposito no caminho de baixo: a arma aparece
+		// na origem do personagem, errada mas visivel. Ver a nota no
+		// components.hpp.
+		//
+		// O TransformComponent continua sendo o offset LOCAL editado pelo
+		// autor — e por isso multiplica aqui, e nao e sobrescrito.
+		if (auto* att = m_Registry.try_get<SocketAttachmentComponent>(entity);
+			att && att->_Valid)
+		{
+			return att->_SocketWorld * local;
+		}
+
 		// Acumula transform do pai
 		auto* rel = m_Registry.try_get<RelationshipComponent>(entity);
 		if (rel && rel->Parent != entt::null && m_Registry.valid(rel->Parent))

@@ -72,8 +72,20 @@ namespace axe
 
 				alreadyWarned.insert(id);
 
-				//AXE_CORE_ERROR("SceneSnapshot: o componente '{}' existe na cena mas NAO esta em "
-				//	"AllComponents (scene_snapshot.hpp).", storage.type().name());
+				// SC45 — o NOME de volta na mensagem.
+				//
+				// Esta rede de seguranca existe exatamente para o caso do
+				// SocketAttachmentComponent, e nao serviu de nada: a linha com
+				// o nome do tipo estava comentada, entao o console dizia
+				// "algum componente sera PERDIDO" sem dizer qual. Um aviso que
+				// nao identifica o culpado custa a mesma leitura e nao poupa
+				// nenhuma investigacao.
+				//
+				// storage.type().name() e o nome mangled do compilador
+				// ("struct axe::SocketAttachmentComponent" no MSVC) — feio,
+				// mas suficiente para achar o tipo, que e o unico trabalho
+				// desta mensagem.
+				AXE_CORE_ERROR("SceneSnapshot: o componente '{}' existe na cena mas NAO esta em AllComponents (scene_snapshot.hpp)., storage.type().name()");
 				AXE_CORE_ERROR("  -> Ele sera PERDIDO ao dar Stop. Adicione o tipo na lista.");
 			}
 		}
