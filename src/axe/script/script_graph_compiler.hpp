@@ -17,10 +17,15 @@ namespace axe
         // functions: ScriptFunctions do asset (estilo Function da Unreal) —
         // cada uma gera um método próprio na classe, e nodes "Call <Func>" em
         // QUALQUER grafo (principal ou de outra função) conseguem chamá-la.
+        // classId — UUID do .axescript deste script. Vai para dentro do C++
+        // gerado (GetScriptClassId) e e o que um "Cast To" de OUTRO script
+        // compara. Vazio significa "script sem identidade": ele roda
+        // normalmente, so nunca casa com cast nenhum.
         static std::string Generate(const ScriptGraph& graph,
             const std::string& scriptName,
             const std::vector<ScriptVariable>* assetVars = nullptr,
-            const std::vector<ScriptFunction>* functions = nullptr);
+            const std::vector<ScriptFunction>* functions = nullptr,
+            const std::string& classId = "");
 
         // Mapeia ScriptVarType -> nome do tipo em C++ (ex: Vec3 -> "glm::vec3").
         // Extraído pra função própria porque é usado em 3 lugares: declaração
@@ -106,14 +111,22 @@ namespace axe
         static std::string ResolvePin(Context& ctx,
             const ScriptPin& pin);
 
-        // Encontra o node conectado ao Flow Out de um node
+        // Encontra o node conectado ao Flow Out de um node.
+        // hops — profundidade da recursão por Reroute; ver kMaxRerouteHops no
+        // .cpp. Nenhum chamador precisa passar: só a própria recursão usa.
         static const ScriptNode* FindNextFlowNode(const Context& ctx,
             const ScriptNode* node,
-            const std::string& outPinName = "Flow Out");
+            const std::string& outPinName = "Flow Out",
+            int hops = 0);
+
+        // SC26 — expressao C++ convertida para std::string conforme o tipo.
+        // Usada pelo node To String E pelo Print String; antes so o primeiro
+        // sabia converter, e o segundo assumia que o valor ja era string.
+        static std::string MakeStringExpr(const std::string& expr, ScriptPinType type);
 
         // Encontra o node e pin conectados a um pin de entrada de dados
         static std::pair<const ScriptNode*, const ScriptPin*>
-            FindDataSource(const Context& ctx, const ScriptPin& inputPin);
+            FindDataSource(const Context& ctx, const ScriptPin& inputPin, int hops = 0);
     };
 
 } // namespace axe

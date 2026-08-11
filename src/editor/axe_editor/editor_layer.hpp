@@ -46,6 +46,7 @@
 #include <fstream>
 
 #include "material_thumbnail_renderer.hpp"
+#include "mesh_thumbnail_renderer.hpp"
 
 #include "axe/animation/animation_world.hpp"
 
@@ -87,6 +88,8 @@ namespace axe
         EditorContext                          m_Context;
         CommandHistory                         m_CommandHistory;
         MaterialThumbnailRenderer              m_ThumbnailRenderer;
+        // SC23 — miniaturas de malha/esqueleto/animacao/script no Asset Browser.
+        MeshThumbnailRenderer                  m_MeshThumbnails;
 
         // ── Física / Scripts ──────────────────────────────────────────────────
         PhysicsWorld  m_PhysicsWorld;

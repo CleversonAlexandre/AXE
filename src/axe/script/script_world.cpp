@@ -4,6 +4,8 @@
 #include <filesystem>
 #include "script_component.hpp"
 #include "dll_loader.hpp"
+#include "script_paths.hpp"
+#include "axe/asset/asset_database.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/physics/physics_components.hpp"
 #include "axe/log/log.hpp"
@@ -33,21 +35,35 @@ namespace axe
 
                 if (!sc.IsLoaded)
                 {
-                    if (sc.DllPath.empty())
+                    // SC4 — o caminho da DLL passa a ser SEMPRE resolvido aqui,
+                    // e nunca lido da cena. Ele é dado derivado: depende de onde
+                    // o projeto está no disco desta máquina. Guardar o valor
+                    // absoluto no .axescene é a mesma classe de erro que a regra
+                    // "nunca serialize caminho absoluto" já proíbe para asset —
+                    // funcionava só até alguém mover a pasta ou abrir o projeto
+                    // em outro computador. Um sc.DllPath que veio de cena antiga
+                    // é ignorado de propósito.
+                    // SC29 — o UUID e uma AJUDA, nao um requisito.
+                    //
+                    // Num jogo empacotado o AssetDatabase pode nem estar
+                    // carregado, e GetByPath devolve nada. Antes isso bastava
+                    // para o script nao carregar; agora o ResolveDll tem um
+                    // passo que acha a DLL pelo padrao do nome quando o UUID
+                    // falta (ver ScriptPaths::ResolveDll, passo 3).
+                    std::string uuid;
+                    if (!sc.ScriptAssetPath.empty())
+                        if (auto* rec = AssetDatabase::Get().GetByPath(sc.ScriptAssetPath))
+                            uuid = rec->UUID;
+
+                    auto resolved = ScriptPaths::ResolveDll(sc.ScriptName, uuid);
+                    if (!resolved.empty())
                     {
-                        char exeBuf[512] = {};
-                        GetModuleFileNameA(nullptr, exeBuf, 512);
-                        std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
-                        std::filesystem::path candidate = exeDir / "temp_scripts" / (sc.ScriptName + ".dll");
-                        if (std::filesystem::exists(candidate))
-                        {
-                            sc.DllPath = candidate.string();
-                            AXE_CORE_INFO("ScriptWorld: DllPath reconstruído → '{}'", sc.DllPath);
-                        }
-                        else
-                        {
-                            AXE_CORE_WARN("ScriptWorld: DLL não encontrada para '{}'. Compile o script antes do Play.", sc.ScriptName);
-                        }
+                        sc.DllPath = resolved.string();
+                    }
+                    else
+                    {
+                        sc.DllPath.clear();
+                        AXE_CORE_WARN("ScriptWorld: DLL não encontrada para '{}'. Compile o script antes do Play.", sc.ScriptName);
                     }
 
                     if (!sc.DllPath.empty())

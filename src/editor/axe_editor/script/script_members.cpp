@@ -33,6 +33,7 @@ namespace axe
             "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity",
             "Float Array","Bool Array","Int Array","Vec3 Array","String Array",
             "Vec2 Array","Vec4 Array","Quat Array","Entity Array",
+            "Asset",   // SC30 — o tipo concreto vem do TypeQualifier
         };
         static const ImVec4 s_VarCols[] = {
             {0.12f,0.55f,0.24f,1}, // Float
@@ -55,7 +56,21 @@ namespace axe
             {0.43f,0.16f,0.63f,1}, // Vec4Array
             {0.47f,0.35f,0.63f,1}, // QuatArray
             {0.12f,0.27f,0.55f,1}, // EntityArray
+            {0.85f,0.45f,0.10f,1}, // Asset — laranja, para nao se confundir
+            // com String (rosa) apesar de ser string
+            // por baixo: o autor escolhe por asset, e a
+            // cor tem de contar isso.
         };
+        static_assert(sizeof(s_VarCols) / sizeof(s_VarCols[0]) ==
+            sizeof(s_VarTypes) / sizeof(s_VarTypes[0]),
+            "SC30: uma cor por tipo — inserir tipo sem cor le fora do array");
+
+        // SC31 — a contagem dos combos era o literal 18, escrito tres vezes.
+        // Acrescentar "Asset" na tabela nao bastou: os combos continuaram
+        // mostrando os 18 primeiros e o tipo novo ficou invisivel. E o mesmo
+        // defeito do menu de contexto no SC18 — um numero que precisa ser
+        // atualizado junto com um array, e ninguem lembra.
+        constexpr int kVarTypeCount = (int)(sizeof(s_VarTypes) / sizeof(s_VarTypes[0]));
 
         float avail = ImGui::GetContentRegionAvail().x;
 
@@ -72,7 +87,7 @@ namespace axe
             ImGui::InputText("##vname", m_NewVarName, sizeof(m_NewVarName));
             ImGui::SameLine(0, 4);
             ImGui::SetNextItemWidth(avail * 0.28f);
-            ImGui::Combo("##vtype", &m_NewVarType, s_VarTypes, 18);
+            ImGui::Combo("##vtype", &m_NewVarType, s_VarTypes, kVarTypeCount);
             ImGui::SameLine(0, 4);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.18f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.55f, 0.24f, 1));
@@ -100,7 +115,7 @@ namespace axe
                     clicked = ImGui::SmallButton("+ Var");
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Adicionar nova variável");
+                    ImGui::SetTooltip("Add new variable");
                 if (clicked)
                 {
                     ScriptVariable v;
@@ -242,7 +257,7 @@ namespace axe
                     // Node quando a variável é selecionada, não dentro do card.
                     float cardWidth = ImGui::GetContentRegionAvail().x;
                     float headerH = 36.f;
-                    float cardHeight = headerH ;
+                    float cardHeight = headerH;
                     ImVec2 cardMin = ImGui::GetCursorScreenPos();
                     ImVec2 cardMax = ImVec2(cardMin.x + cardWidth, cardMin.y + cardHeight);
                     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -313,6 +328,11 @@ namespace axe
                         {
                             if (m_RenameBuf[0] != 0)
                             {
+                                // SC7 — renomear variavel nao entrava no
+                                // historico, e ela e propagada para todo node
+                                // Get/Set: um rename errado tinha de ser
+                                // desfeito a mao em cada node.
+                                MarkEdited("Rename Variable");
                                 std::string oldName = v.Name;
                                 v.Name = m_RenameBuf;
                                 if (m_Graph)
@@ -589,7 +609,7 @@ namespace axe
                     clicked = ImGui::SmallButton("+ Event");
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Adicionar novo Event Dispatcher");
+                    ImGui::SetTooltip("Add new Event Dispatcher");
                 if (clicked)
                 {
                     ScriptCustomEvent e;
@@ -694,7 +714,7 @@ namespace axe
                 m_NewFuncName[0] = 0;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Criar nova Function (estilo Unreal — com Inputs/Outputs próprios)");
+                ImGui::SetTooltip("Create new Function (Unreal style - with its own Inputs/Outputs)");
             ImGui::PopStyleColor(2);
             ImGui::Spacing();
 
@@ -747,7 +767,7 @@ namespace axe
                 if (rowClicked && !rowDragged)
                     SwitchToFunctionGraph(&fn);
                 if (!rowDragged && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Clique para editar — arraste para o canvas para criar um node Call");
+                    ImGui::SetTooltip("Click to edit - drag onto the canvas to create a Call node");
 
                 // ── Conteúdo visual, desenhado por cima do botão invisível ─────
                 ImGui::SetCursorScreenPos(cardMin);
@@ -784,7 +804,7 @@ namespace axe
                 if (ImGui::SmallButton(isExpanded ? "v" : ">"))
                     m_ExpandedFunc = isExpanded ? "" : fn.Name;
                 ImGui::PopStyleColor(2);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Editar parametros (Inputs/Outputs)");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit parameters (Inputs/Outputs)");
 
                 ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -818,7 +838,7 @@ namespace axe
                                 ImGui::SameLine(0, 4);
                                 int curType = (int)params[p].Type;
                                 ImGui::SetNextItemWidth(avail * 0.32f);
-                                if (ImGui::Combo("##ptype", &curType, s_VarTypes, 18))
+                                if (ImGui::Combo("##ptype", &curType, s_VarTypes, kVarTypeCount))
                                 {
                                     params[p].Type = (ScriptVarType)curType;
                                     sigChanged = true;

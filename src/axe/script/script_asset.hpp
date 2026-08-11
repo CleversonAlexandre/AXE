@@ -1,6 +1,7 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/asset/asset.hpp"
+#include "axe/utils/glm_config.hpp"   // SC19: ScriptValue guarda glm::vec4
 #include <string>
 #include <vector>
 #include <memory>
@@ -147,6 +148,22 @@ namespace axe
         Float, Bool, Int, Vec3, String, Vec2, Vec4, Quat, Entity,
         FloatArray, BoolArray, IntArray, Vec3Array, StringArray,
         Vec2Array, Vec4Array, QuatArray, EntityArray,
+
+        // ── S2 / SC30: referencia a um asset do projeto ───────────────────────
+        //
+        // UM valor de enum para TODOS os tipos de asset — textura, som, malha,
+        // Sound Cue, particula, script. Qual deles a variavel aceita fica em
+        // ScriptVariable::TypeQualifier, e nao em mais um valor aqui.
+        //
+        // A alternativa (TextureRef, AudioRef, MeshRef, ...) somaria uma dezena
+        // de valores agora e um por tipo de asset que a engine ganhar depois,
+        // cada um exigindo um case em cada switch do compilador e do editor. O
+        // qualificador e o que o Type Registry precisa ser desde o inicio: o
+        // TIPO e um, a especializacao e dado.
+        //
+        // Acrescentado no FIM, e serializado por NOME (ScriptVarTypeToString) —
+        // entao nenhum .axescript existente muda de significado.
+        Asset,
     };
 
     // BUGFIX: as 3 funções abaixo faziam ARITMÉTICA com os valores do enum
@@ -247,6 +264,7 @@ namespace axe
         case ScriptVarType::Vec4Array:   return "Vec4Array";
         case ScriptVarType::QuatArray:   return "QuatArray";
         case ScriptVarType::EntityArray: return "EntityArray";
+        case ScriptVarType::Asset:       return "Asset";
         default: return "Float";
         }
     }
@@ -269,8 +287,72 @@ namespace axe
         if (s == "Vec4Array")   return ScriptVarType::Vec4Array;
         if (s == "QuatArray")   return ScriptVarType::QuatArray;
         if (s == "EntityArray") return ScriptVarType::EntityArray;
+        if (s == "Asset")       return ScriptVarType::Asset;
         return ScriptVarType::Float;
     }
+
+    // ─── S2 / SC17: ScriptValue — um valor, qualquer tipo ─────────────────────
+    //
+    // ANTES: ScriptPin tinha cinco campos paralelos (DefaultFloat, DefaultBool,
+    // DefaultInt, DefaultString, DefaultVec3), ScriptNode tem sete, e
+    // ScriptVariable tem oito. Nenhum deles sabe qual está valendo — quem
+    // decide é um switch no tipo, repetido em cada leitor. Três consequências
+    // que já custaram caro neste editor:
+    //
+    //   1. Vec2, Vec4 e Quat simplesmente NÃO TINHAM onde guardar valor em
+    //      ScriptPin. Um pin Quat desconectado compilava "{}" e não havia
+    //      campo para editar — foi a queixa que abriu esta revisão.
+    //   2. Cada tipo novo custa um campo em três structs e um case em cada
+    //      switch espalhado. É por isso que "quero uma variável do tipo enum"
+    //      não tinha caminho: não é um recurso, é uma reforma.
+    //   3. Serialização, cópia e migração precisam listar os campos um a um, e
+    //      esquecer um não gera erro nenhum — só um valor que some ao salvar.
+    //
+    // AGORA: um struct só, com armazenamento para todas as formas. O TIPO
+    // continua vindo de fora (do pin, da variável) — ScriptValue guarda, não
+    // interpreta. Isso é de propósito: o mesmo valor precisa sobreviver a uma
+    // troca de tipo na UI, e um enum interno de "qual campo vale" faria a
+    // troca apagar o que o autor digitou.
+    //
+    // Vec cobre Vec2 (xy), Vec3 (xyz), Vec4 e Quat (xyzw, w=1 = identidade).
+    // Str cobre String hoje, e é onde o UUID de asset e o nome de enum vão
+    // caber no S2 sem mexer em struct nenhum de novo — que é o ponto.
+    struct AXE_API ScriptValue
+    {
+        bool        Bool = false;
+        int         Int = 0;
+        float       Float = 0.0f;
+        glm::vec4   Vec = { 0.0f, 0.0f, 0.0f, 1.0f };
+        std::string Str;
+
+        // Grava só o que não é o padrão: um .axescript com centenas de pins
+        // ficaria cheio de zeros idênticos, e diff de asset vira ilegível.
+        nlohmann::json Serialize() const;
+        void           Deserialize(const nlohmann::json& j);
+
+        // Formato anterior ao SC17 (default_float, default_bool, ...), lido
+        // direto do JSON do PIN. Mantido porque todo .axescript existente está
+        // gravado assim e um asset que abre vazio é pior que qualquer dívida.
+        void DeserializeLegacyPin(const nlohmann::json& jPin);
+
+        // Literal C++ para este valor no tipo pedido. Recebe ScriptVarType
+        // (e nao ScriptPinType) porque este header nao conhece pinos; o lado
+        // do pin converte com PinTypeToVarType, em script_graph.hpp.
+        //
+        // Vive aqui, e não no
+        // compilador, porque a emissão de um valor é conhecimento do valor —
+        // deixá-la no compilador foi o que fez Vec2/Vec4/Quat virarem "{}"
+        // silenciosamente por um default: genérico.
+        std::string ToCppLiteral(ScriptVarType t) const;
+
+        bool operator==(const ScriptValue& o) const
+        {
+            return Bool == o.Bool && Int == o.Int && Float == o.Float &&
+                Vec == o.Vec && Str == o.Str;
+        }
+        bool operator!=(const ScriptValue& o) const { return !(*this == o); }
+    };
+
 
     struct ScriptVariable
     {
@@ -278,14 +360,26 @@ namespace axe
         ScriptVarType Type = ScriptVarType::Float;
         std::string   Category = "";    // categoria para agrupamento no painel (vazio = sem categoria)
         std::string   Description = ""; // descrição livre, exibida apenas na aba Node do Script Details
-        float         DefaultFloat = 0.f;
-        bool          DefaultBool = false;
-        int           DefaultInt = 0;
-        float         DefaultVec3[3] = { 0,0,0 };
-        float         DefaultVec2[2] = { 0,0 };
-        float         DefaultVec4[4] = { 0,0,0,1 };  // w=1 por padrão (quaternion identity)
-        float         DefaultQuat[4] = { 0,0,0,1 };  // x,y,z,w — identity
-        std::string   DefaultString;
+        // SC19 — oito campos paralelos viraram um ScriptValue.
+        //
+        // Vec3, Vec2, Vec4 e Quat tinham CADA UM seu proprio float[], quatro
+        // blocos de armazenamento para a mesma coisa. Trocar o tipo da
+        // variavel de Vec3 para Vec4 na UI perdia o que estava digitado,
+        // porque o valor novo lia de um array que ninguem tinha preenchido.
+        // Com um vec4 unico, Vec2 le xy, Vec3 le xyz e Vec4/Quat leem tudo —
+        // e trocar o tipo preserva o que da para preservar.
+        ScriptValue   Default;
+
+        // ── S2 / SC30: especializacao do tipo ────────────────────────────────
+        //
+        // Para Type == Asset, o AssetType aceito ("Texture", "Audio", "Mesh",
+        // "SoundCue", "ParticleSystem", "Script", ...). Vazio = qualquer um.
+        //
+        // O campo e uma STRING e nao um enum de proposito: e aqui que o enum de
+        // usuario (UUID do .axeenum) e a Data Table vao caber, sem tocar em
+        // ScriptVariable de novo. Este e o registro do Type Registry.
+        std::string   TypeQualifier;
+
         bool          Exposed = false;  // visível no Inspector em runtime
 
         // Arrays não têm um "default value" único editável campo-a-campo no

@@ -28,6 +28,8 @@
 #include "axe/graphics/game_camera.hpp"
 #include <vector>
 #include <algorithm>
+#include <cstring>   // S3: strcmp na comparacao de classe
+#include <cstddef>
 
 // Jolt — necessário para DestroyEntitySafe remover bodies do simulador
 #ifdef JPH_DEBUG_RENDERER
@@ -582,6 +584,47 @@ namespace axe
     // e o static body implícito criado pra um Collider sem Rigidbody.
     // PhysicsSystem::Get() é um singleton global — não precisa de nenhum
     // acessor novo na Scene pra chegar nele.
+    // ─────────────────────────────────────────────────────────────────────────
+    //  S3 — identidade de classe e acesso entre scripts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void ScriptVarSlot::SetString(const char* src)
+    {
+        S[0] = '\0';
+        if (!src) return;
+        // strncpy nao garante terminador quando a origem enche o buffer; copiar
+        // 255 e terminar a mao e o unico jeito de isto nunca vazar.
+        std::size_t i = 0;
+        for (; i < sizeof(S) - 1 && src[i]; i++) S[i] = src[i];
+        S[i] = '\0';
+    }
+
+    ScriptBase* ScriptBase::GetScriptOn(entt::entity target) const
+    {
+        if (!m_Context.ScenePtr || target == entt::null) return nullptr;
+
+        auto& reg = m_Context.ScenePtr->GetRegistry();
+        if (!reg.valid(target)) return nullptr;
+
+        auto* sc = reg.try_get<ScriptComponent>(target);
+        if (!sc || !sc->Instance) return nullptr;
+
+        return sc->Instance.get();
+    }
+
+    ScriptBase* ScriptBase::CastScript(entt::entity target, const char* classId) const
+    {
+        if (!classId || !classId[0]) return nullptr;
+
+        ScriptBase* other = GetScriptOn(target);
+        if (!other) return nullptr;
+
+        const char* otherId = other->GetScriptClassId();
+        if (!otherId || !otherId[0]) return nullptr;   // script compilado antes do S3
+
+        return std::strcmp(otherId, classId) == 0 ? other : nullptr;
+    }
+
     void ScriptBase::DestroyEntitySafe(entt::entity target)
     {
         if (!m_Context.ScenePtr || target == entt::null) return;

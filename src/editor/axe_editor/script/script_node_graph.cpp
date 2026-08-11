@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <cmath>   // SC2: std::abs(float) na curva do fio carregado
 
 namespace ed = ax::NodeEditor;
 
@@ -19,12 +20,15 @@ namespace ed = ax::NodeEditor;
 // Fora do namespace axe pra não ter conflito com AXE_API
 static bool IsSplitPin(const axe::ScriptPin& p)
 {
+    // SC20 — reconhece W tambem. Sem isso, o quarto componente de um Vec4 ou
+    // Quat splitado nao era visto como parte do split: o Recombine deixava o
+    // pin W orfao no node e o flag de split continuava ligado para sempre.
     const std::string& n = p.Name;
-    if (n == "X" || n == "Y" || n == "Z") return true;
+    if (n == "X" || n == "Y" || n == "Z" || n == "W") return true;
     if (n.size() >= 2)
     {
         const std::string suf = n.substr(n.size() - 2);
-        return suf == ".X" || suf == ".Y" || suf == ".Z";
+        return suf == ".X" || suf == ".Y" || suf == ".Z" || suf == ".W";
     }
     return false;
 }
@@ -88,7 +92,14 @@ namespace axe
     static const NE sCast[] = {
         {"To Float","ToFloat"},{"To Int","ToInt"},{"To Bool","ToBool"},
         {"To String","ToString"},{"To Vec3","ToVec3"},{"Break Vec3","BreakVec3"},
-        {"Float to Vec3","FloatToVec3"},{nullptr,nullptr}
+        {"Float to Vec3","FloatToVec3"},
+        // S3 — referencia entre scripts. Ficam em Cast porque e o que sao:
+        // "esta entidade roda o script X?" e a mesma pergunta de um cast de
+        // tipo, so que atravessando a fronteira de DLL.
+        {"Cast To Script","CastToScript"},
+        {"Get Script Var","GetScriptVar"},
+        {"Set Script Var","SetScriptVar"},
+        {nullptr,nullptr}
     };
 
     // Conta as entradas do proprio array, ignorando a sentinela {nullptr,
@@ -120,11 +131,23 @@ namespace axe
     };
     // Uma cor por categoria de s_Cats, na MESMA ordem. Inserir categoria
     // sem inserir cor aqui le fora do array.
+    //
+    // SC18 — eram NOVE cores para ONZE categorias. Junto com o "ci < 8"
+    // escrito a mao no laco do menu, as tres ultimas (Array, Flow Control,
+    // Cast) simplesmente nao apareciam: For Loop, For Each, While, Switch on
+    // Int e Switch on String existiam na fabrica de nodes e nao tinham como
+    // ser criados pela interface.
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
         {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.5f,0.85f,1},{0.85f,0.3f,0.75f,1},
-        {0.7f,0.6f,0.95f,1},{0.55f,0.75f,0.95f,1},{0.5f,0.9f,0.9f,1}
+        {0.7f,0.6f,0.95f,1},{0.55f,0.75f,0.95f,1},
+        {0.6f,0.5f,0.9f,1},    // Array
+        {0.5f,0.68f,0.85f,1},  // Flow Control
+        {0.5f,0.9f,0.9f,1}     // Cast
     };
+    static_assert(sizeof(s_CtxCols) / sizeof(s_CtxCols[0]) ==
+        sizeof(s_Cats) / sizeof(s_Cats[0]),
+        "s_CtxCols precisa de uma cor por categoria de s_Cats");
 
     struct CompNodeEntry { const char* label; const char* type; };
     static const CompNodeEntry s_TransformNodes[] = {
@@ -204,6 +227,205 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    //  SC2 — suporte ao fio carregado (Ctrl + clique)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void ScriptGraphWindow::TrackPinRect(ed::PinId id)
+    {
+        // Chamada logo depois do ícone do pin, ainda entre BeginPin/EndPin: o
+        // "item" corrente é o próprio ícone, então o centro do rect é
+        // exatamente de onde o fio sai na tela.
+        ImVec2 a = ImGui::GetItemRectMin();
+        ImVec2 b = ImGui::GetItemRectMax();
+        m_PinCanvasPos.emplace_back((int)id.Get(),
+            ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f));
+    }
+
+    bool ScriptGraphWindow::GetPinCanvasPos(ed::PinId id, ImVec2& out) const
+    {
+        for (const auto& e : m_PinCanvasPos)
+            if (e.first == (int)id.Get()) { out = e.second; return true; }
+        return false;
+    }
+
+    void ScriptGraphWindow::CancelCarriedWire()
+    {
+        if (!m_CarryingWire) return;
+
+        // Devolve cada fio ao pin de origem. AddLink volta a impor
+        // cardinalidade, então se o usuário conseguiu ocupar aquele pin no meio
+        // do gesto, o estado final continua consistente.
+        ScriptPin* from = m_Graph ? m_Graph->FindPin(m_CarriedFromPin) : nullptr;
+        if (from && m_Graph)
+        {
+            for (auto& remote : m_CarriedRemotePins)
+            {
+                ScriptPin* rp = m_Graph->FindPin(remote);
+                if (!rp) continue;
+                ScriptPin* o = (from->Kind == ed::PinKind::Output) ? from : rp;
+                ScriptPin* i = (from->Kind == ed::PinKind::Input) ? from : rp;
+                m_Graph->AddLink(o->ID, i->ID);
+            }
+        }
+
+        // Sem CommitUndo: o grafo voltou ao que era, então registrar um passo
+        // de undo aqui encheria o histórico de entradas que não mudam nada.
+        m_SnapshotBeforeAction.clear();
+        m_CarryingWire = false;
+        m_CarriedRemotePins.clear();
+        m_CarriedFromPin = {};
+    }
+
+    void ScriptGraphWindow::DrawCarriedWire()
+    {
+        if (!m_CarryingWire || !m_Graph) return;
+
+        // Punho FECHADO enquanto o fio está na mão — o par aberto/fechado é o
+        // que faz o gesto se explicar sozinho.
+        m_HandCursor = HandCursor::Closed;
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 mouse = ImGui::GetMousePos();
+
+        // Verde quando o pin sob o cursor aceita, vermelho quando recusa,
+        // âmbar quando não há pin nenhum embaixo — a cor responde antes de o
+        // usuário soltar o botão, igual ao drag normal.
+        ed::PinId hovered = ed::GetHoveredPin();
+        // Sem pin sob o cursor o gesto CORTA a ligação ao soltar — então o
+        // preview já avisa disso, em vermelho. Antes esta era a cor "neutra"
+        // de "ainda procurando", e nada dizia que largar ali destruía o fio.
+        ImU32 col = IM_COL32(200, 70, 70, 230);
+        const char* hint = "Release here to disconnect";
+
+        if (hovered != ed::PinId{})
+        {
+            bool anyOk = false;
+            for (auto& remote : m_CarriedRemotePins)
+            {
+                ScriptLinkQuery q = m_Graph->QueryLink(remote, hovered);
+                if (q.Action == ScriptLinkAction::Accept ||
+                    q.Action == ScriptLinkAction::AcceptImplicit ||
+                    q.Action == ScriptLinkAction::AdoptWildcard)
+                {
+                    anyOk = true; break;
+                }
+                hint = q.Message;
+            }
+            col = anyOk ? IM_COL32(80, 220, 120, 235) : IM_COL32(220, 60, 60, 235);
+            if (anyOk) hint = nullptr;
+        }
+
+        for (auto& remote : m_CarriedRemotePins)
+        {
+            ImVec2 from;
+            if (!GetPinCanvasPos(remote, from)) continue;   // pin fora de vista
+
+            // Mesma curva do fio normal do node editor: tangentes horizontais
+            // proporcionais à distância, com um piso para o traço não colapsar
+            // numa reta quando as pontas estão perto.
+            const float dx = std::abs(mouse.x - from.x);
+            const float strength = (dx < 60.0f) ? 60.0f : dx * 0.5f;
+            const bool  fromIsOutput = [&] {
+                ScriptPin* p = m_Graph->FindPin(remote);
+                return p && p->Kind == ed::PinKind::Output;
+                }();
+            const float s1 = fromIsOutput ? strength : -strength;
+
+            dl->AddBezierCubic(
+                from,
+                ImVec2(from.x + s1, from.y),
+                ImVec2(mouse.x - s1, mouse.y),
+                mouse,
+                col, 2.5f);
+        }
+
+        // Bolinha no cursor: marca onde a ponta solta está, que é o que o
+        // usuário está mirando.
+        dl->AddCircleFilled(mouse, 4.5f, col);
+
+        if (hint && hint[0])
+        {
+            ed::Suspend();
+            ImGui::SetTooltip("%s", hint);
+            ed::Resume();
+        }
+    }
+
+    void ScriptGraphWindow::DrawHandCursor()
+    {
+        if (m_HandCursor == HandCursor::None) return;
+
+        ImGuiIO& io = ImGui::GetIO();
+
+        // Se o backend não sabe esconder o cursor do sistema, desenhar o nosso
+        // por cima daria DOIS cursores na tela. Nesse caso cai no cursor de mão
+        // padrão do ImGui — pior, mas correto.
+        if (!(io.BackendFlags & ImGuiBackendFlags_HasMouseCursors))
+        {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            return;
+        }
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+
+        const bool  closed = (m_HandCursor == HandCursor::Closed);
+        const ImVec2 m = io.MousePos;          // espaço de tela — fora do canvas
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+
+        const ImU32 fill = IM_COL32(245, 245, 245, 255);
+        const ImU32 line = IM_COL32(20, 20, 20, 230);
+
+        // O "hotspot" é o centro da palma: é dali que o fio sai, então é ali
+        // que o ponteiro precisa estar.
+        const float s = 1.0f;                  // escala; 1.0 ≈ 22px de altura
+        auto P = [&](float x, float y) { return ImVec2(m.x + x * s, m.y + y * s); };
+
+        // Cada peça é desenhada duas vezes: contorno escuro por baixo, um pouco
+        // maior, para a mão continuar legível sobre node claro ou fio claro.
+        auto Finger = [&](float x, float top, float bottom, float w)
+            {
+                dl->AddLine(P(x, top), P(x, bottom), line, w * s + 2.0f * s);
+                dl->AddLine(P(x, top), P(x, bottom), fill, w * s);
+            };
+
+        if (!closed)
+        {
+            // ── Palma aberta ─────────────────────────────────────────────────
+            // Quatro dedos estendidos, levemente em leque, e o polegar aberto
+            // para a esquerda.
+            dl->AddRectFilled(P(-6, -3), P(6, 9), line, 5.0f * s);
+            dl->AddRectFilled(P(-5, -2), P(5, 8), fill, 4.0f * s);
+
+            Finger(-3.5f, -11.0f, -2.0f, 2.6f);
+            Finger(-1.0f, -13.0f, -2.0f, 2.6f);
+            Finger(1.5f, -12.5f, -2.0f, 2.6f);
+            Finger(4.0f, -10.0f, -2.0f, 2.6f);
+            // Polegar: sai da lateral, apontando para fora.
+            dl->AddLine(P(-5, 2), P(-11, -4), line, 4.6f * s);
+            dl->AddLine(P(-5, 2), P(-11, -4), fill, 2.6f * s);
+        }
+        else
+        {
+            // ── Punho fechado ────────────────────────────────────────────────
+            // Mesma silhueta, dedos recolhidos: só as juntas aparecem no topo,
+            // e o polegar cruza a frente. A mudança de altura entre os dois
+            // estados é o que dá a sensação de "agarrou".
+            dl->AddRectFilled(P(-6, -5), P(6, 9), line, 5.0f * s);
+            dl->AddRectFilled(P(-5, -4), P(5, 8), fill, 4.0f * s);
+
+            // Juntas — bolinhas encostadas na borda de cima.
+            for (int k = 0; k < 4; k++)
+            {
+                float x = -3.5f + k * 2.4f;
+                dl->AddCircleFilled(P(x, -5.0f), 1.9f * s, line);
+                dl->AddCircleFilled(P(x, -5.0f), 1.2f * s, fill);
+            }
+            // Polegar dobrado por cima da frente do punho.
+            dl->AddLine(P(-5.5f, 1.5f), P(1.5f, 1.5f), line, 4.6f * s);
+            dl->AddLine(P(-5.5f, 1.5f), P(1.5f, 1.5f), fill, 2.6f * s);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     void ScriptGraphWindow::DrawNodeGraph()
     {
         if (!m_Graph) return;
@@ -212,13 +434,114 @@ namespace axe
         ed::Begin("##SG", ImVec2(0, 0));
         m_InsideNodeEditorFrame = true;
 
+        // SC2 — as posições de pin valem só para ESTE frame: o usuário move
+        // node, dá zoom, colapsa categoria. Guardar entre frames daria um fio
+        // preso a onde o pin estava, não a onde está.
+        m_PinCanvasPos.clear();
+        m_SuppressCtxMenuThisFrame = false;
+        m_HandCursor = HandCursor::None;
+
         // Restaura posições salvas no JSON na primeira frame
         if (m_FirstFrame && m_Graph)
             for (auto& node : m_Graph->GetNodes())
                 if (node->Position.x != 0.f || node->Position.y != 0.f)
                     ed::SetNodePosition(node->ID, node->Position);
 
+        // SC9 — depois de um Undo/Redo o canvas ainda mostra as posições de
+        // antes. Empurrar o modelo de volta aqui, dentro do Begin/End, é o
+        // único ponto em que ed::SetNodePosition tem contexto garantido.
+        //
+        // Sem isto o undo de um arrasto se anulava sozinho: o modelo voltava,
+        // o canvas não, e o detector de arrasto logo abaixo interpretava a
+        // diferença como um movimento novo do usuário — gravando a posição do
+        // canvas por cima da restaurada, no mesmo frame. Era exatamente o
+        // sintoma de "arrastar e dar Ctrl+Z não faz nada" no grafo principal;
+        // dentro de uma Function parecia funcionar só porque a troca de grafo
+        // levantava m_FirstFrame e reaplicava tudo por outro caminho.
+        if (m_PendingPositionSync && m_Graph)
+        {
+            for (auto& node : m_Graph->GetNodes())
+                ed::SetNodePosition(node->ID, node->Position);
+            m_PendingPositionSync = false;
+
+        }
+
+        // SC10 — seleção adiada (nodes recém-colados). Depois do
+        // posicionamento, para a moldura de seleção já sair no lugar certo.
+        if (!m_PendingSelectNodes.empty())
+        {
+            ed::ClearSelection();
+            for (const auto& id : m_PendingSelectNodes)
+                ed::SelectNode(id, true);
+            m_PendingSelectNodes.clear();
+        }
+
         for (auto& n : m_Graph->GetNodes()) DrawNode(n.get());
+
+        // ── SC11: arrastar node entra no histórico ───────────────────────────
+        //
+        // Dois eventos exatos do mouse, e nenhuma estimativa. No CLIQUE guarda
+        // onde cada node está; na SOLTURA compara. Entre os dois não interessa
+        // o que acontece.
+        //
+        // A versão anterior tentava perceber o movimento a cada frame e fechar
+        // o passo "quando o gesto parecesse ter acabado". Nunca consegui provar
+        // onde falhava — e é justamente por isso que ela saiu: um undo que
+        // funciona quase sempre custa a confiança inteira do autor no Ctrl+Z.
+        //
+        // A tolerância de 0.5px não é folga arbitrária. ed::SetNodePosition faz
+        // FloorRect nas coordenadas, então uma posição fracionária vinda do
+        // JSON (123.456) volta do canvas como 123.0. Sem tolerância, TODO node
+        // apareceria movido já no segundo frame, sem ninguém ter tocado nele.
+        if (!m_FirstFrame && m_Graph)
+        {
+            // ── 1) Soltou o botão: houve arrasto? ─────────────────────────────
+            //
+            // Vem ANTES da captura, senão o refresh de repouso abaixo apagaria
+            // a referência no mesmo frame em que ela é usada.
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_DragStartPositions.empty())
+            {
+                bool moved = false;
+                for (const auto& pr : m_DragStartPositions)
+                {
+                    const ImVec2 now = ed::GetNodePosition(ed::NodeId(pr.first));
+                    if (!std::isfinite(now.x) || !std::isfinite(now.y)) continue;
+                    if (std::fabs(now.x - pr.second.x) > 0.5f ||
+                        std::fabs(now.y - pr.second.y) > 0.5f)
+                    {
+                        moved = true; break;
+                    }
+                }
+                if (moved) CommitNodeDrag();
+            }
+
+            // ── 2) Enquanto o botão está SOLTO, a referência é o agora ────────
+            //
+            // Aqui estava o erro do SC11. Eu capturava no IsMouseClicked e só
+            // se ImGui::IsWindowHovered() fosse verdadeiro — mas neste ponto do
+            // código a "janela corrente" é a criada por ed::Begin, e o hover
+            // dela não responde o que eu supunha. A condição nunca era
+            // satisfeita, m_DragStartPositions ficava vazia, e o ramo de
+            // soltura acima nunca rodava. O mecanismo estava certo; o gatilho
+            // nunca disparava.
+            //
+            // Depender de um ÚNICO evento (o clique) é frágil por natureza:
+            // basta ele ser consumido em algum caminho para o gesto inteiro
+            // deixar de ser registrado, em silêncio. Manter a referência
+            // atualizada em todo frame de repouso não depende de evento nenhum
+            // — quando o botão desce, a última referência gravada é, por
+            // construção, a posição imediatamente anterior ao gesto.
+            //
+            // Custo: um vetor de N ImVec2 por frame parado. Um grafo grande
+            // tem dezenas de nodes; é ruído perto de desenhá-los.
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                m_DragStartPositions.clear();
+                m_DragStartPositions.reserve(m_Graph->GetNodes().size());
+                for (const auto& n : m_Graph->GetNodes())
+                    m_DragStartPositions.emplace_back((int)n->ID.Get(), ed::GetNodePosition(n->ID));
+            }
+        }
 
         for (auto& lk : m_Graph->GetLinks())
         {
@@ -279,7 +602,13 @@ namespace axe
         // — senão digitar a letra 'c' em qualquer InputText do editor criaria
         // um Comment sem querer. Mesma posição crua (sem ScreenToCanvas) do
         // Reroute acima, pelo mesmo motivo.
-        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
+        // SC8 — exige a tecla LIMPA. Sem esta checagem, Ctrl+C no canvas criava
+        // um Comment em vez de copiar: o atalho olhava so a letra e ignorava o
+        // modificador. Alt e Shift entram na mesma regra por antecipacao —
+        // qualquer combinacao futura com C deixaria de colidir sozinha.
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsWindowHovered() && !io.WantTextInput &&
+            !io.KeyCtrl && !io.KeyShift && !io.KeyAlt &&
             ImGui::IsKeyPressed(ImGuiKey_C, false))
         {
             PushUndo("Add Comment");
@@ -287,245 +616,337 @@ namespace axe
             CommitUndo("Add Comment");
         }
 
+        // ── SC2: Ctrl + clique para desplugar / mover fio ─────────────────────
+        //
+        // Ctrl + botão ESQUERDO num pin conectado arranca os fios dele e passa
+        // a arrastá-los; soltar sobre um pin compatível replugue tudo lá.
+        // Ctrl + botão DIREITO num pin conectado despluga na hora.
+        // Ambos são o gesto da Unreal, e ambos são estado NOSSO: o
+        // imgui-node-editor só sabe iniciar um link a partir de um drag que ele
+        // próprio detectou, e não há API para injetar um drag sintético.
+        //
+        // Um pin de saída pode ter vários fios. Pegar "só um deles" exigiria
+        // perguntar qual — então vêm todos juntos, como na Unreal.
+        {
+            ed::PinId hoveredPin = ed::GetHoveredPin();
+            const bool ctrl = ImGui::GetIO().KeyCtrl;
+
+            if (!m_CarryingWire && ctrl && hoveredPin != ed::PinId{} &&
+                m_Graph->IsPinLinked(hoveredPin))
+            {
+                // Palma ABERTA ao passar com Ctrl sobre um pin conectado: o
+                // cursor avisa que o gesto existe ANTES do clique. Sem isso o
+                // atalho só é descoberto por quem já sabe que ele está lá.
+                m_HandCursor = HandCursor::Open;
+
+                // Ctrl + direito: desplugar e acabou.
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                {
+                    PushUndo("Break Links");
+                    std::vector<ed::LinkId> doomed;
+                    for (const auto& l : m_Graph->GetLinks())
+                        if (l.StartPin == hoveredPin || l.EndPin == hoveredPin)
+                            doomed.push_back(l.ID);
+                    for (auto& id : doomed) m_Graph->RemoveLink(id);
+                    CommitUndo("Break Links");
+                    m_ConsoleLines.push_back("[Info] " + std::to_string(doomed.size()) +
+                        " wire(s) disconnected.");
+                    m_SuppressCtxMenuThisFrame = true;
+                }
+                // Ctrl + esquerdo: arranca e carrega.
+                else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                {
+                    // PushUndo aqui e CommitUndo só no drop: o snapshot fica
+                    // guardado em m_SnapshotBeforeAction enquanto o fio está
+                    // no ar, então um Ctrl+Z depois desfaz o movimento INTEIRO
+                    // (arrancar + replugar), não as duas metades separadas.
+                    PushUndo("Move Link");
+
+                    m_CarriedRemotePins.clear();
+                    m_CarriedFromPin = hoveredPin;
+
+                    std::vector<ed::LinkId> doomed;
+                    for (const auto& l : m_Graph->GetLinks())
+                    {
+                        if (l.StartPin == hoveredPin) { m_CarriedRemotePins.push_back(l.EndPin);   doomed.push_back(l.ID); }
+                        else if (l.EndPin == hoveredPin) { m_CarriedRemotePins.push_back(l.StartPin); doomed.push_back(l.ID); }
+                    }
+                    for (auto& id : doomed) m_Graph->RemoveLink(id);
+
+                    m_CarryingWire = !m_CarriedRemotePins.empty();
+                    if (!m_CarryingWire) m_SnapshotBeforeAction.clear();
+                }
+            }
+
+            // ── Enquanto carrega: solta no pin sob o cursor ────────────────────
+            if (m_CarryingWire)
+            {
+                // Esc ou botão direito abortam e devolvem os fios ao lugar.
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                {
+                    CancelCarriedWire();
+                    m_SuppressCtxMenuThisFrame = true;
+                }
+                else if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                {
+                    ed::PinId target = ed::GetHoveredPin();
+                    int connected = 0;
+
+                    if (target != ed::PinId{})
+                    {
+                        // Cada fio é validado por QueryLink — o mesmo veredito
+                        // do drag normal. Um destino que sirva para dois dos
+                        // três fios conecta os dois e recusa o terceiro, em vez
+                        // de recusar tudo: replugar parcialmente é mais útil do
+                        // que obrigar a refazer o gesto.
+                        for (auto& remote : m_CarriedRemotePins)
+                        {
+                            ScriptLinkQuery q = m_Graph->QueryLink(remote, target);
+                            if (!q.Allowed()) continue;
+
+                            ScriptPin* rp = m_Graph->FindPin(remote);
+                            ScriptPin* tp = m_Graph->FindPin(target);
+                            if (!rp || !tp) continue;
+
+                            ScriptPin* o = (rp->Kind == ed::PinKind::Output) ? rp : tp;
+                            ScriptPin* i = (rp->Kind == ed::PinKind::Input) ? rp : tp;
+
+                            // Só as ações diretas: inserir node de conversão no
+                            // meio de um gesto de MOVER seria uma segunda coisa
+                            // acontecendo sem o usuário ter pedido.
+                            if (q.Action == ScriptLinkAction::Accept ||
+                                q.Action == ScriptLinkAction::AcceptImplicit)
+                            {
+                                m_Graph->AddLink(o->ID, i->ID);
+                                connected++;
+                            }
+                            else if (q.Action == ScriptLinkAction::AdoptWildcard)
+                            {
+                                ScriptPin* wp = (o->Type == ScriptPinType::Wildcard) ? o : i;
+                                ScriptNode* wn = m_Graph->FindNodeOfPin(wp->ID);
+                                m_Graph->AddLink(o->ID, i->ID);
+                                if (wn)
+                                {
+                                    for (auto& p : wn->Inputs)  p.Type = q.AdoptType;
+                                    for (auto& p : wn->Outputs) p.Type = q.AdoptType;
+                                }
+                                connected++;
+                            }
+                        }
+                    }
+
+                    if (connected > 0)
+                    {
+                        CommitUndo("Move Link");
+                        m_ConsoleLines.push_back("[Info] " + std::to_string(connected) +
+                            " wire(s) reconnected.");
+                        m_CarryingWire = false;
+                        m_CarriedRemotePins.clear();
+                        m_CarriedFromPin = {};
+                    }
+                    else if (target == ed::PinId{})
+                    {
+                        // ── Soltou no VAZIO: a ligação morre aqui ────────────
+                        //
+                        // Antes isto devolvia o fio ao pin de origem, e o
+                        // gesto de "arrancar e jogar fora" era impossível —
+                        // A→B, puxar de B e soltar no nada devolvia para B.
+                        //
+                        // A distinção que vale é entre soltar no VAZIO e soltar
+                        // num pin que RECUSOU. Largar no vazio é uma decisão:
+                        // "não quero mais isso ligado". Largar num pin que não
+                        // aceitou é uma tentativa que falhou, e apagar a
+                        // ligação antiga como efeito colateral de uma
+                        // tentativa frustrada seria punir a mira.
+                        //
+                        // O snapshot já foi tirado no PushUndo do momento em
+                        // que o fio foi arrancado, então um Ctrl+Z devolve tudo.
+                        CommitUndo("Break Link");
+                        m_ConsoleLines.push_back("[Info] " + std::to_string(m_CarriedRemotePins.size()) +
+                            " wire(s) disconnected.");
+                        m_CarryingWire = false;
+                        m_CarriedRemotePins.clear();
+                        m_CarriedFromPin = {};
+                    }
+                    else
+                    {
+                        // Soltou em pin incompatível: devolve ao lugar.
+                        CancelCarriedWire();
+                    }
+                }
+            }
+        }
+
         // ── Criação de links ──────────────────────────────────────────────────
-        if (ed::BeginCreate(ImColor(255, 255, 255), 2.0f))
+        //
+        // S1 — este bloco tinha ~240 linhas de if/else encadeados com três
+        // cópias das lambdas isNumeric/isVec e quatro varreduras ad-hoc de
+        // GetNodes() só para descobrir se um pin Wildcard pertencia a um
+        // Reroute. Toda essa decisão migrou para ScriptGraph::QueryLink(): o
+        // canvas agora PERGUNTA e apenas traduz o veredito em cor e tooltip.
+        //
+        // Por que no modelo e não aqui: a mesma pergunta precisa ser respondida
+        // em pelo menos três lugares diferentes — o drag do usuário (aqui), o
+        // arraste de pin para o vazio que promove um node novo (mais abaixo) e
+        // o load de um .axescript antigo (SanitizeLinks). Três respostas
+        // escritas separadamente divergem; foi exatamente o que aconteceu com
+        // ArePinsCompatible(), que existia no header e nunca era chamada.
+        // SC2 — o fio branco "fantasma" que aparecia junto do nosso preview era
+        // ESTE: os dois primeiros argumentos são a cor e a espessura do link que
+        // o node editor desenha enquanto o usuário arrasta. Como o Ctrl+arraste
+        // também é um arraste aos olhos dele, ele desenhava o dele por baixo do
+        // nosso. Alpha 0 e espessura 0 enquanto carregamos: o node editor
+        // continua rodando normalmente (precisamos do QueryNewLink para
+        // recusá-lo), só não pinta nada.
+        const ImVec4 createCol = m_CarryingWire
+            ? ImVec4(0, 0, 0, 0)
+            : ImVec4(1, 1, 1, 1);
+        if (ed::BeginCreate(createCol, m_CarryingWire ? 0.0f : 2.0f))
         {
             ed::PinId sId, eId;
             if (ed::QueryNewLink(&sId, &eId))
             {
-                auto* pA = m_Graph->FindPin(sId);
-                auto* pB = m_Graph->FindPin(eId);
-                if (pA && pB && pA != pB)
+                // SC2 — enquanto um fio está sendo carregado por Ctrl+arraste,
+                // o node editor também acha que está criando um link a partir
+                // do pin clicado. Deixar os dois caminhos rodarem produziria um
+                // fio a mais, ancorado no pin ERRADO (no que foi agarrado, não
+                // na outra ponta). O nosso gesto vence; o dele é recusado.
+                if (m_CarryingWire)
                 {
-                    auto* o = pA->Kind == ed::PinKind::Output ? pA : pB;
-                    auto* i = pA->Kind == ed::PinKind::Input ? pA : pB;
+                    // Transparente pelo mesmo motivo do BeginCreate acima:
+                    // RejectNewItem também PINTA o link recusado, e essa era a
+                    // segunda fonte do fio fantasma.
+                    ed::RejectNewItem(ImColor(0, 0, 0, 0), 0.0f);
+                }
+                else
+                {
+                    ScriptLinkQuery q = m_Graph->QueryLink(sId, eId);
 
-                    if (o->Kind != ed::PinKind::Output || i->Kind != ed::PinKind::Input)
+                    // Normaliza saída/entrada do mesmo jeito que o modelo fez, para
+                    // usar os IDs na ordem certa ao criar o link.
+                    ScriptPin* pA = m_Graph->FindPin(sId);
+                    ScriptPin* pB = m_Graph->FindPin(eId);
+                    ScriptPin* o = (pA && pA->Kind == ed::PinKind::Output) ? pA : pB;
+                    ScriptPin* i = (pA && pA->Kind == ed::PinKind::Input) ? pA : pB;
+
+                    if (!q.Allowed() || !o || !i)
                     {
-                        ed::RejectNewItem(ImColor(255, 0, 0), 2);
+                        ed::RejectNewItem(ImColor(220, 40, 40), 2.0f);
                         ed::Suspend();
-                        ImGui::SetTooltip("Conecte Output → Input");
+                        ImGui::SetTooltip("%s", q.Message);
                         ed::Resume();
-                    }
-                    else if (o->Type == i->Type)
-                    {
-                        // Tipos idênticos — aceita direto
-                        if (ed::AcceptNewItem(GetPinColor(o->Type), 2.5f))
-                        {
-                            PushUndo("Add Link");
-                            m_Graph->AddLink(o->ID, i->ID);
-                            CommitUndo("Add Link");
-                        }
-                    }
-                    else if (o->Type == ScriptPinType::Wildcard && IsArrayPinType(i->Type))
-                    {
-                        // Pin Wildcard de saída de um node genérico de Array (Array
-                        // Get) conectando a um pin de array real de ENTRADA — fixa o
-                        // node Wildcard no tipo concreto. Verificado ANTES do bloco de
-                        // Cast (mais abaixo) para não competir com a lógica de
-                        // conversão entre tipos escalares, que continua tratando
-                        // Wildcard normalmente para os casos não-array (To Float etc.).
-                        if (ed::AcceptNewItem(GetPinColor(i->Type), 2.5f))
-                        {
-                            PushUndo("Add Link (array)");
-                            m_Graph->AddLink(o->ID, i->ID);
-                            ScriptVarType concreteVarType = (ScriptVarType)(
-                                (int)i->Type - (int)ScriptPinType::FloatArray + (int)ScriptVarType::FloatArray);
-                            ScriptVarType elemType = GetElementType(concreteVarType);
-                            for (auto& n : m_Graph->GetNodes())
-                            {
-                                bool owns = false;
-                                for (auto& p : n->Outputs) if (&p == o) owns = true;
-                                if (owns) { m_Graph->RebuildArrayNodePins(n.get(), elemType); break; }
-                            }
-                            CommitUndo("Add Link (array)");
-                        }
-                    }
-                    else if (i->Type == ScriptPinType::Wildcard && IsArrayPinType(o->Type))
-                    {
-                        // Mesmo caso, mas com o pin Wildcard de ENTRADA (Array Add/
-                        // Remove/Get/Length/Clear) recebendo de uma saída de array real.
-                        if (ed::AcceptNewItem(GetPinColor(o->Type), 2.5f))
-                        {
-                            PushUndo("Add Link (array)");
-                            m_Graph->AddLink(o->ID, i->ID);
-                            ScriptVarType concreteVarType = (ScriptVarType)(
-                                (int)o->Type - (int)ScriptPinType::FloatArray + (int)ScriptVarType::FloatArray);
-                            ScriptVarType elemType = GetElementType(concreteVarType);
-                            for (auto& n : m_Graph->GetNodes())
-                            {
-                                bool owns = false;
-                                for (auto& p : n->Inputs) if (&p == i) owns = true;
-                                if (owns) { m_Graph->RebuildArrayNodePins(n.get(), elemType); break; }
-                            }
-                            CommitUndo("Add Link (array)");
-                        }
-                    }
-                    else if (o->Type == ScriptPinType::Wildcard && i->Type == ScriptPinType::Wildcard &&
-                        [&] { for (auto& n : m_Graph->GetNodes()) if (n->Name == "Reroute") for (auto& p : n->Outputs) if (&p == o) return true; return false; }())
-                    {
-                        // Caso raro: dois Reroutes ainda não fixados sendo
-                        // ligados entre si (nenhum lado tem tipo concreto
-                        // ainda). Aceita sem fixar nada — fica resolvido
-                        // automaticamente assim que QUALQUER um dos dois
-                        // lados da cadeia for conectado a algo concreto,
-                        // já que o bloco abaixo sempre propaga pra ambos os
-                        // pins do Reroute envolvido naquela conexão.
-                        if (ed::AcceptNewItem(GetPinColor(ScriptPinType::Wildcard), 2.5f))
-                        {
-                            PushUndo("Add Link (reroute)");
-                            m_Graph->AddLink(o->ID, i->ID);
-                            CommitUndo("Add Link (reroute)");
-                        }
-                    }
-                    else if ((o->Type == ScriptPinType::Wildcard) != (i->Type == ScriptPinType::Wildcard) &&
-                        [&] {
-                            // Só entra aqui se o lado Wildcard pertencer a um
-                            // node Reroute — outros usos de Wildcard (Array,
-                            // Cast) já têm suas próprias regras nos blocos
-                            // acima/abaixo, não competem com esta aqui.
-                            ScriptPin* w = (o->Type == ScriptPinType::Wildcard) ? o : i;
-                            for (auto& n : m_Graph->GetNodes())
-                            {
-                                if (n->Name != "Reroute") continue;
-                                for (auto& p : n->Inputs)  if (&p == w) return true;
-                                for (auto& p : n->Outputs) if (&p == w) return true;
-                            }
-                            return false;
-                        }())
-                    {
-                        // Reroute aceita QUALQUER tipo, inclusive Flow — fixa
-                        // os DOIS pins do Reroute (In e Out) pro tipo
-                        // concreto do outro lado, então o lado ainda solto já
-                        // sai pronto pra aceitar qualquer link do mesmo tipo,
-                        // sem precisar resolver de novo depois.
-                        ScriptPinType concreteType = (o->Type != ScriptPinType::Wildcard) ? o->Type : i->Type;
-                        if (ed::AcceptNewItem(GetPinColor(concreteType), 2.5f))
-                        {
-                            PushUndo("Add Link (reroute)");
-                            m_Graph->AddLink(o->ID, i->ID);
-                            ScriptPin* w = (o->Type == ScriptPinType::Wildcard) ? o : i;
-                            for (auto& n : m_Graph->GetNodes())
-                            {
-                                bool owns = false;
-                                for (auto& p : n->Inputs)  if (&p == w) owns = true;
-                                for (auto& p : n->Outputs) if (&p == w) owns = true;
-                                if (owns)
-                                {
-                                    for (auto& p : n->Inputs)  p.Type = concreteType;
-                                    for (auto& p : n->Outputs) p.Type = concreteType;
-                                    break;
-                                }
-                            }
-                            CommitUndo("Add Link (reroute)");
-                        }
                     }
                     else
                     {
-                        // Tipos diferentes — verifica se há conversão automática disponível
-                        auto isNumeric = [](ScriptPinType t) {
-                            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
-                            };
-                        auto isVec = [](ScriptPinType t) {
-                            return t == ScriptPinType::Vec3 || t == ScriptPinType::Vec4;
-                            };
+                        // Cor do preview: verde do tipo quando é ligação limpa,
+                        // laranja quando há cast/substituição envolvida. A cor
+                        // avisa ANTES de soltar o botão que algo além de "ligar"
+                        // vai acontecer.
+                        const bool warn =
+                            q.Action == ScriptLinkAction::AcceptImplicit ||
+                            q.Action == ScriptLinkAction::InsertConversion ||
+                            q.ReplacesExisting;
+                        const ImColor previewCol = warn
+                            ? ImColor(220, 140, 40)
+                            : GetPinColor(q.LinkColorType);
 
-                        // Determina o node de conversão adequado
-                        const char* convNodeType = nullptr;
-                        const char* convTooltip = nullptr;
-
-                        if (isNumeric(o->Type) && i->Type == ScriptPinType::Float)
+                        if (ed::AcceptNewItem(previewCol, 2.5f))
                         {
-                            convNodeType = "ToFloat";  convTooltip = "Inserir To Float";
-                        }
-                        else if (isNumeric(o->Type) && i->Type == ScriptPinType::Int)
-                        {
-                            convNodeType = "ToInt";    convTooltip = "Inserir To Int";
-                        }
-                        else if (isNumeric(o->Type) && i->Type == ScriptPinType::Bool)
-                        {
-                            convNodeType = "ToBool";   convTooltip = "Inserir To Bool";
-                        }
-                        else if ((isNumeric(o->Type) || isVec(o->Type)) && i->Type == ScriptPinType::String)
-                        {
-                            convNodeType = "ToString"; convTooltip = "Inserir To String";
-                        }
-                        else if (isVec(o->Type) && isVec(i->Type))
-                        {
-                            // Vec3 ↔ Vec4 — aceita com aviso
-                            if (ed::AcceptNewItem(ImColor(220, 140, 40), 2.5f))
+                            switch (q.Action)
                             {
-                                PushUndo("Add Link (cast Vec)");
+                            case ScriptLinkAction::Accept:
+                            case ScriptLinkAction::AcceptImplicit:
+                            {
+                                PushUndo("Add Link");
                                 m_Graph->AddLink(o->ID, i->ID);
-                                CommitUndo("Add Link (cast Vec)");
+                                CommitUndo("Add Link");
+                                break;
                             }
-                            ed::Suspend();
-                            ImGui::SetTooltip("Cast implícito Vec3 ↔ Vec4");
-                            ed::Resume();
-                        }
 
-                        if (convNodeType)
-                        {
-                            // Mostra preview laranja e tooltip
-                            if (ed::AcceptNewItem(ImColor(220, 140, 40), 2.5f))
+                            case ScriptLinkAction::AdoptWildcard:
                             {
-                                // Insere o node de conversão automaticamente
-                                PushUndo(std::string("Add Conversion: ") + convNodeType);
+                                // Reroute fixa os DOIS pins de uma vez, para a
+                                // ponta ainda solta já nascer pronta para receber
+                                // qualquer fio do mesmo tipo.
+                                PushUndo("Add Link (reroute)");
+                                ScriptPin* wp = (o->Type == ScriptPinType::Wildcard) ? o : i;
+                                ScriptNode* wn = m_Graph->FindNodeOfPin(wp->ID);
+                                m_Graph->AddLink(o->ID, i->ID);
+                                if (wn)
+                                {
+                                    for (auto& p : wn->Inputs)  p.Type = q.AdoptType;
+                                    for (auto& p : wn->Outputs) p.Type = q.AdoptType;
+                                }
+                                CommitUndo("Add Link (reroute)");
+                                break;
+                            }
 
-                                // Posiciona entre os dois pins
-                                ImVec2 posO = ed::GetNodePosition(
-                                    [&]() -> ed::NodeId {
-                                        for (auto& n : m_Graph->GetNodes())
-                                            for (auto& p : n->Outputs)
-                                                if (&p == o) return n->ID;
-                                        return ed::NodeId{};
-                                    }());
-                                ImVec2 posI = ed::GetNodePosition(
-                                    [&]() -> ed::NodeId {
-                                        for (auto& n : m_Graph->GetNodes())
-                                            for (auto& p : n->Inputs)
-                                                if (&p == i) return n->ID;
-                                        return ed::NodeId{};
-                                    }());
-                                ImVec2 midPos = ImVec2(
-                                    (posO.x + posI.x) * 0.5f,
-                                    (posO.y + posI.y) * 0.5f);
+                            case ScriptLinkAction::AdoptArrayWildcard:
+                            {
+                                PushUndo("Add Link (array)");
+                                ScriptPin* ap = (o->Type == ScriptPinType::Wildcard) ? o : i;
+                                ScriptNode* an = m_Graph->FindNodeOfPin(ap->ID);
+                                m_Graph->AddLink(o->ID, i->ID);
+                                if (an)
+                                {
+                                    // AdoptType é o tipo do PIN (*Array). O
+                                    // RebuildArrayNodePins quer o ScriptVarType do
+                                    // ELEMENTO — a conversão fica de fora do
+                                    // modelo porque é regra de reconstrução de
+                                    // pins, não de compatibilidade.
+                                    ScriptVarType concrete = (ScriptVarType)(
+                                        (int)q.AdoptType - (int)ScriptPinType::FloatArray
+                                        + (int)ScriptVarType::FloatArray);
+                                    m_Graph->RebuildArrayNodePins(an, GetElementType(concrete));
+                                }
+                                CommitUndo("Add Link (array)");
+                                break;
+                            }
 
-                                auto* conv = m_Graph->AddNode(convNodeType);
-                                if (conv)
+                            case ScriptLinkAction::InsertConversion:
+                            {
+                                PushUndo(std::string("Add Conversion: ") + q.ConversionNode);
+
+                                // Posiciona o node de conversão no meio do caminho.
+                                // FindNodeOfPin substitui a busca por endereço de
+                                // pin que existia aqui — busca por endereço deixa
+                                // de valer assim que qualquer vector de pins
+                                // realoca.
+                                ImVec2 posO{ 0,0 }, posI{ 0,0 };
+                                if (auto* nO = m_Graph->FindNodeOfPin(o->ID)) posO = ed::GetNodePosition(nO->ID);
+                                if (auto* nI = m_Graph->FindNodeOfPin(i->ID)) posI = ed::GetNodePosition(nI->ID);
+                                ImVec2 midPos((posO.x + posI.x) * 0.5f, (posO.y + posI.y) * 0.5f);
+
+                                if (auto* conv = m_Graph->AddNode(q.ConversionNode))
                                 {
                                     ed::SetNodePosition(conv->ID, midPos);
-                                    // Conecta: output original → input do conv → output do conv → input destino
                                     for (auto& p : conv->Inputs)
                                         if (p.Name == "Value") { m_Graph->AddLink(o->ID, p.ID); break; }
                                     for (auto& p : conv->Outputs)
                                         if (p.Name == "Value") { m_Graph->AddLink(p.ID, i->ID); break; }
-                                    m_ConsoleLines.push_back(std::string("[Info] Conversão automática: ") + convNodeType);
+                                    m_ConsoleLines.push_back(
+                                        std::string("[Info] Automatic conversion: ") + q.ConversionNode);
                                 }
-                                CommitUndo(std::string("Add Conversion: ") + convNodeType);
+                                CommitUndo(std::string("Add Conversion: ") + q.ConversionNode);
+                                break;
                             }
-                            ed::Suspend();
-                            ImGui::SetTooltip("%s (automático)", convTooltip);
-                            ed::Resume();
+
+                            default:
+                                break;
+                            }
                         }
-                        else if (o->Type != ScriptPinType::Flow && i->Type != ScriptPinType::Flow)
+
+                        // Só interrompe o desenho para um balão se houver algo a
+                        // dizer — ligação trivial devolve Message vazia.
+                        if (q.Message && q.Message[0])
                         {
-                            // Sem conversão disponível — rejeita com tooltip específico
-                            ed::RejectNewItem(ImColor(220, 40, 40), 2);
                             ed::Suspend();
-                            ImGui::SetTooltip("%s", GetPinIncompatibleReason(o->Type, i->Type));
-                            ed::Resume();
-                        }
-                        else
-                        {
-                            // Flow misturado com dados
-                            ed::RejectNewItem(ImColor(220, 40, 40), 2);
-                            ed::Suspend();
-                            ImGui::SetTooltip("Flow nao conecta com dados");
+                            ImGui::SetTooltip("%s", q.Message);
                             ed::Resume();
                         }
                     }
-                }
+                } // fim do else de m_CarryingWire
             }
         }
         ed::EndCreate();
@@ -543,7 +964,7 @@ namespace axe
                 // (que esperam encontrar exatamente um de cada no grafo).
                 if (node->Name == "Function Entry" || node->Name == "Return Node")
                 {
-                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado — e gerido automaticamente pela Function.");
+                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado - e gerido automaticamente pela Function.");
                     continue;
                 }
 
@@ -589,7 +1010,7 @@ namespace axe
                 if (node && (node->Name == "Function Entry" || node->Name == "Return Node"))
                 {
                     ed::RejectDeletedItem();
-                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado — e gerido automaticamente pela Function.");
+                    m_ConsoleLines.push_back("[Aviso] '" + node->Name + "' nao pode ser deletado - e gerido automaticamente pela Function.");
                     continue;
                 }
                 if (ed::AcceptDeletedItem())
@@ -665,15 +1086,15 @@ namespace axe
                         if (v.Name != node->StringValue) continue;
                         switch (v.Type)
                         {
-                        case ScriptVarType::Float: node->FloatValue = v.DefaultFloat; break;
-                        case ScriptVarType::Bool:  node->BoolValue = v.DefaultBool; break;
-                        case ScriptVarType::Int:   node->IntLocalValue = v.DefaultInt; break;
+                        case ScriptVarType::Float: node->FloatValue = v.Default.Float; break;
+                        case ScriptVarType::Bool:  node->BoolValue = v.Default.Bool; break;
+                        case ScriptVarType::Int:   node->IntLocalValue = v.Default.Int; break;
                         case ScriptVarType::Vec3:
-                            node->Vec3Value[0] = v.DefaultVec3[0];
-                            node->Vec3Value[1] = v.DefaultVec3[1];
-                            node->Vec3Value[2] = v.DefaultVec3[2];
+                            node->Vec3Value[0] = v.Default.Vec.x;
+                            node->Vec3Value[1] = v.Default.Vec.y;
+                            node->Vec3Value[2] = v.Default.Vec.z;
                             break;
-                        case ScriptVarType::String: node->StringLocalValue = v.DefaultString; break;
+                        case ScriptVarType::String: node->StringLocalValue = v.Default.Str; break;
                         default: break;
                         }
                         break;
@@ -723,6 +1144,11 @@ namespace axe
 
         ed::PinId ctxPinId;
         bool openPinCtx = ed::ShowPinContextMenu(&ctxPinId);
+        // SC2 — Ctrl + botão direito num pin JÁ significa "desplugar". Deixar o
+        // menu de contexto abrir junto daria os dois ao mesmo tempo: o fio some
+        // e um menu aparece por cima, como se o menu tivesse feito aquilo.
+        if (openPinCtx && (ImGui::GetIO().KeyCtrl || m_SuppressCtxMenuThisFrame))
+            openPinCtx = false;
         if (openPinCtx) m_CtxPinId = ctxPinId;
 
         ed::NodeId ctxMenuNodeId;
@@ -837,13 +1263,17 @@ namespace axe
             bool isVec3Var = false;
             if (isVarNode && m_ScriptAsset)
             {
-                int vt = ctxNode->IntValue & 0xFF;
-                isVec3Var = (vt == (int)ScriptVarType::Vec3);
+                // SC20 — qualquer tipo vetorial, nao so Vec3.
+                auto isVecVar = [](ScriptVarType t) {
+                    return ScriptPinComponentCount(ScriptVarTypeToPinType(t)) > 0;
+                    };
+                int vt = ctxNode->IntValue & ScriptNodeBits::VarTypeMask;
+                isVec3Var = isVecVar((ScriptVarType)vt);
                 if (!isVec3Var)
                     for (auto& v : m_ScriptAsset->GetVariables())
                         if (v.Name == ctxNode->StringValue)
                         {
-                            isVec3Var = (v.Type == ScriptVarType::Vec3); break;
+                            isVec3Var = isVecVar(v.Type); break;
                         }
             }
 
@@ -855,17 +1285,17 @@ namespace axe
             bool hasClickedSplitPin = false; // pin já splitado (Float tipo "Nome.X")
             if (ctxNode && ctxPin)
             {
-                hasClickedVec3Pin = (ctxPin->Type == ScriptPinType::Vec3);
+                hasClickedVec3Pin = ScriptPinComponentCount(ctxPin->Type) > 0;
                 hasClickedSplitPin = IsSplitPin(*ctxPin); // Float "X","Y","Z","Nome.X" etc.
             }
             bool hasAnyVec3Pin = false;
             if (ctxNode && !ctxPin)
             {
                 for (auto& p : ctxNode->Outputs)
-                    if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
+                    if (ScriptPinComponentCount(p.Type) > 0 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
                 if (!hasAnyVec3Pin)
                     for (auto& p : ctxNode->Inputs)
-                        if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
+                        if (ScriptPinComponentCount(p.Type) > 0 || IsSplitPin(p)) { hasAnyVec3Pin = true; break; }
             }
             bool canSplitRecombine = (isVarNode && isVec3Var)
                 || hasClickedVec3Pin
@@ -881,7 +1311,7 @@ namespace axe
                 {
                     // Sem pin específico: prefere lado com pin Vec3 ou split
                     for (auto& p : ctxNode->Outputs)
-                        if (p.Type == ScriptPinType::Vec3 || IsSplitPin(p)) { clickedOutput = true; break; }
+                        if (ScriptPinComponentCount(p.Type) > 0 || IsSplitPin(p)) { clickedOutput = true; break; }
                     if (!clickedOutput)
                         clickedInput = true;
                 }
@@ -893,78 +1323,137 @@ namespace axe
 
                 // Nome do pin Vec3 que vai ser splitado (pode ser "Value", "Position", "Velocity", etc.)
                 std::string vec3PinName = "Value"; // default para variáveis
-                if (ctxPin && ctxPin->Type == ScriptPinType::Vec3)
+                // SC20 — o TIPO tambem precisa ser guardado, nao so o nome:
+                // o Recombine tem de remontar o mesmo tipo que foi aberto, e
+                // um Vec4 e um Quat abrem os mesmos quatro pins.
+                ScriptPinType splitType = ScriptPinType::Vec3;
+
+                if (ctxPin && ScriptPinComponentCount(ctxPin->Type) > 0)
+                {
                     vec3PinName = ctxPin->Name;
+                    splitType = ctxPin->Type;
+                }
                 else if (!ctxPin)
                 {
-                    // Acha o primeiro pin Vec3 no lado correto
                     auto& pins = clickedOutput ? ctxNode->Outputs : ctxNode->Inputs;
                     for (auto& p : pins)
-                        if (p.Type == ScriptPinType::Vec3) { vec3PinName = p.Name; break; }
+                        if (ScriptPinComponentCount(p.Type) > 0)
+                        {
+                            vec3PinName = p.Name; splitType = p.Type; break;
+                        }
+                }
+                else if (isVarNode)
+                {
+                    // Pin ja splitado num node de variavel: o tipo vem da
+                    // propria variavel, que e quem sabe.
+                    for (auto& v : m_ScriptAsset->GetVariables())
+                        if (v.Name == ctxNode->StringValue)
+                        {
+                            splitType = ScriptVarTypeToPinType(v.Type); break;
+                        }
                 }
 
-                if (!thisSideSplit && ImGui::MenuItem("Split Struct Pin"))
-                {
-                    std::string prefix = (vec3PinName == "Value") ? "" : vec3PinName + ".";
-                    std::string nameX = prefix + "X";
-                    std::string nameY = prefix + "Y";
-                    std::string nameZ = prefix + "Z";
-                    std::string pinToRemove = vec3PinName;
+                const int nComp = ScriptPinComponentCount(splitType);
 
-                    if (clickedOutput)
+                if (!thisSideSplit && nComp > 0 && ImGui::MenuItem("Split Struct Pin"))
+                {
+                    PushUndo("Split Pin");
+
+                    const std::string prefix = (vec3PinName == "Value") ? "" : vec3PinName + ".";
+                    const std::string pinToRemove = vec3PinName;
+
+                    auto& pins = clickedOutput ? ctxNode->Outputs : ctxNode->Inputs;
+                    const ed::PinKind kind = clickedOutput ? ed::PinKind::Output : ed::PinKind::Input;
+
+                    // Guarda o valor do pin ANTES de apaga-lo, para distribuir
+                    // pelos componentes. Sem isto, abrir um pin com valor
+                    // digitado zerava tudo — o autor perdia o que escreveu ao
+                    // fazer um gesto que so deveria mudar a APRESENTACAO.
+                    ScriptValue oldVal;
+                    for (const auto& p : pins)
+                        if (p.Name == pinToRemove) { oldVal = p.Default; break; }
+
+                    pins.erase(std::remove_if(pins.begin(), pins.end(),
+                        [&pinToRemove](const ScriptPin& p) { return p.Name == pinToRemove; }), pins.end());
+
+                    const float* comp = &oldVal.Vec.x;
+                    for (int i = 0; i < nComp; i++)
                     {
-                        ctxNode->Outputs.erase(std::remove_if(ctxNode->Outputs.begin(), ctxNode->Outputs.end(),
-                            [pinToRemove](const ScriptPin& p) { return p.Name == pinToRemove; }), ctxNode->Outputs.end());
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameX.c_str(), ScriptPinType::Float, ed::PinKind::Output);
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameY.c_str(), ScriptPinType::Float, ed::PinKind::Output);
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), nameZ.c_str(), ScriptPinType::Float, ed::PinKind::Output);
+                        const std::string nm = prefix + ScriptPinComponentName(i);
+                        pins.emplace_back(m_Graph->GetNextId(), nm.c_str(), ScriptPinType::Float, kind);
+                        pins.back().Default.Float = comp[i];
                     }
-                    else
-                    {
-                        ctxNode->Inputs.erase(std::remove_if(ctxNode->Inputs.begin(), ctxNode->Inputs.end(),
-                            [pinToRemove](const ScriptPin& p) { return p.Name == pinToRemove; }), ctxNode->Inputs.end());
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameX.c_str(), ScriptPinType::Float, ed::PinKind::Input);
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameY.c_str(), ScriptPinType::Float, ed::PinKind::Input);
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), nameZ.c_str(), ScriptPinType::Float, ed::PinKind::Input);
-                    }
-                    ctxNode->IntValue |= 0x100;
-                    m_ConsoleLines.push_back("[Info] Pin split: " + vec3PinName);
+
+                    ctxNode->IntValue |= ScriptNodeBits::SplitPin;
+                    SetSplitSourceType(ctxNode->IntValue, splitType);
+
+                    CommitUndo("Split Pin");
+                    m_ConsoleLines.push_back("[Info] Pin split: " + vec3PinName +
+                        " (" + std::to_string(nComp) + " components)");
                 }
                 else if (thisSideSplit && ImGui::MenuItem("Recombine Pin"))
                 {
-                    std::string recombinedName = vec3PinName;
-                    if (clickedOutput)
+                    PushUndo("Recombine Pin");
+
+                    // SC20 — o tipo a remontar vem dos bits do node, gravados
+                    // no Split. Antes era Vec3 cravado: recombinar um Vec4
+                    // devolveria um Vec3, perdendo o W sem avisar. Grafo antigo
+                    // (sem os bits) devolve Vec3, que era o unico caso possivel
+                    // na epoca — ver GetSplitSourceType.
+                    const ScriptPinType rebuiltType = GetSplitSourceType(ctxNode->IntValue);
+                    const std::string recombinedName = vec3PinName;
+
+                    auto& pins = clickedOutput ? ctxNode->Outputs : ctxNode->Inputs;
+                    const ed::PinKind kind = clickedOutput ? ed::PinKind::Output : ed::PinKind::Input;
+
+                    // Recolhe os valores dos componentes de volta para o vetor,
+                    // pelo SUFIXO — a ordem no vector nao e garantida depois de
+                    // um Split parcial ou de um load.
+                    ScriptValue merged;
+                    float* mc = &merged.Vec.x;
+                    for (const auto& p : pins)
                     {
-                        ctxNode->Outputs.erase(std::remove_if(ctxNode->Outputs.begin(), ctxNode->Outputs.end(),
-                            [](const ScriptPin& p) {
-                                const std::string& n = p.Name;
-                                return (n.size() >= 2 && (n.substr(n.size() - 2) == ".X" ||
-                                    n.substr(n.size() - 2) == ".Y" ||
-                                    n.substr(n.size() - 2) == ".Z"))
-                                    || n == "X" || n == "Y" || n == "Z";
-                            }), ctxNode->Outputs.end());
-                        ctxNode->Outputs.emplace_back(m_Graph->GetNextId(), recombinedName.c_str(), ScriptPinType::Vec3, ed::PinKind::Output);
+                        if (!IsSplitPin(p)) continue;
+                        const char last = p.Name.empty() ? 'X' : p.Name.back();
+                        const int idx = (last == 'X') ? 0 : (last == 'Y') ? 1 : (last == 'Z') ? 2 : 3;
+                        mc[idx] = p.Default.Float;
                     }
-                    else
-                    {
-                        ctxNode->Inputs.erase(std::remove_if(ctxNode->Inputs.begin(), ctxNode->Inputs.end(),
-                            [](const ScriptPin& p) {
-                                const std::string& n = p.Name;
-                                return (n.size() >= 2 && (n.substr(n.size() - 2) == ".X" ||
-                                    n.substr(n.size() - 2) == ".Y" ||
-                                    n.substr(n.size() - 2) == ".Z"))
-                                    || n == "X" || n == "Y" || n == "Z";
-                            }), ctxNode->Inputs.end());
-                        ctxNode->Inputs.emplace_back(m_Graph->GetNextId(), recombinedName.c_str(), ScriptPinType::Vec3, ed::PinKind::Input);
-                    }
+
+                    pins.erase(std::remove_if(pins.begin(), pins.end(),
+                        [](const ScriptPin& p) { return IsSplitPin(p); }), pins.end());
+
+                    pins.emplace_back(m_Graph->GetNextId(), recombinedName.c_str(), rebuiltType, kind);
+                    pins.back().Default = merged;
+
                     outputSplit = inputSplit = false;
                     for (auto& p : ctxNode->Outputs) if (IsSplitPin(p)) { outputSplit = true; break; }
                     for (auto& p : ctxNode->Inputs)  if (IsSplitPin(p)) { inputSplit = true; break; }
-                    if (!outputSplit && !inputSplit) ctxNode->IntValue &= ~0x100;
+                    if (!outputSplit && !inputSplit)
+                    {
+                        ctxNode->IntValue &= ~ScriptNodeBits::SplitPin;
+                        ctxNode->IntValue &= ~ScriptNodeBits::SplitTypeMask;
+                    }
+
+                    CommitUndo("Recombine Pin");
                     m_ConsoleLines.push_back("[Info] Pin recombined: " + vec3PinName);
                 }
             }
-            else if (ctxNode && ctxPin && ctxPin->Type != ScriptPinType::Flow)
+
+            // ── SC20: Exec Pins e Promote NAO sao alternativa ao Split ───────
+            //
+            // Este bloco era um "else if" do canSplitRecombine. Consequencia:
+            // em qualquer pin que PUDESSE ser splitado — ou seja, todo Vec3 —
+            // o menu mostrava Split e mais nada. "Promote to Variable" existia
+            // no codigo e era inalcancavel justamente nos pins onde promover
+            // faz mais sentido. Voce viu isso como "Vec3 nao tem promote".
+            //
+            // As tres acoes sao ortogonais: abrir um pin em componentes, dar
+            // fluxo ao node e criar uma variavel a partir do pin nao competem
+            // entre si. Viraram blocos independentes, com separador entre eles.
+            if (canSplitRecombine && ctxNode && ctxPin && ctxPin->Type != ScriptPinType::Flow)
+                ImGui::Separator();
+
+            if (ctxNode && ctxPin && ctxPin->Type != ScriptPinType::Flow)
             {
                 // ── Show Exec Pins ────────────────────────────────────────────
                 // Adiciona Flow In/Out ao node de dados para encadeá-lo no flow
@@ -992,17 +1481,28 @@ namespace axe
 
                 ImGui::Separator();
 
-                if (ImGui::MenuItem("Promote to Variable"))
+                // Wildcard nao tem tipo ainda; promover daria uma variavel
+                // Float arbitraria com nome do pin — pior que nao oferecer.
+                const bool canPromote = ctxPin->Type != ScriptPinType::Wildcard;
+
+                if (canPromote && ImGui::MenuItem("Promote to Variable"))
                 {
+                    PushUndo("Promote to Variable");
+
                     ScriptVariable newVar;
                     newVar.Name = ctxPin->Name.empty() ? "NewVar" : ctxPin->Name;
-                    switch (ctxPin->Type) {
-                    case ScriptPinType::Bool:   newVar.Type = ScriptVarType::Bool;   break;
-                    case ScriptPinType::Int:    newVar.Type = ScriptVarType::Int;    break;
-                    case ScriptPinType::Vec3:   newVar.Type = ScriptVarType::Vec3;   break;
-                    case ScriptPinType::String: newVar.Type = ScriptVarType::String; break;
-                    default:                    newVar.Type = ScriptVarType::Float;  break;
-                    }
+
+                    // SC20 — o switch cobria cinco tipos e mandava o resto para
+                    // Float. Um pin Vec4, Quat, Vec2 ou Entity virava uma
+                    // variavel Float com o nome certo e o tipo errado.
+                    // PinTypeToVarType e a mesma tabela que o resto do sistema
+                    // usa, entao um tipo novo entra em um lugar so.
+                    newVar.Type = PinTypeToVarType(ctxPin->Type);
+
+                    // Leva o valor digitado no pin junto: promover e mover o
+                    // valor para uma variavel, nao descarta-lo.
+                    newVar.Default = ctxPin->Default;
+
                     if (m_ScriptAsset) m_ScriptAsset->AddVariable(newVar);
 
                     bool isInput = ctxPin->Kind == ed::PinKind::Input;
@@ -1013,10 +1513,19 @@ namespace axe
                     m_PendingPromoteIsInput = isInput;
                     m_PendingPromoteVarType = (int)newVar.Type;
                     m_PendingPromotePinType = ctxPin->Type;
+
+                    CommitUndo("Promote to Variable");
+                    m_ConsoleLines.push_back("[Info] Promoted to variable: " + newVar.Name);
                 }
             }
-            else
+            else if (!canSplitRecombine)
+            {
+                // So quando NENHUM dos dois blocos desenhou nada. Antes este
+                // else pertencia ao if de Exec/Promote e podia aparecer logo
+                // abaixo do Split, dizendo "sem acoes" numa lista que tinha
+                // acoes.
                 ImGui::TextDisabled("No actions available");
+            }
 
             ImGui::EndPopup();
         }
@@ -1040,12 +1549,12 @@ namespace axe
                     m_ConsoleLines.push_back("[Info] Node deleted.");
                 }
                 if (isProtected && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Gerido automaticamente pela Function — não pode ser deletado.");
+                    ImGui::SetTooltip("Managed automatically by the Function - cannot be deleted.");
             }
             ImGui::EndPopup();
         }
 
-        if (ed::ShowBackgroundContextMenu())
+        if (ed::ShowBackgroundContextMenu() && !m_SuppressCtxMenuThisFrame)
         {
             m_CtxBuf[0] = '\0';
             ImGui::OpenPopup("##SGCtx");
@@ -1137,18 +1646,19 @@ namespace axe
                 std::string("reroute").find(s) != std::string::npos)
                 ImGui::Separator();
 
-            // Categorias estáticas deste menu. NÃO é "todas menos Cast": o
-            // limite corta em Input, e Array / Flow Control / Cast ficam
-            // fora de propósito (o comentário anterior dizia "Cast, índice
-            // 7" e estava errado nos dois números — Cast é o último de dez).
+            // SC18 — TODAS as categorias, derivado do array.
             //
-            // O valor era 7 e virou 8 porque "Audio" entrou no índice 4,
-            // empurrando Input de 6 para 7. Continua sendo um número escrito
-            // à mão, e continua sendo frágil — mas derivá-lo do tamanho do
-            // array mudaria o COMPORTAMENTO, passando a listar categorias
-            // que hoje não aparecem aqui. Isso é decisão de UI, não faxina
-            // de patch de áudio.
-            for (int ci = 0; ci < 8; ci++)
+            // Este limite era um 8 escrito a mao, e o comentario anterior o
+            // defendia dizendo que Array / Flow Control / Cast ficavam de fora
+            // "de proposito". Nao ficavam: os nodes existem na fabrica
+            // (ForLoop, ForEachLoop, WhileLoop, SwitchOnInt, SwitchOnString) e
+            // simplesmente nao tinham como ser criados pela interface. O
+            // numero ja havia migrado de 7 para 8 quando a categoria Audio
+            // entrou no meio — a proxima categoria inserida quebraria de novo.
+            //
+            // Derivar do tamanho do array e a unica forma de isso nao voltar.
+            constexpr int kCatCount = (int)(sizeof(s_Cats) / sizeof(s_Cats[0]));
+            for (int ci = 0; ci < kCatCount; ci++)
             {
                 auto& cat = s_Cats[ci];
                 ImVec4 col = s_CtxCols[ci];
@@ -1252,8 +1762,20 @@ namespace axe
         ed::Resume();
 
         if (m_FirstFrame) { ed::NavigateToContent(); m_FirstFrame = false; }
+
+        // SC2 — por último, para o fio provisório ficar por cima de tudo, e
+        // ainda DENTRO do Begin/End porque as posições de pin estão em espaço
+        // de canvas (mesmo espaço de ImGui::GetMousePos() aqui dentro).
+        DrawCarriedWire();
+
         m_InsideNodeEditorFrame = false;
         ed::End();
+
+        // DEPOIS do ed::End(): aqui o espaço é de tela, então o cursor tem
+        // tamanho fixo independente do zoom do canvas. E é a última chamada de
+        // SetMouseCursor do frame, que é a que vale — o canvas define o cursor
+        // dele ao fechar o frame (pan, redimensionar grupo) e sobrescreveria.
+        DrawHandCursor();
 
         // ── Libera m_SelectedVar quando a seleção do canvas muda ──────────────
         // Precisa ser feito AQUI (ainda dentro do contexto m_EdCtx, antes do

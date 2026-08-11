@@ -45,9 +45,25 @@ namespace axe
 
     // ─── Helpers internos ─────────────────────────────────────────────────────
 
+    // S1 — o salto por Reroute é recursivo e, até aqui, sem teto. Uma cadeia
+    // de Reroutes fechada em anel (possível de montar antes da checagem de
+    // ciclo do QueryLink, e possível de existir em .axescript já salvo) fazia
+    // esta função se chamar para sempre: o sintoma era o editor MORRER no
+    // botão Compilar, sem log nenhum, porque a pilha estourava antes de
+    // qualquer mensagem sair. O teto abaixo transforma isso em nullptr — que
+    // todos os chamadores já tratam como "fim da corrente".
+    static constexpr int kMaxRerouteHops = 64;
+
     const ScriptNode* ScriptGraphCompiler::FindNextFlowNode(
-        const Context& ctx, const ScriptNode* node, const std::string& outPinName)
+        const Context& ctx, const ScriptNode* node, const std::string& outPinName, int hops)
     {
+        if (hops > kMaxRerouteHops)
+        {
+            AXE_CORE_ERROR("ScriptGraphCompiler: cadeia de Reroute circular no fluxo — "
+                "corrente interrompida.");
+            return nullptr;
+        }
+
         for (const auto& outPin : node->Outputs)
         {
             if (outPin.Type != ScriptPinType::Flow) continue;
@@ -66,7 +82,7 @@ namespace axe
                             // visual do fio. Segue recursivamente pro próximo
                             // node real do outro lado dele.
                             if (n->Name == "Reroute")
-                                return FindNextFlowNode(ctx, n.get(), "");
+                                return FindNextFlowNode(ctx, n.get(), "", hops + 1);
                             return n.get();
                         }
             }
@@ -75,8 +91,19 @@ namespace axe
     }
 
     std::pair<const ScriptNode*, const ScriptPin*>
-        ScriptGraphCompiler::FindDataSource(const Context& ctx, const ScriptPin& inputPin)
+        ScriptGraphCompiler::FindDataSource(const Context& ctx, const ScriptPin& inputPin, int hops)
     {
+        // Mesmo teto e mesmo motivo do FindNextFlowNode. Aqui o retorno
+        // {nullptr, nullptr} já significa "sem conexão", e ResolvePin cai no
+        // valor default do pin — degradação silenciosa e segura, em vez de
+        // crash.
+        if (hops > kMaxRerouteHops)
+        {
+            AXE_CORE_ERROR("ScriptGraphCompiler: cadeia de Reroute circular nos dados — "
+                "usando valor default do pin '{}'.", inputPin.Name);
+            return { nullptr, nullptr };
+        }
+
         for (const auto& link : ctx.graph->GetLinks())
         {
             if (link.EndPin != inputPin.ID) continue;
@@ -90,11 +117,54 @@ namespace axe
                         // próprio Reroute, recursivamente, até achar a fonte
                         // de dados real.
                         if (n->Name == "Reroute" && !n->Inputs.empty())
-                            return FindDataSource(ctx, n->Inputs[0]);
+                            return FindDataSource(ctx, n->Inputs[0], hops + 1);
                         return { n.get(), &outPin };
                     }
         }
         return { nullptr, nullptr };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC26 — expressao C++ que vira std::string, seja qual for o tipo
+    //
+    //  Existia so dentro do node "To String". O Print String, do outro lado,
+    //  ASSUMIA que o valor do pin Message ja era uma string e emitia
+    //  "std::string _msg = (expr)" — o que compila quando o pin esta
+    //  desconectado (o default e literal de string) e explode quando o autor
+    //  liga um Float ali, com o erro apontando para um .cpp que ele nunca
+    //  escreveu.
+    //
+    //  Extraida para os dois usarem a mesma. Assim o Print String aceita
+    //  qualquer tipo no Message, que e o comportamento que a interface ja
+    //  sugere ao deixar o fio ser ligado.
+    // ─────────────────────────────────────────────────────────────────────────
+    std::string ScriptGraphCompiler::MakeStringExpr(const std::string& expr, ScriptPinType type)
+    {
+        switch (type)
+        {
+        case ScriptPinType::Float:
+        case ScriptPinType::Int:
+        case ScriptPinType::Bool:
+            return "std::to_string(" + expr + ")";
+
+        case ScriptPinType::String:
+            return expr;   // ja e std::string — nada a converter
+
+        case ScriptPinType::Vec2:
+            return "([&]{ auto _v = (" + expr + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \")\"; }())";
+        case ScriptPinType::Vec3:
+            return "([&]{ auto _v = (" + expr + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \")\"; }())";
+        case ScriptPinType::Vec4:
+        case ScriptPinType::Quat:
+            return "([&]{ auto _v = (" + expr + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \", \" + std::to_string(_v.w) + \")\"; }())";
+
+        default:
+            // Object e arrays nao tem representacao textual generica segura
+            // (array precisaria de um join). Texto explicito em vez de codigo
+            // que nao compila: o autor ve o problema RODANDO, na tela, em vez
+            // de num erro do MSVC sobre um arquivo gerado.
+            return "std::string(\"<sem conversao para string>\")";
+        }
     }
 
     std::string ScriptGraphCompiler::ResolvePin(Context& ctx, const ScriptPin& pin)
@@ -103,30 +173,91 @@ namespace axe
 
         if (!srcNode)
         {
-            // Sem conexão — usa valor padrão
-            switch (pin.Type)
-            {
-            case ScriptPinType::Float:  return std::to_string(pin.DefaultFloat) + "f";
-            case ScriptPinType::Bool:   return pin.DefaultBool ? "true" : "false";
-            case ScriptPinType::Int:    return std::to_string(pin.DefaultInt);
-            case ScriptPinType::String: return "\"" + pin.DefaultString + "\"";
-            case ScriptPinType::Vec3:
-                return "glm::vec3(" +
-                    std::to_string(pin.DefaultVec3.x) + "f, " +
-                    std::to_string(pin.DefaultVec3.y) + "f, " +
-                    std::to_string(pin.DefaultVec3.z) + "f)";
-            case ScriptPinType::Object:
-                // BUGFIX: caía no "default: return \"{}\"" genérico — {} sozinho
-                // não é uma expressão válida em "x != entt::null" (achei isso
-                // testando o IsValid sem Target conectado). entt::null é a
-                // forma correta e já usada em todo o resto do compilador pra
-                // representar "nenhuma entity".
-                return "entt::null";
-            default: return "{}";
-            }
+            // Sem conexão — usa o valor padrão do pin.
+            //
+            // SC17 — este switch tinha um case por tipo E um "default: {}" no
+            // fim. Vec2, Vec4 e Quat caíam no default e compilavam "{}", que
+            // não é expressão válida em vários contextos e, onde é, significa
+            // zero — inclusive para um quaternion, onde (0,0,0,0) normaliza
+            // para NaN. A emissão agora é do próprio valor
+            // (ScriptValue::ToCppLiteral), onde adicionar um tipo obriga a
+            // dizer como ele vira C++ em vez de deixar um default engolir.
+            return pin.Default.ToCppLiteral(PinTypeToVarType(pin.Type));
         }
 
         const std::string& nodeName = srcNode->Name;
+
+        // ── S3: saidas de Cast / leitura de variavel externa ──────────────────
+        if (nodeName == "Cast To Script" && srcPin->Name == "As")
+        {
+            // A local foi declarada pelo proprio Cast (GenerateNode). Devolver
+            // a ENTIDADE, e nao o ponteiro do script, e o que permite ligar o
+            // "As" em qualquer node que ja aceite Object — Destroy Entity, Get
+            // Transform, outro Cast. Um ponteiro exigiria um tipo novo no
+            // grafo e nao sobreviveria a um hot reload.
+            return "__cast" + std::to_string((int)srcNode->ID.Get()) + "_e";
+        }
+
+        // SC27 — a condicao era srcPin->Name == "Value", e NUNCA casava.
+        //
+        // O painel do S3 RENOMEIA esse pin para o nome da variavel escolhida
+        // ("Damage"), justamente para o node se explicar sozinho no grafo — e
+        // eu deixei o compilador procurando pelo nome antigo. Sem casar, o
+        // ResolvePin caia no fallback generico "{}", e o To String logo adiante
+        // gerava std::to_string({}): o erro de "initializer list" que aparecia
+        // num .cpp que voce nunca escreveu.
+        //
+        // Agora identifica pelo que o pin E, e nao pelo nome que ele tinha:
+        // a unica saida nao-Flow deste node e o valor.
+        if (nodeName == "Get Script Var" && srcPin->Type != ScriptPinType::Flow)
+        {
+            std::string obj = "entt::null";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Object") { obj = ResolvePin(ctx, inp); break; }
+
+            const ScriptVarType vt = PinTypeToVarType(srcPin->Type);
+            const std::string varName = srcPin->Name;   // o pin FOI renomeado
+
+            // Expressao unica (lambda imediata) em vez de linhas soltas: um
+            // Get pode aparecer no meio de qualquer expressao — dentro de um
+            // Branch, de um Add, de um argumento — e nesses lugares nao ha
+            // onde inserir um statement antes.
+            std::string fallback;
+            switch (vt)
+            {
+            case ScriptVarType::Bool:   fallback = "false"; break;
+            case ScriptVarType::Int:    fallback = "0"; break;
+            case ScriptVarType::String: fallback = "std::string()"; break;
+                // Entity atravessa como NOME, pelo mesmo motivo do _GetVar.
+            case ScriptVarType::Entity:
+            case ScriptVarType::Asset:  fallback = "std::string()"; break;
+            case ScriptVarType::Vec2:   fallback = "glm::vec2(0.0f)"; break;
+            case ScriptVarType::Vec3:   fallback = "glm::vec3(0.0f)"; break;
+            case ScriptVarType::Vec4:   fallback = "glm::vec4(0.0f)"; break;
+            case ScriptVarType::Quat:   fallback = "glm::quat(1.0f,0.0f,0.0f,0.0f)"; break;
+            default:                    fallback = "0.0f"; break;
+            }
+
+            std::string pick;
+            switch (vt)
+            {
+            case ScriptVarType::Bool:   pick = "__s.B"; break;
+            case ScriptVarType::Int:    pick = "__s.I"; break;
+            case ScriptVarType::String: pick = "std::string(__s.S)"; break;
+            case ScriptVarType::Entity:
+            case ScriptVarType::Asset:  pick = "std::string(__s.S)"; break;
+            case ScriptVarType::Vec2:   pick = "glm::vec2(__s.V[0], __s.V[1])"; break;
+            case ScriptVarType::Vec3:   pick = "glm::vec3(__s.V[0], __s.V[1], __s.V[2])"; break;
+            case ScriptVarType::Vec4:   pick = "glm::vec4(__s.V[0], __s.V[1], __s.V[2], __s.V[3])"; break;
+                // glm::quat monta com (w, x, y, z); o slot guarda xyzw.
+            case ScriptVarType::Quat:   pick = "glm::quat(__s.V[3], __s.V[0], __s.V[1], __s.V[2])"; break;
+            default:                    pick = "__s.F"; break;
+            }
+
+            return "([&]{ axe::ScriptVarSlot __s; axe::ScriptBase* __t = GetScriptOn(" + obj +
+                "); if (__t && __t->_GetVar(\"" + varName + "\", __s)) return " + pick +
+                "; return " + fallback + "; }())";
+        }
 
         // ── Eventos ──────────────────────────────────────────────────────────
 
@@ -685,27 +816,7 @@ namespace axe
                     break;
                 }
 
-            switch (srcType)
-            {
-            case ScriptPinType::Float:
-            case ScriptPinType::Int:
-            case ScriptPinType::Bool:
-                return "std::to_string(" + v + ")";
-            case ScriptPinType::String:
-                return v; // já é std::string — nada a converter
-            case ScriptPinType::Vec2:
-                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \")\"; }())";
-            case ScriptPinType::Vec3:
-                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \")\"; }())";
-            case ScriptPinType::Vec4:
-            case ScriptPinType::Quat:
-                return "([&]{ auto _v = (" + v + "); return std::string(\"(\") + std::to_string(_v.x) + \", \" + std::to_string(_v.y) + \", \" + std::to_string(_v.z) + \", \" + std::to_string(_v.w) + \")\"; }())";
-            default:
-                // Object/Entity/qualquer Array — sem representação textual
-                // segura e genérica (precisaria de um loop de join para
-                // arrays); evita gerar código que não compila.
-                return "std::string(\"<sem conversao para string>\")";
-            }
+            return MakeStringExpr(v, srcType);
         }
         if (nodeName == "To Vec3")
         {
@@ -997,7 +1108,18 @@ namespace axe
             }
         }
 
-        // Fallback
+        // ── Fallback ─────────────────────────────────────────────────────────
+        //
+        // SC27 — "{}" e sintaticamente valido em quase todo lugar, entao um
+        // node que o ResolvePin nao conhece produzia C++ que ora compilava
+        // (virando zero silencioso), ora estourava com uma mensagem
+        // incompreensivel sobre initializer list. Nos dois casos o autor ficava
+        // sem saber QUAL node causou.
+        //
+        // O aviso nao muda o codigo gerado — muda quem paga a conta de
+        // descobrir. Vai para o log do editor com o nome do node e do pin.
+        AXE_CORE_WARN("ScriptGraphCompiler: pin '{}' do node '{}' nao tem regra de "
+            "resolucao — gerando valor vazio.", srcPin->Name, nodeName);
         return "{}";
     }
 
@@ -1233,28 +1355,119 @@ namespace axe
             }
             ctx.Line("GetEventBus().Send(" + target + ", " + evName + ", " + val + ");");
         }
+        // ── S3: Cast To Script ───────────────────────────────────────────────
+        else if (name == "Cast To Script")
+        {
+            std::string obj = "entt::null";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Object") { obj = ResolvePin(ctx, inp); break; }
+
+            const std::string id = std::to_string((int)node->ID.Get());
+            const std::string var = "__cast" + id;
+
+            // A entidade fica guardada numa local para o pin "As" poder ser
+            // resolvido no ramo Succeeded (ver ResolvePin). O ponteiro do
+            // script serve so para o teste — o que trafega no grafo e a
+            // ENTIDADE, que sobrevive a um hot reload.
+            ctx.Line("entt::entity " + var + "_e = " + obj + ";");
+            ctx.Line("axe::ScriptBase* " + var + " = CastScript(" + var + "_e, \"" +
+                node->StringValue + "\");");
+            ctx.Line("if (" + var + ")");
+            ctx.Line("{");
+            ctx.indent++;
+            if (auto* okNode = FindNextFlowNode(ctx, node, "Succeeded"))
+                GenerateNode(ctx, okNode, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("}");
+            ctx.Line("else");
+            ctx.Line("{");
+            ctx.indent++;
+            if (auto* failNode = FindNextFlowNode(ctx, node, "Failed"))
+                GenerateNode(ctx, failNode, deltaTimeVar, depth + 1);
+            ctx.indent--;
+            ctx.Line("}");
+            return;   // os dois ramos ja seguiram o fluxo
+        }
+        else if (name == "Set Script Var")
+        {
+            // O pin de valor e "o que nao e Object nem Flow": o painel o
+            // RENOMEIA para o nome da variavel escolhida, entao procurar por
+            // "Value" so acharia um node ainda nao configurado.
+            std::string obj = "entt::null", val = "0.0f";
+            const ScriptPin* valPin = nullptr;
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Object") { obj = ResolvePin(ctx, inp); continue; }
+                if (inp.Type == ScriptPinType::Flow) continue;
+                val = ResolvePin(ctx, inp); valPin = &inp;
+            }
+            if (!valPin) return;   // variavel ainda nao escolhida
+
+            const std::string id = std::to_string((int)node->ID.Get());
+            const std::string slot = "__slot" + id;
+            const ScriptVarType vt = valPin ? PinTypeToVarType(valPin->Type) : ScriptVarType::Float;
+
+            ctx.Line("{");
+            ctx.indent++;
+            ctx.Line("axe::ScriptBase* __t = GetScriptOn(" + obj + ");");
+            ctx.Line("if (__t)");
+            ctx.Line("{");
+            ctx.indent++;
+            ctx.Line("axe::ScriptVarSlot " + slot + ";");
+            ctx.Line(slot + ".Kind = " + std::to_string((int)vt) + ";");
+            switch (vt)
+            {
+            case ScriptVarType::Bool:   ctx.Line(slot + ".B = " + val + ";"); break;
+            case ScriptVarType::Int:    ctx.Line(slot + ".I = " + val + ";"); break;
+            case ScriptVarType::String: ctx.Line(slot + ".SetString(std::string(" + val + ").c_str());"); break;
+            case ScriptVarType::Entity:
+            case ScriptVarType::Asset:  ctx.Line(slot + ".SetString(std::string(" + val + ").c_str());"); break;
+            case ScriptVarType::Vec2:
+                ctx.Line("{ glm::vec2 __v = " + val + "; " + slot + ".V[0]=__v.x; " + slot + ".V[1]=__v.y; }"); break;
+            case ScriptVarType::Vec3:
+                ctx.Line("{ glm::vec3 __v = " + val + "; " + slot + ".V[0]=__v.x; " + slot + ".V[1]=__v.y; " + slot + ".V[2]=__v.z; }"); break;
+            case ScriptVarType::Vec4:
+                ctx.Line("{ glm::vec4 __v = " + val + "; " + slot + ".V[0]=__v.x; " + slot + ".V[1]=__v.y; " + slot + ".V[2]=__v.z; " + slot + ".V[3]=__v.w; }"); break;
+            case ScriptVarType::Quat:
+                ctx.Line("{ glm::quat __v = " + val + "; " + slot + ".V[0]=__v.x; " + slot + ".V[1]=__v.y; " + slot + ".V[2]=__v.z; " + slot + ".V[3]=__v.w; }"); break;
+            default:                    ctx.Line(slot + ".F = " + val + ";"); break;
+            }
+            ctx.Line("__t->_SetVar(\"" + valPin->Name + "\", " + slot + ");");
+            ctx.indent--;
+            ctx.Line("}");
+            ctx.indent--;
+            ctx.Line("}");
+        }
         else if (name == "Print String")
         {
-            // Verifica se o pin Message está conectado
-            bool connected = false;
-            for (const auto& link : ctx.graph->GetLinks())
-                for (const auto& inp : node->Inputs)
-                    if (inp.Name == "Message" && link.EndPin == inp.ID)
-                    {
-                        connected = true; break;
-                    }
+            // SC18 — UMA fonte para a mensagem: o pin.
+            //
+            // Havia duas. O campo do Script Details escrevia em
+            // node->StringValue; o campo que o SC3 pos dentro do node escreve
+            // no default do pin Message. So o primeiro era lido, entao digitar
+            // no node nao mudava nada no C++ gerado — dois campos, um
+            // obedecido, sem nada na tela dizendo qual.
+            //
+            // ResolvePin ja faz os dois casos sozinho: com fio devolve a
+            // expressao, sem fio devolve o literal do default do pin. O bloco
+            // de deteccao de conexao acima dele era trabalho repetido.
+            // node->StringValue de arquivos antigos e migrado para o pin no
+            // load (ver MigrateLegacyNodeValues em script_graph.cpp).
+            std::string msg = "std::string()";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name != "Message") continue;
 
-            std::string msg;
-            if (connected)
-            {
-                // Pin conectado — resolve o valor dinamicamente
-                for (const auto& inp : node->Inputs)
-                    if (inp.Name == "Message") { msg = ResolvePin(ctx, inp); break; }
-            }
-            else
-            {
-                // Sem conexão — usa o texto digitado no Script Details (node->StringValue)
-                msg = "\"" + node->StringValue + "\"";
+                // SC26 — o tipo que MANDA e o da FONTE, nao o do pin Message.
+                // Com um fio ligado, o valor que chega e do tipo de quem
+                // emite; ligar um Float aqui gerava "std::string _msg =
+                // (float)" e o erro saia no .cpp gerado.
+                ScriptPinType t = inp.Type;
+                auto [srcN, srcP] = FindDataSource(ctx, inp);
+                if (srcP) t = srcP->Type;
+
+                msg = MakeStringExpr(ResolvePin(ctx, inp), t);
+                break;
             }
 
             ctx.Line("{ std::string _msg = (" + msg + "); axe::ScriptBase::PrintOnScreen(_msg.c_str()); }");
@@ -1269,19 +1482,40 @@ namespace axe
                 for (auto& v : *ctx.assetVars)
                     if (v.Name == node->StringValue) { varType = v.Type; break; }
 
-            // Split pin: generate X/Y/Z component assignments
-            if (node->IntValue & 0x100)
+            // SC20 — atribuicao por componente para 2, 3 ou 4 componentes.
+            //
+            // Antes gerava sempre .x/.y/.z. Um Vec4 ou Quat splitado perdia o
+            // W em silencio: o pin existia no editor, o autor ligava um fio
+            // nele, e o C++ gerado simplesmente nao mencionava aquele
+            // componente. Um Vec2 splitado era pior — gerava ".z" num
+            // glm::vec2, e o erro de compilacao apontava para codigo gerado.
+            //
+            // O numero de componentes vem do TIPO da variavel, nao da
+            // contagem de pins: pin faltando (grafo antigo, split parcial) tem
+            // de virar zero, e nao sumir da atribuicao.
+            if (node->IntValue & ScriptNodeBits::SplitPin)
             {
-                std::string x = "0.0f", y = "0.0f", z = "0.0f";
-                for (const auto& inp : node->Inputs)
+                const int nComp = ScriptPinComponentCount(ScriptVarTypeToPinType(varType));
+                static const char* kMember[4] = { ".x", ".y", ".z", ".w" };
+
+                for (int i = 0; i < nComp; i++)
                 {
-                    if (inp.Name == "X") x = ResolvePin(ctx, inp);
-                    if (inp.Name == "Y") y = ResolvePin(ctx, inp);
-                    if (inp.Name == "Z") z = ResolvePin(ctx, inp);
+                    const std::string comp = ScriptPinComponentName(i);
+                    std::string expr = "0.0f";
+
+                    for (const auto& inp : node->Inputs)
+                    {
+                        // Aceita "X" e "Nome.X": o prefixo depende de o pin
+                        // original se chamar "Value" ou nao.
+                        if (inp.Name == comp ||
+                            (inp.Name.size() >= 2 && inp.Name.substr(inp.Name.size() - 2) == "." + comp))
+                        {
+                            expr = ResolvePin(ctx, inp);
+                            break;
+                        }
+                    }
+                    ctx.Line(varName + kMember[i] + " = " + expr + ";");
                 }
-                ctx.Line(varName + ".x = " + x + ";");
-                ctx.Line(varName + ".y = " + y + ";");
-                ctx.Line(varName + ".z = " + z + ";");
             }
             else
             {
@@ -2086,6 +2320,10 @@ namespace axe
             // Entity guarda o NOME como string, resolvido em runtime via
             // FindByName — mesmo padrão usado pra variáveis Entity comuns.
         case ScriptVarType::Entity:     return "std::string";
+            // SC30 — Asset guarda o UUID como string, pela mesma razao de
+            // Entity: e o identificador estavel, e todo consumidor da engine
+            // (PlaySound2D, Sound Cue, AssetDatabase) ja aceita string.
+        case ScriptVarType::Asset:      return "std::string";
         case ScriptVarType::FloatArray:  return "std::vector<float>";
         case ScriptVarType::BoolArray:   return "std::vector<bool>";
         case ScriptVarType::IntArray:    return "std::vector<int>";
@@ -2102,7 +2340,8 @@ namespace axe
     std::string ScriptGraphCompiler::Generate(const ScriptGraph& graph,
         const std::string& scriptName,
         const std::vector<ScriptVariable>* assetVars,
-        const std::vector<ScriptFunction>* functions)
+        const std::vector<ScriptFunction>* functions,
+        const std::string& classId)
     {
         Context ctx{ &graph };
         ctx.assetVars = assetVars;
@@ -2124,7 +2363,8 @@ namespace axe
         ctx.code += "#include <vector>\n";
         ctx.code += "#include <type_traits>\n";
         ctx.code += "#include <algorithm>\n"; // std::min (Substring) — clamp seguro de Start
-        ctx.code += "#include <cstdlib>\n\n";  // rand()/RAND_MAX (nodes Random)
+        ctx.code += "#include <cstdlib>\n";    // rand()/RAND_MAX (nodes Random)
+        ctx.code += "#include <cstring>\n\n";  // S3: strcmp em _GetVar/_SetVar
 
         ctx.code += "extern \"C\" {\n\n";
         ctx.code += "class " + scriptName + " : public axe::ScriptBase\n{\npublic:\n";
@@ -2142,36 +2382,34 @@ namespace axe
                     std::string defaultVal;
                     switch (v.Type)
                     {
+                        // SC19 — os oito escalares saem do MESMO emissor do pin.
+                        //
+                        // Vec2, Vec4 e Quat estavam CRAVADOS em zero/identidade
+                        // aqui: o valor que o autor digitava no painel era
+                        // serializado, recarregado, exibido de volta na tela — e
+                        // descartado na geracao do C++. Uma variavel Quat sempre
+                        // nascia identidade por mais que voce mexesse nela. E o
+                        // mesmo defeito que o pin tinha, pela mesma causa (um
+                        // emissor por lugar em vez de um por valor).
                     case ScriptVarType::Float:
-                        defaultVal = std::to_string(v.DefaultFloat) + "f";
-                        break;
                     case ScriptVarType::Bool:
-                        defaultVal = v.DefaultBool ? "true" : "false";
-                        break;
                     case ScriptVarType::Int:
-                        defaultVal = std::to_string(v.DefaultInt);
-                        break;
-                    case ScriptVarType::Vec3:
-                        defaultVal = "glm::vec3(" +
-                            std::to_string(v.DefaultVec3[0]) + "f," +
-                            std::to_string(v.DefaultVec3[1]) + "f," +
-                            std::to_string(v.DefaultVec3[2]) + "f)";
-                        break;
                     case ScriptVarType::String:
-                        defaultVal = "\"" + v.DefaultString + "\"";
-                        break;
                     case ScriptVarType::Vec2:
-                        defaultVal = "glm::vec2(0.0f, 0.0f)";
-                        break;
+                    case ScriptVarType::Vec3:
                     case ScriptVarType::Vec4:
-                        defaultVal = "glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)";
-                        break;
                     case ScriptVarType::Quat:
-                        defaultVal = "glm::quat(1.0f, 0.0f, 0.0f, 0.0f)";  // identity (w,x,y,z)
+                        defaultVal = v.Default.ToCppLiteral(v.Type);
                         break;
+
                     case ScriptVarType::Entity:
                         // Guarda o nome da entity como string; resolvido em runtime via FindByName
-                        defaultVal = "\"" + v.DefaultString + "\"";
+                    case ScriptVarType::Asset:
+                        // SC30 — Asset guarda o UUID. Emitido pelo ToCppLiteral
+                        // de String para ganhar o escape: um UUID nao tem
+                        // aspas, mas o nome de entity pode ter, e os dois
+                        // passavam crus para dentro de um literal C++.
+                        defaultVal = v.Default.ToCppLiteral(ScriptVarType::String);
                         break;
                     case ScriptVarType::FloatArray:
                         defaultVal = "std::vector<float>(" + std::to_string(v.DefaultArraySize) + ")";
@@ -2410,6 +2648,76 @@ namespace axe
                 if (next) GenerateNode(ctx, next, "deltaTime", 0);
                 ctx.code += "    }\n\n";
             }
+        }
+
+        // ── S3: identidade e acesso generico as variaveis ────────────────────
+        //
+        // Emitido para TODO script, tenha ele um Cast ou nao: quem precisa
+        // disto e o script do OUTRO lado, e no momento de gerar este arquivo
+        // nao ha como saber quem vai apontar para ele. Custa tres metodos.
+        {
+            ctx.code += "public:\n";
+            ctx.code += "    // ── S3: identidade de classe (UUID do .axescript) ──\n";
+            ctx.code += "    const char* GetScriptClassId() const override { return \"" + classId + "\"; }\n\n";
+
+            ctx.code += "    bool _GetVar(const char* __n, axe::ScriptVarSlot& __o) const override\n    {\n";
+            if (assetVars)
+                for (const auto& v : *assetVars)
+                {
+                    if (IsArrayType(v.Type)) continue;   // array por nome fica para o S2
+                    const std::string m = "m_" + SanitizeIdent(v.Name);
+                    ctx.code += "        if (std::strcmp(__n, \"" + v.Name + "\") == 0) { __o.Kind = " +
+                        std::to_string((int)v.Type) + "; ";
+                    switch (v.Type)
+                    {
+                    case ScriptVarType::Bool:   ctx.code += "__o.B = " + m + ";"; break;
+                    case ScriptVarType::Int:    ctx.code += "__o.I = " + m + ";"; break;
+                    case ScriptVarType::Float:  ctx.code += "__o.F = " + m + ";"; break;
+                    case ScriptVarType::String: ctx.code += "__o.SetString(" + m + ".c_str());"; break;
+
+                        // SC26 — Entity e std::string no C++ gerado, e nao
+                        // entt::entity: CppTypeNameFor(Entity) devolve
+                        // "std::string" porque a variavel guarda o NOME da
+                        // entidade, resolvido em runtime via FindByName. Eu
+                        // gerei "(int)m_X" sobre uma std::string, e o erro
+                        // saiu no .cpp gerado — codigo que voce nao escreveu.
+                    case ScriptVarType::Entity:
+                    case ScriptVarType::Asset:  ctx.code += "__o.SetString(" + m + ".c_str());"; break;
+                    case ScriptVarType::Vec2:   ctx.code += "__o.V[0]=" + m + ".x; __o.V[1]=" + m + ".y;"; break;
+                    case ScriptVarType::Vec3:   ctx.code += "__o.V[0]=" + m + ".x; __o.V[1]=" + m + ".y; __o.V[2]=" + m + ".z;"; break;
+                    case ScriptVarType::Vec4:
+                    case ScriptVarType::Quat:   ctx.code += "__o.V[0]=" + m + ".x; __o.V[1]=" + m + ".y; __o.V[2]=" + m + ".z; __o.V[3]=" + m + ".w;"; break;
+                    default: ctx.code += "(void)__o;"; break;
+                    }
+                    ctx.code += " return true; }\n";
+                }
+            ctx.code += "        (void)__n; (void)__o; return false;\n    }\n\n";
+
+            ctx.code += "    bool _SetVar(const char* __n, const axe::ScriptVarSlot& __i) override\n    {\n";
+            if (assetVars)
+                for (const auto& v : *assetVars)
+                {
+                    if (IsArrayType(v.Type)) continue;
+                    const std::string m = "m_" + SanitizeIdent(v.Name);
+                    ctx.code += "        if (std::strcmp(__n, \"" + v.Name + "\") == 0) { ";
+                    switch (v.Type)
+                    {
+                    case ScriptVarType::Bool:   ctx.code += m + " = __i.B;"; break;
+                    case ScriptVarType::Int:    ctx.code += m + " = __i.I;"; break;
+                    case ScriptVarType::Float:  ctx.code += m + " = __i.F;"; break;
+                    case ScriptVarType::String: ctx.code += m + " = __i.S;"; break;
+                    case ScriptVarType::Entity:
+                    case ScriptVarType::Asset:  ctx.code += m + " = __i.S;"; break;   // ver _GetVar
+                    case ScriptVarType::Vec2:   ctx.code += m + " = glm::vec2(__i.V[0], __i.V[1]);"; break;
+                    case ScriptVarType::Vec3:   ctx.code += m + " = glm::vec3(__i.V[0], __i.V[1], __i.V[2]);"; break;
+                    case ScriptVarType::Vec4:   ctx.code += m + " = glm::vec4(__i.V[0], __i.V[1], __i.V[2], __i.V[3]);"; break;
+                        // glm::quat monta com (w, x, y, z); o slot guarda xyzw.
+                    case ScriptVarType::Quat:   ctx.code += m + " = glm::quat(__i.V[3], __i.V[0], __i.V[1], __i.V[2]);"; break;
+                    default: ctx.code += "(void)__i;"; break;
+                    }
+                    ctx.code += " return true; }\n";
+                }
+            ctx.code += "        (void)__n; (void)__i; return false;\n    }\n\n";
         }
 
         // ── Factory function ──────────────────────────────────────────────────

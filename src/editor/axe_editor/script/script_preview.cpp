@@ -3,6 +3,7 @@
 // de componentes, renderização, gizmo sobreposto e input orbital.
 
 #include "script_graph_window.hpp"
+#include "axe/mesh/mesh_loader.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"
@@ -103,14 +104,98 @@ namespace axe
         {
             if (def.Type == "Mesh" && !def.AssetUUID.empty())
             {
-                // TODO: carregar mesh pelo AssetDatabase quando houver MeshAsset
-                const auto* rec = AssetDatabase::Get().GetByUUID(def.AssetUUID);
-                (void)rec; // placeholder
+                // SC22 — aqui havia um TODO com "(void)rec; // placeholder".
+                //
+                // Consequencia pratica: o componente Mesh do Script Editor so
+                // sabia primitivas. Arrastar uma malha importada gravava o
+                // UUID no asset e o preview continuava mostrando a esfera —
+                // parecia que o drop nao tinha funcionado. Foi o que voce
+                // encontrou tentando dar corpo ao BP_Weapon: a pistola nao tem
+                // esqueleto (logo, nao serve como SkeletalMesh) e o unico
+                // outro caminho estava sem implementacao.
+                //
+                // Mesma resolucao que o SceneSerializer ja faz: primitiva pela
+                // fabrica, asset pelo MeshLoader.
+                auto& pr0 = m_PreviewScene->GetRegistry();
+                auto& mc0 = pr0.get_or_emplace<MeshComponent>(m_PreviewEntity);
+                mc0.AssetUUID = def.AssetUUID;
+
+                mc0.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
+                if (!mc0.Data)
+                    AXE_EDITOR_WARN("ScriptPreview: mesh '{}' nao resolvida.", def.AssetUUID);
             }
         }
         auto& pr = m_PreviewScene->GetRegistry();
         auto& mc = pr.get_or_emplace<MeshComponent>(m_PreviewEntity);
         if (!mc.Data) mc.Data = MeshFactory::CreateSphere(32);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    void ScriptGraphWindow::FramePreviewCamera()
+    {
+        if (!m_PreviewScene || !m_PreviewRenderer || !m_PreviewRenderer->m_Camera) return;
+        if (m_PreviewEntity == entt::null) return;
+
+        auto& reg = m_PreviewScene->GetRegistry();
+
+        // Escala e posicao da ENTIDADE. Diferente do preview do AnimGraph, aqui
+        // elas nao podem ser sobrescritas: vieram do Transform raiz do asset e
+        // sao decisao do autor. Quem se adapta e a camera.
+        glm::vec3 entPos(0.0f);
+        glm::vec3 entScale(1.0f);
+        if (auto* tc = reg.try_get<TransformComponent>(m_PreviewEntity))
+        {
+            entPos = tc->Data.Position;
+            entScale = tc->Data.Scale;
+        }
+
+        // Bounds da malha em espaco LOCAL. Skeletal primeiro: e o caso comum de
+        // um script de personagem, e a estatica so existe como fallback.
+        bool haveBounds = false;
+        glm::vec3 mn(0.0f), mx(0.0f);
+
+        auto measure = [&](const auto& meshPtr)
+            {
+                if (!meshPtr) return;
+                const auto& verts = meshPtr->GetVertices();
+                if (verts.empty()) return;
+                mn = mx = verts[0].Position;
+                for (const auto& v : verts)
+                {
+                    mn = glm::min(mn, v.Position);
+                    mx = glm::max(mx, v.Position);
+                }
+                haveBounds = true;
+            };
+
+        if (auto* sk = reg.try_get<SkeletalMeshComponent>(m_PreviewEntity)) measure(sk->Data);
+        if (!haveBounds)
+            if (auto* mc = reg.try_get<MeshComponent>(m_PreviewEntity))     measure(mc->Data);
+
+        if (!haveBounds) return;
+
+        // Para mundo. A altura manda no enquadramento porque personagem e alto
+        // e estreito; usar a maior das tres dimensoes afastaria a camera demais
+        // num objeto largo e baixo, entao pega-se o maior entre altura e a
+        // maior horizontal, com a altura tendo preferencia natural.
+        const glm::vec3 worldMin = entPos + mn * entScale;
+        const glm::vec3 worldMax = entPos + mx * entScale;
+        const glm::vec3 size = worldMax - worldMin;
+
+        const float height = std::max(size.y, 0.0001f);
+        const float width = std::max(size.x, size.z);
+        const float extent = std::max(height, width);
+
+        // 1.9x foi o fator ja calibrado no preview do AnimGraph com FOV 45 —
+        // enquadra o corpo inteiro com folga em cima e embaixo. Reaproveitado
+        // aqui de proposito: dois previews do mesmo editor com enquadramentos
+        // diferentes parecem defeito.
+        const glm::vec3 focal(
+            (worldMin.x + worldMax.x) * 0.5f,
+            (worldMin.y + worldMax.y) * 0.5f,
+            (worldMin.z + worldMax.z) * 0.5f);
+
+        m_PreviewRenderer->m_Camera->SetView(focal, extent * 1.9f);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -234,8 +319,31 @@ namespace axe
             else if (def.Type == "Mesh")
             {
                 auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
-                mc.Data = MeshFactory::CreateByUUID(def.AssetUUID.empty() ? PrimitiveUUID::Sphere : def.AssetUUID);
+
+                // SC24 — AQUI estava o motivo de a pistola nao aparecer.
+                //
+                // Esta linha era um CreateByUUID incondicional. Para uma
+                // primitiva funciona; para um asset importado a fabrica nao
+                // conhece o UUID e devolve nada, apagando a malha que o
+                // SyncMeshFromAsset tinha acabado de carregar. E como este
+                // Sync roda a cada mudanca no painel, a pistola era carregada
+                // e destruida no mesmo frame — nenhuma escala ia adiantar,
+                // porque nao havia malha nenhuma para escalar.
+                const bool changed = (mc.AssetUUID != def.AssetUUID) || !mc.Data;
                 mc.AssetUUID = def.AssetUUID;
+
+                if (changed)
+                {
+                    mc.Data = def.AssetUUID.empty()
+                        ? MeshFactory::CreateByUUID(PrimitiveUUID::Sphere)
+                        : MeshFactory::ResolveByUUID(def.AssetUUID);
+
+                    // Reenquadra: a pistola e o personagem diferem em ordens de
+                    // grandeza, e manter a camera da malha anterior deixaria a
+                    // nova fora de vista — que e exatamente o sintoma que
+                    // parecia "escala errada".
+                    m_CameraFramedFor = nullptr;
+                }
             }
             // ── Material ──────────────────────────────────────────────────────
             else if (def.Type == "Material" && !def.AssetUUID.empty())
@@ -333,6 +441,16 @@ namespace axe
                 if (reg.all_of<ColliderComponent>(m_PreviewEntity))
                     reg.remove<ColliderComponent>(m_PreviewEntity);
             }
+        }
+
+        // SC15 — enquadra a camera UMA vez por asset. Aqui no fim, e nao no
+        // OpenForAsset: naquele momento a malha ainda nao foi resolvida (o
+        // SkeletalMeshAsset e carregado neste proprio laco), e medir bounds
+        // vazios daria uma distancia sem sentido.
+        if (m_CameraFramedFor != m_ScriptAsset.get())
+        {
+            FramePreviewCamera();
+            m_CameraFramedFor = m_ScriptAsset.get();
         }
     }
 

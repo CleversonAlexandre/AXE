@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "axe/asset/asset_database.hpp"
+#include "axe/script/script_paths.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 
 namespace axe
@@ -104,6 +105,12 @@ namespace axe
 		AssetDatabase::Get().Clear();
 		AssetDatabase::Get().Load(m_CurrentProject->RootPath);
 
+		// SC4 — limpeza de artefatos de script orfaos. Feita AQUI, e nao em
+		// qualquer outro momento, porque este e o unico ponto em que o
+		// AssetDatabase acabou de ser carregado: antes disso a pergunta "este
+		// UUID ainda existe?" nao tem resposta confiavel e apagar seria chute.
+		ScriptPaths::SweepOrphans();
+
 		//AXE_CORE_INFO("ProjectManager: projeto '{}' aberto.", m_CurrentProject->Name);
 		return true;
 	}
@@ -128,6 +135,12 @@ namespace axe
 		std::filesystem::create_directories(root / "Assets" / "Materials");
 		std::filesystem::create_directories(root / "Assets" / "Scripts");
 		std::filesystem::create_directories(root / "Assets" / "Audio");
+
+		// SC4 — destino dos artefatos gerados pelo compilador de script. As duas
+		// sao 100% regeneraveis a partir de Assets/: entram no .gitignore do
+		// projeto sem perda nenhuma, e apagar as duas so custa um Compilar.
+		std::filesystem::create_directories(root / "Intermediate" / "Scripts");
+		std::filesystem::create_directories(root / "Binaries" / "Scripts");
 
 		AXE_CORE_INFO("ProjectManager: estrutura criada em '{}'", root.string());
 	}

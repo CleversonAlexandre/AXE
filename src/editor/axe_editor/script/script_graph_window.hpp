@@ -60,6 +60,104 @@ namespace axe
         // Undo/Redo — snapshot based
         void PushUndo(const std::string& actionName);  // call BEFORE making changes
         void CommitUndo(const std::string& actionName);   // call AFTER making changes
+
+        // ── SC7: undo por GESTO (portado do Control Rig) ──────────────────────
+        //
+        // PushUndo/CommitUndo exigem que quem edita conheça o INÍCIO e o FIM da
+        // ação. Para um clique de menu isso é trivial; para um ARRASTO é
+        // impossível — quando o código percebe que o node se moveu, o gesto já
+        // começou, e não há onde encaixar o PushUndo. Foi exatamente por isso
+        // que "Move Node" nunca entrou no histórico daqui: das 28 ações
+        // registradas, mover node não é uma delas, e o Control Rig tem a dele.
+        //
+        // O mecanismo do rig resolve invertendo: em vez de fotografar o "antes"
+        // quando a ação começa, mantém-se SEMPRE uma foto do último estado
+        // confirmado (m_Baseline). Aí qualquer edição só precisa AVISAR que
+        // aconteceu; o comando é fechado depois, quando o gesto termina de
+        // verdade.
+        //
+        // MarkEdited pode ser chamado dezenas de vezes durante um arrasto: só a
+        // primeira abre o passo, e as seguintes são no-op. Sem isso, arrastar
+        // um node de um canto ao outro viraria um passo de undo POR FRAME.
+        void MarkEdited(const char* actionName);
+
+        // ── SC9: aplicar as posicoes do MODELO de volta no canvas ─────────────
+        //
+        // O node-editor guarda a posicao de cada node por conta propria, e ela
+        // so era empurrada de volta no m_FirstFrame. Depois de um Undo, o
+        // modelo voltava para a posicao antiga mas o CANVAS continuava com a
+        // nova — e no frame seguinte a deteccao de arrasto via a diferenca,
+        // marcava "Move Node" e gravava a posicao do canvas por cima da
+        // restaurada. O undo era desfeito por si mesmo, em silencio.
+        //
+        // Flag em vez de chamada direta porque Undo() roda FORA do par
+        // ed::Begin/End; aplicar ali dependeria de o node-editor aceitar
+        // SetNodePosition sem frame aberto. Consumida no inicio do desenho do
+        // canvas, onde o contexto e garantido.
+        bool m_PendingPositionSync = false;
+
+        // Nodes a selecionar no proximo frame do canvas. Mesma razao do
+        // m_PendingPositionSync: ed::SelectNode fora do Begin/End opera sobre
+        // um contexto que ainda nao viu os nodes.
+        std::vector<ed::NodeId> m_PendingSelectNodes;
+
+        // ── SC11: posicoes no instante em que o botao do mouse desceu ─────────
+        //
+        // O arrasto de node deixou de depender de heuristica. Antes eu tentava
+        // NOTAR que um node se moveu e fechar o passo "quando o gesto parecer
+        // ter acabado" (IsAnyItemActive + IsMouseDown). Nao consegui provar em
+        // que ponto isso falhava — e um mecanismo de undo que funciona "quase
+        // sempre" e pior do que nao ter, porque o autor deixa de confiar e
+        // passa a salvar antes de cada movimento.
+        //
+        // Agora o inicio e o fim do gesto sao dois eventos EXATOS do mouse.
+        // No clique, guarda-se onde cada node estava; na soltura, compara-se.
+        // Nao ha o que estimar.
+        std::vector<std::pair<int, ImVec2>> m_DragStartPositions;
+
+        // Restaura um snapshot preservando em qual grafo o autor estava.
+        void RestoreFromSnapshot(const std::string& snapshot);
+
+        // ── SC8: área de transferência de nodes ───────────────────────────────
+        //
+        // Ctrl+C copiava nada e ainda CRIAVA um Comment: o atalho de comentário
+        // era a tecla 'C' sem checar modificador, então qualquer Ctrl+C no
+        // canvas virava um comentário novo.
+        //
+        // O clipboard é uma string JSON no próprio editor, e não o clipboard do
+        // sistema: colar texto arbitrário de fora produziria um grafo
+        // imprevisível, e não há como validar de onde o JSON veio.
+        void CopySelectedNodes(bool cut);
+        void PasteNodes();
+        void DuplicateSelectedNodes();
+        void SaveScript();          // o mesmo que o botão Save da barra
+        std::string m_NodeClipboard;
+        void CommitPendingUndo();   // uma vez por frame, no fim do desenho
+
+        // ── SC16: cobertura automatica de undo ────────────────────────────────
+        //
+        // A auditoria dos paineis achou ~60 widgets que escrevem direto no
+        // asset sem passar por undo nenhum: praticamente todo o inspetor de
+        // componentes (Rigidbody, Collider, CharacterController, SpringArm,
+        // Camera), os defaults de variavel no painel Node, e parte do Members.
+        //
+        // Sair colocando PushUndo/CommitUndo em sessenta lugares seria repetir
+        // o erro que gerou o problema: um site novo nasce sem cobertura e
+        // ninguem nota, porque a falta de undo nao quebra nada — so custa o
+        // trabalho de quem editou.
+        //
+        // Como o snapshot ja e o ASSET INTEIRO, o undo nao precisa saber ONDE
+        // a edicao aconteceu. Basta perceber QUANDO uma interacao terminou e
+        // comparar. m_AnyItemActiveLastFrame detecta a borda de desativacao de
+        // qualquer widget de qualquer painel; a comparacao contra o baseline
+        // decide se houve mudanca de fato. Um site novo nasce coberto.
+        bool        m_AnyItemActiveLastFrame = false;
+        std::string m_ActiveWidgetWindow;   // painel do widget em uso, para nomear o passo
+
+        // Fecha o passo de undo de um arrasto de node usando as posicoes
+        // guardadas em m_DragStartPositions como "antes".
+        void CommitNodeDrag();
+        void RefreshBaseline();     // realinha o "antes" com o estado atual
         void Undo();
         void Redo();
         bool CanUndo() const { return m_History.CanUndo(); }
@@ -117,7 +215,18 @@ namespace axe
         void DrawNode(ScriptNode* node);
         void HandlePreviewInput();
         void DrawPreviewGizmo();       // gizmo sobreposto na preview
-        void DrawScriptDetails();      // conteúdo do painel Details quando objeto selecionado
+        void DrawScriptDetails();
+
+        // ── S3: painel dos nodes de referencia entre scripts ──────────────────
+        //
+        // Escolhe o .axescript alvo (guardado por UUID em StringValue) e, nos
+        // nodes de variavel, qual variavel dele (nome em StringLocalValue).
+        //
+        // A lista de variaveis vem do MANIFESTO — o proprio .axescript, lido do
+        // disco. Nao da DLL do alvo: carrega-la aqui criaria dependencia de
+        // build entre scripts e mataria o hot reload isolado, que e a razao de
+        // cada script ser uma DLL propria.
+        void DrawScriptRefNodeDetails(ScriptNode* node);      // conteúdo do painel Details quando objeto selecionado
         // Conteúdo de detalhes de UMA variável (Type, Name, Default Value,
         // Tamanho para arrays, Exposed, Description, Categoria). Extraído de
         // DrawScriptDetails para ser reutilizável tanto por um node Get/Set
@@ -138,6 +247,21 @@ namespace axe
         void DrawMyBlueprintWindow();  // painel Variables / Events / Dispatchers
         void CompileScript();
         void InitPreviewScene();
+
+        // ── SC15: enquadra a camera do preview no conteudo ────────────────────
+        //
+        // A camera do preview nascia sempre na posicao padrao da EditorCamera
+        // (foco na origem, distancia fixa). Como o Script Editor NAO normaliza
+        // a escala do personagem — quem manda e o Transform raiz do asset, que
+        // o autor definiu — a camera padrao caia dentro do modelo e a tela
+        // abria mostrando os pes.
+        //
+        // Mede a malha em espaco de MUNDO (bounds x escala da entidade) e
+        // aponta a camera para o meio dela. Uma vez por asset aberto: refazer
+        // isso a cada sync roubaria a orbita que o autor acabou de ajustar —
+        // mesma regra ja aplicada no preview do AnimGraph.
+        void FramePreviewCamera();
+        const void* m_CameraFramedFor = nullptr;
         void SyncMeshFromSource();
         void SyncMeshFromAsset();
         void SyncComponentsToPreview();  // espelha ScriptComponentDef → componentes reais no preview
@@ -242,7 +366,13 @@ namespace axe
         bool               m_PendingPromoteIsInput = false;
         int                m_PendingPromoteVarType = 0;
         ScriptPinType      m_PendingPromotePinType = ScriptPinType::Float;
-        bool   m_CtxOpen[7] = { true, true, true, true, true, false, false };
+        // SC18 — 11 posicoes, uma por categoria de s_Cats. Era 7 enquanto o
+        // menu percorria 8 categorias: a oitava (Input) lia e escrevia UMA
+        // POSICAO ALEM do array, em cima do que estivesse na memoria a seguir.
+        // Nao dava crash porque bool[7] costuma cair num bloco com folga, mas
+        // era estouro de buffer real toda vez que o menu abria.
+        bool   m_CtxOpen[11] = { true, true, true, true, true, false, false,
+                                 false, false, true, false };
 
         char   m_CompSearchBuf[128] = {};
         int    m_SelectedCompIndex = -1; // componente selecionado no Scene Graph
@@ -256,6 +386,15 @@ namespace axe
         float       m_MsgTimer = 0.0f;
 
         std::vector<std::string> m_ConsoleLines;
+
+        // ── SC15: filtro do console ───────────────────────────────────────────
+        // Publico porque ClassifyConsoleLine, no .cpp, e uma funcao livre.
+    public:
+        enum class ConsoleSeverity { Info, Warning, Error };
+    private:
+        bool m_ConsoleShowInfo = true;
+        bool m_ConsoleShowWarn = true;
+        bool m_ConsoleShowError = true;
 
         // My Blueprint panel state
         char  m_NewVarName[64] = "NewVar";
@@ -303,6 +442,77 @@ namespace axe
         int  m_RenamingComment = -1;
         bool m_RenameCommentJustStarted = false;
         std::vector<ed::NodeId> m_PendingDeleteNodes;
+
+        // ── SC2: fio carregado no Ctrl + clique esquerdo ──────────────────────
+        // Ctrl+LMB num pin conectado DESPLUGA os fios daquele pin e passa a
+        // "carregá-los" presos ao mouse, para replugar num pin compatível —
+        // mesmo gesto da Unreal. Ctrl+RMB despluga na hora, sem carregar.
+        //
+        // O imgui-node-editor não tem esse modo nativo: ele só sabe iniciar um
+        // link a partir de um drag que ele mesmo detectou. Não existe API para
+        // injetar um drag sintético, então o carregamento é estado nosso, e o
+        // fio provisório é desenhado à mão (ver DrawCarriedWire).
+        //
+        // Um pin de SAÍDA pode ter N fios; ao pegá-lo, todos vêm juntos e todos
+        // são replugados no destino novo. É o comportamento da Unreal e o que
+        // evita a pergunta "qual dos cinco fios você quis mover?".
+        bool                    m_CarryingWire = false;
+        // Pins da OUTRA ponta de cada fio pego — os que continuam ancorados no
+        // grafo. Se o pin agarrado era Input, estes são Outputs (e o destino
+        // novo tem de ser um Input), e vice-versa.
+        std::vector<ed::PinId>  m_CarriedRemotePins;
+        // Pin de onde os fios foram arrancados. Só serve para restaurar no
+        // cancelamento (Esc / clique direito / clique no vazio).
+        ed::PinId               m_CarriedFromPin = {};
+
+        // Posição (em espaço de canvas) do centro do ícone de cada pin, no
+        // frame atual. O imgui-node-editor não expõe a posição de um pin —
+        // GetNodePosition/GetNodeSize dão só a caixa do node — então o
+        // preview do fio carregado não teria de onde partir. Preenchido por
+        // TrackPinRect durante o desenho dos nodes e limpo a cada frame; nunca
+        // consultar fora do par ed::Begin/ed::End.
+        std::vector<std::pair<int, ImVec2>> m_PinCanvasPos;
+        void   TrackPinRect(ed::PinId id);          // chamar logo após o ícone do pin
+        bool   GetPinCanvasPos(ed::PinId id, ImVec2& out) const;
+
+        // Um gesto de Ctrl+direito (desplugar, ou abortar o carregamento) não
+        // pode deixar um menu de contexto abrir logo atrás dele — pareceria
+        // que foi o menu que apagou o fio. Vale só pelo frame em que o gesto
+        // aconteceu.
+        bool m_SuppressCtxMenuThisFrame = false;
+
+        // Cursor de mão desenhado por nós. Nem o ImGui nem o GLFW nem o Win32
+        // têm "palma aberta"/"punho fechado" entre os cursores padrão — o
+        // ImGuiMouseCursor_Hand é o dedo apontando (aquele "L"), e a lista do
+        // GLFW e a do Windows param no mesmo lugar. Um cursor customizado do
+        // sistema exigiria bitmap + glfwCreateCursor, o que só existe atrás da
+        // abstração Window da engine. Desenhar no ImGui resolve sem furar
+        // camada nenhuma: escondemos o cursor do SO e pintamos o nosso.
+        enum class HandCursor { None, Open, Closed };
+        HandCursor m_HandCursor = HandCursor::None;
+
+        // Desenhado DEPOIS de ed::End(), em espaço de tela: dentro do canvas o
+        // desenho é escalado pelo zoom, e um cursor que encolhe quando você
+        // afasta a vista está errado.
+        void DrawHandCursor();
+
+        // ── SC3: valor padrão de pin de entrada ───────────────────────────────
+        // ScriptPin carrega um ScriptValue (SC17; antes eram cinco campos
+        // paralelos), e ScriptGraphCompiler::ResolvePin() o LÊ para todo pin
+        // de entrada sem fio. Só que nenhuma tela do editor jamais ESCREVEU
+        // neles — grep no src/editor inteiro não acha uma atribuição sequer
+        // (as que aparecem são do Material Graph, que é outro PinType e faz
+        // isso certo). Consequência: entrada desconectada sempre compilava
+        // 0 / false / "" / vec3(0), e digitar uma constante era impossível.
+        //
+        // Uma função só, usada pelo canvas E pelo painel Node, para as duas
+        // telas não terem como divergir — mesmo motivo pelo qual
+        // DrawSetVariableLocalValueEditor foi extraída.
+        float PinDefaultEditorWidth(const ScriptPin& pin) const;  // 0 = sem editor
+        void  DrawPinDefaultEditor(ScriptPin& pin, float width);
+
+        void DrawCarriedWire();   // preview do(s) fio(s) presos ao mouse
+        void CancelCarriedWire(); // religa tudo no pin original e sai do modo
         bool  m_CompCollapsed[32] = {};
         bool  m_ScaleLocked = false; // cadeado do Scale: true = escala uniforme (todos os eixos juntos)
         ImVec2      m_GraphWindowCenter = {};
@@ -310,6 +520,30 @@ namespace axe
         Scene* m_ActiveScene = nullptr;
         CommandHistory m_History;
         std::string    m_SnapshotBeforeAction;
+
+        // Foto do último estado CONFIRMADO. É o "antes" de todo passo aberto
+        // por MarkEdited. Precisa ser realinhado depois de cada commit, de
+        // cada Undo/Redo e ao abrir um asset — um baseline velho faria o
+        // próximo Ctrl+Z voltar demais, engolindo edições que já tinham
+        // passo próprio.
+        std::string    m_Baseline;
+        bool           m_PendingUndo = false;
+        std::string    m_PendingUndoName;
+
+        // ── SC6: estado de compilação, refletido no botão Compilar ────────────
+        //
+        // O grafo na tela e o C++ compilado podem estar dessincronizados sem
+        // que nada avise. Antes o botão parecia igual nos três casos — nunca
+        // compilado, compilado com sucesso, compilado com erro — e a única
+        // pista era rolar o console.
+        //
+        // m_GraphDirty é marcado dentro de CommitUndo(), e não em cada ponto
+        // de edição: CommitUndo é o funil por onde TODA mutação do grafo passa
+        // (é o que o sistema de undo exige), então marcar ali cobre node novo,
+        // variável, função, valor de pin e ligação de uma vez. Marcar em cada
+        // chamador seria vinte lugares para esquecer um.
+        bool m_GraphDirty = true;    // true no início: nunca compilado nesta sessão
+        bool m_LastCompileFailed = false;
         std::string    m_PendingUndoSnapshot;
         std::string    m_PendingRedoSnapshot;  // cena ativa do editor (para propagar mudanças em Play)
     };

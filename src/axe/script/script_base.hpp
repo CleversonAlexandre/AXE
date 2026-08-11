@@ -214,6 +214,38 @@ namespace axe
 
     // ScriptBase — classe que todo script gerado herda
     // ─────────────────────────────────────────────────────────────────────────
+    // ─── S3: acesso a variaveis de OUTRO script ──────────────────────────────
+    //
+    //  Para "Cast To BP_Weapon" ter sentido, um script precisa ler e escrever
+    //  variaveis de outro. As duas formas possiveis:
+    //
+    //  (a) header gerado do alvo, acesso direto tipado — rapido, mas cria
+    //      DEPENDENCIA DE BUILD entre DLLs de script: recompilar BP_Weapon
+    //      obrigaria a recompilar todo mundo que o referencia, e o hot reload
+    //      isolado (uma DLL por script) morre.
+    //  (b) interface generica por nome — um lookup por acesso, e cada DLL
+    //      continua independente.
+    //
+    //  Escolhi (b). O custo e um strcmp por acesso; o custo de (a) e o modelo
+    //  de compilacao inteiro. Se um dia doer, cacheia-se um handle — e uma
+    //  otimizacao interna, nao uma mudanca de arquitetura.
+    //
+    //  O slot e POD com buffer FIXO de string, e nao std::string, pelo mesmo
+    //  motivo ja registrado no PrintOnScreen: script DLL e axe.dll podem ser
+    //  compilados com CRTs diferentes, e o layout de std::string nao e estavel
+    //  atravessando essa fronteira.
+    struct AXE_API ScriptVarSlot
+    {
+        int   Kind = 0;      // ScriptVarType como int
+        bool  B = false;
+        int   I = 0;
+        float F = 0.0f;
+        float V[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        char  S[256] = {};
+
+        void SetString(const char* src);
+    };
+
     class AXE_API ScriptBase
     {
     public:
@@ -300,6 +332,33 @@ namespace axe
         // Usar no lugar de ScenePtr->DestroyEntity() para evitar deixar
         // ghost bodies na simulação.
         void DestroyEntitySafe(entt::entity target);
+
+        // ── S3: identidade e variaveis expostas ───────────────────────────────
+        //
+        // Sobrescritos pelo C++ GERADO de cada script. A implementacao base
+        // devolve vazio/false para que um script compilado ANTES do S3
+        // continue carregando: ele simplesmente nunca casa com nenhum cast, em
+        // vez de nao linkar.
+        //
+        // O identificador e o UUID do .axescript, e nao o nome. Dois scripts
+        // podem ter o mesmo nome de exibicao; o UUID e a identidade em toda a
+        // engine, e um cast que compara nome "pega o errado em silencio" — o
+        // mesmo defeito que o Control Rig ja documentou com RigItemRef.
+        virtual const char* GetScriptClassId() const { return ""; }
+
+        virtual bool _GetVar(const char* name, ScriptVarSlot& out) const { (void)name; (void)out; return false; }
+        virtual bool _SetVar(const char* name, const ScriptVarSlot& in) { (void)name; (void)in;  return false; }
+
+        // Script rodando numa entidade da cena, ou nullptr.
+        //
+        // Implementado em axe.dll: ler ScriptComponent exige conhecer o
+        // registry, e uma DLL de script nao pode depender do layout dele.
+        ScriptBase* GetScriptOn(entt::entity target) const;
+
+        // Cast: devolve o script de `target` SE ele for da classe pedida.
+        // Uma chamada em vez de duas linhas no codigo gerado — e o lugar onde
+        // a regra "identidade e UUID" fica escrita uma vez so.
+        ScriptBase* CastScript(entt::entity target, const char* classId) const;
 
     protected:
         ScriptContext    m_Context;

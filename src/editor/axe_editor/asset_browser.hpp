@@ -8,6 +8,7 @@
 #include "axe/asset/asset.hpp"
 #include "axe/graphics/texture.hpp"
 #include "material_thumbnail_renderer.hpp"
+#include "mesh_thumbnail_renderer.hpp"
 #include "file_dialog.hpp"
 #include <string>
 #include <vector>
@@ -46,6 +47,7 @@ namespace axe
         void SetMaterialDropCallback(MaterialDropCallback cb) { m_MaterialDropCallback = cb; }
         void SetAssetRenamedCallback(AssetRenamedCallback cb) { m_AssetRenamedCallback = cb; }
         void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
+        void SetMeshThumbnailRenderer(MeshThumbnailRenderer* r) { m_MeshThumbnails = r; }
 
         void OnFileDrop(const std::string& filepath);
 
@@ -62,6 +64,7 @@ namespace axe
         void DrawContextMenuEmpty();
 
         MaterialThumbnailRenderer* m_ThumbnailRenderer = nullptr;
+        MeshThumbnailRenderer* m_MeshThumbnails = nullptr;
 
     private:
         // Desenho

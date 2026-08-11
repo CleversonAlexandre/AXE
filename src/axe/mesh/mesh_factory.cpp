@@ -1,4 +1,7 @@
 #include "mesh_factory.hpp"
+#include <filesystem>
+#include "axe/mesh/mesh_loader.hpp"
+#include "axe/asset/asset_database.hpp"
 #include "primitive_uuid.hpp"
 #include "axe/log/log.hpp"
 
@@ -325,4 +328,22 @@ namespace axe
 		return std::make_shared<Mesh>(verts, idx);
 	}
 
+
+	std::shared_ptr<Mesh> MeshFactory::ResolveByUUID(const std::string& uuid)
+	{
+		if (uuid.empty()) return nullptr;
+
+		// Primitiva primeiro: ela nao tem arquivo no disco, e procura-la no
+		// AssetDatabase seria uma consulta que sempre falha.
+		if (IsPrimitive(uuid))
+			return CreateByUUID(uuid);
+
+		const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+		if (!rec) return nullptr;
+
+		std::error_code ec;
+		if (!std::filesystem::exists(rec->FilePath, ec)) return nullptr;
+
+		return MeshLoader::Load(rec->FilePath.string()).MeshData;
+	}
 } // namespace axe

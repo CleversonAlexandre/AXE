@@ -1,5 +1,11 @@
 #include "script_graph.hpp"
 #include "axe/log/log.hpp"
+// std::remove_if / std::find — já eram usados neste .cpp por include
+// transitivo; explicitados aqui porque S1 acrescentou mais usos e depender de
+// include indireto é o tipo de coisa que quebra ao mexer em outro header.
+#include <algorithm>
+#include <vector>
+#include <cmath>   // SC10: isfinite no conserto de posicao
 
 namespace axe
 {
@@ -250,7 +256,7 @@ namespace axe
             auto node = makeNode(baseId, "Divide", ScriptNodeCategory::Math);
             node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "B", ScriptPinType::Float, ed::PinKind::Input);
-            node->Inputs.back().DefaultFloat = 1.0f; // evita divisão por 0 no caso comum de B desconectado
+            node->Inputs.back().Default.Float = 1.0f; // evita divisão por 0 no caso comum de B desconectado
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
             return node;
         }
@@ -290,7 +296,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Float, ed::PinKind::Input);
-            node->Inputs.back().DefaultFloat = 1.0f; // intervalo inicial razoável: 0..1
+            node->Inputs.back().Default.Float = 1.0f; // intervalo inicial razoável: 0..1
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
             return node;
         }
@@ -311,7 +317,7 @@ namespace axe
             auto node = makeNode(baseId, "Random Float", ScriptNodeCategory::Math);
             node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Float, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Float, ed::PinKind::Input);
-            node->Inputs.back().DefaultFloat = 1.0f; // intervalo inicial razoável: 0..1
+            node->Inputs.back().Default.Float = 1.0f; // intervalo inicial razoável: 0..1
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Float, ed::PinKind::Output);
             return node;
         }
@@ -320,7 +326,7 @@ namespace axe
             auto node = makeNode(baseId, "Random Int", ScriptNodeCategory::Math);
             node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Int, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Int, ed::PinKind::Input);
-            node->Inputs.back().DefaultInt = 100; // intervalo inicial razoável: 0..100
+            node->Inputs.back().Default.Int = 100; // intervalo inicial razoável: 0..100
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Int, ed::PinKind::Output);
             return node;
         }
@@ -339,7 +345,7 @@ namespace axe
             auto node = makeNode(baseId, "Random Range (Vec3)", ScriptNodeCategory::Math);
             node->Inputs.emplace_back(m_NextId++, "Min", ScriptPinType::Vec3, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Max", ScriptPinType::Vec3, ed::PinKind::Input);
-            node->Inputs.back().DefaultVec3 = glm::vec3(1.0f, 1.0f, 1.0f);
+            node->Inputs.back().Default.Vec = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::Vec3, ed::PinKind::Output);
             return node;
         }
@@ -375,7 +381,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "A", ScriptPinType::String, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Start", ScriptPinType::Int, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Length", ScriptPinType::Int, ed::PinKind::Input);
-            node->Inputs.back().DefaultInt = 999999; // "até o fim" por padrão — substr clampa sozinho
+            node->Inputs.back().Default.Int = 999999; // "até o fim" por padrão — substr clampa sozinho
             node->Outputs.emplace_back(m_NextId++, "Result", ScriptPinType::String, ed::PinKind::Output);
             return node;
         }
@@ -485,7 +491,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "First Index", ScriptPinType::Int, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Last Index", ScriptPinType::Int, ed::PinKind::Input);
-            node->Inputs.back().DefaultInt = 10; // intervalo inicial razoável: 0..10 inclusive
+            node->Inputs.back().Default.Int = 10; // intervalo inicial razoável: 0..10 inclusive
             node->Outputs.emplace_back(m_NextId++, "Loop Body", ScriptPinType::Flow, ed::PinKind::Output);
             node->Outputs.emplace_back(m_NextId++, "Index", ScriptPinType::Int, ed::PinKind::Output);
             node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
@@ -583,7 +589,7 @@ namespace axe
             auto node = makeNode(baseId, "Delay", ScriptNodeCategory::FlowControl);
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Duration", ScriptPinType::Float, ed::PinKind::Input);
-            node->Inputs.back().DefaultFloat = 1.0f;
+            node->Inputs.back().Default.Float = 1.0f;
             node->Outputs.emplace_back(m_NextId++, "Completed", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -704,7 +710,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Direction", ScriptPinType::Vec3, ed::PinKind::Input);
             {
                 ScriptPin spd(m_NextId++, "Speed", ScriptPinType::Float, ed::PinKind::Input);
-                spd.DefaultFloat = 5.0f;
+                spd.Default.Float = 5.0f;
                 node->Inputs.push_back(spd);
             }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -716,7 +722,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             {
                 ScriptPin force(m_NextId++, "Force", ScriptPinType::Float, ed::PinKind::Input);
-                force.DefaultFloat = 5.0f;
+                force.Default.Float = 5.0f;
                 node->Inputs.push_back(force);
             }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -735,12 +741,12 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             {
                 ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
-                name.DefaultString = "Speed";
+                name.Default.Str = "Speed";
                 node->Inputs.push_back(name);
             }
             {
                 ScriptPin val(m_NextId++, "Valor", ScriptPinType::Float, ed::PinKind::Input);
-                val.DefaultFloat = 0.0f;
+                val.Default.Float = 0.0f;
                 node->Inputs.push_back(val);
             }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -752,7 +758,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             {
                 ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
-                name.DefaultString = "IsGrounded";
+                name.Default.Str = "IsGrounded";
                 node->Inputs.push_back(name);
             }
             node->Inputs.emplace_back(m_NextId++, "Valor", ScriptPinType::Bool, ed::PinKind::Input);
@@ -769,7 +775,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             {
                 ScriptPin name(m_NextId++, "Parametro", ScriptPinType::String, ed::PinKind::Input);
-                name.DefaultString = "Attack";
+                name.Default.Str = "Attack";
                 node->Inputs.push_back(name);
             }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -818,7 +824,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             {
                 ScriptPin fov(m_NextId++, "FOV", ScriptPinType::Float, ed::PinKind::Input);
-                fov.DefaultFloat = 60.0f;
+                fov.Default.Float = 60.0f;
                 node->Inputs.push_back(fov);
             }
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
@@ -826,6 +832,48 @@ namespace axe
         }
 
         // ── Destroy Entity ────────────────────────────────────────────────────
+        // ── S3: referencia entre scripts ──────────────────────────────────────
+        //
+        // A identidade da classe alvo e o UUID do .axescript, guardado em
+        // StringValue. O NOME de exibicao fica em StringLocalValue, so para a
+        // tela: renomear o asset nao pode quebrar o cast, e dois scripts com o
+        // mesmo nome nao podem virar o mesmo alvo.
+        if (t == "CastToScript")
+        {
+            auto node = makeNode(baseId, "Cast To Script", ScriptNodeCategory::FlowControl);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Object", ScriptPinType::Object, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Succeeded", ScriptPinType::Flow, ed::PinKind::Output);
+            node->Outputs.emplace_back(m_NextId++, "Failed", ScriptPinType::Flow, ed::PinKind::Output);
+            // A saida "As" carrega a ENTIDADE, nao um ponteiro de script: e o
+            // que os outros nodes ja sabem consumir, e um ponteiro cru no grafo
+            // sobreviveria a um hot reload como lixo. O tipo e reconferido em
+            // cada acesso, que custa um strcmp e nao pode ficar obsoleto.
+            node->Outputs.emplace_back(m_NextId++, "As", ScriptPinType::Object, ed::PinKind::Output);
+            return node;
+        }
+
+        if (t == "GetScriptVar")
+        {
+            auto node = makeNode(baseId, "Get Script Var", ScriptNodeCategory::Variable);
+            node->Inputs.emplace_back(m_NextId++, "Object", ScriptPinType::Object, ed::PinKind::Input);
+            // Wildcard ate o autor escolher a variavel no painel: o tipo vem do
+            // manifesto do script alvo, e fixar Float aqui obrigaria um Cast
+            // logo depois em todo uso que nao fosse Float.
+            node->Outputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Output);
+            return node;
+        }
+
+        if (t == "SetScriptVar")
+        {
+            auto node = makeNode(baseId, "Set Script Var", ScriptNodeCategory::Variable);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Object", ScriptPinType::Object, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Value", ScriptPinType::Wildcard, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         if (t == "DestroyEntity")
         {
             auto node = makeNode(baseId, "Destroy Entity", ScriptNodeCategory::Action);
@@ -907,7 +955,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
             auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
-            v.DefaultFloat = 1.0f;
+            v.Default.Float = 1.0f;
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -917,7 +965,7 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Target", ScriptPinType::Object, ed::PinKind::Input);
             auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
-            pi.DefaultFloat = 1.0f;
+            pi.Default.Float = 1.0f;
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -934,9 +982,9 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Sound", ScriptPinType::String, ed::PinKind::Input);
             auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
-            v.DefaultFloat = 1.0f;
+            v.Default.Float = 1.0f;
             auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
-            pi.DefaultFloat = 1.0f;
+            pi.Default.Float = 1.0f;
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -947,9 +995,9 @@ namespace axe
             node->Inputs.emplace_back(m_NextId++, "Sound", ScriptPinType::String, ed::PinKind::Input);
             node->Inputs.emplace_back(m_NextId++, "Location", ScriptPinType::Vec3, ed::PinKind::Input);
             auto& v = node->Inputs.emplace_back(m_NextId++, "Volume", ScriptPinType::Float, ed::PinKind::Input);
-            v.DefaultFloat = 1.0f;
+            v.Default.Float = 1.0f;
             auto& pi = node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
-            pi.DefaultFloat = 1.0f;
+            pi.Default.Float = 1.0f;
             node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
             return node;
         }
@@ -1212,12 +1260,318 @@ namespace axe
         }
     }
 
+    // S1 — AddLink passa a impor CARDINALIDADE, e não apenas registrar o fio.
+    //
+    // Regra (a mesma do Control Rig, pelas mesmas razões):
+    //   • pin de ENTRADA de dados aceita UM fio  — dois valores no mesmo pin
+    //     não têm desempate, e FindDataSource() do compilador pega o primeiro
+    //     do vector: o programa mudava de comportamento ao reordenar links.
+    //   • pin de SAÍDA de Flow aceita UM destino — dois destinos deixariam a
+    //     ORDEM de execução indefinida, que é justamente o que o fio de Flow
+    //     existe para definir.
+    //   • pin de SAÍDA de dados pode se espalhar para N destinos (fan-out
+    //     legítimo: um Speed alimenta cinco nodes).
+    //   • pin de ENTRADA de Flow pode receber N fios (convergência legítima:
+    //     dois caminhos chegando no mesmo Print String).
+    //
+    // Religar SUBSTITUI o fio anterior em vez de recusar — mesma escolha do
+    // rig. Recusar obrigaria o autor a apagar o fio antigo antes de puxar o
+    // novo, um passo a mais para expressar "quero que venha daqui agora".
     ScriptLink* ScriptGraph::AddLink(ed::PinId startPin, ed::PinId endPin)
     {
+        const ScriptPin* sp = FindPin(startPin);
+        const ScriptPin* ep = FindPin(endPin);
+
+        if (sp && ep)
+        {
+            const bool isFlow = (sp->Type == ScriptPinType::Flow || ep->Type == ScriptPinType::Flow);
+
+            // Entrada de dados ocupada → o fio antigo sai.
+            if (!isFlow)
+            {
+                m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                    [&](const ScriptLink& l) { return l.EndPin == endPin; }),
+                    m_Links.end());
+            }
+            // Saída de Flow ocupada → o destino antigo sai.
+            else
+            {
+                m_Links.erase(std::remove_if(m_Links.begin(), m_Links.end(),
+                    [&](const ScriptLink& l) { return l.StartPin == startPin; }),
+                    m_Links.end());
+            }
+        }
+
         int id = m_NextId++;
         m_Links.emplace_back(id, startPin, endPin);
         AXE_CORE_INFO("ScriptGraph: link {} → {}", startPin.Get(), endPin.Get());
         return &m_Links.back();
+    }
+
+    // ─── S1: consulta e integridade das ligações ──────────────────────────────
+
+    const ScriptNode* ScriptGraph::FindNodeOfPin(ed::PinId id) const
+    {
+        for (const auto& n : m_Nodes)
+        {
+            for (const auto& p : n->Inputs)  if (p.ID == id) return n.get();
+            for (const auto& p : n->Outputs) if (p.ID == id) return n.get();
+        }
+        return nullptr;
+    }
+
+    ScriptNode* ScriptGraph::FindNodeOfPin(ed::PinId id)
+    {
+        return const_cast<ScriptNode*>(
+            static_cast<const ScriptGraph*>(this)->FindNodeOfPin(id));
+    }
+
+    bool ScriptGraph::WouldCreateDataCycle(ed::PinId fromOutput, ed::PinId toInput) const
+    {
+        const ScriptNode* src = FindNodeOfPin(fromOutput);
+        const ScriptNode* dst = FindNodeOfPin(toInput);
+        if (!src || !dst) return false;
+        if (src == dst)   return true;   // auto-ligação já é o ciclo mínimo
+
+        // Existe caminho de DADOS de dst de volta até src? Se existe, fechar
+        // src → dst fecha o laço. Busca em profundidade iterativa: o grafo é
+        // pequeno e recursão aqui seria trocar um estouro de pilha por outro.
+        std::vector<const ScriptNode*> stack{ dst };
+        std::vector<const ScriptNode*> seen;
+
+        while (!stack.empty())
+        {
+            const ScriptNode* cur = stack.back();
+            stack.pop_back();
+
+            if (cur == src) return true;
+            if (std::find(seen.begin(), seen.end(), cur) != seen.end()) continue;
+            seen.push_back(cur);
+
+            // Para onde os pins de SAÍDA de dados de 'cur' apontam?
+            for (const auto& out : cur->Outputs)
+            {
+                if (out.Type == ScriptPinType::Flow) continue;
+                for (const auto& l : m_Links)
+                {
+                    if (l.StartPin != out.ID) continue;
+                    if (const ScriptNode* next = FindNodeOfPin(l.EndPin))
+                        stack.push_back(next);
+                }
+            }
+        }
+        return false;
+    }
+
+    ScriptLinkQuery ScriptGraph::QueryLink(ed::PinId a, ed::PinId b) const
+    {
+        ScriptLinkQuery q;
+        auto* self = const_cast<ScriptGraph*>(this);
+
+        ScriptPin* pA = self->FindPin(a);
+        ScriptPin* pB = self->FindPin(b);
+
+        // 1 — Os dois pins existem e são distintos.
+        if (!pA || !pB || pA == pB)
+        {
+            q.Message = "Invalid pin";
+            return q;
+        }
+
+        // 2 — Direção: exatamente um Output e um Input.
+        ScriptPin* o = (pA->Kind == ed::PinKind::Output) ? pA : pB;
+        ScriptPin* i = (pA->Kind == ed::PinKind::Input) ? pA : pB;
+        if (o->Kind != ed::PinKind::Output || i->Kind != ed::PinKind::Input)
+        {
+            q.Message = "Connect Output -> Input";
+            return q;
+        }
+
+        // 3 — Mesmo node. Não existia checagem: dava para ligar a saída de um
+        //     node na entrada dele mesmo e só descobrir no Compilar.
+        const ScriptNode* nodeO = FindNodeOfPin(o->ID);
+        const ScriptNode* nodeI = FindNodeOfPin(i->ID);
+        if (nodeO && nodeO == nodeI)
+        {
+            q.Message = "A node cannot connect to itself";
+            return q;
+        }
+
+        // 4 — Flow e dados nunca se misturam.
+        const bool oFlow = (o->Type == ScriptPinType::Flow);
+        const bool iFlow = (i->Type == ScriptPinType::Flow);
+        const bool oWild = (o->Type == ScriptPinType::Wildcard);
+        const bool iWild = (i->Type == ScriptPinType::Wildcard);
+        // Reroute é a única exceção: ele transporta Flow também, e por isso
+        // seus pins nascem Wildcard.
+        const bool oIsReroute = (nodeO && nodeO->Name == "Reroute");
+        const bool iIsReroute = (nodeI && nodeI->Name == "Reroute");
+        if (oFlow != iFlow && !(oWild && oIsReroute) && !(iWild && iIsReroute))
+        {
+            q.Message = "Flow cannot connect to data";
+            return q;
+        }
+
+        // 5 — Ciclo de dados. Só para fios de dados (ver WouldCreateDataCycle).
+        if (!oFlow && !iFlow && WouldCreateDataCycle(o->ID, i->ID))
+        {
+            q.Message = "Data cycle - the value would depend on itself";
+            return q;
+        }
+
+        // A partir daqui a ligação é possível; falta decidir COMO.
+        // ReplacesExisting não bloqueia, só informa.
+        for (const auto& l : m_Links)
+        {
+            if (!iFlow && l.EndPin == i->ID) { q.ReplacesExisting = true; break; }
+            if (oFlow && l.StartPin == o->ID) { q.ReplacesExisting = true; break; }
+        }
+
+        // 6 — Tipos idênticos.
+        if (ArePinsExact(o->Type, i->Type))
+        {
+            // Dois Reroutes ainda sem tipo fixado: aceita e não fixa nada — a
+            // cadeia inteira se resolve assim que qualquer ponta encostar em
+            // algo concreto.
+            q.Action = ScriptLinkAction::Accept;
+            q.LinkColorType = o->Type;
+            // Ligação trivial não merece tooltip: o canvas só mostra balão
+            // quando há algo a avisar. Mensagem vazia = silêncio.
+            q.Message = q.ReplacesExisting ? "Replaces the existing connection" : "";
+            return q;
+        }
+
+        // 7 — Wildcard de Reroute recebendo/entregando tipo concreto: o
+        //     Reroute assume o tipo dos DOIS lados de uma vez, então a ponta
+        //     ainda solta já nasce pronta.
+        if (oWild != iWild && (oIsReroute || iIsReroute))
+        {
+            const ScriptNode* wildNode = oWild ? nodeO : nodeI;
+            if (wildNode && wildNode->Name == "Reroute")
+            {
+                q.Action = ScriptLinkAction::AdoptWildcard;
+                q.AdoptType = oWild ? i->Type : o->Type;
+                q.AdoptNode = wildNode;
+                q.LinkColorType = q.AdoptType;
+                q.Message = "Reroute adopts the type";
+                return q;
+            }
+        }
+
+        // 8 — Wildcard de node genérico de Array (Array Add/Get/Length/...)
+        //     encostando num pin de array real: fixa o node no tipo concreto.
+        if ((oWild && IsArrayPinType(i->Type)) || (iWild && IsArrayPinType(o->Type)))
+        {
+            q.Action = ScriptLinkAction::AdoptArrayWildcard;
+            q.AdoptType = oWild ? i->Type : o->Type;
+            q.AdoptNode = oWild ? nodeO : nodeI;
+            q.LinkColorType = q.AdoptType;
+            q.Message = "Array adopts the element type";
+            return q;
+        }
+
+        // 9 — Wildcard de node de Cast (ToFloat/ToInt/ToBool/ToString): a
+        //     validação fina é IsWildcardCastCompatible, que já existia no
+        //     header e nunca era chamada.
+        if (iWild && !oWild)
+        {
+            ScriptPinType castOut = ScriptPinType::Wildcard;
+            if (nodeI) for (const auto& p : nodeI->Outputs)
+                if (p.Type != ScriptPinType::Flow) { castOut = p.Type; break; }
+
+            if (castOut != ScriptPinType::Wildcard &&
+                IsWildcardCastCompatible(o->Type, castOut))
+            {
+                q.Action = ScriptLinkAction::Accept;
+                q.LinkColorType = o->Type;
+                q.Message = "Connect (cast)";
+                return q;
+            }
+            q.Message = "This Cast does not accept that input type";
+            return q;
+        }
+
+        // 10 — Vec3 ↔ Vec4: cast implícito, aceito com aviso visual.
+        auto isVec = [](ScriptPinType t) {
+            return t == ScriptPinType::Vec3 || t == ScriptPinType::Vec4;
+            };
+        if (isVec(o->Type) && isVec(i->Type))
+        {
+            q.Action = ScriptLinkAction::AcceptImplicit;
+            q.LinkColorType = i->Type;
+            q.Message = "Implicit cast Vec3 <-> Vec4";
+            return q;
+        }
+
+        // 11 — Conversão numérica/textual: insere o node de Cast no meio.
+        auto isNumeric = [](ScriptPinType t) {
+            return t == ScriptPinType::Float || t == ScriptPinType::Int || t == ScriptPinType::Bool;
+            };
+        if (isNumeric(o->Type))
+        {
+            if (i->Type == ScriptPinType::Float) { q.ConversionNode = "ToFloat";  q.Message = "Insert To Float (automatic)"; }
+            else if (i->Type == ScriptPinType::Int) { q.ConversionNode = "ToInt";    q.Message = "Insert To Int (automatic)"; }
+            else if (i->Type == ScriptPinType::Bool) { q.ConversionNode = "ToBool";   q.Message = "Insert To Bool (automatic)"; }
+            else if (i->Type == ScriptPinType::String) { q.ConversionNode = "ToString"; q.Message = "Insert To String (automatic)"; }
+        }
+        else if (isVec(o->Type) && i->Type == ScriptPinType::String)
+        {
+            q.ConversionNode = "ToString"; q.Message = "Insert To String (automatic)";
+        }
+
+        if (q.ConversionNode)
+        {
+            q.Action = ScriptLinkAction::InsertConversion;
+            q.LinkColorType = i->Type;
+            return q;
+        }
+
+        // 12 — Sem caminho. A mensagem específica já existia e continua sendo
+        //      a fonte do tooltip.
+        q.Message = GetPinIncompatibleReason(o->Type, i->Type);
+        return q;
+    }
+
+    int ScriptGraph::SanitizeLinks()
+    {
+        int removed = 0;
+        std::vector<ScriptLink> kept;
+        kept.reserve(m_Links.size());
+
+        for (const auto& l : m_Links)
+        {
+            ScriptPin* sp = FindPin(l.StartPin);
+            ScriptPin* ep = FindPin(l.EndPin);
+
+            // Órfão: o pin sumiu (node deletado, assinatura de Function mudada).
+            if (!sp || !ep) { removed++; continue; }
+
+            // Invertido: os dois no mesmo sentido.
+            if (sp->Kind != ed::PinKind::Output || ep->Kind != ed::PinKind::Input)
+            {
+                removed++; continue;
+            }
+
+            const bool isFlow = (sp->Type == ScriptPinType::Flow || ep->Type == ScriptPinType::Flow);
+
+            bool duplicate = false;
+            for (const auto& k : kept)
+            {
+                if (!isFlow && k.EndPin == l.EndPin) { duplicate = true; break; }
+                if (isFlow && k.StartPin == l.StartPin) { duplicate = true; break; }
+            }
+            if (duplicate) { removed++; continue; }
+
+            kept.push_back(l);
+        }
+
+        if (removed > 0)
+        {
+            AXE_CORE_WARN("ScriptGraph: {} ligacao(oes) invalida(s) descartada(s) no load "
+                "(pin inexistente, sentido invertido ou pin ja ocupado).", removed);
+            m_Links = std::move(kept);
+        }
+        return removed;
     }
 
     void ScriptGraph::RemoveLink(ed::LinkId id)
@@ -1554,11 +1908,11 @@ namespace axe
                 jn["inputs"].push_back({
                     {"id", (int)pin.ID.Get()}, {"name", pin.Name},
                     {"type", ScriptPinTypeToString(pin.Type)}, {"kind", (int)pin.Kind},
-                    {"default_float", pin.DefaultFloat},
-                    {"default_bool", pin.DefaultBool},
-                    {"default_int", pin.DefaultInt},
-                    {"default_string", pin.DefaultString},
-                    {"default_vec3", {pin.DefaultVec3.x, pin.DefaultVec3.y, pin.DefaultVec3.z}}
+                    // SC17 — um bloco "default" so, no lugar dos cinco campos.
+                    // Os nomes antigos NAO sao mais gravados: manter os dois
+                    // formatos garantiria que um dia divergissem, e a leitura
+                    // ja aceita o antigo (ver DeserializeLegacyPin).
+                    {"default", pin.Default.Serialize()}
                     });
             for (const auto& pin : node->Outputs)
                 jn["outputs"].push_back({
@@ -1577,6 +1931,149 @@ namespace axe
                 });
 
         return j;
+    }
+
+    // ─── SC8: copiar / colar um pedaço do grafo ───────────────────────────────
+
+    nlohmann::json ScriptGraph::SerializeSubset(const std::vector<ed::NodeId>& nodes) const
+    {
+        // Reaproveita o Serialize() inteiro e filtra. Percorrer m_Nodes de novo
+        // aqui, montando o JSON campo a campo, criaria uma SEGUNDA descrição do
+        // que é um node — e a próxima vez que ScriptNode ganhasse um campo, uma
+        // das duas ficaria para trás em silêncio. O custo é serializar o grafo
+        // todo para copiar três nodes; é irrelevante num gesto de teclado.
+        nlohmann::json full = Serialize();
+        nlohmann::json out;
+        out["next_id"] = 1;
+        out["nodes"] = nlohmann::json::array();
+        out["links"] = nlohmann::json::array();
+
+        auto wanted = [&](int id) {
+            for (const auto& n : nodes) if ((int)n.Get() == id) return true;
+            return false;
+            };
+
+        // Pins que pertencem aos nodes copiados — só links entre eles entram.
+        std::vector<int> pinIds;
+
+        for (const auto& jn : full.value("nodes", nlohmann::json::array()))
+        {
+            if (!wanted(jn["id"].get<int>())) continue;
+            out["nodes"].push_back(jn);
+            for (const auto& jp : jn.value("inputs", nlohmann::json::array()))
+                pinIds.push_back(jp["id"].get<int>());
+            for (const auto& jp : jn.value("outputs", nlohmann::json::array()))
+                pinIds.push_back(jp["id"].get<int>());
+        }
+
+        auto hasPin = [&](int id) {
+            return std::find(pinIds.begin(), pinIds.end(), id) != pinIds.end();
+            };
+
+        for (const auto& jl : full.value("links", nlohmann::json::array()))
+        {
+            const int s = jl["start"].get<int>();
+            const int e = jl["end"].get<int>();
+            if (hasPin(s) && hasPin(e))
+                out["links"].push_back(jl);
+        }
+
+        return out;
+    }
+
+    std::vector<ed::NodeId> ScriptGraph::PasteSubset(const nlohmann::json& j, ImVec2 offset)
+    {
+        std::vector<ed::NodeId> created;
+
+        // Mapa id-antigo -> id-novo, para nodes e pins. Sem ele os links
+        // colados apontariam para os pins do ORIGINAL, e a cópia nasceria
+        // ligada ao que foi copiado.
+        std::vector<std::pair<int, int>> pinRemap;
+
+        auto parsePinType = [](const nlohmann::json& jp) -> ScriptPinType
+            {
+                if (jp["type"].is_string()) return ScriptPinTypeFromString(jp["type"].get<std::string>());
+                return (ScriptPinType)jp["type"].get<int>();
+            };
+
+        for (const auto& jn : j.value("nodes", nlohmann::json::array()))
+        {
+            std::string name = jn["name"];
+            ScriptNodeCategory cat;
+            if (jn["category"].is_string())
+                cat = ScriptNodeCategoryFromString(jn["category"].get<std::string>());
+            else
+                cat = (ScriptNodeCategory)jn["category"].get<int>();
+
+            auto node = std::make_unique<ScriptNode>(m_NextId++, name.c_str(), cat);
+
+            node->Position = { (float)jn["pos"][0] + offset.x, (float)jn["pos"][1] + offset.y };
+            node->StringValue = jn.value("str_val", "");
+            node->FloatValue = jn.value("flt_val", 0.0f);
+            node->BoolValue = jn.value("bool_val", false);
+            node->IntLocalValue = jn.value("int_local", 0);
+            if (jn.contains("vec3_val") && jn["vec3_val"].is_array() && jn["vec3_val"].size() >= 3)
+            {
+                node->Vec3Value[0] = jn["vec3_val"][0];
+                node->Vec3Value[1] = jn["vec3_val"][1];
+                node->Vec3Value[2] = jn["vec3_val"][2];
+            }
+            node->IntValue = jn.value("int_val", 0);
+            node->StringLocalValue = jn.value("str_local", "");
+            node->CommentSize.x = jn.value("comment_w", 320.0f);
+            node->CommentSize.y = jn.value("comment_h", 240.0f);
+            if (jn.contains("comment_color") && jn["comment_color"].is_array() && jn["comment_color"].size() == 3)
+            {
+                node->CommentColor[0] = jn["comment_color"][0];
+                node->CommentColor[1] = jn["comment_color"][1];
+                node->CommentColor[2] = jn["comment_color"][2];
+            }
+
+            for (const auto& jp : jn.value("inputs", nlohmann::json::array()))
+            {
+                const int oldId = jp["id"].get<int>();
+                const int newId = m_NextId++;
+                pinRemap.emplace_back(oldId, newId);
+
+                ScriptPin pin(newId, jp["name"].get<std::string>().c_str(),
+                    parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
+                // SC17 — formato novo se existir, antigo caso contrario. Todo
+                // .axescript gravado antes deste patch cai no segundo ramo.
+                if (jp.contains("default")) pin.Default.Deserialize(jp["default"]);
+                else                        pin.Default.DeserializeLegacyPin(jp);
+                node->Inputs.push_back(std::move(pin));
+            }
+
+            for (const auto& jp : jn.value("outputs", nlohmann::json::array()))
+            {
+                const int oldId = jp["id"].get<int>();
+                const int newId = m_NextId++;
+                pinRemap.emplace_back(oldId, newId);
+
+                node->Outputs.emplace_back(newId, jp["name"].get<std::string>().c_str(),
+                    parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
+            }
+
+            created.push_back(node->ID);
+            m_Nodes.push_back(std::move(node));
+        }
+
+        auto remap = [&](int oldId, int& out) {
+            for (const auto& pr : pinRemap)
+                if (pr.first == oldId) { out = pr.second; return true; }
+            return false;
+            };
+
+        for (const auto& jl : j.value("links", nlohmann::json::array()))
+        {
+            int s = 0, e = 0;
+            if (!remap(jl["start"].get<int>(), s)) continue;
+            if (!remap(jl["end"].get<int>(), e)) continue;
+            m_Links.emplace_back(m_NextId++, ed::PinId(s), ed::PinId(e));
+        }
+
+        AXE_CORE_INFO("ScriptGraph: {} node(s) colado(s).", created.size());
+        return created;
     }
 
     void ScriptGraph::Deserialize(const nlohmann::json& j)
@@ -1602,6 +2099,26 @@ namespace axe
 
             auto node = std::make_unique<ScriptNode>(id, name.c_str(), cat);
             node->Position = { jn["pos"][0], jn["pos"][1] };
+
+            // ── SC10: conserta posicao infinita gravada por versao com bug ────
+            //
+            // ed::GetNodePosition devolve (FLT_MAX, FLT_MAX) para um node que o
+            // canvas ainda nao desenhou, e uma versao anterior gravava esse
+            // valor direto no asset. O JSON aceita, o load aceita, e so o Fit
+            // denuncia — calculando os limites do conteudo com infinito ele
+            // some com a visao inteira e o grafo vira um ponto, sem erro
+            // nenhum no console.
+            //
+            // Zerar aqui e seguro: node em (0,0) fica visivel e arrastavel, e
+            // o autor conserta em um segundo. Deixar passar custa o arquivo.
+            if (!std::isfinite(node->Position.x) || !std::isfinite(node->Position.y) ||
+                std::fabs(node->Position.x) > 1.0e6f || std::fabs(node->Position.y) > 1.0e6f)
+            {
+                AXE_CORE_WARN("ScriptGraph: node '{}' tinha posicao invalida no arquivo "
+                    "({}, {}) — reposicionado na origem.",
+                    name, node->Position.x, node->Position.y);
+                node->Position = { 0.0f, 0.0f };
+            }
             node->StringValue = jn.value("str_val", "");
             node->FloatValue = jn.value("flt_val", 0.0f);
             node->BoolValue = jn.value("bool_val", false);
@@ -1636,12 +2153,10 @@ namespace axe
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
                     parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
-                pin.DefaultFloat = jp.value("default_float", 0.0f);
-                pin.DefaultBool = jp.value("default_bool", false);
-                pin.DefaultInt = jp.value("default_int", 0);
-                pin.DefaultString = jp.value("default_string", std::string(""));
-                if (jp.contains("default_vec3") && jp["default_vec3"].is_array())
-                    pin.DefaultVec3 = { jp["default_vec3"][0], jp["default_vec3"][1], jp["default_vec3"][2] };
+                // SC17 — formato novo se existir, antigo caso contrario. Todo
+                // .axescript gravado antes deste patch cai no segundo ramo.
+                if (jp.contains("default")) pin.Default.Deserialize(jp["default"]);
+                else                        pin.Default.DeserializeLegacyPin(jp);
                 node->Inputs.push_back(std::move(pin));
             }
 
@@ -1649,12 +2164,10 @@ namespace axe
             {
                 ScriptPin pin(jp["id"].get<int>(), jp["name"].get<std::string>().c_str(),
                     parsePinType(jp), (ed::PinKind)jp["kind"].get<int>());
-                pin.DefaultFloat = jp.value("default_float", 0.0f);
-                pin.DefaultBool = jp.value("default_bool", false);
-                pin.DefaultInt = jp.value("default_int", 0);
-                pin.DefaultString = jp.value("default_string", std::string(""));
-                if (jp.contains("default_vec3") && jp["default_vec3"].is_array())
-                    pin.DefaultVec3 = { jp["default_vec3"][0], jp["default_vec3"][1], jp["default_vec3"][2] };
+                // SC17 — formato novo se existir, antigo caso contrario. Todo
+                // .axescript gravado antes deste patch cai no segundo ramo.
+                if (jp.contains("default")) pin.Default.Deserialize(jp["default"]);
+                else                        pin.Default.DeserializeLegacyPin(jp);
                 node->Outputs.push_back(std::move(pin));
             }
 
@@ -1663,6 +2176,44 @@ namespace axe
 
         for (const auto& jl : j.value("links", nlohmann::json::array()))
             m_Links.emplace_back(jl["id"].get<int>(), ed::PinId(jl["start"].get<int>()), ed::PinId(jl["end"].get<int>()));
+
+        // ── SC18: migracao de valores que moravam no node ────────────────────
+        //
+        // Print String guardava a mensagem em node->StringValue, um campo de
+        // uso geral que o mesmo struct reaproveita para nome de variavel,
+        // Action selecionada e titulo de Comment. Agora ela mora no default do
+        // pin Message, onde o resto dos valores de entrada ja mora.
+        //
+        // Migrar no load, e nao pedir para o autor redigitar: e o mesmo padrao
+        // de alias usado para node retirado (ControlFollowBone, RerouteExec).
+        // O campo antigo e LIMPO depois de copiado — deixar os dois
+        // preenchidos e como o bug comecou.
+        for (auto& n : m_Nodes)
+        {
+            if (n->Name != "Print String" || n->StringValue.empty()) continue;
+            for (auto& in : n->Inputs)
+            {
+                if (in.Name != "Message") continue;
+                if (in.Default.Str.empty())
+                {
+                    in.Default.Str = n->StringValue;
+                    AXE_CORE_INFO("ScriptGraph: mensagem do Print String migrada "
+                        "para o pin ('{}').", n->StringValue);
+                }
+                n->StringValue.clear();
+                break;
+            }
+        }
+
+        // S1 — .axescript salvo antes deste patch pode carregar fios que a
+        // regra de cardinalidade nunca deveria ter deixado existir (dois
+        // valores no mesmo pin de entrada, dois destinos na mesma saída de
+        // Flow). Não são erro do arquivo: eram permitidos. Descartar aqui,
+        // uma vez, é preferível a compilar um grafo cujo resultado depende da
+        // ordem do vector — o mesmo raciocínio de "nunca deletar em silêncio"
+        // vale ao contrário aqui, porque o fio extra JÁ era ignorado pelo
+        // compilador; só não aparecia na tela.
+        SanitizeLinks();
     }
 
 } // namespace axe

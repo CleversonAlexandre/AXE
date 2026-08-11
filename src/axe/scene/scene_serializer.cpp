@@ -295,7 +295,12 @@ namespace axe
 			if (auto* sc = registry.try_get<ScriptComponent>(entity))
 			{
 				components["Script"]["asset_path"] = sc->ScriptAssetPath;
-				components["Script"]["dll_path"] = sc->DllPath;
+				// SC4 — dll_path NAO e mais gravado. E dado derivado (depende de
+				// onde o projeto esta no disco desta maquina), e ScriptWorld o
+				// reconstroi via ScriptPaths::ResolveDll no inicio da cena. Mesma
+				// regra que ja vale para Capture/Grid dos probes: o que da para
+				// refazer no load nao vai para o arquivo. Cenas antigas continuam
+				// carregando — o campo e simplesmente ignorado na leitura.
 				components["Script"]["name"] = sc->ScriptName;
 				components["Script"]["compiled"] = sc->IsCompiled;
 			}
@@ -827,7 +832,8 @@ namespace axe
 				auto& t = components["Script"];
 				ScriptComponent sc;
 				sc.ScriptAssetPath = t.value("asset_path", "");
-				sc.DllPath = t.value("dll_path", "");
+				// dll_path de cena antiga e deliberadamente descartado: aponta para
+				// bin/temp_scripts, que este patch abandonou. ScriptWorld resolve.
 				sc.ScriptName = t.value("name", "");
 				sc.IsCompiled = t.value("compiled", false);
 				registry.emplace<ScriptComponent>(entity, sc);

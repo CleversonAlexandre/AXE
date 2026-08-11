@@ -4,6 +4,8 @@
 // DrawSceneGraphWindow: hierarquia de componentes do script, add/remove, drag para graph.
 
 #include "script_graph_window.hpp"
+#include <unordered_map>
+#include "editor/axe_editor/ui/editor_icons.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/script/script_graph.hpp"
 #include "axe/input/input_mapping.hpp"
@@ -150,7 +152,7 @@ namespace axe
                                 ImGui::SetClipboardText(p.Name.c_str());
 
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Copia o nome exato pra colar no no\n'Set Anim %s' do grafo de script.", tname);
+                                ImGui::SetTooltip("Copies the exact name to paste into the\n'Set Anim %s' node in the script graph.", tname);
 
                             ImGui::SameLine();
                             ImGui::Text("%s", p.Name.c_str());
@@ -175,33 +177,53 @@ namespace axe
         }
         else if (def.Type == "Mesh")
         {
+            // ── SC22: malha do projeto, nao so primitiva ─────────────────────
+            //
+            // O painel oferecia UM combo com Sphere/Cube/Cylinder/Plane e um
+            // drop target invisivel colado nele. Escolher uma malha importada
+            // exigia adivinhar que dava para arrastar em cima do combo — e
+            // mesmo acertando, o preview nao carregava nada (ver o TODO que o
+            // SC22 removeu de script_preview.cpp).
+            //
+            // Agora e a mesma dupla que o componente Material ja usa: um
+            // AssetPicker (com busca, botao de limpar e drop target visivel) e,
+            // abaixo, as primitivas como atalho. Um caminho para cada coisa,
+            // nenhum deles escondido.
+            AssetPicker::Draw("Mesh", def.AssetUUID, { AssetType::Mesh },
+                [&](const AssetRecord& record)
+                {
+                    def.AssetUUID = record.UUID;
+                    SyncComponentsToPreview();
+                });
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Or use a primitive:");
+
             static const char* prims[] = { "Sphere","Cube","Cylinder","Plane" };
             static const char* primUUIDs[] = {
                 PrimitiveUUID::Sphere, PrimitiveUUID::Cube,
                 PrimitiveUUID::Cylinder, PrimitiveUUID::Plane };
-            int curIdx = 0;
+
+            // -1 quando a malha atual e um ASSET: sem isso o combo mostraria
+            // "Sphere" ao lado de uma pistola, dizendo que a malha e outra.
+            int curIdx = -1;
             for (int p = 0; p < 4; p++)
                 if (def.AssetUUID == primUUIDs[p]) { curIdx = p; break; }
-            if (ImGui::Combo("Primitive", &curIdx, prims, 4))
+
+            const char* preview = (curIdx >= 0) ? prims[curIdx] : "(asset)";
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##meshprim", preview))
             {
-                def.AssetUUID = primUUIDs[curIdx];
-                auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
-                mc.Data = MeshFactory::CreateByUUID(def.AssetUUID);
-            }
-            if (ImGui::BeginDragDropTarget())
-            {
-                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_UUID"))
-                {
-                    std::string uuid = (const char*)p->Data;
-                    const auto* rec = AssetDatabase::Get().GetByUUID(uuid);
-                    if (rec && rec->Type == AssetType::Mesh)
+                for (int p = 0; p < 4; p++)
+                    if (ImGui::Selectable(prims[p], curIdx == p))
                     {
-                        def.AssetUUID = uuid;
+                        MarkEdited("Set Mesh Primitive");
+                        def.AssetUUID = primUUIDs[p];
                         auto& mc = reg.get_or_emplace<MeshComponent>(m_PreviewEntity);
-                        mc.AssetUUID = uuid;
+                        mc.AssetUUID = def.AssetUUID;
+                        mc.Data = MeshFactory::CreateByUUID(def.AssetUUID);
                     }
-                }
-                ImGui::EndDragDropTarget();
+                ImGui::EndCombo();
             }
         }
         else if (def.Type == "Material")
@@ -320,20 +342,20 @@ namespace axe
                 }
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Move a CAPSULA sem mover o personagem.\nEm metros; Y ja parte de meia altura.\nPara pivo nos PES (Mixamo), deixe em 0,0,0.");
+                    ImGui::SetTooltip("Moves the CAPSULE without moving the character.\nIn meters; Y already starts at half height.\nFor foot-pivot rigs (Mixamo), leave at 0,0,0.");
             }
 
             if (ImGui::Checkbox("Debug Wireframe", &def.CCShowDebug)) ccChanged = true;
 
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Desenha a capsula da fisica na viewport.\nA base dela fica nos PES do personagem.");
+                ImGui::SetTooltip("Draws the physics capsule in the viewport.\nIts base sits at the character's FEET.");
 
             ImGui::Checkbox("Orient Rotation To Movement", &def.CCOrientToMovement);
 
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("O personagem GIRA para a direcao em que anda.\n"
-                    "Com isto, a animacao de caminhar PRA FRENTE serve para\n"
-                    "todas as direcoes — nao precisa de clipes laterais.");
+                ImGui::SetTooltip("The character TURNS toward the direction it moves.\n"
+                    "With this, the FORWARD walk animation covers every\n"
+                    "direction - no strafe clips needed.");
 
             if (def.CCOrientToMovement)
                 ImGui::DragFloat("Rotation Rate", &def.CCRotationRate, 10.f, 0.f, 2000.f, "%.0f deg/s");
@@ -383,6 +405,130 @@ namespace axe
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  S3 — painel dos nodes de referencia entre scripts
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void ScriptGraphWindow::DrawScriptRefNodeDetails(ScriptNode* node)
+    {
+        if (!node) return;
+
+        const bool isVarNode = (node->Name == "Get Script Var" ||
+            node->Name == "Set Script Var");
+
+        // ── 1) Script alvo ───────────────────────────────────────────────────
+        //
+        // O que fica gravado e o UUID (StringValue); o nome (StringLocalValue)
+        // e so exibicao. Renomear o asset no Asset Browser nao pode quebrar o
+        // cast, e dois scripts homonimos nao podem virar o mesmo alvo.
+        ImGui::TextDisabled("Target Script:");
+        ImGui::SetNextItemWidth(-1);
+
+        const std::string shown = node->StringLocalValue.empty()
+            ? (node->StringValue.empty() ? "(none)" : node->StringValue)
+            : node->StringLocalValue;
+
+        if (ImGui::BeginCombo("##s3target", shown.c_str()))
+        {
+            for (const auto& [uuid, rec] : AssetDatabase::Get().GetAll())
+            {
+                if (rec.Type != AssetType::Script) continue;
+
+                const bool sel = (uuid == node->StringValue);
+                if (ImGui::Selectable(rec.Name.c_str(), sel))
+                {
+                    MarkEdited("Set Cast Target");
+                    node->StringValue = uuid;
+                    node->StringLocalValue = rec.Name;
+                    // Trocar de script invalida a variavel escolhida: ela pode
+                    // nao existir no alvo novo, e manter o nome faria o
+                    // _GetVar falhar em runtime sem nada na tela avisando.
+                    if (isVarNode) node->StringLocalValue = rec.Name;
+                }
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        if (node->StringValue.empty())
+        {
+            ImGui::TextDisabled("Pick the script this node refers to.");
+            return;
+        }
+
+        if (!isVarNode) return;
+
+        // ── 2) Variavel do alvo, lida do MANIFESTO ───────────────────────────
+        //
+        // O .axescript e carregado do disco a cada abertura do combo. Nao ha
+        // cache de proposito: o alvo pode ganhar uma variavel enquanto este
+        // grafo esta aberto, e um cache exigiria invalidar em cada Save de
+        // qualquer script — mais mecanismo do que o problema pede, para um
+        // arquivo lido no clique de um combo.
+        const AssetRecord* rec = AssetDatabase::Get().GetByUUID(node->StringValue);
+        if (!rec)
+        {
+            ImGui::TextDisabled("Target script asset not found.");
+            return;
+        }
+
+        ImGui::Spacing();
+        ImGui::TextDisabled("Variable:");
+        ImGui::SetNextItemWidth(-1);
+
+        // A variavel escolhida vira o NOME DO PIN de valor.
+        //
+        // Nao em StringLocalValue (ja ocupado pelo nome do script) nem no
+        // Default.Str do pin (que para uma variavel String seria ao mesmo
+        // tempo o nome dela e o valor dela). O nome do pin ja e serializado,
+        // ja aparece no node — quem olha o grafo le "Health" no pin em vez de
+        // "Value" — e nao exige campo novo num struct que a fase 2 vai
+        // consolidar.
+        std::string curVar;
+        for (const auto& p : (node->Name == "Get Script Var" ? node->Outputs : node->Inputs))
+            if (p.Name != "Object" && p.Name != "Flow In" && p.Name != "Flow Out")
+            {
+                curVar = p.Name; break;
+            }
+
+        if (ImGui::BeginCombo("##s3var", curVar.empty() ? "(none)" : curVar.c_str()))
+        {
+            ScriptAsset target;
+            if (target.Load(rec->FilePath))
+            {
+                for (const auto& v : target.GetVariables())
+                {
+                    const bool sel = (v.Name == curVar);
+                    if (ImGui::Selectable(v.Name.c_str(), sel))
+                    {
+                        MarkEdited("Set Script Var Target");
+
+                        // Renomeia o pin de valor E fixa o TIPO dele pelo
+                        // manifesto: sem isso o pin ficaria Wildcard e a
+                        // validacao de ligacao (S1) nao teria o que comparar.
+                        auto& pins = (node->Name == "Get Script Var") ? node->Outputs : node->Inputs;
+                        for (auto& p : pins)
+                        {
+                            if (p.Name == "Object" || p.Name == "Flow In" || p.Name == "Flow Out") continue;
+                            p.Name = v.Name;
+                            p.Type = ScriptVarTypeToPinType(v.Type);
+                            break;
+                        }
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Could not read the target script.");
+            }
+            ImGui::EndCombo();
+        }
+
+        if (curVar.empty())
+            ImGui::TextDisabled("Pick which variable of the target to access.");
+    }
+
     void ScriptGraphWindow::DrawVariableDetailsPanel(ScriptVariable& v)
     {
         // Type — combo editável (estava faltando: eu tinha removido o combo
@@ -392,6 +538,7 @@ namespace axe
             "Float","Bool","Int","Vec3","String","Vec2","Vec4","Quat","Entity",
             "Float Array","Bool Array","Int Array","Vec3 Array","String Array",
             "Vec2 Array","Vec4 Array","Quat Array","Entity Array",
+            "Asset",   // SC30 — o tipo concreto vem do TypeQualifier
         };
         int ti = (int)v.Type;
         ImColor tc = GetVariableNodeColor(ti);
@@ -399,7 +546,10 @@ namespace axe
         ImGui::TextDisabled("Type:");
         ImGui::SetNextItemWidth(-1);
         ImGui::PushStyleColor(ImGuiCol_Text, typeCol);
-        if (ImGui::Combo("##nd_type", &ti, s_TypeNames, 18))
+        // SC31 — derivado do array, e nao o literal 18 que estava aqui. Ver a
+        // mesma correcao no script_members.cpp.
+        constexpr int kTypeCount = (int)(sizeof(s_TypeNames) / sizeof(s_TypeNames[0]));
+        if (ImGui::Combo("##nd_type", &ti, s_TypeNames, kTypeCount))
             v.Type = (ScriptVarType)ti;
         ImGui::PopStyleColor();
         ImGui::Spacing();
@@ -436,35 +586,121 @@ namespace axe
             ImGui::SetNextItemWidth(-1);
             switch (v.Type)
             {
-            case ScriptVarType::Float:  ImGui::DragFloat("##nd_f", &v.DefaultFloat, 0.01f); break;
-            case ScriptVarType::Bool:   ImGui::Checkbox("##nd_b", &v.DefaultBool); break;
-            case ScriptVarType::Int:    ImGui::DragInt("##nd_i", &v.DefaultInt); break;
+            case ScriptVarType::Float:  ImGui::DragFloat("##nd_f", &v.Default.Float, 0.01f); break;
+            case ScriptVarType::Bool:   ImGui::Checkbox("##nd_b", &v.Default.Bool); break;
+            case ScriptVarType::Int:    ImGui::DragInt("##nd_i", &v.Default.Int); break;
+                // SC19 — Vec2, Vec3, Vec4 e Quat num caminho so. Vec2 e Vec4 nao
+                // tinham case nenhum aqui e caiam no default silencioso: variavel
+                // criada, tipo escolhido, e nenhum campo para preencher.
+            case ScriptVarType::Vec2:
             case ScriptVarType::Vec3:
+            case ScriptVarType::Vec4:
+            case ScriptVarType::Quat:
             {
-                float gap = 4.f, w = ImGui::GetContentRegionAvail().x;
-                float lbl = ImGui::CalcTextSize("X").x;
-                float wf = (w - (lbl + 2.f + gap) * 3.f + gap) / 3.f;
-                ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("X"); ImGui::SameLine(0, 2);
-                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_x", &v.DefaultVec3[0], 0.01f, 0, 0, "%.3f");
-                ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Y"); ImGui::SameLine(0, 2);
-                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_y", &v.DefaultVec3[1], 0.01f, 0, 0, "%.3f");
-                ImGui::SameLine(0, gap); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Z"); ImGui::SameLine(0, 2);
-                ImGui::SetNextItemWidth(wf); ImGui::DragFloat("##nd_z", &v.DefaultVec3[2], 0.01f, 0, 0, "%.3f");
+                const int n =
+                    v.Type == ScriptVarType::Vec2 ? 2 :
+                    v.Type == ScriptVarType::Vec3 ? 3 : 4;
+
+                static const char* kLbl[4] = { "X", "Y", "Z", "W" };
+                static const char* kId[4] = { "##nd_x", "##nd_y", "##nd_z", "##nd_w" };
+                float* comp = &v.Default.Vec.x;
+
+                const float gap = 4.f;
+                const float w = ImGui::GetContentRegionAvail().x;
+                const float lbl = ImGui::CalcTextSize("X").x;
+                const float wf = (w - (lbl + 2.f + gap) * (float)n + gap) / (float)n;
+
+                for (int i = 0; i < n; i++)
+                {
+                    if (i > 0) ImGui::SameLine(0, gap);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", kLbl[i]);
+                    ImGui::SameLine(0, 2);
+                    ImGui::SetNextItemWidth(wf);
+                    ImGui::DragFloat(kId[i], &comp[i], 0.01f, 0, 0, "%.3f");
+                }
                 break;
             }
             case ScriptVarType::String:
             {
-                char sbuf[256] = {}; strncpy(sbuf, v.DefaultString.c_str(), 255);
-                if (ImGui::InputText("##nd_s", sbuf, 256)) v.DefaultString = sbuf;
+                char sbuf[256] = {}; strncpy(sbuf, v.Default.Str.c_str(), 255);
+                if (ImGui::InputText("##nd_s", sbuf, 256)) v.Default.Str = sbuf;
                 break;
             }
+            // ── SC30: referencia a asset ─────────────────────────────────────
+            case ScriptVarType::Asset:
+            {
+                // Qual TIPO de asset esta variavel aceita. O combo escreve em
+                // TypeQualifier; o AssetPicker abaixo filtra por ele.
+                //
+                // Trocar o qualificador LIMPA o valor de proposito: um UUID de
+                // textura guardado numa variavel que virou Audio nao e um
+                // valor "quase certo", e um asset que nao existe mais naquele
+                // filtro — deixa-lo ali daria um campo que mostra vazio e
+                // compila um UUID invisivel.
+                struct Q { const char* Label; AssetType Type; };
+                static const Q kQuals[] = {
+                    { "Texture",         AssetType::Texture        },
+                    { "Audio",           AssetType::Audio          },
+                    { "Sound Cue",       AssetType::SoundCue       },
+                    { "Mesh",            AssetType::Mesh           },
+                    { "Skeletal Mesh",   AssetType::SkeletalMesh   },
+                    { "Material",        AssetType::Material       },
+                    { "Particle System", AssetType::ParticleSystem },
+                    { "Script",          AssetType::Script         },
+                    { "Scene",           AssetType::Scene          },
+                };
+
+                ImGui::TextDisabled("Asset type:");
+                ImGui::SetNextItemWidth(-1);
+                const char* curQ = v.TypeQualifier.empty() ? "(pick one)" : v.TypeQualifier.c_str();
+
+                if (ImGui::BeginCombo("##assetqual", curQ))
+                {
+                    for (const auto& q : kQuals)
+                    {
+                        const bool sel = (v.TypeQualifier == q.Label);
+                        if (ImGui::Selectable(q.Label, sel))
+                        {
+                            MarkEdited("Change Asset Type");
+                            v.TypeQualifier = q.Label;
+                            v.Default.Str.clear();
+                        }
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (v.TypeQualifier.empty())
+                {
+                    ImGui::TextDisabled("Choose which kind of asset this variable holds.");
+                    break;
+                }
+
+                AssetType filter = AssetType::Unknown;
+                for (const auto& q : kQuals)
+                    if (v.TypeQualifier == q.Label) { filter = q.Type; break; }
+
+                ImGui::Spacing();
+                // Mesmo AssetPicker do resto do editor: busca, limpar e drop
+                // target. A tipagem forte vive AQUI — no grafo o valor e o UUID,
+                // uma string, e liga direto no que consome por nome/UUID.
+                AssetPicker::Draw("Default", v.Default.Str, { filter },
+                    [&](const AssetRecord& rec)
+                    {
+                        MarkEdited("Set Asset Default");
+                        v.Default.Str = rec.UUID;
+                    });
+                break;
+            }
+
             case ScriptVarType::Entity:
             {
                 // ── Entity picker ────────────────────────────────────────────
                 // DefaultString guarda o nome da entity referenciada na cena.
                 // Exibe botão com o nome atual + dropdown com todas as entities.
 
-                const std::string& current = v.DefaultString;
+                const std::string& current = v.Default.Str;
                 const char* label = current.empty() ? "[ Nenhuma ]" : current.c_str();
 
                 // Verifica se a entity ainda existe na cena ativa
@@ -500,7 +736,7 @@ namespace axe
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.7f));
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x##clrent")) v.DefaultString.clear();
+                    if (ImGui::SmallButton("x##clrent")) v.Default.Str.clear();
                     ImGui::PopStyleColor(3);
                 }
 
@@ -516,7 +752,7 @@ namespace axe
                 if (ImGui::BeginDragDropTarget())
                 {
                     if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY_NAME"))
-                        v.DefaultString = (const char*)p->Data;
+                        v.Default.Str = (const char*)p->Data;
                     ImGui::EndDragDropTarget();
                 }
 
@@ -544,6 +780,28 @@ namespace axe
                     if (m_ActiveScene)
                     {
                         auto& reg = m_ActiveScene->GetRegistry();
+
+                        // ── SC28: nomes repetidos sao ambiguidade, nao lista ──
+                        //
+                        // Uma variavel Entity guarda o NOME, e o codigo gerado
+                        // resolve com ScenePtr->FindByName(). Com tres
+                        // entidades chamadas "Entity" na cena, FindByName
+                        // devolve a PRIMEIRA — e o script aponta para a errada
+                        // sem nenhum erro em lugar nenhum.
+                        //
+                        // A lista mostrava tres linhas identicas e deixava a
+                        // escolha impossivel. Agora o nome repetido e marcado
+                        // em ambar, ganha o id da entidade ao lado para poder
+                        // ser distinguido na hierarquia, e diz o que vai
+                        // acontecer. Nao da para consertar a ambiguidade aqui
+                        // (a referencia por nome e do modelo), mas da para
+                        // parar de esconde-la.
+                        std::unordered_map<std::string, int> nameCount;
+                        reg.view<NameComponent>().each([&](entt::entity, const NameComponent& nc)
+                            {
+                                nameCount[nc.Name]++;
+                            });
+
                         reg.view<NameComponent>().each([&](entt::entity e, const NameComponent& nc)
                             {
                                 // Filtro de busca
@@ -551,17 +809,29 @@ namespace axe
                                 std::transform(low.begin(), low.end(), low.begin(), ::tolower);
                                 if (!s.empty() && low.find(s) == std::string::npos) return;
 
-                                bool selected = (nc.Name == current);
-                                if (selected)
-                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1));
+                                const bool dup = nameCount[nc.Name] > 1;
+                                const bool selected = (nc.Name == current);
 
-                                if (ImGui::Selectable(nc.Name.c_str(), selected))
+                                if (dup)          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.25f, 1));
+                                else if (selected) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1));
+
+                                std::string label = nc.Name;
+                                if (dup) label += "   (id " + std::to_string((uint32_t)e) + ")";
+
+                                if (ImGui::Selectable(label.c_str(), selected))
                                 {
-                                    v.DefaultString = nc.Name;
+                                    v.Default.Str = nc.Name;
                                     ImGui::CloseCurrentPopup();
                                 }
 
-                                if (selected) ImGui::PopStyleColor();
+                                if (dup && ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "%d entities share this name.\n"
+                                        "The script resolves it by name and will take the FIRST one.\n"
+                                        "Rename it in the Hierarchy to point at the right entity.",
+                                        nameCount[nc.Name]);
+
+                                if (dup || selected) ImGui::PopStyleColor();
                             });
                     }
                     else
@@ -680,8 +950,8 @@ namespace axe
                         ImGui::PopStyleColor(2);
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip(m_ScaleLocked
-                                ? "Escala uniforme (clique para liberar por eixo)"
-                                : "Escala livre por eixo (clique para travar uniforme)");
+                                ? "Uniform scale (click to unlock per axis)"
+                                : "Free scale per axis (click to lock uniform)");
                         if (lockClicked) m_ScaleLocked = !m_ScaleLocked;
                     }
 
@@ -806,12 +1076,12 @@ namespace axe
 
                     if (sel == 0 || got == 0)
                     {
-                        ImGui::TextDisabled("Selecione um node no graph.");
+                        ImGui::TextDisabled("Select a node in the graph.");
                         ImGui::Spacing();
                         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
-                        ImGui::TextWrapped("Clique direito no graph para adicionar nodes");
-                        ImGui::TextWrapped("Arraste pins para conectar");
-                        ImGui::TextWrapped("Delete para remover selecionados");
+                        ImGui::TextWrapped("Right-click the graph to add nodes");
+                        ImGui::TextWrapped("Drag pins to connect");
+                        ImGui::TextWrapped("Delete removes the selection");
                         ImGui::PopStyleColor();
                     }
                     else if (m_Graph)
@@ -890,7 +1160,7 @@ namespace axe
                                             }
 
                                     if (hasConnection)
-                                        ImGui::TextDisabled("(pino Value conectado — valor vem do link)");
+                                        ImGui::TextDisabled("(Value pin connected - value comes from the link)");
                                     else
                                         DrawSetVariableLocalValueEditor(node, foundVar->Type, -1.f);
                                     ImGui::Spacing();
@@ -905,14 +1175,29 @@ namespace axe
                                     DrawVariableDetailsPanel(*foundVar);
                                 }
                             }
+                            // ── S3: escolha do script alvo e da variavel ─────
+                            else if (node->Name == "Cast To Script" ||
+                                node->Name == "Get Script Var" ||
+                                node->Name == "Set Script Var")
+                            {
+                                DrawScriptRefNodeDetails(node);
+                            }
                             else if (node->Name == "Get Action" || node->Name == "Get Axis" || node->Name == "Print String")
                             {
                                 if (node->Name == "Print String")
                                 {
-                                    ImGui::TextDisabled("Message:");
-                                    ImGui::SetNextItemWidth(-1);
-                                    char buf[128]; strncpy(buf, node->StringValue.c_str(), sizeof(buf)); buf[sizeof(buf) - 1] = '\0';
-                                    if (ImGui::InputText("##sv", buf, sizeof(buf))) node->StringValue = buf;
+                                    // SC18 — o campo proprio saiu daqui. Ele
+                                    // escrevia em node->StringValue enquanto o
+                                    // campo dentro do node (SC3) escrevia no
+                                    // default do pin, e so o segundo chegava
+                                    // ao C++ depois da unificacao. Dois campos
+                                    // para o mesmo valor e um convite a
+                                    // digitar no errado.
+                                    //
+                                    // A lista de pinos logo abaixo ja mostra o
+                                    // Message com o editor certo, igual a
+                                    // qualquer outro pin de String.
+                                    ImGui::TextDisabled("Message is edited on the pin below.");
                                 }
                                 else
                                 {
@@ -942,6 +1227,7 @@ namespace axe
                                             if (ImGui::Selectable(names[i].c_str(), sel))
                                             {
                                                 node->StringValue = names[i];
+                                                MarkEdited("Change Action");   // SC7: nao tinha undo
                                                 if (!isGetAction && m_Graph)
                                                 {
                                                     auto* axis = cfg.FindAxis(names[i]);
@@ -971,8 +1257,8 @@ namespace axe
                                     ImGui::TextDisabled("Parametro do AnimGraph:");
                                     ImGui::SetNextItemWidth(-1);
 
-                                    const std::string prev = paramPin->DefaultString.empty()
-                                        ? std::string("(escolher)") : paramPin->DefaultString;
+                                    const std::string prev = paramPin->Default.Str.empty()
+                                        ? std::string("(escolher)") : paramPin->Default.Str;
 
                                     if (ImGui::BeginCombo("##animparamdet", prev.c_str()))
                                     {
@@ -980,11 +1266,11 @@ namespace axe
                                         ImGui::EndCombo();
                                     }
 
-                                    if (!paramPin->DefaultString.empty())
+                                    if (!paramPin->Default.Str.empty())
                                     {
                                         bool known = false;
                                         for (const auto& pr : CollectAnimGraphParams(false))
-                                            if (pr.first == paramPin->DefaultString) { known = true; break; }
+                                            if (pr.first == paramPin->Default.Str) { known = true; break; }
 
                                         if (!known)
                                             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f),
@@ -995,19 +1281,77 @@ namespace axe
                                 }
                             }
 
-                            // Pins listados
+                            // ── Entradas ─────────────────────────────────
+                            //
+                            // SC3 — isto era uma lista de BulletText, só
+                            // leitura. O valor padrão de cada pin já era lido
+                            // pelo compilador e não tinha como ser escrito por
+                            // ninguém: toda entrada solta virava 0 / false /
+                            // "" / vec3(0) no C++ gerado, e não havia como
+                            // digitar uma constante. Agora cada pin sem fio
+                            // ganha o campo do seu tipo — o mesmo widget do
+                            // canvas, pela mesma função.
+                            if (!node->Inputs.empty())
+                            {
+                                ImGui::TextDisabled("Inputs:");
+                                ImGui::Spacing();
+                            }
                             for (auto& p : node->Inputs)
                             {
                                 ImColor pc = GetPinColor(p.Type);
                                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(pc.Value.x, pc.Value.y, pc.Value.z, 1));
-                                ImGui::BulletText("In: %s", p.Name.c_str());
+                                ImGui::BulletText("%s", p.Name.c_str());
                                 ImGui::PopStyleColor();
+
+                                if (p.Type == ScriptPinType::Flow) continue;
+
+                                const bool linked = m_Graph->IsPinLinked(p.ID);
+                                ImGui::Indent(16.f);
+                                if (linked)
+                                {
+                                    ImGui::TextDisabled("(from the wire)");
+                                }
+                                else
+                                {
+                                    float w = PinDefaultEditorWidth(p);
+                                    if (w > 0.f)
+                                    {
+                                        // No painel há espaço de sobra; o campo
+                                        // ocupa a largura toda em vez da mínima
+                                        // que o node usa.
+                                        // Piso de 60: com o painel estreito o
+                                        // valor viraria negativo, e largura
+                                        // negativa no ImGui significa outra
+                                        // coisa (ancorar à direita) — o campo
+                                        // sairia do lugar em vez de encolher.
+                                        float avail = ImGui::GetContentRegionAvail().x - 20.f;
+                                        DrawPinDefaultEditor(p, avail < 60.f ? 60.f : avail);
+                                    }
+                                    else
+                                    {
+                                        // Honestidade em vez de campo morto: os
+                                        // tipos sem armazenamento em ScriptPin
+                                        // (Vec2/Vec4/Quat) e os que não têm
+                                        // constante possível (Object, arrays)
+                                        // dizem o que fazer.
+                                        ImGui::TextDisabled("(no editable default for this type - connect a wire)");
+                                    }
+                                }
+                                ImGui::Unindent(16.f);
+                                ImGui::Spacing();
+                            }
+
+                            if (!node->Outputs.empty())
+                            {
+                                ImGui::Spacing();
+                                ImGui::TextDisabled("Outputs:");
+                                ImGui::Spacing();
                             }
                             for (auto& p : node->Outputs)
                             {
                                 ImColor pc = GetPinColor(p.Type);
                                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(pc.Value.x, pc.Value.y, pc.Value.z, 1));
-                                ImGui::BulletText("Out: %s", p.Name.c_str());
+                                ImGui::BulletText("%s", p.Name.c_str());
                                 ImGui::PopStyleColor();
                             }
                         }
@@ -1204,7 +1548,23 @@ namespace axe
                     if (t == "SpringArm")      return icons.GetSpringArm();
                     if (t == "Camera")         return icons.GetCamera();
                     if (t == "Light")          return icons.GetDirectionalLight();
-                    return nullptr; // sem ícone dedicado — cai no fallback de texto "?"
+                    return nullptr; // sem textura dedicada — cai no glifo, ver getIconGlyph
+                    };
+
+                // SC5 — o fallback deste painel era a letra "?" literal, e era
+                // ela que aparecia ao lado de SkeletalMesh e Point Light: os
+                // dois nunca tiveram PNG na EditorIconLibrary. Um "?" na
+                // hierarquia parece defeito de carregamento, não "sem ícone".
+                //
+                // Font Awesome já está mesclada na fonte e cobre os dois casos
+                // sem precisar desenhar PNG novo. Só entra onde não há textura;
+                // quem tem PNG continua com o PNG, para o painel não ficar com
+                // metade dos ícones num estilo e metade noutro.
+                auto getIconGlyph = [](const std::string& t) -> const char* {
+                    if (t == "SkeletalMesh") return ICON_PERSON_RUNNING;
+                    if (t == "PointLight")   return ICON_BOLT;
+                    if (t == "Light")        return ICON_BOLT;
+                    return ICON_CUBE;   // último recurso: uma forma, não um "?"
                     };
 
                 auto drawComp = [&](int i, float indent) {
@@ -1314,7 +1674,7 @@ namespace axe
                     ImGui::PopStyleColor(3);
                     ImGui::SameLine(0, 6);
 
-                    // Ícone vetorial real (20x20) com fallback de texto "?"
+                    // Ícone: textura quando existe, glifo Font Awesome quando não.
                     auto iconTex = getIconTex(def.Type);
                     if (iconTex && iconTex->IsLoaded())
                     {
@@ -1323,11 +1683,17 @@ namespace axe
                     }
                     else
                     {
-                        ImGui::PushStyleColor(ImGuiCol_Text, col);
+                        const char* glyph = getIconGlyph(def.Type);
                         ImGui::Dummy(ImVec2(20, 20));
                         ImVec2 p = ImGui::GetItemRectMin();
-                        dl->AddText(ImVec2(p.x + 6, p.y + 2), ImGui::ColorConvertFloat4ToU32(col), "?");
-                        ImGui::PopStyleColor();
+                        // Centrado na caixa de 20x20 pela medida real do glifo:
+                        // a Font Awesome tem avanço maior que o desenho, e
+                        // posicionar por offset fixo faz o ícone escorregar
+                        // (mesmo problema já documentado no ui::IconButton).
+                        ImVec2 gs = ImGui::CalcTextSize(glyph);
+                        dl->AddText(ImVec2(p.x + (20.f - gs.x) * 0.5f,
+                            p.y + (20.f - gs.y) * 0.5f),
+                            ImGui::ColorConvertFloat4ToU32(col), glyph);
                     }
                     ImGui::SameLine(0, 8);
 
@@ -1411,7 +1777,7 @@ namespace axe
                         }
 
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Tirar de dentro de '%s' (volta a ser raiz)", parentName);
+                            ImGui::SetTooltip("Move out of '%s' (becomes root again)", parentName);
                     }
 
                     ImGui::EndGroup();

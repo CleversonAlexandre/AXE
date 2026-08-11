@@ -8,6 +8,7 @@
 #include "axe/scene/components.hpp"
 #include "editor/axe_editor/editor_app.hpp"
 #include "axe/script/script_base.hpp"
+#include "axe/script/script_paths.hpp"
 #include "axe/physics/physics_system.hpp"
 #include "axe/audio/audio_engine.hpp"
 #include "axe/audio/sound_cue.hpp"
@@ -215,6 +216,35 @@ namespace axe
                         m_EditorUI->m_SoundCueEditorWindow.OpenAsset(cue, record.FilePath);
                     else
                         AXE_EDITOR_ERROR("Sound Cue '{}': arquivo invalido.", record.Name);
+                }
+                // ── SC34: .axeskel abre a janela do personagem ────────────────
+                //
+                // A janela ja existia e ja recebe um SkeletalMeshAsset
+                // (AnimClipWindow::OpenForAsset) — inclusive com a aba
+                // Skeleton, que e onde os sockets vao morar. O que faltava era
+                // o duplo clique CHAMAR: ele caia no ramo generico, que
+                // instancia na cena.
+                //
+                // Material, Particle e Sound Cue ja abriam editor no duplo
+                // clique; o personagem era o unico asset editavel que ia
+                // parar na cena em vez do editor dele.
+                else if (record.FilePath.extension() == ".axeskel")
+                {
+                    if (auto skel = SkeletalMeshAsset::LoadFromFile(record.FilePath))
+                    {
+                        // Resolve antes de abrir: a janela precisa da malha e
+                        // do esqueleto, e falhar AQUI da uma mensagem util em
+                        // vez de uma janela vazia sem explicacao.
+                        if (skel->Resolve())
+                            m_EditorUI->m_AnimClipWindow.OpenForAsset(skel);
+                        else
+                            AXE_EDITOR_ERROR("'{}': nao foi possivel resolver o esqueleto "
+                                "(o FBX de origem ainda existe?).", record.Name);
+                    }
+                    else
+                    {
+                        AXE_EDITOR_ERROR("'{}': .axeskel invalido.", record.Name);
+                    }
                 }
             });
 
@@ -662,6 +692,14 @@ namespace axe
 
         m_ThumbnailRenderer.Initialize();
         m_EditorUI->GetAssetBrowser()->SetThumbnailRenderer(&m_ThumbnailRenderer);
+
+        // SC23 — mesma sequencia do de material: inicializa e entrega ao
+        // browser. Sao dois renderers e nao um porque as cenas sao diferentes
+        // (esfera fixa com material variavel x malha variavel com material
+        // fixo) e a camera de um e estatica enquanto a do outro reenquadra a
+        // cada asset.
+        m_MeshThumbnails.Initialize();
+        m_EditorUI->GetAssetBrowser()->SetMeshThumbnailRenderer(&m_MeshThumbnails);
         m_EditorUI->m_MaterialEditorWindow.SetThumbnailRenderer(&m_ThumbnailRenderer);
 
         // ── Material recompile callback (SceneSerializer) ─────────────────────
@@ -958,6 +996,7 @@ namespace axe
     void EditorLayer::OnRender()
     {
         m_ThumbnailRenderer.RenderPending();
+        m_MeshThumbnails.RenderPending();
 
         if (m_EditorState == EditorState::Play)
             m_ViewportRenderer->SetGameCamera(&m_GameCamera);
@@ -1886,9 +1925,15 @@ namespace axe
             if (def.Type == "Mesh")
             {
                 auto& mc = registry.emplace<MeshComponent>(entity);
-                mc.Data = MeshFactory::CreateByUUID(
-                    def.AssetUUID.empty() ? axe::PrimitiveUUID::Cube : def.AssetUUID);
                 mc.AssetUUID = def.AssetUUID;
+
+                // SC25 — era CreateByUUID, que so conhece primitiva. Uma malha
+                // importada vinculada no Script Editor nascia SEM geometria ao
+                // ser posta na cena: o script funcionava, a entidade existia, e
+                // nao havia nada na tela. ResolveByUUID cobre os dois casos.
+                mc.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
+                if (!mc.Data)
+                    mc.Data = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
             }
             // ── SkeletalMesh: personagem animado do script ─────────────────
             //
@@ -2025,8 +2070,18 @@ namespace axe
         ScriptComponent sc;
         sc.ScriptAssetPath = scriptPath.string();
         sc.ScriptName = scriptAsset->GetName();
-        sc.DllPath = scriptAsset->DllPath;
-        sc.IsCompiled = scriptAsset->IsCompiled;
+        // SC4 — resolvido do disco, nao copiado do campo do asset: o DllPath
+        // gravado no .axescript pode ser de outra maquina ou apontar para o
+        // temp_scripts antigo. ScriptWorld reconfirma no Play de qualquer
+        // forma; isto aqui so deixa o IsCompiled coerente ja na instanciacao.
+        {
+            std::string uuid;
+            if (auto* rec = AssetDatabase::Get().GetByPath(scriptPath))
+                uuid = rec->UUID;
+            auto dll = ScriptPaths::ResolveDll(sc.ScriptName, uuid);
+            sc.DllPath = dll.string();
+            sc.IsCompiled = !dll.empty();
+        }
         registry.emplace<ScriptComponent>(entity, sc);
 
         m_Context.Select(entity);

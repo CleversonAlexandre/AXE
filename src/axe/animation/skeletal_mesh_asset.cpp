@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include "skeletal_mesh_loader.hpp"
 #include "axe/log/log.hpp"
+#include <glm/gtc/matrix_transform.hpp>   // SC34: translate/scale do socket
+#include <glm/gtx/quaternion.hpp>          // SC34: quat -> mat4
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -194,6 +196,33 @@ namespace axe
 			m_Name, m_Skeleton->GetBoneCount(), m_Clips.size());
 
 		return true;
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+	//  SC34 — sockets
+	// ─────────────────────────────────────────────────────────────────────────
+
+	const SkeletalMeshAsset::Socket* SkeletalMeshAsset::FindSocket(const std::string& name) const
+	{
+		// Nome vazio nunca casa: "sem socket" e estado valido em notify e em
+		// anexo, e nao pode encontrar por acidente um socket mal nomeado.
+		if (name.empty()) return nullptr;
+
+		for (const auto& s : m_Sockets)
+			if (s.Name == name) return &s;
+
+		return nullptr;
+	}
+
+	glm::mat4 SkeletalMeshAsset::GetSocketLocalTransform(const Socket& s) const
+	{
+		// Ordem T * R * S, a mesma do TransformComponent — um socket que se
+		// comportasse diferente do resto do editor seria uma surpresa cara.
+		// A rotacao e autorada em GRAUS (o inspetor mostra graus); a conversao
+		// mora aqui para nao vazar para cada ponto de uso.
+		return glm::translate(glm::mat4(1.0f), s.Location)
+			* glm::mat4(glm::quat(glm::radians(s.Rotation)))
+			* glm::scale(glm::mat4(1.0f), s.Scale);
 	}
 
 	int SkeletalMeshAsset::AddAnimation(const fs::path& file)
@@ -454,6 +483,29 @@ namespace axe
 
 		root["animations"] = anims;
 
+		// ── SC34: sockets ────────────────────────────────────────────────────
+		//
+		// So grava quando ha algum: um .axeskel de personagem sem socket nao
+		// precisa carregar uma chave vazia, e o diff do asset fica legivel.
+		if (!m_Sockets.empty())
+		{
+			json sockets = json::array();
+
+			for (const auto& sk : m_Sockets)
+			{
+				json j;
+				j["name"] = sk.Name;
+				j["bone"] = sk.BoneName;
+				j["loc"] = { sk.Location.x, sk.Location.y, sk.Location.z };
+				j["rot"] = { sk.Rotation.x, sk.Rotation.y, sk.Rotation.z };
+				j["scale"] = { sk.Scale.x,    sk.Scale.y,    sk.Scale.z };
+				if (!sk.PreviewMeshUUID.empty()) j["preview"] = sk.PreviewMeshUUID;
+				sockets.push_back(j);
+			}
+
+			root["sockets"] = sockets;
+		}
+
 		// ── Autoria por clipe (Animation Editor) ─────────────────────────
 		if (!m_ClipMeta.empty())
 		{
@@ -607,6 +659,43 @@ namespace axe
 
 				if (!entry.SourceFile.empty())
 					asset->m_Animations.push_back(entry);
+			}
+		}
+
+		// ── SC34: sockets ────────────────────────────────────────────────────
+		//
+		// Ausente = lista vazia, que e o estado de todo .axeskel gravado antes
+		// deste patch. Nada a migrar: socket e informacao nova, nao um campo
+		// que mudou de forma.
+		if (root.contains("sockets") && root["sockets"].is_array())
+		{
+			for (const auto& j : root["sockets"])
+			{
+				Socket sk;
+				sk.Name = j.value("name", std::string{});
+				sk.BoneName = j.value("bone", std::string{});
+				sk.PreviewMeshUUID = j.value("preview", std::string{});
+
+				auto readVec = [&](const char* key, glm::vec3& out)
+					{
+						if (!j.contains(key) || !j[key].is_array() || j[key].size() < 3) return;
+						out = { j[key][0], j[key][1], j[key][2] };
+					};
+				readVec("loc", sk.Location);
+				readVec("rot", sk.Rotation);
+				readVec("scale", sk.Scale);
+
+				// Socket sem nome nao serve para nada — ninguem consegue
+				// referencia-lo — e ainda atrapalharia o FindSocket. Descarta
+				// avisando, em vez de carregar lixo em silencio.
+				if (sk.Name.empty())
+				{
+					AXE_CORE_WARN("SkeletalMeshAsset: socket sem nome em '{}' — ignorado.",
+						filepath.string());
+					continue;
+				}
+
+				asset->m_Sockets.push_back(sk);
 			}
 		}
 

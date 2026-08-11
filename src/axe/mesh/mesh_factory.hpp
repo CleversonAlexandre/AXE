@@ -24,5 +24,19 @@ namespace axe
 
 		//Verifica se um UUID é de primitiva
 		static bool IsPrimitive(const std::string& uuid);
+
+		// ── SC25: UUID -> malha, seja ela primitiva ou asset ──────────────────
+		//
+		// A regra "primitiva vem da fabrica, asset vem do MeshLoader" estava
+		// escrita a mao em QUATRO lugares — SceneSerializer, preview do Script
+		// Editor (dois pontos) e a instanciacao de um script na cena. Tres
+		// deles chamavam CreateByUUID direto, que devolve nada para um UUID de
+		// asset: era por isso que uma malha importada sumia ao ser posta na
+		// cena e ao ser trocada no painel, enquanto funcionava ao abrir a cena.
+		//
+		// Nao e coincidencia terem divergido: sao quatro copias de uma decisao
+		// que nunca teve dono. Agora tem. Devolve nullptr quando o UUID nao
+		// resolve — quem chama decide o fallback.
+		static std::shared_ptr<Mesh> ResolveByUUID(const std::string& uuid);
 	};
 }//namespace axe

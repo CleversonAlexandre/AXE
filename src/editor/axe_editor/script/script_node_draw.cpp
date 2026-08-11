@@ -83,6 +83,14 @@ namespace axe
             ImGui::DragFloat("##slz", &node->Vec3Value[2], 0.01f, 0, 0, "%.3f");
             break;
         }
+        // SC30 — Asset compartilha o campo de texto do String: o valor e um
+        // UUID, e um Set Variable com valor LOCAL de asset e caso raro (o
+        // normal e ligar um fio vindo de um Get). Um seletor de asset dentro
+        // do node exigiria popup, e popup dentro do canvas do node-editor
+        // precisa de Suspend/Resume — complexidade que este caso nao paga.
+        // No painel de variavel, onde o valor e de fato autorado, ha o
+        // AssetPicker completo.
+        case ScriptVarType::Asset:
         case ScriptVarType::String:
         {
             ImGui::SetNextItemWidth(width);
@@ -98,6 +106,131 @@ namespace axe
     static ImVec4 HdrCol(ScriptNodeCategory c)
     {
         ImColor x = GetNodeHeaderColor(c); return { x.Value.x,x.Value.y,x.Value.z,x.Value.w };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC3 — editor do valor padrão de um pin de entrada
+    //
+    //  Só pins de ENTRADA e só quando não há fio: com fio, o valor vem do link
+    //  e um campo editável ali seria mentira (é o mesmo raciocínio do
+    //  "(pino Value conectado — valor vem do link)" que já existe no Set
+    //  Variable).
+    //
+    //  Vec2 / Vec4 / Quat ficam de FORA de propósito. ScriptPin não tem campo
+    //  de armazenamento para eles — são cinco Default* hoje, e acrescentar
+    //  mais três deixaria oito campos paralelos num struct que já sofre disso.
+    //  A saída certa é a consolidação num ScriptValue, que é pré-requisito do
+    //  Type Registry; enfiar três campos aqui agora só aumentaria a dívida que
+    //  SC17 — resolvido: ScriptValue guarda todas as formas, e Vec2/Vec4/Quat
+    //  passaram a ter editor. O que sobra sem campo e Object (a referencia de
+    //  entidade so ganha editor com o seletor de cena do S2), Wildcard (por
+    //  definicao nao tem tipo ainda) e os arrays (o tamanho e o preenchimento
+    //  moram na variavel, nao no pin).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    float ScriptGraphWindow::PinDefaultEditorWidth(const ScriptPin& pin) const
+    {
+        if (pin.Kind != ed::PinKind::Input) return 0.f;
+        if (!m_Graph || m_Graph->IsPinLinked(pin.ID)) return 0.f;
+
+        switch (pin.Type)
+        {
+        case ScriptPinType::Float:  return 58.f;
+        case ScriptPinType::Int:    return 58.f;
+        case ScriptPinType::Bool:   return 22.f;
+        case ScriptPinType::String: return 96.f;
+        case ScriptPinType::Vec2:   return 104.f;   // dois campos de ~50
+        case ScriptPinType::Vec3:   return 150.f;   // três campos de ~46
+        case ScriptPinType::Vec4:   return 188.f;   // quatro de ~44
+        case ScriptPinType::Quat:   return 188.f;
+        default:                    return 0.f;     // Flow, Object, Wildcard, arrays
+        }
+    }
+
+    void ScriptGraphWindow::DrawPinDefaultEditor(ScriptPin& pin, float width)
+    {
+        if (width <= 0.f) return;
+
+        ImGui::PushID((int)pin.ID.Get());
+
+        // Undo por GESTO, não por frame: arrastar um DragFloat dispara centenas
+        // de alterações e um passo de undo por frame entupiria o histórico.
+        // O snapshot sai quando o campo ganha foco e o passo é fechado quando
+        // ele perde — um Ctrl+Z volta ao valor de antes do gesto inteiro.
+        bool activated = false, committed = false;
+        auto track = [&]()
+            {
+                if (ImGui::IsItemActivated())            activated = true;
+                if (ImGui::IsItemDeactivatedAfterEdit()) committed = true;
+            };
+
+        switch (pin.Type)
+        {
+        case ScriptPinType::Float:
+            ImGui::SetNextItemWidth(width);
+            ImGui::DragFloat("##pdf", &pin.Default.Float, 0.01f, 0.f, 0.f, "%.3f");
+            track();
+            break;
+
+        case ScriptPinType::Int:
+            ImGui::SetNextItemWidth(width);
+            ImGui::DragInt("##pdi", &pin.Default.Int, 0.1f);
+            track();
+            break;
+
+        case ScriptPinType::Bool:
+            ImGui::Checkbox("##pdb", &pin.Default.Bool);
+            track();
+            break;
+
+        case ScriptPinType::String:
+        {
+            char buf[256] = {};
+            strncpy(buf, pin.Default.Str.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(width);
+            if (ImGui::InputText("##pds", buf, sizeof(buf))) pin.Default.Str = buf;
+            track();
+            break;
+        }
+
+        // SC17 — Vec2/Vec3/Vec4/Quat num caminho só. Antes só Vec3 tinha
+        // editor, e os outros três nem tinham onde guardar o valor. Agora a
+        // única diferença entre eles é quantos componentes desenhar.
+        case ScriptPinType::Vec2:
+        case ScriptPinType::Vec3:
+        case ScriptPinType::Vec4:
+        case ScriptPinType::Quat:
+        {
+            const int n =
+                pin.Type == ScriptPinType::Vec2 ? 2 :
+                pin.Type == ScriptPinType::Vec3 ? 3 : 4;
+
+            // Quat rotulado XYZW e não WXYZ: é a ordem em que glm armazena e
+            // em que o autor lê num inspetor. A ordem do CONSTRUTOR
+            // (w primeiro) é problema do ToCppLiteral, não da tela.
+            static const char* kIds[4] = { "##pdx", "##pdy", "##pdz", "##pdw" };
+            float* comp = &pin.Default.Vec.x;
+
+            const float w = (width - 4.f * (n - 1)) / (float)n;
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) ImGui::SameLine(0, 4);
+                ImGui::SetNextItemWidth(w);
+                ImGui::DragFloat(kIds[i], &comp[i], 0.01f, 0.f, 0.f, "%.2f");
+                track();
+            }
+            break;
+        }
+
+        default:
+            break;
+        }
+
+        ImGui::PopID();
+
+        if (activated) PushUndo("Edit Pin Default");
+        if (committed) CommitUndo("Edit Pin Default");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -146,6 +279,7 @@ namespace axe
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
                 {
                     node->StringValue = buf;
+                    MarkEdited("Rename Comment");   // SC7: nao tinha undo
                     m_RenamingComment = -1;
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_Escape)) m_RenamingComment = -1;
@@ -354,6 +488,7 @@ namespace axe
                 ed::BeginPin(pin.ID, ed::PinKind::Input);
                 ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
+                TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                 ed::EndPin();
                 ed::PopStyleVar(uTurn ? 2 : 1);
             }
@@ -367,6 +502,7 @@ namespace axe
                 ed::BeginPin(pin.ID, ed::PinKind::Output);
                 ax::Widgets::Icon(ImVec2(dotSz, dotSz), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0,0,0,0 });
+                TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                 ed::EndPin();
                 ed::PopStyleVar(uTurn ? 2 : 1);
             }
@@ -404,6 +540,7 @@ namespace axe
                 ed::BeginPin(pin.ID, ed::PinKind::Input);
                 ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                 ed::EndPin();
                 ImGui::SameLine(0, 2);
             }
@@ -419,6 +556,7 @@ namespace axe
                 ed::BeginPin(pin.ID, ed::PinKind::Output);
                 ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                 ed::EndPin();
                 ImGui::SameLine(0, 2);
             }
@@ -432,7 +570,16 @@ namespace axe
         }
 
         float inW = 0, outW = 0;
-        for (auto& p : node->Inputs)  inW = std::max(inW, ImGui::CalcTextSize(p.Name.c_str()).x);
+        // SC3 — a largura da coluna de entrada agora inclui o campo de valor
+        // padrão, quando ele existe. Sem somar aqui, o campo vazaria por cima
+        // da coluna de saída assim que o nome do pin fosse curto.
+        for (auto& p : node->Inputs)
+        {
+            float w = ImGui::CalcTextSize(p.Name.c_str()).x;
+            float ed = PinDefaultEditorWidth(p);
+            if (ed > 0.f) w += ed + 6.f;
+            inW = std::max(inW, w);
+        }
         for (auto& p : node->Outputs) outW = std::max(outW, ImGui::CalcTextSize(p.Name.c_str()).x);
         // Switch on String usa campo editável de largura fixa (90px) pros
         // pins de case, em vez de texto — garante espaço mesmo que o nome
@@ -454,13 +601,18 @@ namespace axe
         ImVec4 hcol;
         if (node->Category == ScriptNodeCategory::Variable && m_ScriptAsset)
         {
-            int varTypeIdx = node->IntValue & 0xFF;
+            int varTypeIdx = node->IntValue & ScriptNodeBits::VarTypeMask;
             // Sync from asset
             for (auto& v : m_ScriptAsset->GetVariables())
                 if (v.Name == node->StringValue)
                 {
                     varTypeIdx = (int)v.Type;
-                    node->IntValue = (node->IntValue & 0x100) | varTypeIdx;
+                    // SC20 — preserva TODOS os bits altos, nao so o 0x100.
+                    // Escrito como "(IntValue & 0x100) | tipo", isto apagava o
+                    // tipo do pin splitado (bits 12-16) a cada frame em que o
+                    // node de variavel fosse desenhado — e o Recombine voltaria
+                    // a achar que era Vec3.
+                    node->IntValue = (node->IntValue & ~ScriptNodeBits::VarTypeMask) | varTypeIdx;
                     break;
                 }
 
@@ -534,7 +686,7 @@ namespace axe
 
                 if (!hasConnection)
                 {
-                    // BUGFIX: este editor antes lia/escrevia var->DefaultFloat/
+                    // BUGFIX: este editor antes lia/escrevia var->Default.Float/
                     // DefaultBool/DefaultInt/DefaultVec3/DefaultString — o
                     // valor DEFAULT GLOBAL da variável, compartilhado com
                     // todo Get Variable e com o painel Script Details. Editar
@@ -581,8 +733,8 @@ namespace axe
             int wantType = 0;
             if (ScriptPin* paramPin = FindAnimParamPin(node, &wantType))
             {
-                const std::string preview = paramPin->DefaultString.empty()
-                    ? std::string("(escolher parametro)") : paramPin->DefaultString;
+                const std::string preview = paramPin->Default.Str.empty()
+                    ? std::string("(escolher parametro)") : paramPin->Default.Str;
 
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
 
@@ -596,11 +748,11 @@ namespace axe
 
                 // Nome que nao existe mais no grafo (renomeado/removido) fica
                 // vermelho em vez de falhar calado no Play.
-                if (!paramPin->DefaultString.empty())
+                if (!paramPin->Default.Str.empty())
                 {
                     bool known = false;
                     for (const auto& pr : CollectAnimGraphParams(false))
-                        if (pr.first == paramPin->DefaultString) { known = true; break; }
+                        if (pr.first == paramPin->Default.Str) { known = true; break; }
 
                     if (!known)
                     {
@@ -754,12 +906,24 @@ namespace axe
                 ed::BeginPin(pin.ID, ed::PinKind::Input);
                 ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
                     m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                 ed::EndPin();
                 ImGui::SameLine(0, 3);
                 ImGui::SetCursorPosY(rowY + (ICON_SZ - ImGui::GetTextLineHeight()) * .5f);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.88f, 0.88f, 1));
                 ImGui::TextUnformatted(pin.Name.c_str());
                 ImGui::PopStyleColor();
+
+                // SC3 — campo de valor logo depois do nome, como na Unreal.
+                // Aparece só sem fio; ao conectar, some sozinho, porque a
+                // largura é recalculada a cada frame por PinDefaultEditorWidth.
+                float edW = PinDefaultEditorWidth(pin);
+                if (edW > 0.f)
+                {
+                    ImGui::SameLine(0, 6);
+                    ImGui::SetCursorPosY(rowY + (ICON_SZ - ImGui::GetFrameHeight()) * .5f);
+                    DrawPinDefaultEditor(pin, edW);
+                }
             }
 
             if (hasOut)
@@ -792,6 +956,7 @@ namespace axe
                     ed::BeginPin(pin.ID, ed::PinKind::Output);
                     ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
                         m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                    TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                     ed::EndPin();
                 }
                 else
@@ -808,6 +973,7 @@ namespace axe
                     ed::BeginPin(pin.ID, ed::PinKind::Output);
                     ax::Widgets::Icon(ImVec2(ICON_SZ, ICON_SZ), PinIcon(pin.Type),
                         m_Graph->IsPinLinked(pin.ID), PinCol(pin.Type), { 0.1f,0.1f,0.1f,0.8f });
+                    TrackPinRect(pin.ID);   // SC2: registra onde este pin ficou neste frame
                     ed::EndPin();
                 }
             }
@@ -908,9 +1074,10 @@ namespace axe
             if (!fits) continue;
 
             any = true;
-            if (ImGui::Selectable(p.first.c_str(), p.first == paramPin->DefaultString))
+            if (ImGui::Selectable(p.first.c_str(), p.first == paramPin->Default.Str))
             {
-                paramPin->DefaultString = p.first;
+                paramPin->Default.Str = p.first;
+                MarkEdited("Change Anim Param");   // SC7: nao tinha undo
                 picked = true;
             }
         }

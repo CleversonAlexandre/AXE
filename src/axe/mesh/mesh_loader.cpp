@@ -89,7 +89,7 @@ namespace axe
 		s_MeshCache.erase(filepath);
 	}
 
-	LoadedAsset MeshLoader::Load(const std::string& filepath)
+	LoadedAsset MeshLoader::Load(const std::string& filepath, bool quiet)
 	{
 		auto cached = s_MeshCache.find(filepath);
 		if (cached != s_MeshCache.end())
@@ -132,7 +132,7 @@ namespace axe
 
 		if (scene->mNumMeshes == 0 && scene->mNumAnimations > 0)
 		{
-			AXE_CORE_ERROR("MeshLoader: '{}' nao contem malha — e um arquivo SO DE ANIMACAO "
+			if (!quiet) AXE_CORE_ERROR("MeshLoader: '{}' nao contem malha — e um arquivo SO DE ANIMACAO "
 				"({} clipe(s)). Use 'Importar animacao...' no Inspector do personagem, "
 				"nao o Asset Browser.", filepath, scene->mNumAnimations);
 			return {};

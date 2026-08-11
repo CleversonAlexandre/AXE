@@ -22,7 +22,14 @@ namespace axe
 		// mesmo arquivo (mesma malha usada por várias entidades, ou a
 		// cena sendo serializada/restaurada no Play/Stop) não reimportam
 		// via Assimp, só retornam o LoadedAsset já carregado.
-		static LoadedAsset Load(const std::string& filepath);
+		// quiet — silencia os erros de "arquivo sem malha".
+		//
+		// SC40: existe para SONDAGEM. O erro serve quando o USUARIO manda
+		// importar um arquivo; quando o editor apenas testa "isto por acaso tem
+		// malha?" — como o gerador de thumbnails faz em cada FBX da pasta — ele
+		// vira um par erro+sucesso por arquivo no log, e um log cheio de erros
+		// que nao sao erros treina qualquer um a ignorar o log.
+		static LoadedAsset Load(const std::string& filepath, bool quiet = false);
 
 		// Limpa todo o cache de malhas (ex: ao trocar de projeto).
 		static void ClearCache();

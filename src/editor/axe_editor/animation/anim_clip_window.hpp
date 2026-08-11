@@ -101,6 +101,31 @@ namespace axe
 
 		int m_SelectedClip = -1;
 		int m_SelectedNotify = -1;   // indice em CurrentClip()->Notifies
+
+		// ── SC35: sockets ─────────────────────────────────────────────────────
+		//
+		// Osso selecionado na arvore. Existe para que "Add Socket" ja nasca no
+		// osso certo: escolher a mao numa lista de 60 ossos, num combo, depois
+		// de ja te-la clicado na arvore, e trabalho repetido.
+		std::string m_SelectedBone;
+		int         m_SelectedSocket = -1;   // indice em GetSockets()
+
+		void DrawSocketList();      // lista + add/remove, abaixo da arvore
+		void DrawSocketDetails();   // osso pai, transform e preview mesh
+
+		// SC36 — posiciona a malha de preview do socket selecionado na pose
+		// CORRENTE do personagem. Chamado por frame, junto do preview: o
+		// socket tem de acompanhar a animacao rodando, senao voce alinharia a
+		// arma com a bind pose e ela sairia do lugar assim que o clipe tocasse.
+		void UpdateSocketPreview();
+		entt::entity m_SocketPreviewEntity = entt::null;
+		int          m_SocketPreviewLogged = -2;   // -2 = nunca logou
+
+		// SC39 — gizmo do socket. O modo e int e nao ImGuizmo::OPERATION para
+		// nao arrastar o header do ImGuizmo para dentro deste .hpp.
+		void DrawSocketGizmo();
+		int  m_SocketGizmoOp = 7;      // ImGuizmo::TRANSLATE
+		bool m_SocketGizmoDirty = false;
 		int m_DraggingNotify = -1;   // sendo arrastado na timeline
 
 		// Tempo capturado no right-click da lane (o popup abre depois que o

@@ -25,6 +25,10 @@
 #include "axe/log/log.hpp"
 
 #include "editor/axe_editor/asset/asset_picker.hpp"
+#include <glm/gtx/quaternion.hpp>
+#include "axe/animation/animation_sampler.hpp"
+#include "axe/mesh/mesh_factory.hpp"
+#include "axe/material/material.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -34,6 +38,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/type_ptr.hpp>
+#include <ImGuizmo.h>
 #include <cstdio>
 
 namespace axe
@@ -63,6 +69,16 @@ namespace axe
 		m_SelectedClip = (m_Skeleton && !m_Skeleton->GetClips().empty()) ? 0 : -1;
 
 		SyncPreviewCharacter();
+
+		// SC37 — AQUI, e nao no DrawPreviewPanel.
+		//
+		// O painel roda na fase de UI, que acontece DEPOIS de
+		// RenderToFramebuffer: o transform escrito la so seria visto no frame
+		// seguinte, e a entidade criada no frame N so entraria na cena a tempo
+		// do render N+1. Com o socket sendo destruido e recriado conforme a
+		// selecao, dava para nunca alcancar um frame em que ela existisse no
+		// momento certo.
+		UpdateSocketPreview();
 	}
 
 	void AnimClipWindow::SelectClipByName(const std::string& name)
@@ -638,6 +654,257 @@ namespace axe
 		ImGui::TextDisabled("|  double-click / right-click a lane = add notify  |  drag diamond = move / change track  |  Alt+drag in viewport = camera");
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────
+	//  SC36 — a malha do socket no viewport
+	//
+	//  Sem isto o socket so tinha numeros: voce digitava Location/Rotation e
+	//  torcia. Posicionar uma arma na mao e um trabalho VISUAL — o valor certo
+	//  e "aquele em que o cabo encosta na palma", e nao um numero que se
+	//  calcule.
+	//
+	//  A malha e uma SEGUNDA entidade no preview, com MeshComponent comum, cujo
+	//  transform e reescrito por frame. Nao e filha da entidade do personagem
+	//  nem parte do skinning: o osso ja da a matriz pronta, e enfiar isto no
+	//  pipeline skinado significaria criar um bone falso so para autoria.
+	// ─────────────────────────────────────────────────────────────────────────
+	void AnimClipWindow::UpdateSocketPreview()
+	{
+		if (!m_PreviewScene) return;
+
+		auto& reg = m_PreviewScene->GetRegistry();
+
+		// Sem esqueleto aberto nao ha o que posicionar. Sai cedo em vez de
+		// montar um vector vazio so para o ternario compilar — e o temporario
+		// ainda nao poderia ser ligado a uma referencia const com seguranca de
+		// tempo de vida ao longo da funcao.
+		if (!m_Skeleton) return;
+
+		const auto& sockets = m_Skeleton->GetSockets();
+
+		const bool haveSel = (m_SelectedSocket >= 0 && m_SelectedSocket < (int)sockets.size());
+		const std::string meshUUID = haveSel ? sockets[m_SelectedSocket].PreviewMeshUUID : "";
+
+		// Sem socket selecionado, ou sem malha nele: a entidade some.
+		//
+		// Some de verdade (destroy), e nao "fica invisivel": manter uma
+		// entidade vazia na cena de preview a faria aparecer em qualquer
+		// varredura futura do registry como um objeto sem malha e sem dono.
+		if (!haveSel || meshUUID.empty())
+		{
+			if (m_SocketPreviewEntity != entt::null && reg.valid(m_SocketPreviewEntity))
+				m_PreviewScene->DestroyEntity(m_SocketPreviewEntity);
+
+			m_SocketPreviewEntity = entt::null;
+			return;
+		}
+
+		if (m_SocketPreviewEntity == entt::null || !reg.valid(m_SocketPreviewEntity))
+			m_SocketPreviewEntity = m_PreviewScene->CreateEntity("SocketPreview");
+
+		auto& mc = reg.get_or_emplace<MeshComponent>(m_SocketPreviewEntity);
+
+		// Material explicito: o SceneRenderer aceita material nulo, mas o
+		// caminho deferido nao desenha sem ele. Um cinza neutro basta — a
+		// malha do socket serve para POSICIONAR, nao para avaliar aparencia.
+		if (!reg.all_of<MaterialComponent>(m_SocketPreviewEntity))
+		{
+			auto m = std::make_shared<Material>(nullptr, "SocketPreview");
+			m->UsePBR = true;
+			m->Metallic = 0.0f;
+			m->Roughness = 0.55f;
+			m->Color = glm::vec4(0.85f, 0.55f, 0.15f, 1.0f);   // laranja: e uma
+			// ajuda de autoria,
+			// nao parte do modelo
+			reg.emplace<MaterialComponent>(m_SocketPreviewEntity, m);
+		}
+
+		// Recarrega so quando o UUID muda: ResolveByUUID le o arquivo do disco,
+		// e faze-lo por frame transformaria o preview num leitor de FBX.
+		if (mc.AssetUUID != meshUUID)
+		{
+			mc.AssetUUID = meshUUID;
+			mc.Data = MeshFactory::ResolveByUUID(meshUUID);
+
+			// Uma linha por TROCA de malha, nao por frame. Sem isto, "nao
+			// aparece nada" nao distingue malha-nao-carregada de
+			// malha-carregada-fora-de-vista, e as duas causas nao tem nada em
+			// comum.
+			if (mc.Data)
+				AXE_EDITOR_INFO("Socket preview: malha '{}' carregada ({} vertices).",
+					meshUUID, (int)mc.Data->GetVertices().size());
+			else
+				AXE_EDITOR_ERROR("Socket preview: nao foi possivel resolver a malha '{}'.",
+					meshUUID);
+		}
+
+		if (!mc.Data) return;
+
+		// ── Matriz do osso na pose CORRENTE ──────────────────────────────────
+		const auto& skel = m_Skeleton->GetSkeleton();
+		if (!skel) return;
+
+		const auto& sock = sockets[m_SelectedSocket];
+
+		int boneIdx = -1;
+		const auto& bones = skel->GetBones();
+		for (int i = 0; i < (int)bones.size(); i++)
+			if (bones[i].Name == sock.BoneName) { boneIdx = i; break; }
+
+		if (boneIdx < 0) return;   // osso renomeado no re-import — nao adivinha
+
+		std::vector<glm::mat4> skinning, globals;
+
+		// Amostra a MESMA pose que o viewport esta mostrando. Reamostrar aqui,
+		// em vez de reaproveitar o que o renderer calculou, custa uma passada
+		// no esqueleto por frame — e evita depender de o componente expor um
+		// cache interno que hoje ele nao expoe.
+		if (auto clip = CurrentClip())
+			AnimationSampler::Sample(*skel, *clip, PreviewTime(), skinning, &globals);
+		else
+			AnimationSampler::BindPose(*skel, skinning, &globals);
+
+		if (boneIdx >= (int)globals.size()) return;
+
+		// Transform do PERSONAGEM: o preview pode aplicar escala/offset na
+		// entidade, e ignorar isso poria a arma em outra escala que a mao.
+		glm::mat4 charXf(1.0f);
+		if (auto* tc = reg.try_get<TransformComponent>(m_PreviewEntity))
+			charXf = tc->Data.GetMatrix();
+
+		const glm::mat4 world = charXf * globals[boneIdx]
+			* m_Skeleton->GetSocketLocalTransform(sock);
+
+		// Decompoe para o TransformComponent porque e o que o renderer le. A
+		// escala sai do comprimento das colunas; a rotacao, da base
+		// normalizada — decomposicao suficiente aqui porque um socket nao tem
+		// shear (translate*rotate*scale, sempre).
+		auto& tc = reg.get_or_emplace<TransformComponent>(m_SocketPreviewEntity);
+
+		glm::vec3 sc(
+			glm::length(glm::vec3(world[0])),
+			glm::length(glm::vec3(world[1])),
+			glm::length(glm::vec3(world[2])));
+
+		glm::mat3 rot(
+			glm::vec3(world[0]) / (sc.x > 0.0f ? sc.x : 1.0f),
+			glm::vec3(world[1]) / (sc.y > 0.0f ? sc.y : 1.0f),
+			glm::vec3(world[2]) / (sc.z > 0.0f ? sc.z : 1.0f));
+
+		tc.Data.Position = glm::vec3(world[3]);
+		tc.Data.Rotation = glm::eulerAngles(glm::quat_cast(rot));
+		tc.Data.Scale = sc;
+
+		// Diagnostico de POSICAO, uma vez por troca de socket.
+		//
+		// O caso que este log resolve: a malha carrega, a entidade existe, e a
+		// pistola esta a 300 unidades da camera ou com escala 0.001 — invisivel
+		// pelos mesmos sintomas de "nao renderizou". Ver os numeros separa as
+		// duas hipoteses num olhar.
+		if (m_SocketPreviewLogged != m_SelectedSocket)
+		{
+			m_SocketPreviewLogged = m_SelectedSocket;
+			AXE_EDITOR_INFO("Socket '{}': pos ({:.3f}, {:.3f}, {:.3f})  escala ({:.3f}, {:.3f}, {:.3f}).",
+				sock.Name,
+				tc.Data.Position.x, tc.Data.Position.y, tc.Data.Position.z,
+				tc.Data.Scale.x, tc.Data.Scale.y, tc.Data.Scale.z);
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+	//  SC39 — gizmo para posicionar o socket
+	//
+	//  O gizmo opera no espaco do MUNDO (e o unico em que o ImGuizmo sabe
+	//  desenhar), mas o socket guarda um transform RELATIVO ao osso. Entao o
+	//  resultado do arrasto e trazido de volta multiplicando pelo inverso da
+	//  matriz do osso — sem isso, mover o socket com o personagem em qualquer
+	//  pose que nao a bind gravaria um offset que so vale naquela pose.
+	//
+	//  Atalhos W/E/R, os mesmos do viewport principal: um editor onde cada
+	//  janela tem a sua tecla obriga a lembrar de qual janela se esta.
+	// ─────────────────────────────────────────────────────────────────────────
+	void AnimClipWindow::DrawSocketGizmo()
+	{
+		if (!m_Skeleton || !m_PreviewRenderer || !m_PreviewRenderer->m_Camera) return;
+
+		auto& sockets = m_Skeleton->GetSockets();
+		if (m_SelectedSocket < 0 || m_SelectedSocket >= (int)sockets.size()) return;
+
+		auto& sock = sockets[m_SelectedSocket];
+
+		const auto& skel = m_Skeleton->GetSkeleton();
+		if (!skel) return;
+
+		int boneIdx = -1;
+		const auto& bones = skel->GetBones();
+		for (int i = 0; i < (int)bones.size(); i++)
+			if (bones[i].Name == sock.BoneName) { boneIdx = i; break; }
+
+		if (boneIdx < 0) return;
+
+		// Teclas so quando o mouse esta sobre o preview: W num campo de texto
+		// do painel ao lado nao pode trocar o modo do gizmo.
+		if (m_PreviewHovered && !ImGui::IsAnyItemActive())
+		{
+			if (ImGui::IsKeyPressed(ImGuiKey_W)) m_SocketGizmoOp = ImGuizmo::TRANSLATE;
+			if (ImGui::IsKeyPressed(ImGuiKey_E)) m_SocketGizmoOp = ImGuizmo::ROTATE;
+			if (ImGui::IsKeyPressed(ImGuiKey_R)) m_SocketGizmoOp = ImGuizmo::SCALE;
+		}
+
+		std::vector<glm::mat4> skinning, globals;
+
+		if (auto clip = CurrentClip())
+			AnimationSampler::Sample(*skel, *clip, PreviewTime(), skinning, &globals);
+		else
+			AnimationSampler::BindPose(*skel, skinning, &globals);
+
+		if (boneIdx >= (int)globals.size()) return;
+
+		glm::mat4 charXf(1.0f);
+		if (auto* tc = m_PreviewScene->GetRegistry().try_get<TransformComponent>(m_PreviewEntity))
+			charXf = tc->Data.GetMatrix();
+
+		const glm::mat4 boneWorld = charXf * globals[boneIdx];
+		glm::mat4 world = boneWorld * m_Skeleton->GetSocketLocalTransform(sock);
+
+		ImGuizmo::SetOrthographic(false);
+		ImGuizmo::SetDrawlist();
+
+		const ImVec2 rmin = ImGui::GetItemRectMin();
+		const ImVec2 rsz = ImGui::GetItemRectSize();
+		ImGuizmo::SetRect(rmin.x, rmin.y, rsz.x, rsz.y);
+
+		glm::mat4 view = m_PreviewRenderer->m_Camera->GetViewMatrix();
+		glm::mat4 proj = m_PreviewRenderer->m_Camera->GetProjectionMatrix();
+
+		if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
+			(ImGuizmo::OPERATION)m_SocketGizmoOp, ImGuizmo::LOCAL,
+			glm::value_ptr(world)))
+		{
+			// De volta para o espaco do osso.
+			const glm::mat4 local = glm::inverse(boneWorld) * world;
+
+			glm::vec3 t, sc;
+			glm::vec3 rotDeg;
+			ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(local),
+				glm::value_ptr(t), glm::value_ptr(rotDeg), glm::value_ptr(sc));
+
+			sock.Location = t;
+			sock.Rotation = rotDeg;   // o campo ja e em graus, como o ImGuizmo
+			sock.Scale = sc;
+
+			m_SocketGizmoDirty = true;
+		}
+
+		// Grava so quando o arrasto TERMINA. Um Save por frame de arrasto
+		// reescreveria o .axeskel dezenas de vezes por segundo — e o disco nao
+		// e onde se guarda estado intermediario de um gesto.
+		if (m_SocketGizmoDirty && !ImGuizmo::IsUsing())
+		{
+			m_Skeleton->Save();
+			m_SocketGizmoDirty = false;
+		}
+	}
+
 	void AnimClipWindow::DrawPreviewPanel()
 	{
 		const ImVec2 pavail = ImGui::GetContentRegionAvail();
@@ -657,6 +924,14 @@ namespace axe
 		}
 
 		m_PreviewHovered = ImGui::IsItemHovered();
+
+		// ── SC39: gizmo do socket ────────────────────────────────────────────
+		//
+		//  Antes de HandlePreviewInput: quando o gizmo esta sendo arrastado, o
+		//  input de camera precisa ficar quieto, senao o mesmo arrasto move a
+		//  peca E orbita a cena.
+		DrawSocketGizmo();
+
 		HandlePreviewInput();
 
 		// Notifies recem-cruzados, por cima do canto do preview.
@@ -734,7 +1009,8 @@ namespace axe
 
 		const auto& bones = skel->GetBones();
 
-		ImGui::TextDisabled("%d bones  (sockets: coming soon)", (int)bones.size());
+		ImGui::TextDisabled("%d bones  |  %d socket(s)",
+			(int)bones.size(), (int)m_Skeleton->GetSockets().size());
 		ImGui::Separator();
 
 		// Filhos por indice — a ordem topologica do Skeleton (pai sempre
@@ -751,20 +1027,30 @@ namespace axe
 		{
 			const std::vector<Bone>* Bones;
 			const std::vector<std::vector<int>>* Children;
+			std::string* Selected;   // SC35 — osso clicado
 
 			void Walk(int idx) const
 			{
 				const auto& kids = (*Children)[idx];
+				const std::string& name = (*Bones)[idx].Name;
 
-				ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
+				ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth
+					| ImGuiTreeNodeFlags_OpenOnArrow;   // SC35: clicar no nome
+				// seleciona em vez de
+				// abrir/fechar o galho
 
 				if (kids.empty())
 					flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 				else if (idx == 0)
 					flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
-				const bool open = ImGui::TreeNodeEx(
-					(*Bones)[idx].Name.c_str(), flags);
+				if (Selected && *Selected == name)
+					flags |= ImGuiTreeNodeFlags_Selected;
+
+				const bool open = ImGui::TreeNodeEx(name.c_str(), flags);
+
+				if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && Selected)
+					*Selected = name;
 
 				if (open && !kids.empty())
 				{
@@ -776,14 +1062,272 @@ namespace axe
 			}
 		};
 
-		Walker w{ &bones, &children };
+		// A arvore fica num filho de altura fixa para que a lista de sockets
+		// tenha lugar garantido: com 60+ ossos ela empurraria os sockets para
+		// fora da janela, e a secao existiria sem nunca ser vista.
+		ImGui::BeginChild("##bonetree", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.5f), true);
+
+		Walker w{ &bones, &children, &m_SelectedBone };
 
 		for (std::size_t i = 0; i < bones.size(); ++i)
 			if (bones[i].ParentIndex < 0)
 				w.Walk((int)i);
+
+		ImGui::EndChild();
+
+		DrawSocketList();
 	}
 
-	// ── Centro: preview + timeline ───────────────────────────────────────
+	// ─────────────────────────────────────────────────────────────────────────
+	//  SC35 — sockets: lista e edicao
+	// ─────────────────────────────────────────────────────────────────────────
+
+	void AnimClipWindow::DrawSocketList()
+	{
+		auto& sockets = m_Skeleton->GetSockets();
+
+		ImGui::Spacing();
+		ImGui::TextDisabled("Sockets");
+		ImGui::SameLine();
+
+		// Add usa o osso SELECIONADO na arvore acima. Sem osso selecionado o
+		// botao fica desabilitado com a explicacao no tooltip, em vez de criar
+		// um socket orfao que so daria erro depois — um socket sem osso nao tem
+		// onde existir no espaco.
+		const bool canAdd = !m_SelectedBone.empty();
+
+		if (!canAdd) ImGui::BeginDisabled();
+
+		if (ImGui::SmallButton("+ Add"))
+		{
+			SkeletalMeshAsset::Socket s;
+			s.BoneName = m_SelectedBone;
+
+			// Nome unico ja na criacao: dois sockets homonimos fariam o
+			// FindSocket devolver sempre o primeiro, e o segundo seria
+			// inalcancavel sem nenhum aviso — a mesma armadilha das entidades
+			// de mesmo nome que ja nos custou uma sessao.
+			int n = 1;
+			std::string candidate;
+			bool taken = true;
+
+			while (taken)
+			{
+				candidate = "Socket_" + std::to_string(n++);
+				taken = false;
+				for (const auto& other : sockets)
+					if (other.Name == candidate) { taken = true; break; }
+			}
+
+			s.Name = candidate;
+			sockets.push_back(s);
+			m_SelectedSocket = (int)sockets.size() - 1;
+			m_Skeleton->Save();
+		}
+
+		if (!canAdd)
+		{
+			ImGui::EndDisabled();
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip("Select a bone in the tree above first.");
+		}
+
+		ImGui::Separator();
+
+		if (sockets.empty())
+		{
+			ImGui::TextDisabled("No sockets yet.");
+			return;
+		}
+
+		for (int i = 0; i < (int)sockets.size(); i++)
+		{
+			ImGui::PushID(i);
+
+			const bool sel = (m_SelectedSocket == i);
+			std::string label = sockets[i].Name + "   [" + sockets[i].BoneName + "]";
+
+			if (ImGui::Selectable(label.c_str(), sel))
+				m_SelectedSocket = i;
+
+			if (ImGui::BeginPopupContextItem("##sockctx"))
+			{
+				if (ImGui::MenuItem("Delete"))
+				{
+					sockets.erase(sockets.begin() + i);
+
+					// O indice selecionado apontaria para outro socket (ou
+					// para fora) depois do erase. Limpar e o unico estado
+					// honesto: o que estava selecionado deixou de existir.
+					m_SelectedSocket = -1;
+					m_Skeleton->Save();
+
+					ImGui::EndPopup();
+					ImGui::PopID();
+					break;
+				}
+				ImGui::EndPopup();
+			}
+
+			ImGui::PopID();
+		}
+
+		if (m_SelectedSocket >= 0 && m_SelectedSocket < (int)sockets.size())
+		{
+			ImGui::Separator();
+			DrawSocketDetails();
+		}
+	}
+
+	void AnimClipWindow::DrawSocketDetails()
+	{
+		auto& sockets = m_Skeleton->GetSockets();
+		auto& s = sockets[m_SelectedSocket];
+
+		bool dirty = false;
+
+		// ── Nome ─────────────────────────────────────────────────────────────
+		char nameBuf[128] = {};
+		strncpy(nameBuf, s.Name.c_str(), sizeof(nameBuf) - 1);
+
+		ImGui::TextDisabled("Name");
+		ImGui::SetNextItemWidth(-1);
+
+		if (ImGui::InputText("##sockname", nameBuf, sizeof(nameBuf)))
+		{
+			// Rejeita colisao em vez de aceitar e quebrar o FindSocket. Vazio
+			// tambem sai fora: um socket sem nome nao pode ser referenciado.
+			const std::string candidate = nameBuf;
+			bool taken = candidate.empty();
+
+			for (int i = 0; i < (int)sockets.size() && !taken; i++)
+				if (i != m_SelectedSocket && sockets[i].Name == candidate) taken = true;
+
+			if (!taken) { s.Name = candidate; dirty = true; }
+		}
+
+		if (ImGui::IsItemDeactivatedAfterEdit() && s.Name != nameBuf)
+			ImGui::SetTooltip("Name must be unique and non-empty.");
+
+		// ── Osso pai ─────────────────────────────────────────────────────────
+		//
+		// Combo, e nao "usa o selecionado na arvore": remontar um socket para
+		// outro osso e uma correcao deliberada, e depender da selecao da
+		// arvore faria isso acontecer sem querer ao navegar.
+		ImGui::TextDisabled("Parent bone");
+		ImGui::SetNextItemWidth(-1);
+
+		if (const auto& skel = m_Skeleton->GetSkeleton())
+		{
+			if (ImGui::BeginCombo("##sockbone", s.BoneName.c_str()))
+			{
+				for (const auto& b : skel->GetBones())
+				{
+					const bool selB = (b.Name == s.BoneName);
+					if (ImGui::Selectable(b.Name.c_str(), selB))
+					{
+						s.BoneName = b.Name;
+						dirty = true;
+					}
+					if (selB) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
+		// ── Transform relativo ao osso ───────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::TextDisabled("Relative to bone");
+
+		auto vec3Row = [&](const char* label, const char* id, glm::vec3& v, float step)
+			{
+				ImGui::TextDisabled("%s", label);
+				ImGui::SetNextItemWidth(-1);
+				if (ImGui::DragFloat3(id, &v.x, step, 0.0f, 0.0f, "%.3f")) dirty = true;
+			};
+
+		vec3Row("Location", "##sockloc", s.Location, 0.01f);
+		vec3Row("Rotation", "##sockrot", s.Rotation, 0.5f);    // graus
+		vec3Row("Scale", "##socksca", s.Scale, 0.01f);
+
+		// ── SC38: compensacao de unidade ─────────────────────────────────────
+		//
+		//  Anexar a um osso HERDA a escala do personagem — e isso esta certo:
+		//  em runtime a arma presa na mao encolhe se a mao encolher. O problema
+		//  e que o Y Bot veio do Mixamo em centimetros e o preview o reduz a
+		//  1/100, enquanto a pistola ja foi autorada numa escala onde 1 serve.
+		//  Multiplicada por 0.01, ela fica com 2mm dentro da palma: renderiza,
+		//  e ninguem ve.
+		//
+		//  Este botao NAO cancela a heranca no render — fazer isso faria o
+		//  editor mentir, mostrando um tamanho que o jogo nao teria. Ele apenas
+		//  ESCREVE no campo Scale o fator que compensa, deixando o numero
+		//  visivel e editavel. A decisao continua sendo do autor; o botao so
+		//  poupa a conta.
+		//
+		//  A raiz do problema e a falta de um fator de unidade no asset da
+		//  malha, gravado na importacao. Enquanto ele nao existe, a compensacao
+		//  por socket e o lugar honesto para ela morar.
+		if (m_PreviewScene && m_PreviewEntity != entt::null)
+		{
+			auto& preg = m_PreviewScene->GetRegistry();
+
+			if (auto* ctc = preg.try_get<TransformComponent>(m_PreviewEntity))
+			{
+				const glm::vec3 cs = ctc->Data.Scale;
+				const bool scaled =
+					std::abs(cs.x - 1.0f) > 0.0001f ||
+					std::abs(cs.y - 1.0f) > 0.0001f ||
+					std::abs(cs.z - 1.0f) > 0.0001f;
+
+				if (scaled)
+				{
+					ImGui::Spacing();
+
+					if (ImGui::Button("Match mesh units", ImVec2(-1, 0)))
+					{
+						// Divisao guardada: escala zero em qualquer eixo daria
+						// infinito, e um transform com inf some da tela sem
+						// erro nenhum — trocaria um bug invisivel por outro.
+						s.Scale = {
+							cs.x != 0.0f ? 1.0f / cs.x : 1.0f,
+							cs.y != 0.0f ? 1.0f / cs.y : 1.0f,
+							cs.z != 0.0f ? 1.0f / cs.z : 1.0f
+						};
+						dirty = true;
+					}
+
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip(
+							"The character is previewed at %.3f scale, and anything\n"
+							"attached to a bone inherits it — as it will at runtime.\n"
+							"This fills Scale with the factor that cancels it out,\n"
+							"for a mesh authored in different units.",
+							cs.x);
+				}
+			}
+		}
+
+		// ── Preview mesh ─────────────────────────────────────────────────────
+		ImGui::Spacing();
+		ImGui::TextDisabled("Preview mesh (editor only)");
+
+		if (AssetPicker::Draw("Mesh", s.PreviewMeshUUID,
+			{ AssetType::Mesh }, [&](const AssetRecord&) { dirty = true; }))
+		{
+			dirty = true;
+		}
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Shown here so you can position the socket.\n"
+				"It is not attached at runtime.");
+
+		// Grava so quando algo mudou de fato: este painel roda por frame, e um
+		// Save por frame reescreveria o .axeskel continuamente.
+		if (dirty) m_Skeleton->Save();
+	}
+
+	// ── Centro: preview + timeline ───────────────────────────────────────	// ── Centro: preview + timeline ───────────────────────────────────────
 
 
 

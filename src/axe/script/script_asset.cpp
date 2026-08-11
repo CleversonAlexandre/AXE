@@ -6,6 +6,105 @@
 
 namespace axe
 {
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  SC17 — ScriptValue
+    // ─────────────────────────────────────────────────────────────────────────
+
+    nlohmann::json ScriptValue::Serialize() const
+    {
+        nlohmann::json j = nlohmann::json::object();
+        if (Bool)          j["b"] = Bool;
+        if (Int != 0)      j["i"] = Int;
+        if (Float != 0.0f) j["f"] = Float;
+        if (!Str.empty())  j["s"] = Str;
+
+        // O w nasce em 1 (quaternion identidade), entao o vetor "vazio" nao e
+        // {0,0,0,0}. Comparar contra o default correto evita gravar um bloco
+        // "v" em todo pin escalar do arquivo.
+        if (Vec != glm::vec4(0.0f, 0.0f, 0.0f, 1.0f))
+            j["v"] = { Vec.x, Vec.y, Vec.z, Vec.w };
+
+        return j;
+    }
+
+    void ScriptValue::Deserialize(const nlohmann::json& j)
+    {
+        if (!j.is_object()) return;
+        Bool = j.value("b", false);
+        Int = j.value("i", 0);
+        Float = j.value("f", 0.0f);
+        Str = j.value("s", std::string(""));
+        if (j.contains("v") && j["v"].is_array() && j["v"].size() >= 4)
+            Vec = { j["v"][0], j["v"][1], j["v"][2], j["v"][3] };
+        else
+            Vec = { 0.0f, 0.0f, 0.0f, 1.0f };
+    }
+
+    void ScriptValue::DeserializeLegacyPin(const nlohmann::json& jPin)
+    {
+        Float = jPin.value("default_float", 0.0f);
+        Bool = jPin.value("default_bool", false);
+        Int = jPin.value("default_int", 0);
+        Str = jPin.value("default_string", std::string(""));
+
+        // O formato antigo so tinha vec3; o w fica na identidade para que um
+        // pin que vire Quat depois nao nasca com quaternion degenerado (0,0,0,0),
+        // que normaliza para NaN na primeira operacao.
+        if (jPin.contains("default_vec3") && jPin["default_vec3"].is_array() &&
+            jPin["default_vec3"].size() >= 3)
+        {
+            Vec = { jPin["default_vec3"][0], jPin["default_vec3"][1],
+                    jPin["default_vec3"][2], 1.0f };
+        }
+    }
+
+    std::string ScriptValue::ToCppLiteral(ScriptVarType t) const
+    {
+        auto f = [](float v) { return std::to_string(v) + "f"; };
+
+        switch (t)
+        {
+        case ScriptVarType::Float:  return f(Float);
+        case ScriptVarType::Int:    return std::to_string(Int);
+        case ScriptVarType::Bool:   return Bool ? "true" : "false";
+
+        case ScriptVarType::String:
+        {
+            // Escapa o que quebraria o literal no .cpp gerado. Uma aspa dupla
+            // digitada num Print String derrubava a compilacao com um erro
+            // apontando para codigo que o autor nunca escreveu.
+            std::string out;
+            out.reserve(Str.size() + 2);
+            for (char c : Str)
+            {
+                if (c == '\\' || c == '"') out += '\\';
+                if (c == '\n') { out += "\\n"; continue; }
+                if (c == '\r') { out += "\\r"; continue; }
+                if (c == '\t') { out += "\\t"; continue; }
+                out += c;
+            }
+            return "\"" + out + "\"";
+        }
+
+        case ScriptVarType::Vec2: return "glm::vec2(" + f(Vec.x) + ", " + f(Vec.y) + ")";
+        case ScriptVarType::Vec3: return "glm::vec3(" + f(Vec.x) + ", " + f(Vec.y) + ", " + f(Vec.z) + ")";
+        case ScriptVarType::Vec4: return "glm::vec4(" + f(Vec.x) + ", " + f(Vec.y) + ", " +
+            f(Vec.z) + ", " + f(Vec.w) + ")";
+
+            // glm::quat recebe (w, x, y, z) — nesta ordem, e nao xyzw. Trocar
+            // isso da um quaternion silenciosamente errado: compila, roda, e a
+            // rotacao sai torta sem nenhum erro em lugar nenhum.
+        case ScriptVarType::Quat: return "glm::quat(" + f(Vec.w) + ", " + f(Vec.x) + ", " +
+            f(Vec.y) + ", " + f(Vec.z) + ")";
+
+            // "{}" sozinho nao e expressao valida em "x != entt::null".
+        case ScriptVarType::Entity: return "entt::null";
+
+        default: return "{}";
+        }
+    }
+
     using json = nlohmann::json;
 
     // ── ScriptComponentDef ────────────────────────────────────────────────────
@@ -259,7 +358,9 @@ namespace axe
         json root;
         root["name"] = m_Name;
         root["class_type"] = ScriptClassTypeToString(m_ClassType);
-        root["dll_path"] = DllPath;
+        // SC4 — dll_path nao e mais gravado: e derivado do local do projeto nesta
+        // maquina, e ScriptPaths::ResolveDll o reconstroi. Gravar o absoluto
+        // funcionava so ate mover a pasta ou abrir o projeto em outro PC.
         root["compiled"] = IsCompiled;
 
         // Transform RAIZ (painel Object do Script Editor) — antes so existia
@@ -280,14 +381,11 @@ namespace axe
             json jv;
             jv["name"] = v.Name;
             jv["type"] = ScriptVarTypeToString(v.Type);
-            jv["f"] = v.DefaultFloat;
-            jv["b"] = v.DefaultBool;
-            jv["i"] = v.DefaultInt;
-            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
-            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
-            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
-            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
-            jv["s"] = v.DefaultString;
+            // SC30 — so grava quando ha qualificador, para nao poluir toda
+            // variavel escalar do arquivo com uma chave vazia.
+            if (!v.TypeQualifier.empty()) jv["type_qualifier"] = v.TypeQualifier;
+            // SC19 — um bloco "default" no lugar de f/b/i/v3/v2/v4/vq/s.
+            jv["default"] = v.Default.Serialize();
             jv["cat"] = v.Category;
             jv["desc"] = v.Description;
             jv["exposed"] = v.Exposed;
@@ -315,7 +413,8 @@ namespace axe
 
         m_Name = root.value("name", m_Name);
         m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
-        DllPath = root.value("dll_path", "");
+        // dll_path de arquivo antigo e descartado de proposito (ver Save).
+        DllPath.clear();
         IsCompiled = root.value("compiled", false);
 
         if (root.contains("root_transform"))
@@ -351,26 +450,48 @@ namespace axe
                 ScriptVariable v;
                 v.Name = jv.value("name", "NewVar");
                 v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
-                v.DefaultFloat = jv.value("f", 0.f);
-                v.DefaultBool = jv.value("b", false);
-                v.DefaultInt = jv.value("i", 0);
-                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
+                v.TypeQualifier = jv.value("type_qualifier", std::string(""));
+                // SC19 — formato novo se existir; senao le os campos soltos
+                // do formato anterior. Todo .axescript gravado antes deste
+                // patch cai no segundo ramo, uma vez.
+                if (jv.contains("default"))
                 {
-                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
-                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
+                    v.Default.Deserialize(jv["default"]);
+                }
+                else
+                {
+                    v.Default.Float = jv.value("f", 0.f);
+                    v.Default.Bool = jv.value("b", false);
+                    v.Default.Int = jv.value("i", 0);
+                    v.Default.Str = jv.value("s", std::string(""));
+
+                    // Havia QUATRO blocos separados (v3/v2/v4/vq) para um
+                    // vetor so. Qual deles vale depende do tipo da variavel —
+                    // ler todos em sequencia deixaria o ultimo sobrescrever os
+                    // anteriores e um Vec3 abriria com o valor do Quat.
+                    auto readVec = [&](const char* key, int n, float wDefault)
+                        {
+                            if (!jv.contains(key) || !jv[key].is_array()) return false;
+                            const auto& a = jv[key];
+                            if ((int)a.size() < n) return false;
+                            v.Default.Vec = { 0.f, 0.f, 0.f, wDefault };
+                            float* c = &v.Default.Vec.x;
+                            for (int k = 0; k < n; k++) c[k] = a[k];
+                            return true;
+                        };
+
+                    switch (v.Type)
                     {
-                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
-                    }
-                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
-                    {
-                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
-                    }
-                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
-                    {
-                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
+                    case ScriptVarType::Vec2: case ScriptVarType::Vec2Array:
+                        readVec("v2", 2, 1.f); break;
+                    case ScriptVarType::Vec4: case ScriptVarType::Vec4Array:
+                        readVec("v4", 4, 1.f); break;
+                    case ScriptVarType::Quat: case ScriptVarType::QuatArray:
+                        readVec("vq", 4, 1.f); break;
+                    default:
+                        readVec("v3", 3, 1.f); break;
                     }
                 }
-                v.DefaultString = jv.value("s", "");
                 v.Category = jv.value("cat", "");
                 v.Description = jv.value("desc", "");
                 v.Exposed = jv.value("exposed", false);
@@ -430,7 +551,9 @@ namespace axe
         json root;
         root["name"] = m_Name;
         root["class_type"] = ScriptClassTypeToString(m_ClassType);
-        root["dll_path"] = DllPath;
+        // SC4 — dll_path nao e mais gravado: e derivado do local do projeto nesta
+        // maquina, e ScriptPaths::ResolveDll o reconstroi. Gravar o absoluto
+        // funcionava so ate mover a pasta ou abrir o projeto em outro PC.
         root["compiled"] = IsCompiled;
 
         // Transform RAIZ (painel Object do Script Editor) — antes so existia
@@ -452,14 +575,11 @@ namespace axe
             json jv;
             jv["name"] = v.Name;
             jv["type"] = ScriptVarTypeToString(v.Type);
-            jv["f"] = v.DefaultFloat;
-            jv["b"] = v.DefaultBool;
-            jv["i"] = v.DefaultInt;
-            jv["v3"] = { v.DefaultVec3[0], v.DefaultVec3[1], v.DefaultVec3[2] };
-            jv["v2"] = { v.DefaultVec2[0], v.DefaultVec2[1] };
-            jv["v4"] = { v.DefaultVec4[0], v.DefaultVec4[1], v.DefaultVec4[2], v.DefaultVec4[3] };
-            jv["vq"] = { v.DefaultQuat[0], v.DefaultQuat[1], v.DefaultQuat[2], v.DefaultQuat[3] };
-            jv["s"] = v.DefaultString;
+            // SC30 — so grava quando ha qualificador, para nao poluir toda
+            // variavel escalar do arquivo com uma chave vazia.
+            if (!v.TypeQualifier.empty()) jv["type_qualifier"] = v.TypeQualifier;
+            // SC19 — um bloco "default" no lugar de f/b/i/v3/v2/v4/vq/s.
+            jv["default"] = v.Default.Serialize();
             jv["cat"] = v.Category;
             jv["desc"] = v.Description;
             jv["exposed"] = v.Exposed;
@@ -505,7 +625,8 @@ namespace axe
 
         m_Name = root.value("name", filepath.stem().string());
         m_ClassType = ScriptClassTypeFromString(root.value("class_type", "Entity"));
-        DllPath = root.value("dll_path", "");
+        // dll_path de arquivo antigo e descartado de proposito (ver Save).
+        DllPath.clear();
         IsCompiled = root.value("compiled", false);
 
         if (root.contains("root_transform"))
@@ -542,26 +663,48 @@ namespace axe
                 ScriptVariable v;
                 v.Name = jv.value("name", "NewVar");
                 v.Type = ScriptVarTypeFromString(jv.value("type", "Float"));
-                v.DefaultFloat = jv.value("f", 0.f);
-                v.DefaultBool = jv.value("b", false);
-                v.DefaultInt = jv.value("i", 0);
-                if (jv.contains("v3") && jv["v3"].is_array() && jv["v3"].size() == 3)
+                v.TypeQualifier = jv.value("type_qualifier", std::string(""));
+                // SC19 — formato novo se existir; senao le os campos soltos
+                // do formato anterior. Todo .axescript gravado antes deste
+                // patch cai no segundo ramo, uma vez.
+                if (jv.contains("default"))
                 {
-                    v.DefaultVec3[0] = jv["v3"][0]; v.DefaultVec3[1] = jv["v3"][1]; v.DefaultVec3[2] = jv["v3"][2];
-                    if (jv.contains("v2") && jv["v2"].is_array() && jv["v2"].size() >= 2)
+                    v.Default.Deserialize(jv["default"]);
+                }
+                else
+                {
+                    v.Default.Float = jv.value("f", 0.f);
+                    v.Default.Bool = jv.value("b", false);
+                    v.Default.Int = jv.value("i", 0);
+                    v.Default.Str = jv.value("s", std::string(""));
+
+                    // Havia QUATRO blocos separados (v3/v2/v4/vq) para um
+                    // vetor so. Qual deles vale depende do tipo da variavel —
+                    // ler todos em sequencia deixaria o ultimo sobrescrever os
+                    // anteriores e um Vec3 abriria com o valor do Quat.
+                    auto readVec = [&](const char* key, int n, float wDefault)
+                        {
+                            if (!jv.contains(key) || !jv[key].is_array()) return false;
+                            const auto& a = jv[key];
+                            if ((int)a.size() < n) return false;
+                            v.Default.Vec = { 0.f, 0.f, 0.f, wDefault };
+                            float* c = &v.Default.Vec.x;
+                            for (int k = 0; k < n; k++) c[k] = a[k];
+                            return true;
+                        };
+
+                    switch (v.Type)
                     {
-                        v.DefaultVec2[0] = jv["v2"][0]; v.DefaultVec2[1] = jv["v2"][1];
-                    }
-                    if (jv.contains("v4") && jv["v4"].is_array() && jv["v4"].size() >= 4)
-                    {
-                        v.DefaultVec4[0] = jv["v4"][0]; v.DefaultVec4[1] = jv["v4"][1]; v.DefaultVec4[2] = jv["v4"][2]; v.DefaultVec4[3] = jv["v4"][3];
-                    }
-                    if (jv.contains("vq") && jv["vq"].is_array() && jv["vq"].size() >= 4)
-                    {
-                        v.DefaultQuat[0] = jv["vq"][0]; v.DefaultQuat[1] = jv["vq"][1]; v.DefaultQuat[2] = jv["vq"][2]; v.DefaultQuat[3] = jv["vq"][3];
+                    case ScriptVarType::Vec2: case ScriptVarType::Vec2Array:
+                        readVec("v2", 2, 1.f); break;
+                    case ScriptVarType::Vec4: case ScriptVarType::Vec4Array:
+                        readVec("v4", 4, 1.f); break;
+                    case ScriptVarType::Quat: case ScriptVarType::QuatArray:
+                        readVec("vq", 4, 1.f); break;
+                    default:
+                        readVec("v3", 3, 1.f); break;
                     }
                 }
-                v.DefaultString = jv.value("s", "");
                 v.Category = jv.value("cat", "");
                 v.Description = jv.value("desc", "");
                 m_Variables.push_back(v);

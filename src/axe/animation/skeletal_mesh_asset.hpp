@@ -39,6 +39,40 @@ namespace axe
 			std::filesystem::path SourceFile;   // FBX que só tem as curvas
 		};
 
+		// ── SC34: Socket ──────────────────────────────────────────────────────
+		//
+		//  Um ponto de ancoragem NOMEADO, preso a um osso com um transform
+		//  proprio. E o que falta hoje para prender uma arma na mao: o osso da
+		//  a posicao da mao, e o socket corrige a diferenca entre "onde a mao
+		//  esta" e "onde o cabo da pistola deve ficar".
+		//
+		//  Por que nao usar o osso direto, como o campo Notify::Socket faz
+		//  hoje: o osso e do ESQUELETO, e sua origem foi decidida por quem
+		//  riggou o personagem — normalmente no centro do punho, com eixos
+		//  arbitrarios. Nao ha onde guardar "5cm adiante, girado 90 graus" sem
+		//  espalhar esse offset por cada notify, cada anexo e cada script que
+		//  usar aquela mao. O socket guarda uma vez, com nome, e todo mundo
+		//  passa a falar de "GunSocket" em vez de "mixamorig:RightHand + um
+		//  ajuste que cada um refaz".
+		//
+		//  Mora no ASSET e nao no Skeleton: o Skeleton e reconstruido a cada
+		//  Resolve() a partir do FBX, e o FBX nao tem sockets — eles se
+		//  perderiam. O .axeskel e o que persiste decisao de autoria.
+		//
+		//  PreviewMeshUUID e so autoria: a malha que o editor desenha no socket
+		//  para voce posicionar olhando. NAO instancia nada em runtime — quem
+		//  anexa de verdade e o gameplay. Guardar aqui evita que o autor tenha
+		//  que montar a cena inteira so para saber se o cabo ficou na palma.
+		struct Socket
+		{
+			std::string Name;             // identificador usado por notifies/anexos
+			std::string BoneName;         // osso pai — casado por NOME, como os clipes
+			glm::vec3   Location{ 0.0f };
+			glm::vec3   Rotation{ 0.0f };  // graus, XYZ
+			glm::vec3   Scale{ 1.0f };
+			std::string PreviewMeshUUID;   // so visualizacao de autoria
+		};
+
 		static std::shared_ptr<SkeletalMeshAsset> Create(const std::string& name,
 			const std::filesystem::path& sourceFile);
 
@@ -71,6 +105,24 @@ namespace axe
 		const std::filesystem::path& GetSourceFile() const { return m_SourceFile; }
 		const std::filesystem::path& GetFilePath() const { return m_FilePath; }
 		const std::vector<AnimEntry>& GetAnimations() const { return m_Animations; }
+
+		// ── SC34: sockets ─────────────────────────────────────────────────────
+		//
+		// Nao-const porque o editor de esqueleto edita direto na lista, do mesmo
+		// jeito que o Script Editor edita GetVariables(). Quem chama grava com
+		// Save() — o asset nao salva sozinho, pela mesma razao do AddAnimation.
+		std::vector<Socket>& GetSockets() { return m_Sockets; }
+		const std::vector<Socket>& GetSockets() const { return m_Sockets; }
+
+		// Socket por nome, ou nullptr. Nome vazio devolve nullptr de propósito:
+		// "sem socket" e um estado valido em notify e em anexo, e nao pode
+		// casar por acidente com um socket que alguem deixou sem nome.
+		const Socket* FindSocket(const std::string& name) const;
+
+		// Transform local do socket (offset em relacao ao osso pai). Separado
+		// do FindSocket para que quem so quer a matriz nao precise repetir a
+		// montagem de translate*rotate*scale em cada ponto de uso.
+		glm::mat4 GetSocketLocalTransform(const Socket& s) const;
 
 		// Remove uma ENTRADA (o registro do arquivo) e reconstroi a lista de
 		// clipes. E o "desimportar" — os clipes daquele arquivo somem do
@@ -130,6 +182,7 @@ namespace axe
 		std::shared_ptr<SkinnedMesh>                m_Mesh;
 		std::shared_ptr<Skeleton>                   m_Skeleton;
 		std::vector<std::shared_ptr<AnimationClip>> m_Clips;
+		std::vector<Socket> m_Sockets;   // SC34 — persistidos no .axeskel
 		bool m_Resolved = false;
 	};
 

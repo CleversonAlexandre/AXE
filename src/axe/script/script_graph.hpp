@@ -272,6 +272,77 @@ namespace axe
         return ScriptNodeCategory::Action;
     }
 
+    // SC19 — ScriptValue mudou de casa: agora vive em script_asset.hpp.
+    //
+    // ScriptVariable tambem precisa dele, e ScriptVariable esta la. Como
+    // script_graph.hpp JA inclui script_asset.hpp, o caminho so funciona nesse
+    // sentido — deixar o valor aqui obrigaria script_asset a incluir
+    // script_graph, fechando um ciclo. Valor e mais fundamental que grafo;
+    // morar no arquivo mais baixo e o lugar certo dele.
+
+    // ─── SC20: componentes de um tipo vetorial ────────────────────────────────
+    //
+    // Split Struct Pin era Vec3-e-so-Vec3, com "X","Y","Z" escritos a mao em
+    // seis lugares (menu, criacao, remocao, deteccao, recombinacao e o
+    // compilador). Vec2, Vec4 e Quat nao tinham como ser abertos.
+    //
+    // Uma funcao responde quantos componentes o tipo tem; zero significa "nao
+    // e vetorial, nao ha o que abrir". Acrescentar um tipo vetorial novo passa
+    // a ser um case aqui, e nao uma cacada por strings "Z" no projeto.
+    inline int ScriptPinComponentCount(ScriptPinType t)
+    {
+        switch (t)
+        {
+        case ScriptPinType::Vec2: return 2;
+        case ScriptPinType::Vec3: return 3;
+        case ScriptPinType::Vec4: return 4;
+        case ScriptPinType::Quat: return 4;
+        default: return 0;
+        }
+    }
+
+    // Sufixos na ordem dos componentes. Quat usa XYZW (a ordem de
+    // ARMAZENAMENTO do glm); a ordem do CONSTRUTOR, com w primeiro, e problema
+    // do ToCppLiteral e nao aparece na tela.
+    inline const char* ScriptPinComponentName(int i)
+    {
+        static const char* k[4] = { "X", "Y", "Z", "W" };
+        return (i >= 0 && i < 4) ? k[i] : "X";
+    }
+
+    // ─── SC20: bits de ScriptNode::IntValue ───────────────────────────────────
+    //
+    // IntValue e um campo de uso geral que ja carregava DUAS coisas somadas: o
+    // tipo da variavel nos 8 bits baixos e o flag de "pin splitado" no bit 8,
+    // ambos escritos como numeros crus (0xFF, 0x100) espalhados pelo editor e
+    // pelo compilador. O SC20 precisa guardar uma terceira — QUAL tipo foi
+    // splitado, para o Recombine saber se remonta um Vec2, um Vec4 ou um Quat.
+    //
+    // Nomear os bits nao paga a divida (ela morre na fase 2 do ScriptValue,
+    // quando ScriptNode for consolidado), mas impede que a terceira informacao
+    // entre como mais um numero magico.
+    namespace ScriptNodeBits
+    {
+        constexpr int VarTypeMask = 0x000000FF;  // ScriptVarType da variavel
+        constexpr int SplitPin = 0x00000100;  // ha pin splitado neste node
+        constexpr int SplitTypeShift = 12;
+        constexpr int SplitTypeMask = 0x0001F000;  // ScriptPinType que foi splitado
+    }
+
+    inline ScriptPinType GetSplitSourceType(int intValue)
+    {
+        const int v = (intValue & ScriptNodeBits::SplitTypeMask) >> ScriptNodeBits::SplitTypeShift;
+        // Zero significa "gravado antes do SC20", quando so Vec3 podia ser
+        // splitado — assumir Vec3 mantem os grafos existentes corretos.
+        return v == 0 ? ScriptPinType::Vec3 : (ScriptPinType)v;
+    }
+
+    inline void SetSplitSourceType(int& intValue, ScriptPinType t)
+    {
+        intValue &= ~ScriptNodeBits::SplitTypeMask;
+        intValue |= ((int)t << ScriptNodeBits::SplitTypeShift) & ScriptNodeBits::SplitTypeMask;
+    }
+
     struct ScriptPin
     {
         ed::PinId   ID;
@@ -279,11 +350,8 @@ namespace axe
         ScriptPinType Type;
         ed::PinKind Kind;
 
-        float     DefaultFloat = 0.0f;
-        bool      DefaultBool = false;
-        int       DefaultInt = 0;
-        std::string DefaultString;
-        glm::vec3 DefaultVec3 = {};
+        // Valor usado quando o pin de entrada não tem fio.
+        ScriptValue Default;
 
         ScriptPin(int id, const char* name, ScriptPinType type, ed::PinKind kind)
             : ID(id), Name(name), Type(type), Kind(kind) {}
@@ -351,6 +419,70 @@ namespace axe
         ScriptNode& operator=(ScriptNode&&) noexcept = default;
     };
 
+    // ─── S1: validação de ligação — fonte única de verdade ────────────────────
+    //
+    // ANTES: a decisão de "esta ligação pode existir?" morava dentro do
+    // BeginCreate() do canvas (script_node_graph.cpp), numa cadeia de if/else
+    // com lambdas isNumeric/isVec redeclaradas em 3 pontos e varreduras
+    // ad-hoc de m_Nodes para descobrir se um pin Wildcard pertencia a um
+    // Reroute. Consequências mensuráveis, todas confirmadas no código:
+    //
+    //   1. ArePinsCompatible()/ArePinsExact() existiam neste header e NÃO eram
+    //      chamadas por ninguém — a regra "oficial" e a regra realmente
+    //      aplicada eram dois textos diferentes que ninguém garantia iguais.
+    //   2. Nenhum caminho impedia ligar um pin de saída num pin de entrada do
+    //      MESMO node.
+    //   3. Nenhum caminho impedia um CICLO de dados. O compilador resolve
+    //      entrada por recursão (ResolvePin → FindDataSource → ResolvePin);
+    //      um ciclo de dados era stack overflow no Compilar, não erro de autor.
+    //   4. Nenhum caminho impedia DOIS fios no mesmo pin de entrada.
+    //      FindDataSource() devolve o PRIMEIRO link encontrado: com dois, o
+    //      valor compilado passava a depender da ordem do vector — muda ao
+    //      salvar/recarregar, sem nenhum aviso.
+    //
+    // AGORA: o canvas pergunta, o modelo responde. QueryLink() é a única
+    // função que decide, e o editor só traduz o veredito em cor/tooltip.
+    // Mesma separação já vigente no Control Rig: modelo na axe.dll, canvas
+    // no editor.
+    enum class ScriptLinkAction
+    {
+        Reject,             // não pode ligar — Message explica por quê
+        Accept,             // tipos idênticos (inclusive Flow → Flow)
+        AcceptImplicit,     // aceita com cast implícito (Vec3 ↔ Vec4) — preview laranja
+        InsertConversion,   // aceita inserindo ConversionNode entre os dois pins
+        AdoptWildcard,      // aceita fixando o Wildcard (Reroute) em AdoptType
+        AdoptArrayWildcard, // aceita fixando o node genérico de Array em AdoptType
+    };
+
+    struct ScriptLinkQuery
+    {
+        ScriptLinkAction Action = ScriptLinkAction::Reject;
+
+        // Tipo usado para colorir o preview do fio durante o drag.
+        ScriptPinType LinkColorType = ScriptPinType::Wildcard;
+
+        // AdoptWildcard / AdoptArrayWildcard: tipo concreto a fixar e node dono
+        // do pin Wildcard. AdoptType é sempre o tipo do PIN (escalar ou *Array);
+        // para AdoptArrayWildcard o chamador converte para ScriptVarType do
+        // ELEMENTO via GetElementType, como já fazia.
+        ScriptPinType     AdoptType = ScriptPinType::Wildcard;
+        const ScriptNode* AdoptNode = nullptr;
+
+        // InsertConversion: tipo de node a criar ("ToFloat", "ToInt", "ToBool",
+        // "ToString"). Sempre com pins de entrada e saída chamados "Value".
+        const char* ConversionNode = nullptr;
+
+        // Tooltip a exibir. Nunca nulo — em Accept traz o rótulo da operação.
+        const char* Message = "";
+
+        // true quando a ligação vai SUBSTITUIR um fio existente (entrada de
+        // dados já ocupada, ou saída de Flow já ocupada). Não impede nada;
+        // existe para o canvas avisar antes de o usuário soltar o botão.
+        bool ReplacesExisting = false;
+
+        bool Allowed() const { return Action != ScriptLinkAction::Reject; }
+    };
+
     // Grafo completo de script de um objeto
     class AXE_API ScriptGraph
     {
@@ -369,6 +501,59 @@ namespace axe
         ScriptPin* FindPin(ed::PinId id);
         ScriptNode* FindNode(ed::NodeId id);
         bool        IsPinLinked(ed::PinId id) const;
+
+        // ── S1: consulta e integridade das ligações ───────────────────────────
+
+        // Node dono de um pin. Existia como lambda copiada em 5 pontos do
+        // canvas ("for n : GetNodes() for p : n->Inputs if (&p == pin)") —
+        // varredura por ENDEREÇO de pin, que só funciona enquanto ninguém
+        // realoca o vector de pins no meio. Aqui a busca é por ID.
+        const ScriptNode* FindNodeOfPin(ed::PinId id) const;
+        ScriptNode* FindNodeOfPin(ed::PinId id);
+
+        // O veredito único sobre uma ligação candidata. Aceita os dois pins em
+        // qualquer ordem (normaliza saída/entrada internamente).
+        ScriptLinkQuery QueryLink(ed::PinId a, ed::PinId b) const;
+
+        // true se ligar fromOutput → toInput fechar um ciclo de DADOS.
+        // Só dados: ciclo de Flow é legítimo (é assim que se faz um loop
+        // manual, igual à Unreal) e o compilador já se protege com o
+        // parâmetro depth de GenerateNode. Ciclo de dados não tem semântica
+        // nenhuma — é sempre erro de autoria.
+        bool WouldCreateDataCycle(ed::PinId fromOutput, ed::PinId toInput) const;
+
+        // Remove links órfãos (pin inexistente), invertidos (saída→saída),
+        // e violações de cardinalidade em grafos já salvos, mantendo sempre
+        // o PRIMEIRO link de cada pin ocupado. Chamado no fim de Deserialize:
+        // .axescript gravado antes deste patch pode conter duas fontes no
+        // mesmo pin de entrada, e o valor compilado dependia da ordem do
+        // vector. Retorna quantos links foram descartados (0 = arquivo limpo).
+        int SanitizeLinks();
+
+        // ── SC8: copiar / colar um pedaço do grafo ────────────────────────────
+        //
+        // Vive no MODELO, e não no editor, pelo mesmo motivo do ScriptPaths: a
+        // reconstrução de um node a partir de JSON já existe aqui dentro
+        // (Deserialize), e escrever uma segunda no editor garantiria que as
+        // duas divergissem no primeiro campo novo de ScriptNode.
+        //
+        // SerializeSubset usa exatamente o formato de Serialize(), então o que
+        // vai para o clipboard é um grafo válido — dá para inspecionar, e um
+        // dia dá para colar entre scripts diferentes sem mudar nada aqui.
+        nlohmann::json SerializeSubset(const std::vector<ed::NodeId>& nodes) const;
+
+        // Cria cópias dos nodes com IDs NOVOS e devolve os IDs criados.
+        //
+        // ID novo não é detalhe: colar preservando o ID original produziria
+        // dois nodes com a mesma identidade no mesmo grafo, e o FindNode
+        // devolveria sempre o primeiro — o segundo ficaria visível na tela e
+        // inalcançável por qualquer operação.
+        //
+        // Só os links cujas DUAS pontas estão no conjunto colado são
+        // recriados. Um fio que saía para fora da seleção não tem onde
+        // ancorar; inventar uma ligação para o node mais parecido seria pior
+        // do que não ligar nada.
+        std::vector<ed::NodeId> PasteSubset(const nlohmann::json& j, ImVec2 offset);
 
         // Reconstrói os pins de saída de um node "Get Axis" conforme o
         // AxisValueType do Axis Mapping selecionado (1/2/3 pins Float:
@@ -473,6 +658,7 @@ namespace axe
         case 15: return ImColor(110, 40, 160); // Vec4Array
         case 16: return ImColor(120, 90, 160); // QuatArray
         case 17: return ImColor(30, 70, 140);  // EntityArray
+        case 18: return ImColor(215, 115, 25); // Asset — laranja
         default: return ImColor(180, 60, 140);
         }
     }
@@ -481,6 +667,36 @@ namespace axe
     // — usado tanto pelos nodes Get/Set Variable quanto pelos nodes genéricos
     // de array (Array Add/Get/Length/etc.), evitando duplicar este mapeamento
     // em cada arquivo que precisa dele (script_node_draw.cpp, script_node_graph.cpp).
+    // SC19 — o caminho inverso, para o lado do PIN poder pedir um literal C++
+    // ao ScriptValue (que fala ScriptVarType, por morar em script_asset.hpp).
+    // Sem isto haveria um segundo emissor de literais so para pinos — a
+    // duplicacao que o SC17 acabou de eliminar.
+    inline ScriptVarType PinTypeToVarType(ScriptPinType t)
+    {
+        switch (t)
+        {
+        case ScriptPinType::Float:  return ScriptVarType::Float;
+        case ScriptPinType::Bool:   return ScriptVarType::Bool;
+        case ScriptPinType::Int:    return ScriptVarType::Int;
+        case ScriptPinType::Vec3:   return ScriptVarType::Vec3;
+        case ScriptPinType::String: return ScriptVarType::String;
+        case ScriptPinType::Vec2:   return ScriptVarType::Vec2;
+        case ScriptPinType::Vec4:   return ScriptVarType::Vec4;
+        case ScriptPinType::Quat:   return ScriptVarType::Quat;
+        case ScriptPinType::Object: return ScriptVarType::Entity;
+        case ScriptPinType::FloatArray:  return ScriptVarType::FloatArray;
+        case ScriptPinType::BoolArray:   return ScriptVarType::BoolArray;
+        case ScriptPinType::IntArray:    return ScriptVarType::IntArray;
+        case ScriptPinType::Vec3Array:   return ScriptVarType::Vec3Array;
+        case ScriptPinType::StringArray: return ScriptVarType::StringArray;
+        case ScriptPinType::Vec2Array:   return ScriptVarType::Vec2Array;
+        case ScriptPinType::Vec4Array:   return ScriptVarType::Vec4Array;
+        case ScriptPinType::QuatArray:   return ScriptVarType::QuatArray;
+        case ScriptPinType::EntityArray: return ScriptVarType::EntityArray;
+        default: return ScriptVarType::Float;   // Flow e Wildcard nao tem valor
+        }
+    }
+
     inline ScriptPinType ScriptVarTypeToPinType(ScriptVarType t)
     {
         switch (t) {
@@ -501,6 +717,19 @@ namespace axe
         case ScriptVarType::Vec4Array:   return ScriptPinType::Vec4Array;
         case ScriptVarType::QuatArray:   return ScriptPinType::QuatArray;
         case ScriptVarType::EntityArray: return ScriptPinType::EntityArray;
+
+            // SC30 — Asset vira pino de STRING, e nao um tipo de pino novo.
+            //
+            // O valor de uma referencia de asset E o UUID, uma string. Como
+            // pino String, ele ja liga direto em tudo que a engine consome por
+            // nome/UUID: PlaySound2D aceita os dois, o Sound Cue idem. Um
+            // ScriptPinType::Asset novo obrigaria a escrever conversao para
+            // String em cada um desses pontos para chegar no mesmo lugar.
+            //
+            // A tipagem forte fica onde ela de fato ajuda: no EDITOR, onde o
+            // seletor so lista assets do tipo declarado no TypeQualifier. No
+            // grafo, um UUID e texto.
+        case ScriptVarType::Asset:  return ScriptPinType::String;
         default: return ScriptPinType::Float; // Float e fallback
         }
     }

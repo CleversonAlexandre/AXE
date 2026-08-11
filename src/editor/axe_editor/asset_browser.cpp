@@ -10,6 +10,7 @@
 #include "axe/log/log.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/project/project_manager.hpp"
+#include "axe/script/script_paths.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/script/script_asset.hpp"
@@ -358,9 +359,27 @@ namespace axe
         std::string uuid = record.UUID;
         std::string name = record.Name;
         auto filePath = record.FilePath;
+        const bool isScript = (record.Type == AssetType::Script);
 
         try
         {
+            // SC4 — script excluido leva junto o .cpp e a .dll gerados. Antes
+            // eles ficavam para tras em bin/temp_scripts para sempre: nada no
+            // editor sabia que existiam, e no projeto seguinte apareciam
+            // misturados com os de outro projeto.
+            //
+            // Antes de apagar o arquivo do asset, porque se a DLL estiver
+            // travada (carregada em Play) o remove falha e o aviso precisa
+            // sair — apagar o .axescript primeiro deixaria o artefato orfao
+            // sem ninguem para reclamar.
+            if (isScript)
+            {
+                const std::string stem = filePath.stem().string();
+                int removedArtifacts = ScriptPaths::RemoveArtifactsFor(stem, uuid);
+                if (removedArtifacts == 0)
+                    AXE_CORE_INFO("AssetBrowser: nenhum artefato compilado de '{}' para remover.", name);
+            }
+
             if (std::filesystem::exists(filePath))
                 std::filesystem::remove(filePath);
 
@@ -1463,6 +1482,77 @@ namespace axe
         {
             ImGui::Separator();
 
+            // ── SC33: importar um clipe DIRETO no esqueleto ──────────────────
+            //
+            //  Um FBX so de animacao (Mixamo "Without Skin") nao pode virar
+            //  asset sozinho: clipe nao existe sem esqueleto — os indices de
+            //  bone de cada arquivo nao batem entre si, e o casamento e sempre
+            //  por NOME contra um esqueleto alvo. Por isso o MeshLoader recusa
+            //  o arquivo, e a recusa esta certa.
+            //
+            //  O que estava errado era o CAMINHO: a unica forma de importar era
+            //  botar o personagem na cena, seleciona-lo e usar o Inspector. O
+            //  Asset Browser, que e onde o arquivo esta, so sabia dizer nao.
+            //
+            //  Agora ele pergunta o que falta — QUAL esqueleto — e faz o
+            //  import. A operacao ja existia inteira (AddAnimation + Save no
+            //  .axeskel); faltava um lugar para chama-la.
+            if (ImGui::BeginMenu("Importar animacao em..."))
+            {
+                bool anySkel = false;
+
+                for (const auto& [uuid, rec] : AssetDatabase::Get().GetAll())
+                {
+                    if (rec.FilePath.extension() != ".axeskel") continue;
+                    anySkel = true;
+
+                    if (ImGui::MenuItem(rec.Name.c_str()))
+                    {
+                        auto target = SkeletalMeshAsset::LoadFromFile(rec.FilePath);
+
+                        if (!target || !target->Resolve())
+                        {
+                            AXE_EDITOR_ERROR("Nao foi possivel abrir o esqueleto '{}'.", rec.Name);
+                        }
+                        else
+                        {
+                            // AddAnimation grava a REFERENCIA ao arquivo no
+                            // .axeskel, e nao uma copia das curvas. Por isso o
+                            // Save() logo em seguida: sem ele o clipe existe so
+                            // nesta sessao e some ao fechar o editor.
+                            const int added = target->AddAnimation(record.FilePath.string());
+
+                            if (added <= 0)
+                            {
+                                AXE_EDITOR_ERROR("'{}' nao trouxe nenhum clipe para '{}'. "
+                                    "Os nomes dos bones do arquivo precisam bater com os do "
+                                    "esqueleto — canais sem bone correspondente sao descartados.",
+                                    record.Name, rec.Name);
+                            }
+                            else if (target->Save(rec.FilePath))
+                            {
+                                AXE_EDITOR_INFO("{} clipe(s) de '{}' importado(s) em '{}'.",
+                                    added, record.Name, rec.Name);
+                            }
+                            else
+                            {
+                                AXE_EDITOR_ERROR("Clipes lidos, mas nao foi possivel gravar '{}'.",
+                                    rec.FilePath.string());
+                            }
+                        }
+                    }
+                }
+
+                if (!anySkel)
+                    ImGui::TextDisabled("Nenhum .axeskel no projeto.");
+
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("For a FBX with only curves (Mixamo 'Without Skin').\n"
+                    "The clip is stored in the chosen skeleton's .axeskel.");
+
             if (ImGui::MenuItem("Importar como Skeletal Mesh"))
             {
                 auto asset = SkeletalMeshAsset::Create(record.Name, record.FilePath);
@@ -1920,6 +2010,31 @@ namespace axe
             case AssetType::ParticleSystem: icon = icons.GetMesh(); /* TODO: ícone dedicado */ break;
             default:                  icon = icons.GetMesh();                                   break;
             }
+
+            // ── SC23: miniatura do CONTEUDO, quando existir ──────────────────
+            //
+            // Depois do switch, e nao no lugar dele: o icone generico continua
+            // sendo o que aparece enquanto a miniatura nao ficou pronta, e
+            // continua sendo o fallback definitivo para um asset sem malha
+            // (um script sem corpo, um clipe sem esqueleto ao lado). Zero
+            // vindo do GetThumbnail significa "use o icone", nunca "espere".
+            //
+            // Malha, esqueleto, clipe de animacao e script entram; textura e
+            // material ficam de fora porque ja tem miniatura propria, e audio
+            // e cena nao tem forma para desenhar.
+            const bool wantsMeshThumb =
+                record.Type == AssetType::Mesh ||
+                record.Type == AssetType::Script ||
+                record.Type == AssetType::ControlRig ||   // SC32: personagem do rig
+                record.FilePath.extension() == ".axeskel" ||
+                record.FilePath.extension() == ".axeanim";
+
+            if (wantsMeshThumb && m_MeshThumbnails)
+            {
+                m_MeshThumbnails->Register(record.UUID, record.FilePath, (int)record.Type);
+                if (uint32_t id = m_MeshThumbnails->GetThumbnail(record.UUID))
+                    overrideTextureID = id;
+            }
         }
 
         ImGui::PushID(record.UUID.c_str());
@@ -2045,6 +2160,20 @@ namespace axe
                     ProjectManager::Get().SaveProject();
                     AXE_EDITOR_INFO("GameMode '{}' definido como ativo.", record.Name);
                 }
+            }
+            // ── SC34: personagem ABRE, nao instancia ─────────────────────
+            //
+            // O ramo generico abaixo chama os DOIS callbacks. Para um
+            // .axeskel isso jogava o personagem na cena E abria a janela no
+            // mesmo gesto — e o que se via era a instancia, porque ela e
+            // visivel e a janela nasce atras. Editar o esqueleto exigia
+            // apagar o que o duplo clique acabara de criar.
+            //
+            // Para pôr na cena continua havendo o arrastar, que e o gesto
+            // explicito de "quero isto aqui".
+            else if (record.FilePath.extension() == ".axeskel")
+            {
+                if (m_AssetOpenCallback) m_AssetOpenCallback(record);
             }
             else
             {
