@@ -24,6 +24,13 @@
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
 
+// SR2 — o caminho de render do JOGO mora aqui.
+//
+// O ViewportRenderer continua sendo o renderer de EDITOR; o que ele faz
+// agora e delegar o frame de Play ao WorldRenderer, em vez de monta-lo
+// ele mesmo. Ver a nota em RenderToFramebuffer.
+#include "axe/renderer/world_renderer.hpp"
+
 namespace axe
 {
 
@@ -140,6 +147,17 @@ namespace axe
 		PostProcessSettings               m_PostProcessSettings;
 		bool  m_PreviewMode = false;
 		float m_LastTimeSeconds = 0.0f; // para cálculo de dt no Time of Day
+
+		// SR2 — o frame de Play.
+		//
+		// Criado sempre, inicializado sob demanda (no primeiro Play), porque
+		// as ~9 superficies do editor que instanciam um ViewportRenderer
+		// (previews de material, rig, particulas, anim clip, anim graph,
+		// script, e os dois thumbnail renderers) nunca entram em Play — e
+		// alocar GBuffer, HDR e passes para cada uma delas seria dezenas de
+		// megabytes de VRAM que ninguem usaria.
+		WorldRenderer m_WorldRenderer;
+		bool          m_WorldRendererReady = false;
 	};
 
 } // namespace axe

@@ -130,7 +130,19 @@ project "axe"
         "GLFW",
         "opengl32",
         "Glad",
-        "assimp-vc145-mt",
+        -- B2.4: assimp SAIU daqui.
+        --
+        -- O runtime le apenas os formatos proprios (.axemesh, .axeskelbin,
+        -- .axeclipbin). O importador de FBX virou ferramenta de autoria e
+        -- mora em src/editor/axe_editor/import; quem o liga ao runtime e o
+        -- AssetImportHooks, registrado no boot do editor.
+        --
+        -- Era o bloqueio B2 do PACKAGING_READINESS: um jogo empacotado nao
+        -- carrega mais uma DLL de importacao de FBX que nunca usa.
+        --
+        -- Se esta linha voltar, alguem religou o runtime ao importador —
+        -- procure por um include de mesh_loader/skeletal_mesh_loader dentro
+        -- de src/axe.
         "Jolt"
     }
 

@@ -4,9 +4,13 @@
 #include "editor_ui.hpp"
 #include "file_dialog.hpp"
 #include "axe/core/command_history.hpp"
-#include "axe/physics/physics_world.hpp"
-#include "axe/particles/particle_world.hpp"
-#include "axe/audio/audio_world.hpp"
+
+// SR1 — os cinco mundos de simulacao deixaram de ser membros desta classe e
+// passaram a viver dentro do SceneRuntime, que este header inclui. As
+// inclusoes individuais de physics_world / particle_world / audio_world /
+// animation_world / script_world sairam daqui: quem precisa delas e o
+// runtime, nao o editor.
+#include "axe/runtime/scene_runtime.hpp"
 
 
 #include "axe/graphics/renderer/viewport_renderer.hpp"
@@ -21,11 +25,10 @@
 #include "axe/graphics/editor_camera.hpp"
 #include "editor_context.hpp"
 
-#include "axe/mesh/mesh_loader.hpp"
+#include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/script/script_asset.hpp"
-#include "axe/script/script_world.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/input/input.hpp"
 #include "axe/scene/game_mode_asset.hpp"
@@ -35,7 +38,6 @@
 #include "axe/scene/scene_serializer.hpp"
 #include "editor_icon_library.hpp"
 
-#include "axe/graphics/game_camera.hpp"
 #include "axe/events/key_event.hpp"
 #include "axe/input/key_codes.hpp"
 
@@ -47,8 +49,6 @@
 
 #include "material_thumbnail_renderer.hpp"
 #include "mesh_thumbnail_renderer.hpp"
-
-#include "axe/animation/animation_world.hpp"
 
 #include "axe/scene/scene_snapshot.hpp"
 
@@ -91,23 +91,24 @@ namespace axe
         // SC23 — miniaturas de malha/esqueleto/animacao/script no Asset Browser.
         MeshThumbnailRenderer                  m_MeshThumbnails;
 
-        // ── Física / Scripts ──────────────────────────────────────────────────
-        PhysicsWorld  m_PhysicsWorld;
-        ScriptWorld   m_ScriptWorld;
-        ParticleWorld m_ParticleWorld;
-
-        // Voices persistentes das AudioSourceComponent + pose do listener.
-        // One-shot (AnimNotify, script) NAO passa por aqui — dispara direto
-        // no AudioEngine, no instante da chamada.
-        AudioWorld    m_AudioWorld;
-
-        // Avança o tempo dos clipes e recalcula as palettes de bone.
-        // Sem estado próprio — tudo vive nos SkeletalMeshComponent.
-        AnimationWorld m_AnimationWorld;
-        entt::entity  m_PlayerEntity = entt::null;
-
-        // ── Câmera de jogo ────────────────────────────────────────────────────
-        GameCamera m_GameCamera;
+        // ── Runtime ───────────────────────────────────────────────────────────
+        //
+        // SR1 — aqui moravam PhysicsWorld, ScriptWorld, ParticleWorld,
+        // AudioWorld, AnimationWorld, m_PlayerEntity e m_GameCamera, todos
+        // como membros diretos desta classe.
+        //
+        // Sete membros de estado de JOGO dentro de uma classe de EDITOR. O
+        // custo disso nao era de organizacao: era que a ordem de update, o
+        // ciclo start/stop e a resolucao de GameMode viviam num objeto que um
+        // `game.exe` nao linkaria nunca. Cada sistema novo pendurado aqui era
+        // mais um no a desatar no dia do empacotamento.
+        //
+        // Agora o Play do editor roda EXATAMENTE o objeto que o jogo vai
+        // rodar. Ver a nota longa no topo de scene_runtime.hpp.
+        //
+        // O que ficou deste lado, e por que: o SceneSnapshot logo acima. Ele
+        // existe para DESFAZER o Play — conceito que so o editor tem.
+        SceneRuntime m_Runtime;
 
         // ── FPS ───────────────────────────────────────────────────────────────
         float m_DeltaTime = 0.0f;

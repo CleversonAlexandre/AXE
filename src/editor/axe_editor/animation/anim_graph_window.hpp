@@ -6,6 +6,7 @@
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/scene_environment.hpp"
+#include "axe/core/command_history.hpp"   // CommandHistory — undo/redo (AG3b)
 
 #include <imgui.h>
 #include <imgui_node_editor.h>
@@ -88,6 +89,22 @@ namespace axe
 			// transicao Sm->Transitions[TransIndex] — o "Crouch to Idle
 			// (rule)" da Unreal. Graph continua nulo nesse caso.
 			int TransIndex = -1;
+
+			// AG3e — chaves ESTAVEIS do nivel, para reconstruir a navegacao
+			// depois de um undo.
+			//
+			// Graph e Sm sao ponteiros para dentro do grafo raiz. O restore
+			// substitui esse grafo inteiro, e os dois viram lixo. Estes dois
+			// campos sobrevivem porque descrevem o CAMINHO, nao o endereco:
+			//
+			//   SmNodeId   — Id do no de State Machine no grafo pai
+			//   StateIndex — indice do estado dentro da SM pai
+			//
+			// Os Ids atravessam o snapshot intactos (AnimNode::Clone copia o
+			// Id, e o restore repoe o grafo com a mesma numeracao), entao a
+			// busca por Id encontra o mesmo no de antes.
+			int SmNodeId = -1;
+			int StateIndex = -1;
 		};
 
 		void DrawBreadcrumb();
@@ -228,7 +245,104 @@ namespace axe
 		int    m_PreviewSyncedSerial = 0;
 		double m_LastEditTime = 0.0;
 
-		void MarkEdited();
+		// AG3b — MarkEdited passou a aceitar o NOME da acao, para o undo.
+		//
+		// O parametro e opcional: as dezenas de call-sites que ja existiam
+		// continuam validos e seguem marcando sujo sem abrir passo de undo.
+		// Isso e proposital, e nao preguica de migrar — a maioria deles e o
+		// loop que grava posicao de no todo frame, e cada frame virar um passo
+		// de Ctrl+Z seria pior que nao ter undo.
+		void MarkEdited(const char* action = nullptr);
+
+		// ── Undo / Redo ──────────────────────────────────────────────────────
+		//
+		// Por SNAPSHOT, como no Control Rig, e pelo mesmo motivo: o grafo muda
+		// de formas muito diferentes (apagar um no leva os fios junto, inserir
+		// um reroute religa duas pontas), e escrever o inverso exato de cada
+		// operacao seria muito codigo com um deles errado. O asset inteiro sao
+		// alguns milhares de bytes; copiar e barato e nao tem como divergir.
+		struct AnimSnapshot
+		{
+			std::vector<AnimParamDecl> Parameters;
+			AnimPoseGraph              Root;   // copia PROFUNDA (ver AnimPoseGraph)
+		};
+
+		AnimSnapshot CaptureState() const;
+		void         RestoreState(const AnimSnapshot& snap);
+
+		// Fecha o comando pendente quando o gesto termina. Chamado por frame.
+		void CommitPendingUndo();
+
+		void DoUndo();
+		void DoRedo();
+
+		// AG3c — foco agregado dos paineis do editor, calculado DURANTE o
+		// desenho.
+		//
+		// Os atalhos rodam no fim do frame, depois de todos os ImGui::End().
+		// Naquele ponto a janela corrente nao e mais nenhuma janela do
+		// AnimGraph, e IsWindowFocused responde sempre false — era exatamente
+		// isso que impedia o Ctrl+Z de funcionar. Cada painel marca a flag
+		// enquanto esta aberto; os atalhos leem o resultado.
+		bool m_ShortcutFocus = false;
+
+		// ── Clipboard ────────────────────────────────────────────────────────
+		//
+		// Guarda os nos COPIADOS (clones profundos) e os links INTERNOS ao
+		// recorte, com os ids antigos. O Paste remapeia.
+		//
+		// Nao usa o clipboard do sistema de proposito: colar um grafo de
+		// animacao dentro de um editor de texto nao serve a ninguem, e
+		// serializar/desserializar so para atravessar a area de transferencia
+		// seria trabalho a mais com mais chance de erro.
+		struct GraphClipboard
+		{
+			std::vector<std::unique_ptr<AnimNode>> Nodes;
+			std::vector<AnimLink>                  Links;   // ids ANTIGOS
+		};
+
+		GraphClipboard m_Clipboard;
+
+		// Ids ORIGINAIS dos nos copiados, na mesma ordem de m_Clipboard.Nodes.
+		// O Clone nao carrega o Id (o AddNode atribui um novo), entao o Paste
+		// precisa desta lista para remapear os links internos.
+		std::vector<int> m_ClipboardIds;
+
+		// Posicao do cursor em coordenada de CANVAS, capturada durante o
+		// desenho.
+		//
+		// O Paste roda no fim do frame, fora do Begin/End do node-editor —
+		// e la nao ha contexto para ScreenToCanvas converter. Guardar o valor
+		// enquanto o contexto existe e a forma de o Ctrl+V colar sob o cursor
+		// em vez de num ponto arbitrario.
+		ImVec2 m_LastCanvasMousePos{ 0, 0 };
+
+		// ── Paleta de nos (AG5) ──────────────────────────────────────────────
+		//
+		// Mesmo formato do Control Rig e do Script Editor: busca no topo,
+		// categorias coloridas colapsaveis, cor do item ecoando a do no.
+		//
+		// m_PaletteOpen guarda quais categorias ficaram abertas ENTRE
+		// aberturas do menu. Sem isso, quem trabalha o dia todo com Blends
+		// reabriria a categoria a cada clique direito.
+		char m_PaletteFilter[64] = {};
+		bool m_PaletteOpen[8] = {};
+
+		void CopySelection(bool cut);
+		// `at` = onde colar, em coordenada de canvas. Nulo usa a posicao do
+		// cursor capturada no ultimo frame — o caminho do Ctrl+V. O item
+		// "Colar" da paleta passa o ponto do clique direito, que e o que o
+		// usuario apontou.
+		void PasteClipboard(const ImVec2* at = nullptr);
+
+		CommandHistory m_History;
+
+		// Estado no fim do ultimo comando — serve de "antes" do proximo, entao
+		// guardamos UM snapshot por comando em vez de dois.
+		std::shared_ptr<AnimSnapshot> m_Baseline;
+
+		bool        m_PendingUndo = false;
+		std::string m_PendingUndoName;
 
 		// ── Preview 3D ───────────────────────────────────────────────────────
 		//

@@ -5,6 +5,7 @@
 #include "axe/log/log.hpp"
 #include <cstring>
 #include <algorithm>
+#include <iterator>   // std::size — tamanho do array de botoes do mouse (IN1)
 
 namespace axe
 {
@@ -38,6 +39,25 @@ namespace axe
         // Key enum usa valores GLFW (0–511)
         for (int i = 0; i < 512; i++)
             s_CurrentKeys[i] = s_Window->IsKeyDown(i);
+
+        // IN1 — o mouse.
+        //
+        // Este loop NAO EXISTIA. O array era zerado no Init, copiado para
+        // s_PreviousMouse todo frame e lido pelo GetMouseButton — mas ninguem
+        // nunca escrevia nele. Oito `false` permanentes.
+        //
+        // Como IsBindingPhysicallyDown le exatamente esse array, TODO binding
+        // de mouse respondia "solto" para sempre: Action, Axis, Pressed, Held,
+        // qualquer trigger. E falhava em silencio — nao ha erro possivel em
+        // ler um botao que o usuario simplesmente nao apertou.
+        //
+        // O sintoma pratico era enganoso: teclado funcionava, mouse nao, o que
+        // aponta para configuracao de binding e nao para codigo faltando.
+        //
+        // O limite e 8 porque e o tamanho de s_CurrentMouse. Derivado do
+        // proprio array em vez de literal — mesma licao do SC18/SC31.
+        for (int i = 0; i < (int)std::size(s_CurrentMouse); i++)
+            s_CurrentMouse[i] = s_Window->IsMouseButtonDown(i);
     }
 
     int Input::GetKeyCode(const char* name)

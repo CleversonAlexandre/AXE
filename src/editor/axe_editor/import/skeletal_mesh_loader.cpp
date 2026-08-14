@@ -1,4 +1,4 @@
-#include "skeletal_mesh_loader.hpp"
+#include "editor/axe_editor/import/skeletal_mesh_loader.hpp"
 #include "axe/log/log.hpp"
 
 #include <assimp/Importer.hpp>

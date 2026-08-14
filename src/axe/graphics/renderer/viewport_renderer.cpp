@@ -95,7 +95,58 @@ namespace axe
 	void ViewportRenderer::RenderToFramebuffer(Framebuffer& framebuffer,
 		std::uint32_t width, std::uint32_t height, float timeSeconds)
 	{
+		// ── SR2: o frame de Play nao e montado aqui ──────────────────────────
+		//
+		// Tudo o que vinha depois deste bloco no ramo `if (m_GameCamera)` — HDR,
+		// environment, ceu procedural, skybox, TAA, SSR, post-process e a
+		// visualizacao de som — mudou para o WorldRenderer, em src/axe/renderer/.
+		//
+		// POR QUE: aquele ramo nunca foi editor; era o frame do jogo. E este
+		// arquivo inclui <imgui.h> e <ImGuizmo.h>. Enquanto o unico caminho que
+		// sabia montar um frame de jogo morasse aqui, o `game.exe` teria que
+		// duplicar ~150 linhas ou arrastar ImGuizmo para dentro do jogo. Mesmo
+		// padrao do B1, um andar abaixo.
+		//
+		// POR QUE O RETURN CEDO, e nao uma refatoracao do metodo inteiro: nove
+		// superficies do editor instanciam um ViewportRenderer (previews de
+		// material, rig, particulas, anim clip, anim graph, script, e os dois
+		// thumbnail renderers). Mexer no caminho de Edit poria as nove em risco
+		// de uma vez, por ganho estetico. Abaixo desta linha, nada mudou.
+		//
+		// O CUSTO, assumido: o caminho de Edit mantem sua propria copia de SSR,
+		// TAA, post-process e sync de environment. Sao duas implementacoes que
+		// podem divergir. A rota de saida e o Edit passar a delegar tambem — mas
+		// isso e patch proprio, com as nove superficies testadas uma a uma, e
+		// nao um efeito colateral deste.
+		//
+		// GANHO IMEDIATO: o Play do editor renderiza pelo MESMO caminho que o
+		// jogo empacotado vai usar. O WorldRenderer fica exercitado todo dia,
+		// em vez de ser um caminho que so seria descoberto quebrado no dia do
+		// empacotamento.
+		if (m_GameCamera)
+		{
+			if (!m_WorldRendererReady)
+			{
+				m_WorldRenderer.Initialize();
+				m_WorldRendererReady = true;
+			}
 
+			const float aspect = height > 0 ? (float)width / (float)height : 1.0f;
+
+			WorldRenderer::FrameParams p;
+			p.WorldScene = m_Scene;
+			p.Environment = m_Environment;
+			p.View = m_GameCamera->GetViewMatrix();
+			p.Projection = m_GameCamera->GetProjectionMatrix(aspect);
+			p.EyePosition = m_GameCamera->GetPosition();
+			p.Width = width;
+			p.Height = height;
+			p.TimeSeconds = timeSeconds;
+			p.ShowSoundVisualization = ShowSoundVisualization;
+
+			m_WorldRenderer.RenderToFramebuffer(framebuffer, p);
+			return;
+		}
 
 		// 1. Resize HDR primeiro
 		auto& hdrSpec = m_HDRFramebuffer->GetSpecification();
@@ -206,6 +257,21 @@ namespace axe
 
 		entt::entity selected = m_SelectedEntity ? *m_SelectedEntity : entt::null;
 
+		// SR2 — INALCANCAVEL a partir daqui.
+		//
+		// O return cedo no topo do metodo garante que `m_GameCamera` e nulo
+		// nesta altura, entao este ramo e todos os ternarios
+		// `m_GameCamera ? A : B` mais abaixo sempre resolvem para o lado do
+		// editor.
+		//
+		// Deixado no lugar DE PROPOSITO, e nao apagado: remover o if/else
+		// significa reindentar ~70 linhas do caminho de Edit, que e o caminho
+		// usado pelas nove superficies de preview. Trocar risco real por
+		// higiene de codigo, num patch cujo objetivo era justamente nao
+		// encostar no Edit, seria o negocio errado.
+		//
+		// Sai junto com a delegacao do caminho de Edit (SR2b), quando as nove
+		// superficies forem testadas uma a uma.
 		if (m_GameCamera)
 		{
 			float aspect = height > 0 ? (float)width / (float)height : 1.0f;

@@ -41,6 +41,7 @@ namespace axe
 		void CaptureCursor(bool capture) override;
 
 		bool      IsKeyDown(int keycode)        const override;
+		bool      IsMouseButtonDown(int button) const override;
 		glm::vec2 GetCursorPosition()           const override;
 		void      SetCursorPosition(float x, float y) override;
 

@@ -63,6 +63,17 @@ namespace axe
 		ctx.AllowWorldQueries = allowWorldQueries;
 		ctx.View = View;
 
+		// AG2 — carimba o frame.
+		//
+		// O contador e POR INSTANCIA, e nao global: cada personagem tem sua
+		// copia do grafo, e um contador compartilhado so criaria acoplamento
+		// entre eles sem ganho nenhum.
+		//
+		// Incrementa mesmo com advanceTime == false (preview congelado): a
+		// guarda precisa de um valor NOVO a cada passagem, senao o segundo
+		// frame de preview seria pulado inteiro e a pose congelaria de vez.
+		ctx.FrameId = ++m_FrameId;
+
 		m_Graph.Update(ctx);
 
 		// NÃO há "limpar triggers" aqui — e é de propósito.

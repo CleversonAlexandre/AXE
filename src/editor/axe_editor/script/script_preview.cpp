@@ -3,7 +3,7 @@
 // de componentes, renderização, gizmo sobreposto e input orbital.
 
 #include "script_graph_window.hpp"
-#include "axe/mesh/mesh_loader.hpp"
+#include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/script/script_asset.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"

@@ -11,6 +11,7 @@
 #include "rig/control_rig_window.hpp"
 #include "animation/anim_clip_window.hpp"
 #include "editor/axe_editor/input/input_settings_window.hpp"
+#include "editor/axe_editor/asset/asset_report_window.hpp"   // B3.2
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
 #include <functional>
@@ -41,6 +42,7 @@ namespace axe
         ControlRigWindow     m_ControlRigWindow;
         AnimClipWindow       m_AnimClipWindow;
         InputSettingsWindow  m_InputSettingsWindow;
+        AssetReportWindow    m_AssetReportWindow;   // B3.2
 
         // Callbacks conectados pelo EditorLayer
         std::function<void()> OnNewScene;

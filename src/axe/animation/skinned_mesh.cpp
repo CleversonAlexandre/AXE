@@ -7,43 +7,8 @@
 
 namespace axe
 {
-	bool SkinnedVertex::AddBoneInfluence(int boneID, float weight)
-	{
-		// O Assimp emite pesos irrelevantes (1e-7) que só gastam slot.
-		if (weight <= 1e-5f)
-			return true;
-
-		for (int i = 0; i < AXE_MAX_BONE_INFLUENCE; ++i)
-		{
-			if (Weights[i] <= 0.0f)
-			{
-				BoneIDs[i] = boneID;
-				Weights[i] = weight;
-				return true;
-			}
-		}
-
-		// 4 slots cheios. O loader trata (substitui a menor influência).
-		return false;
-	}
-
-	void SkinnedVertex::NormalizeWeights()
-	{
-		const float sum = Weights[0] + Weights[1] + Weights[2] + Weights[3];
-
-		if (sum <= 1e-5f)
-		{
-			// Vértice sem NENHUM peso (acontece: malha com partes não
-			// riggadas). Sem tratamento, a matriz final vira zero e o
-			// vértice colapsa na origem — a mesh aparece "sugada" pro chão.
-			// Amarra 100% no bone raiz: a parte fica rígida, mas VISÍVEL.
-			BoneIDs = glm::ivec4(0, -1, -1, -1);
-			Weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-			return;
-		}
-
-		Weights /= sum;
-	}
+	// B2.4 — AddBoneInfluence e NormalizeWeights viraram inline no header.
+	// Ver a nota la: o importador saiu da DLL e precisava dos simbolos.
 
 	SkinnedMesh::SkinnedMesh(const std::vector<SkinnedVertex>& vertices,
 		const std::vector<std::uint32_t>& indices,

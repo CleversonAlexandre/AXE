@@ -4,12 +4,17 @@
 
 #include <imgui_internal.h>   // DockBuilder — so pro layout padrao, uma vez
 
+#include "editor/axe_editor/ui/editor_widgets.hpp"   // ui::IconButton, ui::Accent (AG3)
+#include "editor/axe_editor/ui/editor_icons.hpp"     // ICON_* — Font Awesome subsetada (AG3)
+
 #include <utilities/widgets.h>   // ax::Widgets::Icon — mesmo pino do Material/Script
 #include <utilities/drawing.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>    // FLT_MAX — guarda de no ainda nao desenhado (AG3b)
 #include <cmath>     // std::sqrt — geometria das setas de transicao
+#include <iterator>  // std::size — contagem dos arrays do menu (AG1)
 #include <set>
 #include <cstdio>
 
@@ -37,17 +42,30 @@ namespace axe
 	AnimGraphWindow::NodeStyle AnimGraphWindow::StyleFor(const AnimNode& node, bool isOutput)
 	{
 		if (isOutput)
-			return { ImVec4(0.62f, 0.45f, 0.13f, 1.0f), "SAIDA" };
+			return { ImVec4(0.62f, 0.45f, 0.13f, 1.0f), "OUTPUT" };
 
 		if (dynamic_cast<const AnimNode_StateMachine*>(&node))
-			return { ImVec4(0.42f, 0.28f, 0.62f, 1.0f), "MAQUINA DE ESTADOS" };
+			return { ImVec4(0.42f, 0.28f, 0.62f, 1.0f), "STATE MACHINE" };
+
+		// AG4 — logica tem faixa propria.
+		//
+		// Sem isto todos cairiam no "VARIABLE" verde logo abaixo, por serem
+		// nos de dado. Mas um Compare nao e uma variavel: ele DECIDE. A faixa
+		// separada e o que permite bater o olho num grafo e ver onde estao as
+		// decisoes.
+		if (dynamic_cast<const AnimNode_Not*>(&node) ||
+			dynamic_cast<const AnimNode_BoolOp*>(&node) ||
+			dynamic_cast<const AnimNode_CompareFloat*>(&node) ||
+			dynamic_cast<const AnimNode_SelectFloat*>(&node) ||
+			dynamic_cast<const AnimNode_FloatMath*>(&node))
+			return { ImVec4(0.58f, 0.44f, 0.16f, 1.0f), "LOGIC" };
 
 		if (node.OutputType() != AnimPinType::Pose)
-			return { ImVec4(0.24f, 0.52f, 0.24f, 1.0f), "VARIAVEL" };
+			return { ImVec4(0.24f, 0.52f, 0.24f, 1.0f), "VARIABLE" };
 
 		if (dynamic_cast<const AnimNode_ClipPlayer*>(&node) ||
 			dynamic_cast<const AnimNode_BlendSpacePlayer*>(&node))
-			return { ImVec4(0.18f, 0.42f, 0.60f, 1.0f), "FONTE DE POSE" };
+			return { ImVec4(0.18f, 0.42f, 0.60f, 1.0f), "POSE SOURCE" };
 
 		return { ImVec4(0.50f, 0.32f, 0.42f, 1.0f), "BLEND" };
 	}
@@ -70,13 +88,20 @@ namespace axe
 
 	static constexpr float kPinIconSize = 18.0f;
 
+	// AG3 — o ponto do reroute. Menor que o pino normal de proposito: ele
+	// tem que ler como um NO NO FIO, nao como um no minusculo.
+	static constexpr float kReroutePinSize = 12.0f;
+
 	// Pino no estilo Blueprint: SETA (Flow) para pose — o fluxo principal —
 	// e CIRCULO para dado. Cheio = ligado, vazado = livre. Forma + cor:
 	// legivel ate pra quem nao distingue as cores.
-	static void DrawPinIcon(const ImVec4& color, bool connected, bool isPose)
+	// `size` default = kPinIconSize: todos os call-sites antigos seguem
+	// identicos. So o reroute (AG3) passa outro valor.
+	static void DrawPinIcon(const ImVec4& color, bool connected, bool isPose,
+		float size = kPinIconSize)
 	{
 		ax::Widgets::Icon(
-			ImVec2(kPinIconSize, kPinIconSize),
+			ImVec2(size, size),
 			isPose ? ax::Drawing::IconType::Flow : ax::Drawing::IconType::Circle,
 			connected, color, ImVec4(0.09f, 0.09f, 0.11f, 1.0f));
 	}
@@ -136,11 +161,479 @@ namespace axe
 		ImGui::Dummy(ImVec2(width, 6.0f));
 	}
 
-	void AnimGraphWindow::MarkEdited()
+	void AnimGraphWindow::MarkEdited(const char* action)
 	{
 		m_Dirty = true;
 		++m_EditSerial;
 		m_LastEditTime = ImGui::GetTime();
+
+		// AG3b — anota a acao, mas NAO fecha o comando aqui.
+		//
+		// Um arrasto de no chama MarkEdited dezenas de vezes (o loop que grava
+		// posicao roda todo frame). Se cada chamada virasse um passo de undo,
+		// desfazer um movimento so exigiria trinta Ctrl+Z. O comando so fecha
+		// quando o gesto termina — ver CommitPendingUndo.
+		if (action && !m_PendingUndo)
+		{
+			m_PendingUndo = true;
+			m_PendingUndoName = action;
+		}
+	}
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  UNDO / REDO — por snapshot (AG3b)
+	// ═════════════════════════════════════════════════════════════════════════
+
+	AnimGraphWindow::AnimSnapshot AnimGraphWindow::CaptureState() const
+	{
+		AnimSnapshot snap;
+
+		if (m_Asset)
+		{
+			snap.Parameters = m_Asset->GetParameters();
+
+			// Copia PROFUNDA: AnimPoseGraph tem copy-ctor que clona os nos.
+			// Uma copia rasa daria dois grafos apontando para os mesmos
+			// unique_ptr — double free na primeira destruicao.
+			snap.Root = m_Asset->GetRoot();
+		}
+
+		return snap;
+	}
+
+	void AnimGraphWindow::RestoreState(const AnimSnapshot& snap)
+	{
+		if (!m_Asset)
+			return;
+
+		m_Asset->GetParameters() = snap.Parameters;
+		m_Asset->GetRoot() = snap.Root;
+		m_Asset->GetRoot().Resolve();
+
+		// ── Reconstroi a navegacao (AG3e) ────────────────────────────────────
+		//
+		// NavEntry guarda PONTEIROS crus para dentro do grafo raiz, e o
+		// restore acabou de substituir esse grafo — todos viraram lixo.
+		//
+		// No AG3b isto era resolvido voltando para a raiz. Funcionava e era
+		// seguro, mas na pratica e ruim: voce desce num estado, ajusta um no,
+		// aperta Ctrl+Z e e cuspido para fora.
+		//
+		// Agora o caminho e REFEITO a partir das chaves estaveis
+		// (SmNodeId / StateIndex / TransIndex), que sobreviveram porque
+		// descrevem o caminho e nao o endereco.
+		//
+		// Se QUALQUER nivel nao for encontrado — o undo desfez justamente a
+		// criacao daquele estado, por exemplo — paramos ali e ficamos no
+		// nivel mais fundo que ainda existe. Nunca ha ponteiro invalido: cada
+		// nivel so entra depois de ser resolvido no grafo NOVO.
+		const std::vector<NavEntry> oldNav = m_Nav;
+
+		m_Nav.clear();
+		m_Nav.push_back({ "AnimGraph", &m_Asset->GetRoot(), nullptr });
+
+		for (std::size_t i = 1; i < oldNav.size(); ++i)
+		{
+			const NavEntry& want = oldNav[i];
+			const NavEntry& parent = m_Nav.back();
+
+			// Nivel de STATE MACHINE: acha o no pelo Id no grafo do pai.
+			if (want.SmNodeId >= 0 && want.StateIndex < 0 && want.TransIndex < 0)
+			{
+				if (!parent.Graph)
+					break;
+
+				auto* smNode = dynamic_cast<AnimNode_StateMachine*>(
+					parent.Graph->FindNode(want.SmNodeId));
+
+				if (!smNode)
+					break;
+
+				NavEntry e = want;
+				e.Graph = nullptr;
+				e.Sm = smNode;
+				m_Nav.push_back(e);
+				continue;
+			}
+
+			// Nivel de ESTADO: sub-grafo de parent.Sm->States[StateIndex].
+			if (want.StateIndex >= 0)
+			{
+				if (!parent.Sm || want.StateIndex >= (int)parent.Sm->States.size())
+					break;
+
+				NavEntry e = want;
+				e.Graph = &parent.Sm->States[want.StateIndex].Graph;
+				e.Sm = nullptr;
+				m_Nav.push_back(e);
+				continue;
+			}
+
+			// Nivel de REGRA: pertence a MESMA state machine do pai.
+			if (want.TransIndex >= 0)
+			{
+				if (!parent.Sm || want.TransIndex >= (int)parent.Sm->Transitions.size())
+					break;
+
+				NavEntry e = want;
+				e.Graph = nullptr;
+				e.Sm = parent.Sm;
+				m_Nav.push_back(e);
+				continue;
+			}
+
+			break;
+		}
+
+		m_SelectedNode = -1;
+		m_SelectedState = -1;
+		m_SelectedTransition = -1;
+		m_SelectedCondition = -1;
+
+		// AG3e — SEM ISTO OS NOS EMPILHAM NA ORIGEM.
+		//
+		// O contexto do node-editor vai ser recriado logo abaixo, e um
+		// contexto novo nao conhece posicao de no nenhuma. Quem reaplica
+		// EditorX/EditorY e o bloco guardado por `m_PositionsLoaded`, no
+		// inicio de cada canvas — e ele so roda quando a flag esta em false.
+		//
+		// Sem zerar aqui, o contexto novo desenhava tudo em (0,0): era o
+		// "ficou tudo empilhado" depois do Ctrl+Z.
+		m_PositionsLoaded = false;
+
+		// ── Recriar o contexto SO quando o nivel mudou (AG3f) ────────────────
+		//
+		// Destruir e recriar o contexto custa um frame ate as posicoes serem
+		// reaplicadas — e esse frame e a PISCADA que aparecia a cada Ctrl+Z.
+		//
+		// A justificativa original ("os Ids mudaram de significado") nao vale
+		// para o caso comum do undo: o snapshot PRESERVA os Ids, e se a
+		// navegacao foi reconstruida no mesmo nivel, e o mesmo grafo — cada Id
+		// significa exatamente o que significava antes.
+		//
+		// Onde recriar continua sendo necessario: quando o nivel final ficou
+		// DIFERENTE do original (um nivel sumiu e subimos). Ai sim os Ids
+		// mudam de significado, porque eles sao por grafo — o no 1 da raiz e o
+		// no 1 de um sub-grafo sao nos distintos com o mesmo numero, e o
+		// contexto guardaria a posicao de um para o outro.
+		//
+		// Via FLAG, e nao destruindo aqui: o restore e disparado de dentro do
+		// frame (atalho lido durante o desenho), e destruir o contexto no meio
+		// da passada do ImGui deixaria o resto do frame desenhando num
+		// ponteiro morto.
+		bool sameLevel = (m_Nav.size() == oldNav.size());
+
+		if (sameLevel)
+		{
+			for (std::size_t i = 0; i < m_Nav.size(); ++i)
+			{
+				if (m_Nav[i].SmNodeId != oldNav[i].SmNodeId
+					|| m_Nav[i].StateIndex != oldNav[i].StateIndex
+					|| m_Nav[i].TransIndex != oldNav[i].TransIndex)
+				{
+					sameLevel = false;
+					break;
+				}
+			}
+		}
+
+		if (!sameLevel)
+			m_NeedsContextReset = true;
+
+		m_Dirty = true;
+		++m_EditSerial;
+		m_LastEditTime = ImGui::GetTime();
+	}
+
+	void AnimGraphWindow::CommitPendingUndo()
+	{
+		if (!m_PendingUndo)
+			return;
+
+		// So fecha quando o gesto ACABOU. Sem esta espera, arrastar um no
+		// geraria um comando por frame.
+		if (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive())
+			return;
+
+		m_PendingUndo = false;
+
+		if (!m_Asset)
+			return;
+
+		// O "antes" e o baseline (estado no fim do comando anterior); o
+		// "depois" e agora. Guardar um por comando em vez de dois.
+		auto before = m_Baseline;
+		auto after = std::make_shared<AnimSnapshot>(CaptureState());
+
+		if (!before)
+		{
+			// Primeira edicao da sessao: nao ha antes para voltar.
+			m_Baseline = after;
+			return;
+		}
+
+		const std::string name = m_PendingUndoName;
+
+		// ── Por que o flag `skipFirst` ───────────────────────────────────────
+		//
+		// `CommandHistory::Push` EXECUTA o Execute do comando, e `Redo`
+		// tambem. Mas neste ponto o estado do editor JA E o "depois" — a
+		// edicao acabou de acontecer. Deixar o Push restaurar seria inofensivo
+		// para os dados e visivel para o usuario: RestoreState reseta a
+		// navegacao para a raiz e recria o contexto do node-editor. Voce
+		// seria jogado para fora do sub-grafo a cada acao.
+		//
+		// `ReplaceTop` nao resolve — ele tambem chama Execute.
+		//
+		// Entao o Execute engole a PRIMEIRA chamada (a do Push) e passa a
+		// valer da segunda em diante, que e o Redo de verdade.
+		auto skipFirst = std::make_shared<bool>(true);
+
+		Command cmd;
+		cmd.Name = name;
+
+		cmd.Execute = [this, after, skipFirst]()
+			{
+				if (*skipFirst) { *skipFirst = false; return; }
+				RestoreState(*after);
+				m_Baseline = after;
+			};
+
+		cmd.Undo = [this, before]()
+			{
+				RestoreState(*before);
+				m_Baseline = before;
+			};
+
+		m_History.Push(cmd);
+
+		m_Baseline = after;
+	}
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  CLIPBOARD — copiar / recortar / colar / duplicar (AG3c)
+	// ═════════════════════════════════════════════════════════════════════════
+
+	void AnimGraphWindow::CopySelection(bool cut)
+	{
+		if (m_Nav.empty() || !m_Nav.back().Graph || !m_EdCtx)
+			return;
+
+		AnimPoseGraph& graph = *m_Nav.back().Graph;
+
+		// ── AG3d: o contexto do node-editor precisa estar ATIVO aqui ─────────
+		//
+		// Esta funcao roda no fim do frame, e a essa altura o
+		// DrawPoseGraphCanvas ja chamou ed::SetCurrentEditor(nullptr).
+		// GetSelectedObjectCount le a lista de selecao DO CONTEXTO — sem ele,
+		// desreferencia nulo e o programa morre com access violation. Foi
+		// exatamente o crash do Ctrl+X.
+		//
+		// Religar e valido: as funcoes de consulta e SetNodePosition nao
+		// exigem estar entre Begin/End, so exigem um contexto corrente.
+		// Desligamos no fim para nao deixar estado pendurado para quem vier
+		// depois nesta mesma passada.
+		// AG5 — SALVA e RESTAURA, em vez de zerar.
+		//
+		// A versao do AG3d zerava o contexto na saida, e isso bastava enquanto
+		// esta funcao so era chamada do fim do frame, com o contexto ja nulo.
+		//
+		// Agora ela tambem e chamada do item "Paste" da paleta — que roda
+		// DENTRO de ed::Suspend()/Resume(), com o contexto ATIVO. Zerar ali
+		// deixaria o ed::Resume() e o ed::End() seguintes sem contexto.
+		struct CtxGuard
+		{
+			ed::EditorContext* Prev;
+			explicit CtxGuard(ed::EditorContext* next)
+				: Prev(ed::GetCurrentEditor()) {
+				ed::SetCurrentEditor(next);
+			}
+			~CtxGuard() { ed::SetCurrentEditor(Prev); }
+		} ctxGuard(m_EdCtx);
+
+		// GetSelectedObjectCount conta nos E fios; GetSelectedNodes devolve
+		// quantos eram nos de fato. Dimensionamos pelo total e confiamos no
+		// retorno — um vetor curto seria escrita fora dos limites. Mesmo
+		// cuidado do Control Rig (rig_graph_canvas.cpp), e pela mesma razao:
+		// um array fixo aqui e um estouro esperando por um grafo grande.
+		const int total = ed::GetSelectedObjectCount();
+
+		if (total <= 0)
+			return;
+
+		std::vector<ed::NodeId> ids((std::size_t)total);
+		const int count = ed::GetSelectedNodes(ids.data(), total);
+
+		if (count <= 0)
+			return;
+
+		std::vector<int> picked;
+		picked.reserve(count);
+
+		m_Clipboard.Nodes.clear();
+		m_Clipboard.Links.clear();
+
+		for (int i = 0; i < count; ++i)
+		{
+			const int id = (int)ids[i].Get();
+
+			// O Output NUNCA vai junto. Existe exatamente um por grafo, e um
+			// segundo colado deixaria o grafo com duas saidas e nenhuma regra
+			// para decidir qual vale.
+			if (id == graph.GetOutputNode())
+				continue;
+
+			AnimNode* n = graph.FindNode(id);
+			if (!n)
+				continue;
+
+			picked.push_back(id);
+			m_Clipboard.Nodes.push_back(n->Clone());
+
+			// O Clone PRESERVA o Id (CopyCommonTo copia `dst.Id = Id`), mas
+			// isso nao ajuda: AnimPoseGraph::AddNode sobrescreve com
+			// `m_NextId++`. E melhor assim — colar preservando o Id daria dois
+			// nos com o mesmo Id no mesmo grafo, e FindNode devolveria o
+			// primeiro que achasse.
+			//
+			// Por isso `picked` guarda os ids antigos na MESMA ordem dos
+			// clones, e o Paste casa por indice para religar os fios.
+		}
+
+		if (m_Clipboard.Nodes.empty())
+			return;
+
+		// Links INTERNOS ao recorte. Um fio que sai da selecao para fora nao
+		// vem junto: colar recriaria uma ligacao para um no que o usuario nao
+		// copiou, e o resultado seria um grafo que ele nao pediu.
+		auto inSelection = [&picked](int id)
+			{
+				return std::find(picked.begin(), picked.end(), id) != picked.end();
+			};
+
+		for (const AnimLink& l : graph.GetLinks())
+		{
+			if (inSelection(l.FromNode) && inSelection(l.ToNode))
+				m_Clipboard.Links.push_back(l);
+		}
+
+		// Os ids antigos viajam junto com o clipboard, na mesma ordem dos
+		// clones. Guardados aqui para o Paste remapear.
+		m_ClipboardIds = picked;
+
+		if (cut)
+		{
+			for (int id : picked)
+				graph.RemoveNode(id);
+
+			m_SelectedNode = -1;
+			MarkEdited("Cut");
+		}
+	}
+
+	void AnimGraphWindow::PasteClipboard(const ImVec2* at)
+	{
+		if (m_Clipboard.Nodes.empty() || m_Nav.empty() || !m_Nav.back().Graph || !m_EdCtx)
+			return;
+
+		AnimPoseGraph& graph = *m_Nav.back().Graph;
+
+		// Mesmo motivo do CopySelection: ed::SetNodePosition tambem precisa de
+		// contexto corrente. Ver a nota la.
+		// AG5 — SALVA e RESTAURA, em vez de zerar.
+		//
+		// A versao do AG3d zerava o contexto na saida, e isso bastava enquanto
+		// esta funcao so era chamada do fim do frame, com o contexto ja nulo.
+		//
+		// Agora ela tambem e chamada do item "Paste" da paleta — que roda
+		// DENTRO de ed::Suspend()/Resume(), com o contexto ATIVO. Zerar ali
+		// deixaria o ed::Resume() e o ed::End() seguintes sem contexto.
+		struct CtxGuard
+		{
+			ed::EditorContext* Prev;
+			explicit CtxGuard(ed::EditorContext* next)
+				: Prev(ed::GetCurrentEditor()) {
+				ed::SetCurrentEditor(next);
+			}
+			~CtxGuard() { ed::SetCurrentEditor(Prev); }
+		} ctxGuard(m_EdCtx);
+
+		// Onde colar: sob o cursor, com o recorte inteiro deslocado em bloco.
+		//
+		// Ancoramos no no mais acima-a-esquerda do recorte e movemos todos
+		// pelo mesmo delta — colar empilhando tudo no mesmo ponto destruiria
+		// o arranjo que a pessoa acabou de copiar.
+		float minX = FLT_MAX, minY = FLT_MAX;
+
+		for (const auto& n : m_Clipboard.Nodes)
+		{
+			minX = std::min(minX, n->EditorX);
+			minY = std::min(minY, n->EditorY);
+		}
+
+		const ImVec2 target = at ? *at : m_LastCanvasMousePos;
+
+		const float dx = target.x - minX;
+		const float dy = target.y - minY;
+
+		// old id -> new id, para religar os fios internos.
+		std::vector<std::pair<int, int>> remap;
+		remap.reserve(m_Clipboard.Nodes.size());
+
+		for (std::size_t i = 0; i < m_Clipboard.Nodes.size(); ++i)
+		{
+			// Clona DE NOVO, a partir do clipboard: sem isto, o primeiro
+			// Paste esvaziaria o clipboard (os unique_ptr seriam movidos) e um
+			// segundo Ctrl+V nao colaria nada.
+			auto copy = m_Clipboard.Nodes[i]->Clone();
+
+			copy->EditorX = m_Clipboard.Nodes[i]->EditorX + dx;
+			copy->EditorY = m_Clipboard.Nodes[i]->EditorY + dy;
+
+			const ImVec2 pos(copy->EditorX, copy->EditorY);
+
+			const int newId = graph.AddNode(std::move(copy));
+
+			ed::SetNodePosition(newId, pos);
+
+			if (i < m_ClipboardIds.size())
+				remap.emplace_back(m_ClipboardIds[i], newId);
+		}
+
+		auto mapId = [&remap](int oldId) -> int
+			{
+				for (const auto& p : remap)
+					if (p.first == oldId) return p.second;
+				return -1;
+			};
+
+		for (const AnimLink& l : m_Clipboard.Links)
+		{
+			const int from = mapId(l.FromNode);
+			const int to = mapId(l.ToNode);
+
+			if (from >= 0 && to >= 0)
+				graph.AddLink(from, to, l.ToPin, l.Kind);
+		}
+
+		graph.Resolve();
+		MarkEdited("Paste");
+	}
+
+	void AnimGraphWindow::DoUndo()
+	{
+		if (!m_History.CanUndo())
+			return;
+
+		m_History.Undo();
+	}
+
+	void AnimGraphWindow::DoRedo()
+	{
+		if (!m_History.CanRedo())
+			return;
+
+		m_History.Redo();
 	}
 
 	void AnimGraphWindow::Initialize()
@@ -166,7 +659,7 @@ namespace axe
 		// estados estilo Unreal: setas retas borda-a-borda, icone de
 		// transicao clicavel, arrasto de borda cria transicao, nivel de
 		// regra navegavel).
-		AXE_EDITOR_INFO("AnimGraph editor - SM_UESTYLE_V1 + FOOTIK_V5");
+		AXE_EDITOR_INFO("AnimGraph editor - SM_UESTYLE_V1 + AG3b");
 
 		m_Asset = asset;
 		m_Skeleton = skeleton;
@@ -184,6 +677,19 @@ namespace axe
 		m_SelectedState = -1;
 		m_SelectedTransition = -1;
 		m_SelectedCondition = -1;
+
+		// AG3b — historico zerado e baseline semeado com o estado RECEM-ABERTO.
+		//
+		// Zerar e obrigatorio: um Ctrl+Z herdado do asset anterior restauraria
+		// o grafo DAQUELE asset por cima deste.
+		//
+		// E o baseline precisa existir desde ja. Sem ele, a primeira edicao
+		// nao teria "antes" para onde voltar e seria engolida — voce faria uma
+		// mudanca, apertaria Ctrl+Z, e nada aconteceria.
+		m_History.Clear();
+		m_PendingUndo = false;
+		m_PendingUndoName.clear();
+		m_Baseline = asset ? std::make_shared<AnimSnapshot>(CaptureState()) : nullptr;
 	}
 
 	void AnimGraphWindow::NavigateTo(const NavEntry& entry)
@@ -263,7 +769,7 @@ namespace axe
 			// Anim Blueprint: salvou, a cena acompanha.
 			m_Asset->BumpVersion();
 
-			AXE_EDITOR_INFO("AnimGraph '{}' salvo.", m_Asset->GetName());
+			AXE_EDITOR_INFO("AnimGraph '{}' saved.", m_Asset->GetName());
 		}
 	}
 
@@ -324,12 +830,28 @@ namespace axe
 		//
 		// Submetidos FORA do Begin/End da janela-mae. E como o docking do ImGui
 		// funciona: eles sao janelas de topo, e o dockspace apenas os hospeda.
-		ImGui::Begin("Parametros##anim");
+		// Os atalhos valem em qualquer painel do editor, nao so no canvas —
+		// Ctrl+S com o foco nos Parametros tem que salvar. O foco e a OR dos
+		// tres; ver a nota em "Graph###anim_graph".
+		m_ShortcutFocus = false;
+
+		ImGui::Begin("Parameters###anim_params");
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+			m_ShortcutFocus = true;
 		DrawParametersPanel();
 		ImGui::End();
 
-		ImGui::Begin("Grafo##anim");
+		ImGui::Begin("Graph###anim_graph");
 		{
+			// AG3c — o foco e capturado AQUI, dentro do Begin/End da janela.
+			//
+			// Os atalhos rodam no fim do frame, depois de todos os End() — e
+			// naquele ponto a "janela corrente" do ImGui nao e mais nenhuma
+			// janela do AnimGraph, entao IsWindowFocused respondia sempre
+			// FALSE e nenhum atalho disparava. Era isso que fazia Ctrl+Z nao
+			// funcionar.
+			m_ShortcutFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
 			NavEntry& top = m_Nav.back();
 
 			if (top.Graph)
@@ -341,11 +863,66 @@ namespace axe
 		}
 		ImGui::End();
 
-		ImGui::Begin("Detalhes##anim");
+		ImGui::Begin("Details###anim_details");
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+			m_ShortcutFocus = true;
 		DrawDetailsPanel();
 		ImGui::End();
 
 		DrawPreviewWindow();
+
+		// ── Atalhos e fechamento de comando (AG3b) ───────────────────────────
+		//
+		// No FIM do frame, depois de todos os canvases, por dois motivos:
+		//
+		//   1. CommitPendingUndo precisa ver o gesto ja terminado. Rodando
+		//      antes, `IsMouseDown` ainda estaria true no ultimo frame do
+		//      arrasto e o comando so fecharia no frame seguinte.
+		//   2. Um Ctrl+Z lido aqui dispara o RestoreState com o desenho ja
+		//      feito, entao nada nesta passada toca no grafo que acabou de ser
+		//      trocado.
+		//
+		// A guarda de foco nao e zelo excessivo: sem ela, um Ctrl+Z digitado
+		// enquanto se renomeia um parametro desfaria o grafo em vez do texto.
+		// IsAnyItemActive cobre exatamente esse caso.
+		CommitPendingUndo();
+
+		if (m_ShortcutFocus && !ImGui::IsAnyItemActive())
+		{
+			const ImGuiIO& io = ImGui::GetIO();
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+			{
+				// Ctrl+Shift+Z e redo — a convencao que a maioria das
+				// ferramentas de grafo usa. Ctrl+Y continua valendo para quem
+				// vem do Windows. Testado ANTES do undo puro, senao o Shift
+				// seria ignorado e o Ctrl+Z levaria os dois caminhos.
+				if (io.KeyShift) DoRedo();
+				else             DoUndo();
+			}
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+				DoRedo();
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+				Save();
+
+			// ── Clipboard ────────────────────────────────────────────────────
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+				CopySelection(false);
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false))
+				CopySelection(true);
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false))
+				PasteClipboard();
+
+			if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+			{
+				CopySelection(false);
+				PasteClipboard();
+			}
+		}
 	}
 
 	void AnimGraphWindow::DrawDockLayout(ImGuiID dockspaceId)
@@ -377,31 +954,72 @@ namespace axe
 		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.30f, nullptr, &center);
 		const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.55f, nullptr, nullptr);
 
-		ImGui::DockBuilderDockWindow("Parametros##anim", left);
-		ImGui::DockBuilderDockWindow("Grafo##anim", center);
-		ImGui::DockBuilderDockWindow("Detalhes##anim", right);
-		ImGui::DockBuilderDockWindow("Preview##anim", rightBottom);
+		ImGui::DockBuilderDockWindow("Parameters###anim_params", left);
+		ImGui::DockBuilderDockWindow("Graph###anim_graph", center);
+		ImGui::DockBuilderDockWindow("Details###anim_details", right);
+		ImGui::DockBuilderDockWindow("Preview###anim_preview", rightBottom);
 
 		ImGui::DockBuilderFinish(dockspaceId);
 	}
 
 	void AnimGraphWindow::DrawToolbar()
 	{
-		if (ImGui::Button("Salvar"))
+		// AG3 — mesmo vocabulario do Control Rig e do Script Editor.
+		//
+		// Nao e so estetica: as tres janelas sao o MESMO tipo de ferramenta
+		// (um grafo com preview e detalhes), e ate aqui a de animacao era a
+		// unica com botao de texto puro. Trocar de janela custava um reajuste
+		// de leitura que nao deveria existir.
+		//
+		// ui::IconButton vem de editor_widgets.hpp, o header compartilhado; os
+		// ICON_* vem da Font Awesome 6 subsetada. Nada novo foi criado aqui.
+		if (ui::IconButton(ICON_SAVE, "Save  (Ctrl+S)", ui::Accent::Primary))
 			Save();
 
 		ImGui::SameLine();
-		ImGui::TextDisabled("|");
+
+		// AG3b — undo / redo, mesmo arranjo do Control Rig: desabilitados
+		// quando nao ha o que desfazer, com o NOME da acao no tooltip.
+		// "Desfazer o que?" e a duvida real de quem esta com a mao no Ctrl+Z.
+		{
+			const bool canUndo = m_History.CanUndo();
+
+			ImGui::BeginDisabled(!canUndo);
+			if (ui::IconButton(ICON_UNDO, nullptr))
+				DoUndo();
+			ImGui::EndDisabled();
+
+			if (canUndo && ImGui::IsItemHovered())
+				ImGui::SetTooltip("Undo: %s  (Ctrl+Z)", m_History.GetUndoName().c_str());
+
+			ImGui::SameLine();
+
+			const bool canRedo = m_History.CanRedo();
+
+			ImGui::BeginDisabled(!canRedo);
+			if (ui::IconButton(ICON_REDO, nullptr))
+				DoRedo();
+			ImGui::EndDisabled();
+
+			if (canRedo && ImGui::IsItemHovered())
+				ImGui::SetTooltip("Redo: %s  (Ctrl+Y)", m_History.GetRedoName().c_str());
+		}
+
+		ImGui::SameLine();
+		ui::ToolbarSeparator();
 		ImGui::SameLine();
 
 		const NavEntry& top = m_Nav.back();
 
+		// A dica de uso ganhou o icone de informacao — do mesmo jeito que as
+		// outras janelas marcam texto auxiliar. Sem ele, a linha compete
+		// visualmente com o botao de salvar.
 		if (top.Graph)
-			ImGui::TextDisabled("botao direito no fundo = adicionar no  |  duplo-clique numa State Machine = entrar nela");
+			ImGui::TextDisabled(ICON_CIRCLE_INFO "  right-click the background = add node  |  double-click a State Machine = step into it");
 		else if (top.TransIndex >= 0)
-			ImGui::TextDisabled("botao direito no fundo = nova condicao  |  selecione um no de condicao para editar  |  Delete apaga");
+			ImGui::TextDisabled(ICON_CIRCLE_INFO "  right-click the background = new condition  |  select a condition node to edit  |  Delete removes");
 		else
-			ImGui::TextDisabled("arraste da BORDA de um estado = transicao  |  circulo da seta = a transicao (duplo-clique abre a regra)");
+			ImGui::TextDisabled(ICON_CIRCLE_INFO "  drag from a state's EDGE = transition  |  the arrow's circle IS the transition (double-click opens its rule)");
 	}
 
 	void AnimGraphWindow::DrawBreadcrumb()
@@ -413,7 +1031,7 @@ namespace axe
 			if (i > 0)
 			{
 				ImGui::SameLine();
-				ImGui::TextDisabled(">");
+				ImGui::TextDisabled(ICON_ARROW_RIGHT);
 				ImGui::SameLine();
 			}
 
@@ -444,9 +1062,9 @@ namespace axe
 		// renomeia; o default do selecionado aparece embaixo — em vez de
 		// cada linha carregar combo + botao + campo, que era o formulario
 		// entulhado de antes.
-		ImGui::TextUnformatted("Parametros");
+		ui::SectionHeader(ICON_SLIDERS, "Parameters", ui::Accent::Primary);
 		ImGui::SameLine();
-		ImGui::TextDisabled("(arraste para o grafo)");
+		ImGui::TextDisabled("(drag onto the graph)");
 		ImGui::Separator();
 		ImGui::Spacing();
 
@@ -547,13 +1165,13 @@ namespace axe
 			{
 				m_SelectedParam = (int)i;
 
-				if (ImGui::MenuItem("Renomear"))
+				if (ImGui::MenuItem("Rename"))
 				{
 					m_RenamingParam = (int)i;
 					m_RenameBuf[0] = '\0';
 				}
 
-				if (ImGui::MenuItem("Excluir"))
+				if (ImGui::MenuItem("Delete"))
 					removeIdx = (int)i;
 
 				ImGui::EndPopup();
@@ -582,7 +1200,7 @@ namespace axe
 			ImGui::PopID();
 		}
 
-		if (ImGui::Button("+ Parametro", ImVec2(-1, 0)))
+		if (ImGui::Button("+ Parameter", ImVec2(-1, 0)))
 		{
 			AnimParamDecl d;
 			d.Name = "NovoParam";
@@ -634,7 +1252,7 @@ namespace axe
 			case AnimParamType::Trigger:
 				// Trigger nao tem default: um pulso armado no frame 1
 				// dispararia a transicao sozinho, sem ninguem ter apertado.
-				ImGui::TextDisabled("(pulso)");
+				ImGui::TextDisabled("(pulse)");
 				break;
 			}
 		}
@@ -730,12 +1348,12 @@ namespace axe
 					m_Asset->Resolve(*skel);
 					MarkEdited();
 
-					AXE_EDITOR_INFO("AnimGraph '{}' vinculado ao esqueleto '{}' ({} clipe(s)). Salve para persistir.",
+					AXE_EDITOR_INFO("AnimGraph '{}' bound to skeleton '{}' ({} clip(s)). Save to persist.",
 						m_Asset->GetName(), skel->GetName(), skel->GetClips().size());
 				}
 				else
 				{
-					AXE_EDITOR_ERROR("Nao consegui resolver o esqueleto '{}'.", rec->Name);
+					AXE_EDITOR_ERROR("Could not resolve skeleton '{}'.", rec->Name);
 				}
 			}
 			// ── Arquivo de ANIMACAO (o fluxo "arrasta o idle pro grafo") ────
@@ -775,17 +1393,17 @@ namespace axe
 					MarkEdited();
 
 					if (added > 1)
-						AXE_EDITOR_INFO("'{}': {} takes importados — os demais estao no combo de clipes.",
+						AXE_EDITOR_INFO("'{}': {} takes imported — the rest are in the clip combo.",
 							rec->Name, added);
 				}
 				else
 				{
-					AXE_EDITOR_WARN("'{}' nao trouxe nenhum clipe compativel com o esqueleto.", rec->Name);
+					AXE_EDITOR_WARN("'{}' brought no clips compatible with the skeleton.", rec->Name);
 				}
 			}
 			else if (rec && isAnimFile && !m_Skeleton)
 			{
-				AXE_EDITOR_WARN("O grafo esta sem esqueleto — arraste o .axeskel do personagem pro canvas primeiro.");
+				AXE_EDITOR_WARN("The graph has no skeleton — drag the character's .axeskel onto the canvas first.");
 			}
 			// ── .axeskel com esqueleto ja vinculado: fluxo de clipe ─────────
 			else if (rec && ext == ".axeskel" && m_Skeleton)
@@ -818,7 +1436,7 @@ namespace axe
 				{
 					m_SelectedNode = hit->Id;
 
-					AXE_EDITOR_INFO("'{}' solto sobre '{}': escolha o clipe no painel Detalhes.",
+					AXE_EDITOR_INFO("'{}' dropped onto '{}': pick the clip in the Details panel.",
 						rec->Name, hit->Title.empty() ? hit->TypeName() : hit->Title);
 				}
 				else
@@ -834,7 +1452,7 @@ namespace axe
 					m_SelectedNode = id;
 					MarkEdited();
 
-					AXE_EDITOR_INFO("Clip Player criado a partir de '{}'. Escolha o clipe no painel Detalhes.",
+					AXE_EDITOR_INFO("Clip Player created from '{}'. Pick the clip in the Details panel.",
 						rec->Name);
 				}
 			}
@@ -881,7 +1499,7 @@ namespace axe
 				}
 				else
 				{
-					AXE_EDITOR_WARN("Parametro '{}' e {}: ainda nao existe no Get para este tipo.",
+					AXE_EDITOR_WARN("Parameter '{}' is {}: there is no Get node for this type yet.",
 						p.Name, p.Type == AnimParamType::Int ? "Int" : "Trigger");
 				}
 			}
@@ -910,6 +1528,56 @@ namespace axe
 
 		for (const auto& n : nodes)
 		{
+			// ── Reroute: caminho de desenho totalmente separado (AG3) ────────
+			//
+			// Nao passa pelo header + duas colunas: um reroute com header
+			// seria um card, e um card no meio do fio atrapalha exatamente o
+			// que ele veio resolver. O que se quer e um PONTO no fio.
+			//
+			// Os dois pinos ficam colados (SameLine com espacamento zero), o
+			// que da a impressao de um unico ponto mesmo sendo dois ed::PinId
+			// distintos por tras — mesmo truque do reroute do Script Editor.
+			if (dynamic_cast<AnimNode_Reroute*>(n.get()))
+			{
+				ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(2, 2, 2, 2));
+				ed::PushStyleVar(ed::StyleVar_NodeRounding, kReroutePinSize);
+				ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.10f, 0.10f, 0.12f, 0.95f));
+				ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+
+				// AG3b — o reroute segue o tipo do fio: pose usa o pino de
+				// pose e a seta; dado usa o pino de dado e o circulo, com a
+				// cor do tipo. Sem isto, um reroute num fio de Float
+				// desenharia seta branca de pose no meio de um fio verde.
+				const bool isPoseRr = (n->OutputType() == AnimPinType::Pose);
+				const ImVec4 rrCol = isPoseRr ? kPoseColor : ColorFor(n->OutputType());
+
+				const bool rrIn = isPoseRr
+					? (!n->Inputs.empty() && n->Inputs[0] != nullptr)
+					: (!n->DataInputs.empty() && n->DataInputs[0].Link != nullptr);
+
+				ed::BeginNode(n->Id);
+
+				ed::BeginPin(isPoseRr ? PoseInPin(n->Id, 0) : DataInPin(n->Id, 0),
+					ed::PinKind::Input);
+				ed::PinPivotAlignment(ImVec2(0.5f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+				DrawPinIcon(rrCol, rrIn, isPoseRr, kReroutePinSize);
+				ed::EndPin();
+
+				ImGui::SameLine(0.0f, 0.0f);
+
+				ed::BeginPin(OutPin(n->Id), ed::PinKind::Output);
+				ed::PinPivotAlignment(ImVec2(0.5f, 0.5f));
+				ed::PinPivotSize(ImVec2(0, 0));
+				DrawPinIcon(rrCol, true, isPoseRr, kReroutePinSize);
+				ed::EndPin();
+
+				ed::EndNode();
+				ed::PopStyleColor(2);
+				ed::PopStyleVar(2);
+				continue;
+			}
+
 			const bool isOutput = (n->Id == graph.GetOutputNode());
 			const bool isSm = (dynamic_cast<AnimNode_StateMachine*>(n.get()) != nullptr);
 			const bool isValue = (n->OutputType() != AnimPinType::Pose);
@@ -924,8 +1592,8 @@ namespace axe
 			const char* sub = nullptr;
 
 			if (isOutput) { accent = ImVec4(0.27f, 0.21f, 0.13f, 1.0f); sub = "AnimGraph"; }
-			else if (isSm) { accent = ImVec4(0.20f, 0.23f, 0.33f, 1.0f); sub = "State Machine  (duplo-clique)"; }
-			else if (isValue) { accent = ImVec4(0.13f, 0.29f, 0.16f, 1.0f); sub = "Variavel"; }
+			else if (isSm) { accent = ImVec4(0.20f, 0.23f, 0.33f, 1.0f); sub = "State Machine  (double-click)"; }
+			else if (isValue) { accent = ImVec4(0.13f, 0.29f, 0.16f, 1.0f); sub = "Variable"; }
 			else if (isPlayer) { accent = ImVec4(0.14f, 0.30f, 0.21f, 1.0f); }   // player: verde UE
 
 			const std::string title = n->Title.empty() ? n->TypeName() : n->Title;
@@ -1126,9 +1794,22 @@ namespace axe
 					if (!src || !dst) valid = false;
 					else if (dB)
 					{
-						// destino e pino de dado: a origem NAO pode ser pose
+						// AG4 — destino e pino de dado: o TIPO tem que bater.
+						//
+						// Antes a regra era so "a origem nao pode ser pose", e
+						// isso deixava passar Bool -> pino Float. O sintoma era
+						// cruel: o editor desenhava o fio em VERDE, e o
+						// ReadFloat chamava EvaluateFloat num no que so
+						// implementa EvaluateBool — recebendo o default 0.0f
+						// para sempre. Foi exatamente o que fez o Get Bool
+						// "IsAim" ligado no Alpha nunca funcionar.
+						//
+						// Com os nos logicos misturando Bool e Float no mesmo
+						// grafo, esse engano deixa de ser possibilidade remota
+						// e vira o erro mais provavel do dia a dia.
 						valid = (src->OutputType() != AnimPinType::Pose)
-							&& pB < (int)dst->DataInputs.size();
+							&& pB < (int)dst->DataInputs.size()
+							&& src->OutputType() == dst->DataInputs[pB].Type;
 					}
 					else
 					{
@@ -1145,7 +1826,7 @@ namespace axe
 				else if (ed::AcceptNewItem(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 3.0f))
 				{
 					graph.AddLink(nA, nB, pB, dB ? AnimLinkKind::Data : AnimLinkKind::Pose);
-					MarkEdited();
+					MarkEdited("Connect");
 				}
 			}
 		}
@@ -1167,7 +1848,7 @@ namespace axe
 						const AnimLink l = ls[idx];
 						graph.RemoveLinksTo(l.ToNode, l.ToPin, l.Kind);
 						graph.Resolve();
-						MarkEdited();
+						MarkEdited("Delete link");
 					}
 				}
 			}
@@ -1189,7 +1870,7 @@ namespace axe
 				{
 					graph.RemoveNode(id);
 					m_SelectedNode = -1;
-					MarkEdited();
+					MarkEdited("Delete node");
 				}
 			}
 		}
@@ -1213,6 +1894,87 @@ namespace axe
 		ed::Resume();
 
 		ed::End();
+
+		// AG3c — posicao do cursor em canvas, para o Ctrl+V colar sob o mouse.
+		// Capturada AQUI porque o contexto do node-editor ainda esta ativo;
+		// no fim do frame, onde os atalhos rodam, ScreenToCanvas nao teria
+		// como converter.
+		m_LastCanvasMousePos = ed::ScreenToCanvas(ImGui::GetMousePos());
+
+		// ── Duplo-clique num fio insere um REROUTE (AG3b) ────────────────────
+		//
+		// O gesto que todo mundo tenta primeiro quando um fio atravessa meio
+		// grafo. O ponto nasce onde voce clicou e o fio original vira DOIS.
+		//
+		// DEPOIS DO ed::End(), e isso nao e detalhe de arrumacao — e o que faz
+		// a posicao sair certa.
+		//
+		//   Dentro do Begin/End o node-editor aplica a transformacao do canvas
+		//   ao ImGui, entao ImGui::GetMousePos() JA devolve coordenada de
+		//   canvas. Chamar ScreenToCanvas ali transforma duas vezes: o no
+		//   nascia longe do cursor, e o erro crescia com o zoom e o pan.
+		//
+		//   Fora do Begin/End o mouse volta a ser coordenada de TELA, que e o
+		//   que ScreenToCanvas espera. Mesmo lugar em que o Control Rig faz
+		//   isto (rig_graph_canvas.cpp, depois do End dele).
+		//
+		// A guarda do fio HOVERED vem junto: sem ela, dois cliques rapidos
+		// enquanto voce arruma um no caem num fio proximo e religam o grafo
+		// pelas costas.
+		{
+			const int lid = (ed::GetHoveredLink().Get() != 0)
+				? (int)ed::GetDoubleClickedLink().Get()
+				: 0;
+
+			const int idx = lid - 0x40000;
+			const auto& ls = graph.GetLinks();
+
+			if (idx >= 0 && idx < (int)ls.size())
+			{
+				// COPIA, nao referencia: AddLink e RemoveLinksTo mexem no
+				// vetor, e uma referencia para o elemento viraria lixo no meio
+				// da operacao.
+				const AnimLink l = ls[idx];
+
+				if (auto node = CreateAnimNode("Reroute"))
+				{
+					// AG3b — o reroute adota o tipo do fio.
+					//
+					// Um fio de dado (Get Float -> Alpha) precisa de um
+					// reroute que se declare Float, senao ele nasce Pose, a
+					// validacao de link recusa a segunda ponta e sobra um no
+					// solto no meio do grafo.
+					const AnimNode* src = graph.FindNode(l.FromNode);
+					auto* rr = static_cast<AnimNode_Reroute*>(node.get());
+					rr->SetPinType(src ? src->OutputType() : AnimPinType::Pose);
+					rr->RebuildPins();
+
+					ImVec2 pos = ed::ScreenToCanvas(ImGui::GetMousePos());
+
+					// Centraliza o ponto no lugar clicado, em vez de pendurar
+					// o canto superior esquerdo ali.
+					pos.x -= kReroutePinSize;
+					pos.y -= kReroutePinSize * 0.5f;
+
+					node->Title = "Reroute";
+					node->EditorX = pos.x;
+					node->EditorY = pos.y;
+
+					const int id = graph.AddNode(std::move(node));
+
+					ed::SetNodePosition(id, pos);
+
+					// A segunda ligacao SUBSTITUI o fio original: AddLink
+					// remove o que estiver chegando no mesmo pino de destino,
+					// e resolve o grafo sozinho ao final.
+					graph.AddLink(l.FromNode, id, 0, l.Kind);
+					graph.AddLink(id, l.ToNode, l.ToPin, l.Kind);
+
+					m_SelectedNode = id;
+					MarkEdited("Insert reroute");
+				}
+			}
+		}
 
 		// ── Selecao e duplo-clique (DEPOIS do End, como manda o node-editor) ──
 		ed::NodeId sel = 0;
@@ -1241,37 +2003,88 @@ namespace axe
 				}
 
 				ed::SetCurrentEditor(nullptr);
-				NavigateTo({ sm->Title.empty() ? "State Machine" : sm->Title, nullptr, sm });
+				NavigateTo({ sm->Title.empty() ? "State Machine" : sm->Title, nullptr, sm,
+					-1, sm->Id });
 				return;
 			}
 		}
 
 		// Guarda as posicoes todo frame: barato, e garante que um arrasto nunca
 		// se perde — nem se voce fechar a janela sem salvar (o dirty avisa).
+		//
+		// AG3b — com a guarda de FLT_MAX.
+		//
+		// `ed::GetNodePosition` devolve FLT_MAX para um no que o node-editor
+		// ainda NAO DESENHOU. Isso acontece de verdade: um no criado depois do
+		// loop de desenho — pelo menu, ou pelo duplo-clique no fio — so vai ser
+		// desenhado no frame seguinte, e este loop roda antes disso.
+		//
+		// Sem a guarda, EditorX/EditorY viravam FLT_MAX, e era esse valor que
+		// ia para o .axeanim. O no reaparecia no infinito depois de salvar e
+		// reabrir, e ninguem ligava o defeito a criacao do no, porque na tela
+		// ele estava no lugar certo o tempo todo.
 		for (const auto& n : graph.GetNodes())
 		{
 			const ImVec2 pos = ed::GetNodePosition(n->Id);
+
+			if (pos.x >= FLT_MAX * 0.5f || pos.y >= FLT_MAX * 0.5f)
+				continue;
 
 			if (pos.x != n->EditorX || pos.y != n->EditorY)
 			{
 				n->EditorX = pos.x;
 				n->EditorY = pos.y;
-				MarkEdited();
+
+				// COM nome: o PendingUndo agrupa o arrasto inteiro num passo
+				// so. E precisamente o caso que o agrupamento existe para
+				// resolver — sem ele, seriam dezenas de comandos por gesto.
+				MarkEdited("Move node");
 			}
 		}
 
 		ed::SetCurrentEditor(nullptr);
 	}
 
+	// ── Paleta de nos (AG5) ──────────────────────────────────────────────────
+	//
+	// Reescrita para o mesmo formato do Control Rig e do Script Editor: busca
+	// no topo com foco automatico, categorias coloridas colapsaveis, e a cor
+	// do item ecoando a do no que ele cria.
+	//
+	// A versao anterior era uma lista corrida com separadores e rotulos
+	// cinzas. Funcionava com dez nos; com os cinco de logica do AG4 ela passou
+	// a exigir leitura linear para achar qualquer coisa — e era a unica das
+	// tres janelas de grafo sem busca.
 	void AnimGraphWindow::DrawNodePalette(AnimPoseGraph& graph)
 	{
-		ImGui::TextDisabled("Adicionar no");
+		// Foco automatico: o gesto vira "botao direito, digita", sem clicar no
+		// campo. Mesmo comportamento das outras duas janelas.
+		ImGui::SetNextItemWidth(-1.0f);
+
+		if (ImGui::IsWindowAppearing())
+			ImGui::SetKeyboardFocusHere();
+
+		ImGui::InputTextWithHint("##animpalfilter", "Search node...",
+			m_PaletteFilter, sizeof(m_PaletteFilter));
+
 		ImGui::Separator();
+
+		// ── Atalhos do topo ──────────────────────────────────────────────────
+		//
+		// Colar so aparece quando ha algo no clipboard: um item permanentemente
+		// cinza vira ruido. E some quando ha busca ativa — quem digitou esta
+		// procurando um no, e um "Paste" no meio do resultado nao pertence ali.
+		// Mesma regra do Control Rig.
+		if (!m_Clipboard.Nodes.empty() && m_PaletteFilter[0] == 0)
+		{
+			if (ImGui::MenuItem("Paste", "Ctrl+V"))
+				PasteClipboard(&m_MenuOpenCanvasPos);
+
+			ImGui::Separator();
+		}
 
 		struct Entry { const char* Label; const char* Type; };
 
-		// Agrupado por FUNCAO, e nao alfabeticamente: quem procura "como misturo
-		// duas animacoes" procura em Blend, nao em B.
 		static const Entry kSources[] = {
 			{ "Clip Player",        "ClipPlayer" },
 			{ "Blend Space Player", "BlendSpacePlayer" },
@@ -1285,56 +2098,156 @@ namespace axe
 			{ "Apply Additive",         "ApplyAdditive" },
 		};
 
-		static const Entry kValues[] = {
-			{ "Get Float (parametro)", "GetFloat" },
-			{ "Get Bool (parametro)",  "GetBool" },
-		};
-
 		static const Entry kPostProcess[] = {
-			{ "Foot IK",     "FootIK" },
 			{ "Control Rig", "ControlRig" },
 		};
 
-		auto emit = [&](const Entry* list, int count)
+		static const Entry kLogic[] = {
+			{ "Not",            "Not" },
+			{ "And / Or / Xor", "BoolOp" },
+			{ "Compare Float",  "CompareFloat" },
+			{ "Select Float",   "SelectFloat" },
+			{ "Float Math",     "FloatMath" },
+		};
+
+		static const Entry kOrganize[] = {
+			{ "Reroute", "Reroute" },
+		};
+
+		// Criar e DESENHAR separados: o desenho mora no laco das categorias
+		// (que precisa filtrar), e aqui fica so o que acontece no clique.
+		auto spawn = [&](const char* type)
 			{
-				for (int i = 0; i < count; ++i)
-				{
-					if (!ImGui::MenuItem(list[i].Label))
-						continue;
+				auto node = CreateAnimNode(type);
 
-					auto node = CreateAnimNode(list[i].Type);
+				if (!node)
+					return;
 
-					if (!node)
-						continue;
+				// AG3b — a posicao do CLIQUE DIREITO, gravada quando o menu
+				// abriu. Reler o mouse aqui pegaria a posicao sobre o ITEM DE
+				// MENU, que com a paleta alta fica bem longe do ponto pedido.
+				const ImVec2 canvas = m_MenuOpenCanvasPos;
 
-					node->Title = list[i].Label;
+				node->Title = type;
+				node->EditorX = canvas.x;
+				node->EditorY = canvas.y;
 
-					const ImVec2 mouse = ImGui::GetMousePos();
-					const ImVec2 canvas = ed::ScreenToCanvas(mouse);
-					node->EditorX = canvas.x;
-					node->EditorY = canvas.y;
+				const int id = graph.AddNode(std::move(node));
 
-					const int id = graph.AddNode(std::move(node));
+				// Posiciona SO o no novo. Mexer na flag global de posicoes
+				// reposicionaria todos e desfaria o arranjo ja montado.
+				ed::SetNodePosition(id, canvas);
 
-					ed::SetNodePosition(id, canvas);
-					MarkEdited();
-				}
+				m_SelectedNode = id;
+				MarkEdited("Add node");
+
+				m_PaletteFilter[0] = 0;
 			};
 
-		ImGui::TextDisabled("Fontes de pose");
-		emit(kSources, 3);
+		struct Cat
+		{
+			const char* Name;
+			const Entry* Items;
+			int          Count;
+			ImVec4       Color;
+		};
 
-		ImGui::Separator();
-		ImGui::TextDisabled("Blends");
-		emit(kBlends, 4);
+		// As cores ecoam a faixa do NO no canvas (ver StyleFor): a categoria de
+		// onde voce tirou o no e a cor que ele tem na tela.
+		//
+		// IM_ARRAYSIZE e nao um numero digitado — a contagem a mao ja escondeu
+		// uma entrada de menu neste projeto.
+		const Cat kCats[] =
+		{
+			{ "Pose sources",  kSources,     IM_ARRAYSIZE(kSources),     ImVec4(0.18f, 0.42f, 0.60f, 1.0f) },
+			{ "Blends",          kBlends,      IM_ARRAYSIZE(kBlends),      ImVec4(0.50f, 0.32f, 0.42f, 1.0f) },
+			{ "Post-processing", kPostProcess, IM_ARRAYSIZE(kPostProcess), ImVec4(0.42f, 0.28f, 0.62f, 1.0f) },
+			{ "Logic",          kLogic,       IM_ARRAYSIZE(kLogic),       ImVec4(0.58f, 0.44f, 0.16f, 1.0f) },
+			{ "Organize",     kOrganize,    IM_ARRAYSIZE(kOrganize),    ImVec4(0.45f, 0.42f, 0.30f, 1.0f) },
+		};
 
-		ImGui::Separator();
-		ImGui::TextDisabled("Pos-processamento");
-		emit(kPostProcess, 2);
+		static_assert(IM_ARRAYSIZE(kCats) <= 8,
+			"m_PaletteOpen tem 8 posicoes; aumente o array se acrescentar categorias.");
 
-		ImGui::Separator();
-		ImGui::TextDisabled("Variaveis");
-		emit(kValues, 2);
+		// Busca em minusculas dos dois lados. Sem isto "clip" nao acharia
+		// "Clip Player" — e ninguem digita com a caixa certa.
+		std::string needle = m_PaletteFilter;
+		std::transform(needle.begin(), needle.end(), needle.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+
+		const bool filtering = !needle.empty();
+
+		const auto matches = [&](const char* label)
+			{
+				if (!filtering)
+					return true;
+
+				std::string low = label;
+				std::transform(low.begin(), low.end(), low.begin(),
+					[](unsigned char c) { return (char)std::tolower(c); });
+
+				return low.find(needle) != std::string::npos;
+			};
+
+		int shown = 0;
+
+		for (int ci = 0; ci < IM_ARRAYSIZE(kCats); ++ci)
+		{
+			const Cat& cat = kCats[ci];
+
+			// Categoria sem nenhum item que case some inteira — filtrar e
+			// mostrar cinco cabecalhos vazios nao ajuda ninguem.
+			int hits = 0;
+
+			for (int i = 0; i < cat.Count; ++i)
+				if (matches(cat.Items[i].Label))
+					++hits;
+
+			if (!hits)
+				continue;
+
+			shown += hits;
+
+			ImGui::PushStyleColor(ImGuiCol_Header, cat.Color);
+			ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+				ImVec4(cat.Color.x * 1.35f, cat.Color.y * 1.35f, cat.Color.z * 1.35f, 1.0f));
+
+			// Filtrando, tudo abre: voce buscou para ver o resultado, nao para
+			// abrir categoria por categoria.
+			const bool open = filtering
+				|| ImGui::CollapsingHeader(cat.Name,
+					m_PaletteOpen[ci] ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+
+			// So memoriza quando NAO esta filtrando — senao a busca deixaria
+			// todas as categorias abertas para sempre.
+			if (!filtering)
+				m_PaletteOpen[ci] = open;
+
+			ImGui::PopStyleColor(2);
+
+			if (!open)
+				continue;
+
+			ImGui::Indent(8.0f);
+
+			for (int i = 0; i < cat.Count; ++i)
+			{
+				if (!matches(cat.Items[i].Label))
+					continue;
+
+				ImGui::PushStyleColor(ImGuiCol_Text, cat.Color);
+				const bool clicked = ImGui::MenuItem(cat.Items[i].Label);
+				ImGui::PopStyleColor();
+
+				if (clicked)
+					spawn(cat.Items[i].Type);
+			}
+
+			ImGui::Unindent(8.0f);
+		}
+
+		if (!shown)
+			ImGui::TextDisabled("No node matching \"%s\".", m_PaletteFilter);
 	}
 
 
@@ -2006,10 +2919,10 @@ namespace axe
 
 				if (t >= 0 && t < (int)sm.Transitions.size())
 				{
-					if (ImGui::MenuItem("Editar regra"))
+					if (ImGui::MenuItem("Edit rule"))
 						pendingRuleNav = t;
 
-					if (ImGui::MenuItem("Excluir transicao"))
+					if (ImGui::MenuItem("Delete transition"))
 					{
 						sm.Transitions.erase(sm.Transitions.begin() + t);
 						m_SelectedTransition = -1;
@@ -2019,7 +2932,7 @@ namespace axe
 			}
 			else if (id == kAnyStateNode)               // ── Any State
 			{
-				if (ImGui::BeginMenu("Criar transicao para"))
+				if (ImGui::BeginMenu("Create transition to"))
 				{
 					for (std::size_t j = 0; j < sm.States.size(); ++j)
 					{
@@ -2046,7 +2959,7 @@ namespace axe
 
 				if (i >= 0 && i < (int)sm.States.size())
 				{
-					if (ImGui::BeginMenu("Criar transicao para"))
+					if (ImGui::BeginMenu("Create transition to"))
 					{
 						for (std::size_t j = 0; j < sm.States.size(); ++j)
 						{
@@ -2070,7 +2983,7 @@ namespace axe
 						ImGui::EndMenu();
 					}
 
-					if (sm.EntryState != i && ImGui::MenuItem("Tornar estado de entrada"))
+					if (sm.EntryState != i && ImGui::MenuItem("Make entry state"))
 					{
 						sm.EntryState = i;
 						MarkEdited();
@@ -2078,7 +2991,7 @@ namespace axe
 
 					ImGui::Separator();
 
-					if (ImGui::MenuItem("Abrir sub-grafo"))
+					if (ImGui::MenuItem("Open sub-graph"))
 						pendingStateNav = i;
 				}
 			}
@@ -2102,15 +3015,15 @@ namespace axe
 					m_ShowAnyState = !anyVisible;
 
 				if (anyLocked && ImGui::IsItemHovered())
-					ImGui::SetTooltip("Ha transicoes partindo do Any State.\nApague-as para poder esconde-lo.");
+					ImGui::SetTooltip("There are transitions leaving Any State.\nDelete them before hiding it.");
 
 				ImGui::Separator();
 			}
 
-			if (ImGui::MenuItem("Novo Estado"))
+			if (ImGui::MenuItem("New State"))
 			{
 				AnimSmState st;
-				st.Name = "Estado " + std::to_string(sm.States.size());
+				st.Name = "State " + std::to_string(sm.States.size());
 
 				// Nasce onde o mouse ABRIU o menu — que e onde voce esta
 				// olhando. (GetMousePos na hora do clique ja se moveu pro
@@ -2192,9 +3105,17 @@ namespace axe
 		}
 
 		// Grava as posicoes TODO frame — barato, e um arrasto nunca se perde.
+		//
+		// AG3b — mesma guarda de FLT_MAX do grafo de poses. O estado criado
+		// pelo menu "add_state" so e desenhado no frame seguinte, e ate la
+		// GetNodePosition devolve FLT_MAX. Sem a guarda, era esse valor que ia
+		// para o .axeanim.
 		for (std::size_t i = 0; i < sm.States.size(); ++i)
 		{
 			const ImVec2 pos = ed::GetNodePosition(StateNode((int)i));
+
+			if (pos.x >= FLT_MAX * 0.5f || pos.y >= FLT_MAX * 0.5f)
+				continue;
 
 			if (pos.x != sm.States[i].EditorX || pos.y != sm.States[i].EditorY)
 			{
@@ -2208,7 +3129,8 @@ namespace axe
 		if (pendingStateNav >= 0 && pendingStateNav < (int)sm.States.size())
 		{
 			ed::SetCurrentEditor(nullptr);
-			NavigateTo({ sm.States[pendingStateNav].Name, &sm.States[pendingStateNav].Graph, nullptr });
+			NavigateTo({ sm.States[pendingStateNav].Name, &sm.States[pendingStateNav].Graph, nullptr,
+				-1, -1, pendingStateNav });
 			return;
 		}
 
@@ -2223,7 +3145,8 @@ namespace axe
 				? sm.States[tr.To].Name : "?";
 
 			ed::SetCurrentEditor(nullptr);
-			NavigateTo({ fromName + " -> " + toName + " (regra)", nullptr, &sm, pendingRuleNav });
+			NavigateTo({ fromName + " -> " + toName + " (rule)", nullptr, &sm, pendingRuleNav,
+				m_Nav.back().SmNodeId });
 			return;
 		}
 
@@ -2274,7 +3197,7 @@ namespace axe
 
 		ImDrawList* dl = ImGui::GetWindowDrawList();
 
-		static const char* kOpLabels[] = { ">", ">=", "<", "<=", "==", "!=", "e true", "e false", "disparou" };
+		static const char* kOpLabels[] = { ">", ">=", "<", "<=", "==", "!=", "is true", "is false", "disparou" };
 
 		// ── Result ───────────────────────────────────────────────────────────
 		{
@@ -2305,7 +3228,7 @@ namespace axe
 		for (std::size_t c = 0; c < tr.Conditions.size(); ++c)
 		{
 			const auto& cond = tr.Conditions[c];
-			const char* pname = cond.Parameter.empty() ? "(parametro?)" : cond.Parameter.c_str();
+			const char* pname = cond.Parameter.empty() ? "(parameter?)" : cond.Parameter.c_str();
 			const int   op = (int)cond.Op;
 
 			if (cond.Op <= AnimCompare::NotEqual)
@@ -2318,9 +3241,9 @@ namespace axe
 
 			ed::BeginNode(CondNode((int)c));
 
-			const float w = NodeWidthFor("Condicao", buf);
+			const float w = NodeWidthFor("Condition", buf);
 
-			DrawNodeHeader("Condicao", nullptr, ImVec4(0.50f, 0.18f, 0.18f, 1.0f), w);
+			DrawNodeHeader("Condition", nullptr, ImVec4(0.50f, 0.18f, 0.18f, 1.0f), w);
 
 			const ImVec2 bodyStart = ImGui::GetCursorScreenPos();
 
@@ -2342,7 +3265,7 @@ namespace axe
 		// ── Exit Time (informativo — edita no Detalhes) ──────────────────────
 		if (tr.HasExitTime)
 		{
-			std::snprintf(buf, sizeof(buf), "apos %.2f do ciclo", tr.ExitTime);
+			std::snprintf(buf, sizeof(buf), "after %.2f of the cycle", tr.ExitTime);
 
 			ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.085f, 0.085f, 0.095f, 0.96f));
 			ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
@@ -2473,7 +3396,7 @@ namespace axe
 			{
 				const int c = id - 0x61000;
 
-				if (c < (int)tr.Conditions.size() && ImGui::MenuItem("Excluir condicao"))
+				if (c < (int)tr.Conditions.size() && ImGui::MenuItem("Delete condition"))
 				{
 					tr.Conditions.erase(tr.Conditions.begin() + c);
 					m_SelectedCondition = -1;
@@ -2487,7 +3410,7 @@ namespace axe
 
 		if (ImGui::BeginPopup("rule_bg_ctx"))
 		{
-			if (ImGui::MenuItem("+ Condicao"))
+			if (ImGui::MenuItem("+ Condition"))
 			{
 				AnimCondition c;
 
@@ -2546,15 +3469,15 @@ namespace axe
 				}
 			}
 
-			ImGui::TextDisabled("Selecione um no.");
+			ImGui::TextDisabled("Select a node.");
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::TextWrapped(
-				"Este e um GRAFO DE POSES. Os links carregam poses (branco) ou "
-				"valores (verde/vermelho).\n\n"
-				"A maquina de estados e um NO aqui dentro - de duplo-clique nela "
-				"para editar os estados.\n\n"
-				"E o que permitira, depois, plugar um Two Bone IK entre ela e o "
+				"This is a POSE GRAPH. Links carry poses (white) or "
+				"values (green/red).\n\n"
+				"The state machine is a NODE in here - double-click it "
+				"to edit its states.\n\n"
+				"It is what will later let you plug a Two Bone IK between it and the "
 				"Output.");
 			return;
 		}
@@ -2573,7 +3496,7 @@ namespace axe
 
 			if (m_SelectedCondition >= 0 && m_SelectedCondition < (int)tr.Conditions.size())
 			{
-				ImGui::TextUnformatted("Condicao");
+				ImGui::TextUnformatted("Condition");
 				ImGui::Separator();
 
 				int removeCond = -1;
@@ -2582,7 +3505,7 @@ namespace axe
 
 				ImGui::Spacing();
 
-				if (ImGui::Button("Excluir condicao", ImVec2(-1, 0)))
+				if (ImGui::Button("Delete condition", ImVec2(-1, 0)))
 					removeCond = m_SelectedCondition;
 
 				if (removeCond >= 0)
@@ -2614,18 +3537,18 @@ namespace axe
 				return;
 			}
 
-			ImGui::TextDisabled("Selecione um estado ou uma transicao.");
+			ImGui::TextDisabled("Select a state or a transition.");
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::TextWrapped(
-				"Estado = o que toca. Cada um contem um SUB-GRAFO de poses "
-				"(duplo-clique para abrir).\n\n"
-				"Transicao = quando trocar. Arraste da BORDA de um estado ate "
-				"outro para criar; o circulo no meio da seta E a transicao "
-				"(clique seleciona, duplo-clique abre a REGRA da condicao).\n\n"
-				"Locomocao inteira cabe em UM estado com um Blend Space. Nao faca "
-				"idle/walk/run como tres estados - as transicoes entre eles dao pop "
-				"no meio de uma aceleracao.");
+				"State = what plays. Each holds a pose SUB-GRAPH "
+				"(double-click to open).\n\n"
+				"Transition = when to switch. Drag from a state's EDGE to "
+				"another to create it; the circle mid-arrow IS the transition "
+				"(click selects, double-click opens the condition's RULE).\n\n"
+				"A whole locomotion fits in ONE state with a Blend Space. Do not make "
+				"idle/walk/run as three states - the transitions between them pop "
+				"in the middle of an acceleration.");
 		}
 	}
 
@@ -2637,7 +3560,7 @@ namespace axe
 		char title[64];
 		std::snprintf(title, sizeof(title), "%s", node.Title.c_str());
 
-		if (ImGui::InputText("Titulo", title, sizeof(title)))
+		if (ImGui::InputText("Title", title, sizeof(title)))
 		{
 			node.Title = title;
 			MarkEdited();
@@ -2648,11 +3571,11 @@ namespace axe
 		// ── Clip Player ──────────────────────────────────────────────────────
 		if (auto* cp = dynamic_cast<AnimNode_ClipPlayer*>(&node))
 		{
-			const char* cur = cp->ClipName.empty() ? "(nenhum)" : cp->ClipName.c_str();
+			const char* cur = cp->ClipName.empty() ? "(none)" : cp->ClipName.c_str();
 
-			if (ImGui::BeginCombo("Clipe", cur))
+			if (ImGui::BeginCombo("Clip", cur))
 			{
-				if (ImGui::Selectable("(nenhum)", cp->ClipName.empty()))
+				if (ImGui::Selectable("(none)", cp->ClipName.empty()))
 				{
 					cp->ClipName.clear();
 					cp->Clip.reset();
@@ -2687,9 +3610,9 @@ namespace axe
 			}
 
 			if (!m_Skeleton)
-				ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Sem esqueleto - nao ha clipes.");
+				ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "No skeleton - no clips.");
 
-			if (ImGui::DragFloat("Velocidade", &cp->PlayRate, 0.05f, -3.0f, 3.0f, "%.2fx")) MarkEdited();
+			if (ImGui::DragFloat("Speed", &cp->PlayRate, 0.05f, -3.0f, 3.0f, "%.2fx")) MarkEdited();
 			if (ImGui::Checkbox("Loop", &cp->Loop)) MarkEdited();
 			return;
 		}
@@ -2697,14 +3620,14 @@ namespace axe
 		// ── Blend Space Player ───────────────────────────────────────────────
 		if (auto* bs = dynamic_cast<AnimNode_BlendSpacePlayer*>(&node))
 		{
-			ImGui::TextWrapped("Locomocao inteira em um no. O valor vem do pino "
-				"'Speed' - ligue um no de variavel nele.");
+			ImGui::TextWrapped("A whole locomotion in one node. The value comes from the pin "
+				"'Speed' - wire a variable node into it.");
 			ImGui::Spacing();
 
-			if (ImGui::DragFloat("Velocidade", &bs->PlayRate, 0.05f, 0.0f, 3.0f, "%.2fx")) MarkEdited();
+			if (ImGui::DragFloat("Speed", &bs->PlayRate, 0.05f, 0.0f, 3.0f, "%.2fx")) MarkEdited();
 
 			ImGui::Separator();
-			ImGui::TextDisabled("Amostras");
+			ImGui::TextDisabled("Samples");
 
 			int removeIdx = -1;
 
@@ -2730,7 +3653,7 @@ namespace axe
 				MarkEdited();
 			}
 
-			if (m_Skeleton && ImGui::BeginCombo("+ amostra", "adicionar..."))
+			if (m_Skeleton && ImGui::BeginCombo("+ sample", "add..."))
 			{
 				std::set<std::string> seen;
 
@@ -2750,7 +3673,7 @@ namespace axe
 			}
 
 			ImGui::Spacing();
-			ImGui::TextDisabled("Ex: idle=0, walk=150, run=400");
+			ImGui::TextDisabled("e.g. idle=0, walk=150, run=400");
 			return;
 		}
 
@@ -2761,7 +3684,7 @@ namespace axe
 			//
 			// Um nome digitado errado le 0 e nunca dispara nada — sem erro, sem
 			// aviso. E o bug mais frustrante de um AnimGraph.
-			if (ImGui::BeginCombo("Parametro", gf->Parameter.c_str()))
+			if (ImGui::BeginCombo("Parameter", gf->Parameter.c_str()))
 			{
 				for (const auto& p : m_Asset->GetParameters())
 				{
@@ -2783,7 +3706,7 @@ namespace axe
 
 		if (auto* gb = dynamic_cast<AnimNode_GetBool*>(&node))
 		{
-			if (ImGui::BeginCombo("Parametro", gb->Parameter.c_str()))
+			if (ImGui::BeginCombo("Parameter", gb->Parameter.c_str()))
 			{
 				for (const auto& p : m_Asset->GetParameters())
 				{
@@ -2817,21 +3740,21 @@ namespace axe
 			if (ImGui::DragFloat("Blend Time", &bb->BlendTime, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
 
 			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("0 = corte seco. Um bool que faz a pose saltar e o\n"
-					"defeito mais comum em rig de arma/agachamento.");
+				ImGui::SetTooltip("0 = hard cut. A bool that makes the pose jump is the\n"
+					"the most common flaw in weapon/crouch rigs.");
 			return;
 		}
 
 		if (auto* lb = dynamic_cast<AnimNode_LayeredBlend*>(&node))
 		{
-			ImGui::TextWrapped("Corre com as pernas E atira com os bracos. A mascara "
-				"vem do osso raiz para baixo na hierarquia.");
+			ImGui::TextWrapped("Runs with the legs AND shoots with the arms. The mask "
+				"runs from the root bone down the hierarchy.");
 			ImGui::Spacing();
 
 			char bone[64];
 			std::snprintf(bone, sizeof(bone), "%s", lb->RootBone.c_str());
 
-			if (ImGui::InputText("Osso raiz", bone, sizeof(bone)))
+			if (ImGui::InputText("Root bone", bone, sizeof(bone)))
 			{
 				lb->RootBone = bone;
 				lb->Reset();       // forca reconstruir a mascara
@@ -2845,12 +3768,12 @@ namespace axe
 			}
 
 			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Suaviza a fronteira ao longo de N ossos.\n"
-					"Sem feather, a juncao vira uma dobra rigida no meio das costas.");
+				ImGui::SetTooltip("Smooths the boundary across N bones.\n"
+					"Without feather, the seam becomes a hard crease mid-back.");
 
 			// A lista de ossos do personagem, pra nao ter que digitar de cabeca.
 			if (m_Skeleton && m_Skeleton->GetSkeleton() &&
-				ImGui::BeginCombo("Escolher osso", "..."))
+				ImGui::BeginCombo("Pick bone", "..."))
 			{
 				const auto& bones = m_Skeleton->GetSkeleton()->GetBones();
 
@@ -2871,25 +3794,25 @@ namespace axe
 
 		if (auto* cr = dynamic_cast<AnimNode_ControlRig*>(&node))
 		{
-			ImGui::TextWrapped("Roda um Control Rig (.axerig) POR CIMA da pose que chega. "
-				"O Forwards Solve do rig processa os ossos (Foot IK, look-at, "
-				"correcoes procedurais) e a pose corrigida segue no grafo.");
+			ImGui::TextWrapped("Runs a Control Rig (.axerig) ON TOP of the incoming pose. "
+				"The rig's Forwards Solve processes the bones (foot IK, look-at, "
+				"procedural fixes) and the corrected pose continues down the graph.");
 			ImGui::Spacing();
 
 			// Nome do rig escolhido (UUID -> nome legivel) pro combo.
-			std::string current = "(nenhum)";
+			std::string current = "(none)";
 			if (!cr->RigUUID.empty())
 			{
 				if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(cr->RigUUID))
 					current = rec->Name.empty() ? rec->FilePath.stem().string() : rec->Name;
 				else
-					current = "(faltando)";
+					current = "(missing)";
 			}
 
 			if (ImGui::BeginCombo("Control Rig", current.c_str()))
 			{
-				// "(nenhum)" desliga o no — a pose passa intacta.
-				if (ImGui::Selectable("(nenhum)", cr->RigUUID.empty()))
+				// "(none)" desliga o no — a pose passa intacta.
+				if (ImGui::Selectable("(none)", cr->RigUUID.empty()))
 				{
 					cr->RigUUID.clear();
 					cr->ResolveRig(m_Skeleton ? m_Skeleton->GetSkeleton().get() : nullptr, "editor");
@@ -2920,138 +3843,137 @@ namespace axe
 			}
 
 			if (cr->RigUUID.empty())
-				ImGui::TextDisabled("Escolha um .axerig pra este no fazer algo.");
+				ImGui::TextDisabled("Pick an .axerig for this node to do anything.");
 			else if (!cr->RigAsset)
 				ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-					"O rig nao carregou. Salve/reabra o grafo ou confira o arquivo.");
+					"The rig did not load. Save/reopen the graph or check the file.");
 
 			ImGui::Spacing();
-			ImGui::TextDisabled("O pino Alpha controla a intensidade (0..1).");
-			return;
-		}
-
-		if (auto* ik = dynamic_cast<AnimNode_FootIK*>(&node))
-		{
-			ImGui::TextWrapped("Cola os pes no chao (rampas, degraus). Faz raycast "
-				"pra baixo em cada pe e dobra o joelho pra alcancar.");
-			ImGui::Spacing();
-
-			// Lista de ossos do esqueleto pros combos.
-			const Skeleton* sk = m_Skeleton ? m_Skeleton->GetSkeleton().get() : nullptr;
-
-			auto boneCombo = [&](const char* label, std::string& value)
-				{
-					if (!sk)
-					{
-						// Sem esqueleto: campo de texto puro (ainda editavel).
-						char buf[64];
-						std::snprintf(buf, sizeof(buf), "%s", value.c_str());
-						if (ImGui::InputText(label, buf, sizeof(buf))) { value = buf; MarkEdited(); }
-						return;
-					}
-
-					if (ImGui::BeginCombo(label, value.empty() ? "(escolher)" : value.c_str()))
-					{
-						for (const auto& b : sk->GetBones())
-							if (ImGui::Selectable(b.Name.c_str(), b.Name == value))
-							{
-								value = b.Name;
-								MarkEdited();
-							}
-
-						ImGui::EndCombo();
-					}
-				};
-
-			int removeLeg = -1;
-
-			for (std::size_t i = 0; i < ik->Legs.size(); ++i)
-			{
-				ImGui::PushID((int)i);
-				ImGui::Separator();
-
-				ImGui::Text("Perna %d", (int)i + 1);
-				ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
-				if (ImGui::SmallButton("x")) removeLeg = (int)i;
-
-				boneCombo("Coxa", ik->Legs[i].Upper);
-				boneCombo("Canela", ik->Legs[i].Lower);
-				boneCombo("Pe", ik->Legs[i].Foot);
-
-				ImGui::PopID();
-			}
-
-			if (removeLeg >= 0)
-			{
-				ik->Legs.erase(ik->Legs.begin() + removeLeg);
-				MarkEdited();
-			}
-
-			ImGui::Spacing();
-
-			if (ImGui::Button("+ Perna", ImVec2(-1, 0)))
-			{
-				ik->Legs.push_back({});
-				MarkEdited();
-			}
-
-			ImGui::Separator();
-			ImGui::TextDisabled("Parametros");
-
-			if (ImGui::DragFloat("Alcance max", &ik->MaxReach, 0.01f, 0.05f, 2.0f, "%.2fm")) MarkEdited();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Quanto o pe pode subir/descer do plano da animacao.\n"
-					"Passou disso, o no desiste do pe (buraco, parede).");
-
-			if (ImGui::DragFloat("Trim vertical", &ik->FootHeight, 0.005f, -0.1f, 0.2f, "%.3fm")) MarkEdited();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Ajuste fino somado a TODO pe. 0 = a sola encosta\nonde a animacao a poe. Positivo levanta.");
-
-			if (ImGui::DragFloat("Suavizacao", &ik->Smoothing, 0.5f, 0.0f, 40.0f, "%.0f/s")) MarkEdited();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Persegue o alvo em vez de saltar nele.\n"
-					"Menor = mais macio e mais atrasado. 0 = sem suavizacao.");
-
-			if (ImGui::Checkbox("Abaixar quadril (pelvis dip)", &ik->DipPelvis)) MarkEdited();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Desce o quadril quando um pe nao alcanca.\n"
-					"Sem isso, a perna estica reto e o corpo parece puxado pra cima.");
-
-			if (ik->DipPelvis)
-				boneCombo("Osso do quadril", ik->PelvisBone);
-
-			ImGui::Spacing();
-			ImGui::TextDisabled("O pino Alpha controla a intensidade (0..1).");
+			ImGui::TextDisabled("The Alpha pin controls the intensity (0..1).");
 			return;
 		}
 
 		if (dynamic_cast<AnimNode_StateMachine*>(&node))
 		{
-			ImGui::TextWrapped("Duplo-clique no no para editar os estados.");
+			ImGui::TextWrapped("Double-click the node to edit its states.");
 			return;
 		}
 
 		if (dynamic_cast<AnimNode_Output*>(&node))
 		{
-			ImGui::TextWrapped("A pose final do personagem. Tudo que chega aqui e "
-				"o que vai pro skin cache.");
+			ImGui::TextWrapped("The character's final pose. Whatever reaches here is "
+				"what goes to the skin cache.");
 			return;
 		}
 
-		ImGui::TextDisabled("(sem parametros)");
+		// ── Nos logicos (AG4) ────────────────────────────────────────────────
+		if (auto* bo = dynamic_cast<AnimNode_BoolOp*>(&node))
+		{
+			static const char* kOps[] = { "AND", "OR", "XOR" };
+			int op = (int)bo->Operation;
+
+			if (ImGui::Combo("Operation", &op, kOps, (int)std::size(kOps)))
+			{
+				bo->Operation = (AnimNode_BoolOp::Op)op;
+				MarkEdited("Change operator");
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("AND: both. OR: either. XOR: exactly one.");
+			return;
+		}
+
+		if (auto* cf = dynamic_cast<AnimNode_CompareFloat*>(&node))
+		{
+			static const char* kOps[] = { "A > B", "A < B", "A >= B", "A <= B",
+										  "A == B", "A != B" };
+			int op = (int)cf->Operation;
+
+			if (ImGui::Combo("Comparison", &op, kOps, (int)std::size(kOps)))
+			{
+				cf->Operation = (AnimNode_CompareFloat::Op)op;
+				MarkEdited("Change comparison");
+			}
+
+			// A tolerancia so significa alguma coisa nos dois operadores de
+			// igualdade; mostrar sempre sugeriria que ela afeta o "maior que".
+			const bool usesTol = (cf->Operation == AnimNode_CompareFloat::Op::Equal
+				|| cf->Operation == AnimNode_CompareFloat::Op::NotEqual);
+
+			if (usesTol)
+			{
+				if (ImGui::DragFloat("Tolerance", &cf->Tolerance, 0.001f, 0.0f, 1.0f, "%.4f"))
+					MarkEdited("Change tolerance");
+
+				ImGui::TextDisabled("Exact float comparison almost never works:\n"
+					"a value that 'should' be 1.0 is usually 0.99999994.");
+			}
+
+			return;
+		}
+
+		if (auto* sf = dynamic_cast<AnimNode_SelectFloat*>(&node))
+		{
+			if (ImGui::DragFloat("Blend (s)", &sf->BlendTime, 0.01f, 0.0f, 2.0f, "%.2f"))
+				MarkEdited("Change blend time");
+
+			ImGui::Spacing();
+			ImGui::TextWrapped("Picks between the two values based on the condition. "
+				"The blend avoids the snap of switching in a single frame; "
+				"zero switches instantly.");
+			return;
+		}
+
+		if (auto* fm = dynamic_cast<AnimNode_FloatMath*>(&node))
+		{
+			static const char* kOps[] = { "A + B", "A - B", "A * B", "A / B",
+										  "Min(A, B)", "Max(A, B)" };
+			int op = (int)fm->Operation;
+
+			if (ImGui::Combo("Operation", &op, kOps, (int)std::size(kOps)))
+			{
+				fm->Operation = (AnimNode_FloatMath::Op)op;
+				MarkEdited("Change operator");
+			}
+
+			if (fm->Operation == AnimNode_FloatMath::Op::Divide)
+				ImGui::TextDisabled("B equal to zero returns A, not infinity.");
+
+			return;
+		}
+
+		if (dynamic_cast<AnimNode_Not*>(&node))
+		{
+			ImGui::TextWrapped("Inverts the incoming boolean.");
+			return;
+		}
+
+		// AG3 — o reroute cairia no "(no parameters)" generico, que e tecnicamente
+		// verdade e praticamente inutil: quem clica num pontinho quer saber o que
+		// aquilo e.
+		if (dynamic_cast<AnimNode_Reroute*>(&node))
+		{
+			ImGui::TextWrapped("A node on the wire. The pose goes in and comes out unchanged — it only serves "
+				"to bend the path and straighten out the graph.");
+			ImGui::Spacing();
+			ImGui::TextDisabled("Delete removes the point; the wires on both sides detach.");
+			return;
+		}
+
+		ImGui::TextDisabled("(no parameters)");
 	}
 
 	void AnimGraphWindow::DrawStateDetails(AnimNode_StateMachine& sm, int index)
 	{
 		auto& st = sm.States[index];
 
-		ImGui::TextUnformatted("Estado");
+		ImGui::TextUnformatted("State");
 		ImGui::Separator();
 
 		char name[64];
 		std::snprintf(name, sizeof(name), "%s", st.Name.c_str());
 
-		if (ImGui::InputText("Nome", name, sizeof(name)))
+		if (ImGui::InputText("Name", name, sizeof(name)))
 		{
 			st.Name = name;
 			MarkEdited();
@@ -3059,9 +3981,9 @@ namespace axe
 
 		if (sm.EntryState == index)
 		{
-			ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "Estado de ENTRADA");
+			ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "ENTRY state");
 		}
-		else if (ImGui::Button("Tornar estado de entrada", ImVec2(-1, 0)))
+		else if (ImGui::Button("Make entry state", ImVec2(-1, 0)))
 		{
 			sm.EntryState = index;
 			MarkEdited();
@@ -3069,11 +3991,11 @@ namespace axe
 
 		ImGui::Spacing();
 		ImGui::Separator();
-		ImGui::TextWrapped("O que este estado TOCA vive no sub-grafo dele. "
-			"De duplo-clique no no para abrir.");
+		ImGui::TextWrapped("What this state PLAYS lives in its sub-graph. "
+			"Double-click the node to open it.");
 
-		if (ImGui::Button("Abrir sub-grafo", ImVec2(-1, 0)))
-			NavigateTo({ st.Name, &st.Graph, nullptr });
+		if (ImGui::Button("Open sub-graph", ImVec2(-1, 0)))
+			NavigateTo({ st.Name, &st.Graph, nullptr, -1, -1, index });
 	}
 
 	// Uma linha do editor de condicoes: [parametro] [operador] [valor] [x].
@@ -3113,7 +4035,7 @@ namespace axe
 
 		ImGui::SameLine();
 
-		const char* ops[] = { ">", ">=", "<", "<=", "==", "!=", "e true", "e false", "disparou" };
+		const char* ops[] = { ">", ">=", "<", "<=", "==", "!=", "is true", "is false", "disparou" };
 		int op = (int)cond.Op;
 
 		ImGui::SetNextItemWidth(78.0f);
@@ -3136,7 +4058,7 @@ namespace axe
 	{
 		auto& tr = sm.Transitions[index];
 
-		ImGui::TextUnformatted("Transicao");
+		ImGui::TextUnformatted("Transition");
 		ImGui::Separator();
 
 		const char* fromName = (tr.From < 0) ? "Any State"
@@ -3150,22 +4072,22 @@ namespace axe
 		// Botao pra ENTRAR na regra (so quando ainda nao estamos nela — senao
 		// empilharia um segundo nivel de regra identico).
 		if (m_Nav.back().TransIndex < 0 &&
-			ImGui::Button("Abrir grafo da regra", ImVec2(-1, 0)))
+			ImGui::Button("Open rule graph", ImVec2(-1, 0)))
 		{
 			ed::SetCurrentEditor(nullptr);
-			NavigateTo({ std::string(fromName) + " -> " + toName + " (regra)",
-				nullptr, &sm, index });
+			NavigateTo({ std::string(fromName) + " -> " + toName + " (rule)",
+				nullptr, &sm, index, m_Nav.back().SmNodeId });
 			return;
 		}
 
 		ImGui::Spacing();
 
-		if (ImGui::DragFloat("Duracao", &tr.Duration, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Crossfade. 0 = corte seco.");
+		if (ImGui::DragFloat("Duration", &tr.Duration, 0.01f, 0.0f, 2.0f, "%.2fs")) MarkEdited();
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Crossfade. 0 = hard cut.");
 
-		if (ImGui::DragInt("Prioridade", &tr.Priority, 0.1f, 0, 100)) MarkEdited();
+		if (ImGui::DragInt("Priority", &tr.Priority, 0.1f, 0, 100)) MarkEdited();
 		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Se duas transicoes valem no mesmo frame,\na de maior prioridade vence.");
+			ImGui::SetTooltip("If two transitions hold on the same frame,\nthe higher priority wins.");
 
 		ImGui::Spacing();
 
@@ -3174,35 +4096,35 @@ namespace axe
 		if (ImGui::IsItemHovered())
 		{
 			ImGui::SetTooltip(
-				"So permite a transicao depois que o estado completou X do ciclo.\n\n"
-				"E o que impede um ataque de ser cortado no primeiro frame: sem\n"
-				"isto, 'attack -> idle quando parado' dispara imediatamente e o\n"
-				"golpe nunca sai.");
+				"Only allows the transition after the state completed X of its cycle.\n\n"
+				"It is what keeps an attack from being cut on frame one: without\n"
+				"that, 'attack -> idle when still' fires immediately and\n"
+				"the strike never lands.");
 		}
 
 		if (tr.HasExitTime)
 		{
-			if (ImGui::SliderFloat("##exit", &tr.ExitTime, 0.0f, 1.0f, "%.2f do ciclo")) MarkEdited();
+			if (ImGui::SliderFloat("##exit", &tr.ExitTime, 0.0f, 1.0f, "%.2f of the cycle")) MarkEdited();
 		}
 
 		if (tr.From < 0)
 		{
 			ImGui::Spacing();
-			ImGui::TextDisabled("Any State ignora exit time - dano e morte");
-			ImGui::TextDisabled("precisam interromper na hora.");
+			ImGui::TextDisabled("Any State ignores exit time - damage and death");
+			ImGui::TextDisabled("must interrupt right away.");
 
-			if (ImGui::Checkbox("Pode redisparar no proprio estado", &tr.CanRetriggerSelf)) MarkEdited();
+			if (ImGui::Checkbox("Can retrigger on the same state", &tr.CanRetriggerSelf)) MarkEdited();
 		}
 
 		ImGui::Spacing();
 		ImGui::Separator();
-		ImGui::TextDisabled("Condicoes (TODAS precisam passar)");
+		ImGui::TextDisabled("Conditions (ALL must pass)");
 
 		if (tr.Conditions.empty() && !tr.HasExitTime)
 		{
-			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Sem condicao e sem exit time:");
-			ImGui::TextWrapped("esta transicao dispara no primeiro frame, sempre - "
-				"o estado de origem nunca sera visto.");
+			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "No condition and no exit time:");
+			ImGui::TextWrapped("this transition fires on frame one, always - "
+				"the source state will never be seen.");
 		}
 
 		const auto& params = m_Asset->GetParameters();
@@ -3218,7 +4140,7 @@ namespace axe
 			MarkEdited();
 		}
 
-		if (ImGui::Button("+ Condicao", ImVec2(-1, 0)))
+		if (ImGui::Button("+ Condition", ImVec2(-1, 0)))
 		{
 			AnimCondition c;
 			if (!params.empty()) c.Parameter = params[0].Name;

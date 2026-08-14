@@ -39,6 +39,7 @@ namespace axe
 			}
 		}
 		m_InputSettingsWindow.Draw();
+		m_AssetReportWindow.Draw();
 
 		// Painel de Environment — flutuante, abrível pelo menu View
 		if (m_ShowEnvironment && OnDrawEnvironment)
@@ -297,6 +298,11 @@ namespace axe
 			{
 				if (ImGui::MenuItem("Input Settings"))
 					m_InputSettingsWindow.Open();
+
+				// B3.2 — em Project, junto do Input Settings: e informacao
+				// sobre o PROJETO inteiro, nao sobre a cena aberta.
+				if (ImGui::MenuItem("Asset Report"))
+					m_AssetReportWindow.Open();
 
 				ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
 				ImGui::EndMenu();

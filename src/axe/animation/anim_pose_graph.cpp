@@ -161,8 +161,11 @@ namespace axe
 		// Update PULL, a partir da saída: só o que de fato contribui pra pose
 		// final é atualizado. Um ramo desconectado no meio da edição não gasta
 		// CPU nem avança tempo.
+		// AG2 — UpdateOnce. A raiz de um sub-grafo de estado pode ser
+		// alcancada mais de uma vez no mesmo frame quando a maquina esta em
+		// crossfade; a guarda cobre esse caso tambem.
 		if (AnimNode* out = FindNode(m_OutputNode))
-			out->Update(ctx);
+			out->UpdateOnce(ctx);
 	}
 
 	void AnimPoseGraph::Evaluate(AnimEvalContext& ctx, Pose& out)
@@ -251,6 +254,16 @@ namespace axe
 		m_OutputNode = j.value("output", -1);
 		m_NextId = j.value("next_id", 1);
 
+		// AG1 — ids dos nos que a fabrica recusou, para podar os links deles.
+		//
+		// Antes, um no descartado deixava os links orfaos em m_Links. O
+		// Resolve() os ignora (FindNode devolve nullptr), entao nada quebrava
+		// na hora — mas eles voltavam a ser GRAVADOS no proximo save, e o
+		// arquivo carregava para sempre fios apontando para um no que nao
+		// existe mais. Cada abertura reimprimia o aviso, e nenhum save
+		// resolvia.
+		std::vector<int> droppedIds;
+
 		if (j.contains("nodes"))
 		{
 			for (const auto& jn : j["nodes"])
@@ -265,7 +278,11 @@ namespace axe
 					// engine, ou um nó que foi removido. Gritar e pular é melhor
 					// que crashar — o resto do grafo ainda abre e o usuário
 					// consegue ver o que sobrou.
-					AXE_CORE_ERROR("AnimPoseGraph: tipo de no desconhecido '{}' — ignorado.", type);
+					//
+					// A fabrica ja explicou o caso dela (tipo aposentado x tipo
+					// desconhecido); aqui so registramos o id para a poda.
+					AXE_CORE_ERROR("AnimPoseGraph: no de tipo '{}' nao pode ser criado — descartado.", type);
+					droppedIds.push_back(jn.value("id", -1));
 					continue;
 				}
 
@@ -317,6 +334,22 @@ namespace axe
 				l.ToNode = jl.value("to", -1);
 				l.ToPin = jl.value("pin", 0);
 				l.Kind = jl.value("data", false) ? AnimLinkKind::Data : AnimLinkKind::Pose;
+
+				// AG1 — link que toca um no descartado nao entra.
+				//
+				// Descartar na LEITURA, e nao no Resolve, e o que faz o
+				// proximo save gravar o arquivo ja limpo. Deixar para o
+				// Resolve apenas esconderia o lixo.
+				const bool touchesDropped =
+					std::find(droppedIds.begin(), droppedIds.end(), l.FromNode) != droppedIds.end()
+					|| std::find(droppedIds.begin(), droppedIds.end(), l.ToNode) != droppedIds.end();
+
+				if (touchesDropped)
+				{
+					AXE_CORE_WARN("AnimPoseGraph: link {} -> {} descartado junto com o no removido.",
+						l.FromNode, l.ToNode);
+					continue;
+				}
 
 				m_Links.push_back(l);
 			}

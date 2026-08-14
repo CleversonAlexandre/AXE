@@ -24,6 +24,9 @@
 #include "axe/lighting/directional_light.hpp"
 #include "axe/log/log.hpp"
 
+#include "editor/axe_editor/ui/editor_widgets.hpp"   // ui::IconButton (AG3)
+#include "editor/axe_editor/ui/editor_icons.hpp"     // ICON_PLAY / ICON_PAUSE (AG3)
+
 #include <imgui.h>
 
 namespace axe
@@ -177,7 +180,7 @@ namespace axe
 		m_PreviewAssetInScene = m_Asset;
 
 		if (!sameAsset)
-			AXE_EDITOR_INFO("AnimGraph preview: personagem '{}' carregado ({} clipe(s)).",
+			AXE_EDITOR_INFO("AnimGraph preview: character '{}' loaded ({} clip(s)).",
 				m_Skeleton->GetName(), m_Skeleton->GetClips().size());
 	}
 
@@ -234,7 +237,7 @@ namespace axe
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
-		if (ImGui::Begin("Preview##anim"))
+		if (ImGui::Begin("Preview###anim_preview"))
 		{
 			// ── Barra de controle ────────────────────────────────────────────
 			//
@@ -246,12 +249,18 @@ namespace axe
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
 			ImGui::BeginChild("preview_bar", ImVec2(0, 32), false);
 
-			if (ImGui::Button(m_PreviewPlaying ? "Pausar" : "Tocar"))
+			// AG3 — transporte por icone, como no Control Rig e no Anim Clip.
+			//
+			// Play/pause e o par de formas mais reconhecido que existe numa
+			// ferramenta de animacao; escrever a palavra era o caminho longo.
+			if (ui::IconButton(m_PreviewPlaying ? ICON_PAUSE : ICON_PLAY,
+				m_PreviewPlaying ? "Pause the preview" : "Play the preview",
+				m_PreviewPlaying ? ui::Accent::Warning : ui::Accent::Primary))
 				m_PreviewPlaying = !m_PreviewPlaying;
 
 			ImGui::SameLine();
 
-			if (ImGui::Button("Reiniciar"))
+			if (ui::IconButton(ICON_ROTATE_LEFT, "Restart the graph from scratch"))
 			{
 				if (m_PreviewScene && m_PreviewEntity != entt::null)
 				{
@@ -275,13 +284,13 @@ namespace axe
 				{
 					const std::string state = sk->GraphInstance.GetCurrentStateName();
 
-					ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "  Estado: %s",
-						state.empty() ? "(nenhum)" : state.c_str());
+					ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "  State: %s",
+						state.empty() ? "(none)" : state.c_str());
 				}
 			}
 
 			ImGui::SameLine(0.0f, 20.0f);
-			ImGui::TextDisabled("Alt + arrastar = camera");
+			ImGui::TextDisabled("Alt + drag = camera");
 
 			ImGui::EndChild();
 			ImGui::PopStyleVar();

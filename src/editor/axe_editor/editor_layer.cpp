@@ -10,6 +10,9 @@
 #include "axe/script/script_base.hpp"
 #include "axe/script/script_paths.hpp"
 #include "axe/physics/physics_system.hpp"
+#include "axe/mesh/mesh_cooked.hpp"        // B2.1 — cook no import
+#include "axe/asset/asset_import_hooks.hpp"   // B2.4
+#include "editor/axe_editor/import/skeletal_mesh_loader.hpp"   // B2.4
 #include "axe/audio/audio_engine.hpp"
 #include "axe/audio/sound_cue.hpp"
 #include <iostream>
@@ -18,6 +21,29 @@
 
 namespace axe
 {
+    namespace
+    {
+        // ── B2.1: carrega e cozinha se preciso ───────────────────────────────
+        //
+        // Existe para que os TRES pontos de import do editor (drop de arquivo
+        // externo, arrastar do Asset Browser para a hierarquia, e para o
+        // viewport) cozinhem pelo mesmo caminho. Espalhar a chamada de Write
+        // pelos tres garantiria que um deles ficasse para tras — e o sintoma
+        // seria "esta malha carrega rapido e aquela nao", sem causa aparente.
+        //
+        // Reimporta e regrava quando o cozido esta velho, entao substituir o
+        // FBX e usar a malha de novo ja atualiza o .axemesh.
+        LoadedAsset LoadMeshCooking(const std::filesystem::path& path)
+        {
+            LoadedAsset asset = MeshLoader::Load(path.string());
+
+            if (asset.MeshData && !MeshCooked::IsUpToDate(path))
+                MeshCooked::Write(MeshCooked::PathFor(path), *asset.MeshData);
+
+            return asset;
+        }
+    }
+
     EditorLayer::EditorLayer()
         : Layer("EditorLayer"), m_EditorUI(std::make_unique<EditorUI>())
     {}
@@ -27,12 +53,57 @@ namespace axe
     {
         AXE_EDITOR_INFO("EditorLayer attached");
 
-        axe::Input::Init(&EditorApp::Get().GetWindow());
+        // SR1 — Input::Init e AudioEngine::Init eram duas chamadas soltas
+        // aqui. Viraram uma so, do lado do runtime.
+        //
+        // Nao e cosmetica: o KNOWN_LIMITATIONS registrava que a
+        // inicializacao do AudioEngine estava acoplada ao EditorLayer e
+        // precisava de um ponto standalone. Este e o ponto — o `main` do
+        // jogo chamara a MESMA funcao, e nao precisara saber que existe um
+        // AudioEngine para inicializar.
+        SceneRuntime::InitializeServices(&EditorApp::Get().GetWindow());
 
-        // Audio sobe junto com a layer, e nao no primeiro som tocado.
-        // Abrir o device custa alguns milissegundos: pagar isso no attach e
-        // invisivel; pagar no primeiro tiro e um engasgo no meio do jogo.
-        AudioEngine::Init();
+        // ── B2.4: registra os importadores ────────────────────────────────
+        //
+        // Este e o ponto que liga o assimp ao runtime — e ele so existe no
+        // EDITOR. O `game.exe` nao registra nada, e por isso consegue rodar
+        // com um `axe.dll` que nao linka assimp.
+        //
+        // Cada hook importa E COZINHA: a partir do proximo load, o asset entra
+        // pelo formato proprio e o importador nao e mais tocado. E o que faz o
+        // projeto migrar sozinho, um asset por vez.
+        AssetImportHooks::SetMeshImporter(
+            [](const std::filesystem::path& p) -> std::shared_ptr<Mesh>
+            {
+                auto asset = MeshLoader::Load(p.string());
+
+                if (asset.MeshData && !MeshCooked::IsUpToDate(p))
+                    MeshCooked::Write(MeshCooked::PathFor(p), *asset.MeshData);
+
+                return asset.MeshData;
+            });
+
+        AssetImportHooks::SetSkeletalImporter(
+            [](const std::filesystem::path& p) -> AssetImportHooks::SkeletalResult
+            {
+                SkeletalAsset imported = SkeletalMeshLoader::Load(p.string());
+
+                AssetImportHooks::SkeletalResult r;
+                r.Mesh = imported.MeshData;
+                r.Skeleton = imported.SkeletonData;
+                r.Clips = imported.Clips;
+
+                // O cozido NAO e gravado aqui: o .axeskelbin e derivado do
+                // .axeskel, nao do FBX (um mesmo FBX pode originar varios), e
+                // quem conhece esse caminho e o SkeletalMeshAsset::Resolve.
+                return r;
+            });
+
+        AssetImportHooks::SetClipImporter(
+            [](const std::filesystem::path& p, const Skeleton& target)
+            {
+                return SkeletalMeshLoader::LoadClips(p.string(), target);
+            });
 
         m_Scene = std::make_unique<Scene>();
         m_Context.ActiveScene = m_Scene.get();
@@ -171,7 +242,7 @@ namespace axe
             [this](const std::string& filepath)
             {
                 std::string uuid = AssetDatabase::Get().Register(filepath);
-                LoadedAsset asset = MeshLoader::Load(filepath);
+                LoadedAsset asset = LoadMeshCooking(filepath);
                 if (!asset.MeshData) { AXE_CORE_ERROR("EditorLayer: falha ao carregar '{}'", filepath); return; }
 
                 std::string name = std::filesystem::path(filepath).stem().string();
@@ -456,7 +527,7 @@ namespace axe
                     return;
                 }
 
-                LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
+                LoadedAsset asset = LoadMeshCooking(record->FilePath);
                 if (!asset.MeshData) return;
                 auto entity = m_Scene->CreateEntity(record->Name);
                 auto& mc = registry.emplace<MeshComponent>(entity);
@@ -587,7 +658,7 @@ namespace axe
                 if (TryOpenAnimationFile(*record))
                     return;
 
-                LoadedAsset asset = MeshLoader::Load(record->FilePath.string());
+                LoadedAsset asset = LoadMeshCooking(record->FilePath);
                 if (!asset.MeshData) return;
                 auto entity = m_Scene->CreateEntity(record->Name);
                 auto& mc = registry.emplace<MeshComponent>(entity);
@@ -663,9 +734,10 @@ namespace axe
                             m_Context.ClearSelection();
                             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
                             EditorApp::Get().GetWindow().CaptureCursor(true);
-                            m_GameCamera.MouseCaptured = true;
-                            m_GameCamera.m_FirstMouse = true;
-                            m_ViewportRenderer->SetGameCamera(&m_GameCamera);
+                            auto& gameCam = m_Runtime.GetGameCamera();
+                            gameCam.MouseCaptured = true;
+                            gameCam.m_FirstMouse = true;
+                            m_ViewportRenderer->SetGameCamera(&gameCam);
                             m_EditorState = EditorState::Play;
                             AXE_EDITOR_INFO("Modo Play retomado.");
                         }
@@ -841,11 +913,49 @@ namespace axe
     // ─────────────────────────────────────────────────────────────────────────
     void EditorLayer::OnDetach()
     {
+        // ── SR1b: parada defensiva ────────────────────────────────────────
+        //
+        // Morrer em Play e caminho legitimo: fechar a janela nao passa pelo
+        // botao Stop. Sem isto, o SceneRuntime seria destruido com a
+        // simulacao ainda de pe.
+        //
+        // O que isso deixa para tras, em ordem de gravidade:
+        //
+        //   1. Os callbacks do Jolt continuam registrados no PhysicsSystem,
+        //      que e SINGLETON — sobrevive a esta layer. Eles capturam
+        //      `this` do SceneRuntime e a `Scene`, os dois prestes a virar
+        //      memoria morta. Qualquer contato despachado depois disso e
+        //      use-after-free.
+        //   2. As DLLs de script ficam carregadas, com OnEnd nunca chamado.
+        //   3. Voices vivas seguram PCM de clips no instante em que o
+        //      ShutdownServices logo abaixo fecha o device.
+        //
+        // Hoje o (1) e inofensivo por acidente: o unico caminho que destroi
+        // esta layer com o jogo rodando e o fechamento do programa, e ali
+        // nada mais ticka. Trocar de projeto ja exige Stop (ver
+        // OnOpenProject). Mas "inofensivo por acidente" e uma garantia que
+        // depende de nenhum caminho novo aparecer — e o HUD vai adicionar
+        // caminhos. Melhor nao depender.
+        //
+        // Chamamos OnStop direto, e nao EnterEdit: EnterEdit restauraria o
+        // snapshot, mexeria na selecao e no CommandHistory, e escreveria em
+        // m_EditorUI — que pode ja ter sido destruido dependendo da ordem.
+        // Aqui nao se quer voltar ao estado de edicao; quer-se desligar.
+        if (m_EditorState != EditorState::Edit && m_Scene)
+        {
+            m_Runtime.OnStop(*m_Scene);
+            m_EditorState = EditorState::Edit;
+        }
+
         m_EditorUI.reset();
 
-        // Antes do device morrer: se sobrar voice viva, ela ainda segura o
-        // PCM de um clip e o backend fecharia com dado em uso.
-        AudioEngine::Shutdown();
+        // SR1 — o AudioEngine::Shutdown mudou de lugar, nao de momento: a
+        // razao continua sendo que uma voice viva ainda segura o PCM de um
+        // clip, e o backend fecharia com dado em uso.
+        //
+        // Depende do OnStop acima ter rodado primeiro quando havia jogo de
+        // pe: e ele quem mata as voices da cena.
+        SceneRuntime::ShutdownServices();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -897,47 +1007,78 @@ namespace axe
         else
             AXE_CORE_ERROR("AssetBrowser é nullptr!");
 
-        // Partículas tickam em Edit (preview ao vivo) E em Play; congelam no Pause.
-        // AutoDestroy só é permitido em Play — em Edit nunca destrói entities.
-        if (m_Scene && m_EditorState != EditorState::Pause)
-        {
-            bool inPlay = (m_EditorState == EditorState::Play);
-            glm::vec3 camPos(0.f);
-            if (m_ViewportRenderer && m_ViewportRenderer->m_Camera)
-                camPos = m_ViewportRenderer->m_Camera->GetPosition();
-            m_ParticleWorld.OnUpdate(*m_Scene, deltaTime, inPlay, camPos);
-
-            // Animação tem que rodar ANTES do render: o SceneCollector lê a
-            // BonePalette que este update acabou de escrever. Se rodasse
-            // depois, o personagem ficaria sempre um frame atrasado — o que
-            // aparece como "tremida" sutil em movimento rápido.
-            //
-            // Em Edit (inPlay == false) o tempo não avança, mas a palette
-            // continua sendo calculada: é o que mostra o personagem na
-            // bind pose em vez de colapsado na origem.
-            m_AnimationWorld.OnUpdate(*m_Scene, deltaTime, inPlay);
-        }
-
         // Preview do Particle Editor tem sua própria ParticleWorld/cena —
         // tickado independente do estado de Play/Pause da cena principal.
         if (m_EditorUI && m_EditorUI->m_ParticleEditorWindow.IsOpen())
             m_EditorUI->m_ParticleEditorWindow.UpdatePreview(deltaTime);
 
+        // ── SR1: a orquestracao do frame virou UMA chamada ────────────────
+        //
+        // Aqui havia ~110 linhas chamando ParticleWorld, AnimationWorld,
+        // ScriptWorld, PhysicsWorld e AudioWorld na ordem certa, com as
+        // justificativas dessa ordem em comentario. Tudo isso mudou para
+        // SceneRuntime::OnUpdate — inclusive os comentarios, que valem tanto
+        // para o editor quanto para o jogo.
+        //
+        // O que sobrou deste lado e o que so o editor sabe:
+        //
+        //   * qual TickMode o estado atual do editor significa;
+        //   * onde esta a camera do viewport, que serve de ouvido em Edit e
+        //     de referencia de LOD fora do Play;
+        //   * o preview do Particle Editor, que tem cena e mundo proprios.
+        if (m_Scene)
+        {
+            SceneRuntime::TickContext tick;
+            tick.InputWindow = &EditorApp::Get().GetWindow();
+
+            switch (m_EditorState)
+            {
+            case EditorState::Play:  tick.Mode = SceneRuntime::TickMode::Play;        break;
+            case EditorState::Pause: tick.Mode = SceneRuntime::TickMode::Paused;      break;
+            default:                 tick.Mode = SceneRuntime::TickMode::EditPreview; break;
+            }
+
+            // Camera do viewport: existe so no editor.
+            //
+            // LISTENER — fora do Play, o ouvido do usuario esta onde ele
+            // esta olhando, nao onde a camera de jogo parou. Em Play nao
+            // passamos override, e o runtime usa a GameCamera; e o mesmo
+            // caminho que o jogo empacotado vai percorrer.
+            //
+            // LOD DE PARTICULA — mudanca de comportamento consciente, a
+            // unica deste patch. Antes o LOD usava a camera do viewport
+            // SEMPRE, inclusive em Play: com o viewport parado atras do
+            // personagem, emissores perto do jogador eram avaliados como
+            // distantes. Agora, em Play, o LOD usa a GameCamera. Fora do
+            // Play o comportamento e identico ao anterior.
+            SceneRuntime::ListenerPose viewportListener;
+            glm::vec3 viewportCamPos(0.0f);
+            const bool haveViewportCam =
+                (m_ViewportRenderer && m_ViewportRenderer->m_Camera);
+
+            if (haveViewportCam)
+            {
+                viewportCamPos = m_ViewportRenderer->m_Camera->GetPosition();
+                viewportListener = SceneRuntime::PoseFromView(
+                    viewportCamPos, m_ViewportRenderer->m_Camera->GetViewMatrix());
+            }
+
+            if (m_EditorState != EditorState::Play && haveViewportCam)
+            {
+                tick.ListenerOverride = &viewportListener;
+                tick.LodCameraPosition = &viewportCamPos;
+            }
+
+            m_Runtime.OnUpdate(*m_Scene, deltaTime, tick);
+        }
+
+        // Esc sai do Play. Fica aqui, e nao no runtime: "Esc volta pro
+        // editor" e comportamento de editor. Num jogo, Esc e o que o jogo
+        // decidir que ele e.
         if (m_EditorState == EditorState::Play)
         {
             ImGui::GetIO().WantCaptureKeyboard = false;
             ImGui::SetNextFrameWantCaptureKeyboard(false);
-
-            if (m_PlayerEntity != entt::null && m_Scene)
-            {
-                auto* tc = m_Scene->GetRegistry().try_get<TransformComponent>(m_PlayerEntity);
-                if (tc) m_GameCamera.SetTarget(&tc->Data.Position);
-            }
-
-            m_GameCamera.OnUpdate(deltaTime, &EditorApp::Get().GetWindow());
-            m_ScriptWorld.OnSceneUpdate(*m_Scene, deltaTime);
-            m_PhysicsWorld.OnUpdate(*m_Scene, deltaTime);
-            axe::ScriptBase::TickScreenMessages(deltaTime);
 
             bool escNow = EditorApp::Get().GetWindow().IsKeyDown((int)Key::Escape);
             if (escNow && !m_EscWasPressed) EnterPause();
@@ -947,67 +1088,6 @@ namespace axe
         {
             m_EscWasPressed = false;
         }
-
-        // ── AUDIO: o ULTIMO do OnUpdate, de proposito ─────────────────────
-        //
-        // Ordem do frame:
-        //   Particle -> Animation -> [Play] Script -> [Play] Physics
-        //     -> AUDIO -> (OnRender: SceneCollector -> SceneRenderer)
-        //
-        // Uma fonte 3D presa a um personagem le a posicao do transform. Se
-        // o audio rodasse antes da fisica, usaria a posicao do frame
-        // anterior — audivel como panning atrasado em movimento rapido. O
-        // render nao depende do audio, entao o audio pode ser o ultimo.
-        //
-        // FORA do bloco de Play: o AudioWorld tambem precisa rodar em Edit
-        // para alimentar o listener (preview do Animation Editor) e para
-        // servir o botao Play do Inspector. Ele proprio decide o que fica
-        // mudo, via `inPlay`.
-        if (m_Scene)
-        {
-            const bool inPlay = (m_EditorState == EditorState::Play);
-            const bool paused = (m_EditorState == EditorState::Pause);
-
-            // Pose de fallback do listener: a camera ativa. Em Play e a
-            // GameCamera; em Edit, a do viewport. Extraida da view matrix
-            // porque e a unica coisa que as duas expoem em comum — e a
-            // view matrix ja e a inversa da pose, entao transpor a parte
-            // rotacional devolve os eixos do mundo.
-            glm::vec3 lisPos(0.0f);
-            glm::vec3 lisFwd(0.0f, 0.0f, -1.0f);
-            glm::vec3 lisUp(0.0f, 1.0f, 0.0f);
-
-            glm::mat4 view(1.0f);
-            bool haveView = false;
-
-            if (inPlay)
-            {
-                lisPos = m_GameCamera.GetPosition();
-                view = m_GameCamera.GetViewMatrix();
-                haveView = true;
-            }
-            else if (m_ViewportRenderer && m_ViewportRenderer->m_Camera)
-            {
-                lisPos = m_ViewportRenderer->m_Camera->GetPosition();
-                view = m_ViewportRenderer->m_Camera->GetViewMatrix();
-                haveView = true;
-            }
-
-            if (haveView)
-            {
-                const glm::mat3 r = glm::transpose(glm::mat3(view));
-                lisFwd = -r[2];
-                lisUp = r[1];
-            }
-
-            m_AudioWorld.OnUpdate(*m_Scene, deltaTime, inPlay, paused,
-                lisPos, lisFwd, lisUp);
-        }
-
-        // Recolhe as voices que terminaram. Depois do AudioWorld: uma voice
-        // que acabou de ser criada neste frame nao pode ser recolhida antes
-        // de tocar.
-        AudioEngine::Update(deltaTime);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1017,7 +1097,7 @@ namespace axe
         m_MeshThumbnails.RenderPending();
 
         if (m_EditorState == EditorState::Play)
-            m_ViewportRenderer->SetGameCamera(&m_GameCamera);
+            m_ViewportRenderer->SetGameCamera(&m_Runtime.GetGameCamera());
         else
             m_ViewportRenderer->SetGameCamera(nullptr);
 
@@ -1162,7 +1242,7 @@ namespace axe
         if (ImGui::Button("▶ Play", ImVec2(50, 26)))
         {
             if (isEdit)        EnterPlay();
-            else if (isPause) { m_GameCamera.MouseCaptured = true; m_EditorState = EditorState::Play; }
+            else if (isPause) { m_Runtime.GetGameCamera().MouseCaptured = true; m_EditorState = EditorState::Play; }
         }
         if (isPlay) ImGui::PopStyleColor();
 
@@ -1497,130 +1577,48 @@ namespace axe
         // ProbeGrid, nem a pose de um personagem, nem o runtime de um emissor.
         m_SceneSnapshot.Capture(*m_Scene);
 
-        // ── Conecta callbacks do Jolt ao ScriptWorld ──────────────────────────
-        // Feito ANTES de OnSceneStart para que os bodies já criados sejam cobertos.
-        // Os callbacks recebem entt::entity como uint32_t (via UserData do body).
-        PhysicsSystem::Get().SetCollisionCallback(
-            [this](uint32_t a, uint32_t b)
-            {
-                if (!m_Scene) return;
-                m_ScriptWorld.DispatchCollision(*m_Scene,
-                    (entt::entity)a, (entt::entity)b);
-            });
-
-        PhysicsSystem::Get().SetTriggerCallbacks(
-            [this](uint32_t a, uint32_t b)
-            {
-                if (!m_Scene) return;
-                // Para triggers: chama OnCollision em ambas as partes
-                // (comportamento padrão — personagem encosta no trigger)
-                m_ScriptWorld.DispatchCollision(*m_Scene,
-                    (entt::entity)a, (entt::entity)b);
-                m_ScriptWorld.DispatchTriggerEnter(*m_Scene,
-                    (entt::entity)a, (entt::entity)b);
-            },
-            [this](uint32_t a, uint32_t b)
-            {
-                if (!m_Scene) return;
-                m_ScriptWorld.DispatchTriggerExit(*m_Scene,
-                    (entt::entity)a, (entt::entity)b);
-            });
-
-        m_PhysicsWorld.OnSceneStart(*m_Scene);
-        m_ScriptWorld.SetActiveCamera(&m_GameCamera); // injeta câmera pra scripts
-        m_ScriptWorld.OnSceneStart(*m_Scene);
-
-        // DEPOIS do Capture, sempre: o snapshot precisa guardar a cena sem
-        // nenhuma voice viva, para que o Restore devolva handles limpos em
-        // vez de handles de voices que ja morreram.
-        m_AudioWorld.OnScenePlay(*m_Scene);
-
-        m_PlayerEntity = entt::null;
+        // ── SR1: start do jogo, uma chamada ───────────────────────────────
+        //
+        // Daqui saiu ~110 linhas: fiacao dos callbacks do Jolt, OnSceneStart
+        // dos mundos, resolucao do GameMode -> DefaultPawn e configuracao da
+        // GameCamera a partir de SpringArm/CameraComponent.
+        //
+        // Nada disso era editor. Todas as quatro coisas o jogo empacotado
+        // precisa fazer identicamente — por isso foram para o SceneRuntime.
+        //
+        // O ProjectManager NAO atravessou junto: o runtime nao sabe o que e
+        // um `.axeproject`. Quem le o GameMode ativo e o editor, e injeta.
+        // Amanha quem injeta e o manifesto de empacotamento, e o
+        // SceneRuntime nao muda uma linha.
+        SceneRuntime::StartConfig startCfg;
+        startCfg.InputWindow = &EditorApp::Get().GetWindow();
         if (ProjectManager::Get().HasProject())
-        {
-            const std::string& gmUUID = ProjectManager::Get().GetCurrent().ActiveGameModeUUID;
-            if (!gmUUID.empty())
-            {
-                const AssetRecord* gmRec = AssetDatabase::Get().GetByUUID(gmUUID);
-                if (gmRec)
-                {
-                    auto gmAsset = GameModeAsset::LoadFromFile(gmRec->FilePath);
-                    if (gmAsset && gmAsset->HasDefaultPawn())
-                    {
-                        auto& registry = m_Scene->GetRegistry();
-                        registry.view<ScriptComponent>().each([&](entt::entity e, ScriptComponent& sc)
-                            {
-                                if (m_PlayerEntity != entt::null) return;
-                                const AssetRecord* rec = AssetDatabase::Get().GetByPath(sc.ScriptAssetPath);
-                                if (rec && rec->UUID == gmAsset->DefaultPawnScriptUUID)
-                                    m_PlayerEntity = e;
-                            });
+            startCfg.GameModeUUID = ProjectManager::Get().GetCurrent().ActiveGameModeUUID;
 
-                        if (m_PlayerEntity != entt::null)
-                        {
-                            auto* sa = registry.try_get<SpringArmComponent>(m_PlayerEntity);
-                            auto* tc = registry.try_get<TransformComponent>(m_PlayerEntity);
+        // O Capture ja aconteceu logo acima — e precisa mesmo ter acontecido
+        // antes, porque o OnStart dispara as fontes com PlayOnStart e o
+        // snapshot tem que guardar a cena sem nenhuma voice viva.
+        const SceneRuntime::StartResult started = m_Runtime.OnStart(*m_Scene, startCfg);
 
-                            if (sa)
-                            {
-                                m_GameCamera.CameraMode = GameCamera::Mode::ThirdPerson;
-                                m_GameCamera.TPDistance = sa->Length;
-                                m_GameCamera.TPHeight = sa->HeightOffset;
-                                m_GameCamera.TPLagSpeed = sa->LagSpeed;
-                                m_GameCamera.TPMouseRotates = sa->MouseRotates;
-                            }
-                            if (auto* cam = registry.try_get<CameraComponent>(m_PlayerEntity))
-                            {
-                                m_GameCamera.Fov = cam->Fov;
-                                m_GameCamera.NearClip = cam->NearClip;
-                                m_GameCamera.FarClip = cam->FarClip;
-                                m_GameCamera.Sensitivity = cam->Sensitivity;
-                            }
-                            if (tc)
-                            {
-                                glm::vec3 startPos = tc->Data.Position +
-                                    glm::vec3(0, m_GameCamera.TPHeight, m_GameCamera.TPDistance);
-                                m_GameCamera.Reset(startPos, -90.0f, -10.0f);
-                                m_GameCamera.SetTarget(&tc->Data.Position);
-                            }
-                            AXE_EDITOR_INFO("GameMode: pawn encontrado (entity {}), câmera third person.", (uint32_t)m_PlayerEntity);
-                        }
-                    }
-                }
-            }
-        }
+        auto& gameCam = m_Runtime.GetGameCamera();
 
-        if (m_Scene)
-        {
-            auto& registry = m_Scene->GetRegistry();
-            for (auto entity : registry.view<CameraComponent>())
-            {
-                auto& cam = registry.get<CameraComponent>(entity);
-                if (cam.IsPrimary)
-                {
-                    m_GameCamera.Fov = cam.Fov;
-                    m_GameCamera.NearClip = cam.NearClip;
-                    m_GameCamera.FarClip = cam.FarClip;
-                    m_GameCamera.MoveSpeed = cam.MoveSpeed;
-                    m_GameCamera.Sensitivity = cam.Sensitivity;
-                    if (auto* tc = registry.try_get<TransformComponent>(entity))
-                        m_GameCamera.Reset(tc->Data.Position, tc->Data.Rotation.y, tc->Data.Rotation.x);
-                    break;
-                }
-            }
-        }
-
+        // Fallback de posicionamento da camera: cena sem NENHUM
+        // CameraComponent comeca o Play de onde o usuario estava olhando.
+        //
+        // Fica do lado do editor de proposito — depende da camera do
+        // viewport, que so existe aqui. Um jogo com cena sem camera usa o
+        // default da GameCamera, e isso e problema do nivel, nao do runtime.
         auto& editorCam = m_ViewportRenderer->m_Camera;
-        if (!m_Scene || m_Scene->GetRegistry().view<CameraComponent>().empty())
+        if (!started.HasSceneCamera && editorCam)
         {
-            m_GameCamera.Reset(editorCam->GetPosition(),
+            gameCam.Reset(editorCam->GetPosition(),
                 glm::degrees(editorCam->GetYaw()),
                 glm::degrees(editorCam->GetPitch()));
         }
 
-        m_GameCamera.MouseCaptured = true;
-        m_GameCamera.m_FirstMouse = true;
-        m_ViewportRenderer->SetGameCamera(&m_GameCamera);
+        gameCam.MouseCaptured = true;
+        gameCam.m_FirstMouse = true;
+        m_ViewportRenderer->SetGameCamera(&gameCam);
         m_Context.ClearSelection();
         m_EditorState = EditorState::Play;
 
@@ -1633,7 +1631,7 @@ namespace axe
     void EditorLayer::EnterPause()
     {
         if (m_EditorState != EditorState::Play) return;
-        m_GameCamera.MouseCaptured = false;
+        m_Runtime.GetGameCamera().MouseCaptured = false;
         m_EditorState = EditorState::Pause;
         m_ViewportRenderer->SetGameCamera(nullptr);
         ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
@@ -1646,23 +1644,13 @@ namespace axe
     {
         if (m_EditorState == EditorState::Edit) return;
 
-        m_ScriptWorld.OnSceneStop(*m_Scene);
-        m_ParticleWorld.OnSceneStop(*m_Scene);
-
-        // Stop mata todo som do jogo. Sem isso, um loop disparado em Play
-        // continuaria tocando por cima do editor — e so sumiria fechando o
-        // programa.
+        // ── SR1: stop do jogo, uma chamada ────────────────────────────────
         //
-        // O AudioWorld zera tambem os handles nos componentes; o StopAll
-        // cobre o que nao pertence a fonte nenhuma (one-shot de notify em
-        // voo no momento do Stop).
-        m_AudioWorld.OnSceneStop(*m_Scene);
-        AudioEngine::StopAll();
-        m_GameCamera.CameraMode = GameCamera::Mode::FreeFly;
-        m_GameCamera.ClearTarget();
-        m_PlayerEntity = entt::null;
-        m_PhysicsWorld.OnSceneStop(*m_Scene);
-        axe::ScriptBase::ClearScreenMessages();
+        // A ordem (script -> particulas -> audio -> StopAll -> camera ->
+        // fisica -> mensagens de tela) e as razoes dela foram inteiras para
+        // SceneRuntime::OnStop. O runtime ainda ganhou algo que nao existia
+        // aqui: a desconexao dos callbacks do Jolt.
+        m_Runtime.OnStop(*m_Scene);
 
         // Libera o cursor ao parar o Play — via abstração Window, sem GLFW cru.
         EditorApp::Get().GetWindow().CaptureCursor(false);
@@ -1694,7 +1682,7 @@ namespace axe
             if (m_EditorUI) m_EditorUI->GetHierarchy()->SetContext(&m_Context);
         }
 
-        m_GameCamera.MouseCaptured = false;
+        m_Runtime.GetGameCamera().MouseCaptured = false;
         m_ViewportRenderer->SetGameCamera(nullptr);
         m_EditorState = EditorState::Edit;
         ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;

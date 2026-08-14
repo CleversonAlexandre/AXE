@@ -1,4 +1,15 @@
 #pragma once
+// B2.4 — este arquivo mudou de src/axe para src/editor.
+//
+// O importador de FBX e ferramenta de AUTORIA: ele le formato de
+// intercambio e produz os arquivos cozidos que o runtime consome. O
+// jogo nunca importa nada, entao o assimp nao precisa estar no axe.dll.
+//
+// O AXE_API saiu junto: os tipos nao sao mais exportados pela DLL, e
+// mante-lo os marcaria como dllimport de simbolos que nao existem la.
+//
+// Quem liga isto ao runtime e o AssetImportHooks, registrado no boot
+// do editor.
 #include "axe/core/types.hpp"
 #include "axe/mesh/mesh.hpp"
 #include "axe/material/material.hpp"
@@ -8,13 +19,13 @@
 namespace axe
 {
 
-	struct AXE_API LoadedAsset
+	struct LoadedAsset
 	{
 		std::shared_ptr<Mesh>     MeshData;
 		std::shared_ptr<Material> MaterialData;
 	};
 
-	class AXE_API MeshLoader
+	class MeshLoader
 	{
 	public:
 		// Retorna asset vazio (MeshData == nullptr) se falhar.

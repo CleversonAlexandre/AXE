@@ -1,7 +1,7 @@
 // AXE build tag: inspector_window collapsable-volume-sections v2
 #include "inspector_window.hpp"
 #include "file_dialog.hpp"
-#include "axe/animation/skeletal_mesh_loader.hpp"
+#include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
 #include "axe/utils/glm_config.hpp"

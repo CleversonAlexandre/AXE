@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstdint>   // uint64_t — FrameId / m_LastUpdateFrame (AG2)
 
 // O header completo, e não o json_fwd.hpp: o forward seria mais leve, mas eu
 // não tenho como confirmar que ele existe no vendor deste projeto — e um
@@ -130,6 +131,32 @@ namespace axe
 		bool AllowWorldQueries = false;
 
 		float DeltaTime = 0.0f;
+
+		// AG2 — identificador do frame atual, monotonico e POR INSTANCIA.
+		//
+		// Existe por causa de uma unica propriedade do grafo: um no pode ter
+		// MAIS DE UM consumidor. Locomotion alimentando o Base de um Layered
+		// Blend e tambem outro ramo; um Clip Player servindo dois blends.
+		// Nesses casos o Update daquele no era alcancado por dois caminhos e
+		// rodava DUAS VEZES no mesmo frame — e cada passagem faz
+		// `m_Time += DeltaTime`.
+		//
+		// Resultado: aquele ramo tocava no DOBRO da velocidade, e os notifies
+		// dele disparavam duas vezes. Sem nenhum parametro no editor que
+		// explicasse; a causa era a topologia do grafo.
+		//
+		// O AnimNode::UpdateOnce compara este valor com a marca do no e
+		// executa uma vez so. Quem tem N consumidores avanca UMA vez, e todos
+		// leem o mesmo resultado — que e o que qualquer um esperaria de um
+		// grafo de poses.
+		//
+		// Comeca em 1, e nao em 0: a marca do no nasce em 0, e um FrameId 0
+		// no primeiro frame faria o grafo inteiro ser pulado.
+		//
+		// 64 bits para nunca dar wrap. Em 32 bits seriam ~2 anos a 60fps —
+		// improvavel, mas o modo de falha e uma animacao que congela sem
+		// motivo, e nao vale a economia de 4 bytes por contexto.
+		std::uint64_t FrameId = 1;
 
 		// false = preview do editor com o tempo congelado. Os nós ainda
 		// avaliam (a pose sai certa), mas nada avança.
@@ -258,6 +285,32 @@ namespace axe
 		// só um apareça na tela.
 		virtual void Update(AnimEvalContext& ctx) = 0;
 
+		// AG2 — o Update com guarda de visita. USE ESTE, nunca o Update direto.
+		//
+		// Nao e virtual de proposito: um no derivado nao deve poder desligar a
+		// guarda. Ele sobrescreve `Update`, que continua sendo onde o trabalho
+		// mora; a guarda fica fora do alcance dele.
+		//
+		// Por que a guarda nao entrou dentro do proprio Update: seria preciso
+		// repetir a checagem na primeira linha de CADA no, e um no novo que
+		// esquecesse traria o bug de volta em silencio, so naquele ramo. Com
+		// o ponto de entrada separado, o esquecimento possivel e do lado de
+		// quem CHAMA — e ai o efeito e o comportamento antigo, nao um bug
+		// novo.
+		//
+		// Nao cobre Evaluate. Avaliar duas vezes gasta CPU a toa, mas produz a
+		// mesma pose — enquanto atualizar duas vezes CORROMPE o tempo. Cachear
+		// pose por no exigiria armazenamento por no e conversa com o PosePool;
+		// e outro patch, e e otimizacao, nao correcao.
+		void UpdateOnce(AnimEvalContext& ctx)
+		{
+			if (m_LastUpdateFrame == ctx.FrameId)
+				return;
+
+			m_LastUpdateFrame = ctx.FrameId;
+			Update(ctx);
+		}
+
 		// ── FASE 2 ───────────────────────────────────────────────────────────
 		//
 		// Produz a pose. Puxa as entradas conforme precisa.
@@ -333,9 +386,18 @@ namespace axe
 				d.Link = nullptr;
 
 			dst.Inputs.assign(dst.InputCount(), nullptr);
+
+			// m_LastUpdateFrame NAO e copiado: e estado de runtime do no
+			// ORIGINAL, e o clone comeca sem historico. Copiar poderia trazer
+			// um FrameId futuro e fazer o clone pular o primeiro Update.
 		}
 
 	protected:
+		// AG2 — ultimo frame em que este no rodou Update. Ver UpdateOnce.
+		//
+		// Zero como valor inicial e seguro porque o FrameId comeca em 1.
+		std::uint64_t m_LastUpdateFrame = 0;
+
 		// Avalia uma entrada; se não houver nada ligada, devolve bind pose.
 		//
 		// Centralizado aqui porque TODO nó precisa disso, e esquecer o check

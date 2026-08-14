@@ -33,8 +33,14 @@ namespace axe
 
 	void AnimNode::UpdateInput(AnimEvalContext& ctx, int pin) const
 	{
+		// AG2 — UpdateOnce, nao Update.
+		//
+		// Este e o caminho por onde quase todo no do grafo e atualizado, e
+		// era aqui que a visita dupla acontecia: um Layered Blend chama
+		// UpdateInput(0) e UpdateInput(1), e se os dois pinos levassem ao
+		// mesmo no (direta ou indiretamente), ele avancava o tempo duas vezes.
 		if (pin >= 0 && pin < (int)Inputs.size() && Inputs[pin])
-			Inputs[pin]->Update(ctx);
+			Inputs[pin]->UpdateOnce(ctx);
 	}
 
 	// ── Pinos de dado ────────────────────────────────────────────────────────

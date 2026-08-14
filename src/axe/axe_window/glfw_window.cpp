@@ -313,6 +313,18 @@ namespace axe
 		return glfwGetKey(m_Window, keycode) == GLFW_PRESS;
 	}
 
+	bool WindowGlfw::IsMouseButtonDown(int button) const
+	{
+		// GLFW_MOUSE_BUTTON_1..8 sao 0..7, e GLFW_MOUSE_BUTTON_RIGHT e 1 —
+		// exatamente a numeracao do enum MouseButton. Nenhuma traducao
+		// necessaria, e por isso o bug era invisivel: tudo casava, so
+		// faltava alguem perguntar ao GLFW.
+		if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST)
+			return false;
+
+		return glfwGetMouseButton(m_Window, button) == GLFW_PRESS;
+	}
+
 	glm::vec2 WindowGlfw::GetCursorPosition() const
 	{
 		double x, y;

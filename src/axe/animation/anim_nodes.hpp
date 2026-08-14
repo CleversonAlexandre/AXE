@@ -8,6 +8,7 @@
 #include "axe/animation/bone_mask.hpp"
 #include "axe/animation/rig/control_rig_asset.hpp"   // AnimNode_ControlRig
 
+#include <cmath>     // std::fabs — nos logicos (AG4)
 #include <memory>
 #include <string>
 #include <utility>
@@ -38,6 +39,116 @@ namespace axe
 
 		void Update(AnimEvalContext& ctx) override { UpdateInput(ctx, 0); }
 		void Evaluate(AnimEvalContext& ctx, Pose& out) override { EvalInput(ctx, 0, out); }
+	};
+
+	// ── Reroute ───────────────────────────────────────────────────────────────
+	//
+	// Um "no" no fio. Recebe uma pose e devolve a MESMA pose.
+	//
+	// POR QUE ELE EXISTE (AG3):
+	//
+	//   Grafo de locomocao real tem fios que atravessam a tela inteira e
+	//   cruzam por cima de outros nos. O reroute e onde voce dobra o fio para
+	//   que ele passe por baixo, por cima, ou contorne. E organizacao visual.
+	//
+	// POR QUE E UM NO DE RUNTIME, e nao decoracao de editor:
+	//
+	//   Ele esta NO CAMINHO da pose. Se existisse so no editor, o .axeanim
+	//   precisaria gravar o link "resolvido" (pulando o reroute), e ai a
+	//   posicao visual dele nao teria onde morar — ou moraria numa tabela
+	//   paralela que precisa ser mantida em sincronia com os links. Um
+	//   passthrough e mais barato que essa sincronia, e e o mesmo desenho
+	//   que o Control Rig ja usa.
+	//
+	//   O custo em runtime e uma chamada de funcao por reroute por frame.
+	//
+	// SOBRE A GUARDA DO AG2: o reroute herda UpdateOnce como qualquer no, e
+	// isso importa mais aqui do que na media — reroute existe justamente para
+	// ser reusado, entao ele e um candidato natural a ter varios consumidores.
+	class AXE_API AnimNode_Reroute : public AnimNode
+	{
+	public:
+		const char* TypeName() const override { return "Reroute"; }
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_Reroute>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		// AG3b — o reroute ADOTA o tipo do fio em que foi inserido.
+		//
+		// Sem isto ele seria sempre de pose, e um reroute num fio de dado
+		// (Get Float -> Alpha) teria a segunda ponta recusada pela validacao
+		// de link: sobraria um no solto no meio do grafo, com metade do fio
+		// desligada e nenhuma mensagem dizendo por que.
+		//
+		// Serializado, porque um reroute de Float relido como Pose quebraria
+		// o grafo no load — e o usuario veria um .axeanim que abriu diferente
+		// de como foi salvo.
+		void SetPinType(AnimPinType t) { m_PinType = t; }
+		AnimPinType OutputType() const override { return m_PinType; }
+
+		// Pose e dado moram em listas de pino SEPARADAS (Inputs x DataInputs),
+		// entao o reroute troca de lista conforme o tipo. Quando e dado, o
+		// InputCount de pose e zero — senao o no anunciaria um pino de pose
+		// que ninguem alimenta.
+		int InputCount() const override { return m_PinType == AnimPinType::Pose ? 1 : 0; }
+		const char* InputName(int) const override { return ""; }
+
+		void Update(AnimEvalContext& ctx) override
+		{
+			if (m_PinType == AnimPinType::Pose)
+				UpdateInput(ctx, 0);
+		}
+
+		void Evaluate(AnimEvalContext& ctx, Pose& out) override
+		{
+			if (m_PinType == AnimPinType::Pose)
+				EvalInput(ctx, 0, out);
+		}
+
+		// Repasse dos valores de dado. Le o pino 0 de DataInputs, que o
+		// editor cria quando o tipo nao e pose.
+		float EvaluateFloat(AnimEvalContext& ctx) override { return ReadFloat(ctx, 0); }
+		bool  EvaluateBool(AnimEvalContext& ctx)  override { return ReadBool(ctx, 0); }
+
+		void Serialize(nlohmann::json& j) const override
+		{
+			j["pin_type"] = (int)m_PinType;
+		}
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			m_PinType = (AnimPinType)j.value("pin_type", (int)AnimPinType::Pose);
+			RebuildPins();
+		}
+
+		// Cria o pino de dado quando o tipo pede. Chamado no load e pelo
+		// editor logo depois do SetPinType.
+		void RebuildPins()
+		{
+			DataInputs.clear();
+
+			if (m_PinType == AnimPinType::Float)      AddFloatPin("", 0.0f);
+			else if (m_PinType == AnimPinType::Bool)  AddBoolPin("", false);
+		}
+
+		// GetNormalizedTime atravessa o reroute.
+		//
+		// Sem isto, um reroute entre um Clip Player e a maquina de estados
+		// quebraria o ExitTime das transicoes: a maquina perguntaria o tempo
+		// normalizado, receberia o default, e a transicao dispararia na hora
+		// errada. Bug que so apareceria depois de alguem organizar o grafo —
+		// o pior tipo de armadilha.
+		float GetNormalizedTime() const override
+		{
+			return Inputs.empty() || !Inputs[0] ? 0.0f : Inputs[0]->GetNormalizedTime();
+		}
+
+	private:
+		AnimPinType m_PinType = AnimPinType::Pose;
 	};
 
 	// ── Nós de VARIÁVEL ───────────────────────────────────────────────────────
@@ -79,6 +190,332 @@ namespace axe
 		float EvaluateFloat(AnimEvalContext& ctx) override
 		{
 			return ctx.GetFloat(Parameter);
+		}
+	};
+
+	// ── Nos LOGICOS (AG4) ────────────────────────────────────────────────────
+	//
+	// POR QUE ELES EXISTEM
+	//
+	//   Ate aqui, toda decisao sobre um valor de dado tinha que ser tomada no
+	//   Script Editor e chegar aqui pronta, como parametro. Isso funciona, mas
+	//   espalha a logica de animacao por dois lugares: "o Alpha do Control Rig
+	//   cai quando agachado" e regra de ANIMACAO, e vive melhor no grafo de
+	//   animacao do que num script de gameplay.
+	//
+	//   Sao nos de DADO, como o GetFloat: Update e Evaluate sao no-op, e eles
+	//   sao puxados pelo ReadFloat/ReadBool de quem os consome.
+	//
+	// SEM ESTADO, DE PROPOSITO
+	//
+	//   Nenhum destes nos guarda nada entre frames. Isso os torna imunes ao
+	//   problema que o AG2 resolveu: ler duas vezes no mesmo frame devolve o
+	//   mesmo valor e nao custa nada alem de recalcular. Por isso eles nao
+	//   precisam da guarda de UpdateOnce — nao ha tempo para avancar.
+	//
+	//   Se algum dia entrar um no com estado (um Spring, um Delay), ele NAO
+	//   pode seguir este molde: vai precisar de tempo, e portanto de Update
+	//   de verdade.
+
+	// Inverte um booleano.
+	class AXE_API AnimNode_Not : public AnimNode
+	{
+	public:
+		const char* TypeName() const override { return "Not"; }
+
+		AnimNode_Not() { AddBoolPin("In", false); }
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_Not>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		AnimPinType OutputType() const override { return AnimPinType::Bool; }
+
+		void Update(AnimEvalContext&) override {}
+		void Evaluate(AnimEvalContext&, Pose&) override {}
+
+		bool EvaluateBool(AnimEvalContext& ctx) override { return !ReadBool(ctx, 0); }
+	};
+
+	// AND / OR / XOR num no so, com o operador no painel.
+	//
+	// Um no por operador daria tres entradas de menu quase identicas e
+	// obrigaria a apagar e recriar para trocar de ideia. Com o combo, trocar
+	// AND por OR e um clique — e o formato dos pinos nao muda.
+	class AXE_API AnimNode_BoolOp : public AnimNode
+	{
+	public:
+		enum class Op { And = 0, Or = 1, Xor = 2 };
+
+		Op Operation = Op::And;
+
+		const char* TypeName() const override { return "BoolOp"; }
+
+		AnimNode_BoolOp()
+		{
+			AddBoolPin("A", false);
+			AddBoolPin("B", false);
+		}
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_BoolOp>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		AnimPinType OutputType() const override { return AnimPinType::Bool; }
+
+		void Update(AnimEvalContext&) override {}
+		void Evaluate(AnimEvalContext&, Pose&) override {}
+
+		bool EvaluateBool(AnimEvalContext& ctx) override
+		{
+			const bool a = ReadBool(ctx, 0);
+			const bool b = ReadBool(ctx, 1);
+
+			switch (Operation)
+			{
+			case Op::Or:  return a || b;
+			case Op::Xor: return a != b;
+			default:      return a && b;
+			}
+		}
+
+		void Serialize(nlohmann::json& j) const override { j["op"] = (int)Operation; }
+		void Deserialize(const nlohmann::json& j) override
+		{
+			Operation = (Op)j.value("op", (int)Op::And);
+		}
+	};
+
+	// Compara dois floats e devolve bool. E a ponte entre os dois mundos:
+	// um parametro Float vira condicao sem passar pelo script.
+	class AXE_API AnimNode_CompareFloat : public AnimNode
+	{
+	public:
+		enum class Op {
+			Greater = 0, Less = 1, GreaterEqual = 2, LessEqual = 3,
+			Equal = 4, NotEqual = 5
+		};
+
+		Op Operation = Op::Greater;
+
+		// Tolerancia do Equal / NotEqual.
+		//
+		// Comparar float com == e pedir para nunca dar verdadeiro: um valor
+		// que "deveria" ser 1.0 costuma ser 0.99999994 depois de um blend.
+		// Sem esta folga, o no funcionaria em teoria e nunca na pratica.
+		float Tolerance = 0.001f;
+
+		const char* TypeName() const override { return "CompareFloat"; }
+
+		AnimNode_CompareFloat()
+		{
+			AddFloatPin("A", 0.0f);
+			AddFloatPin("B", 0.5f);
+		}
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_CompareFloat>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		AnimPinType OutputType() const override { return AnimPinType::Bool; }
+
+		void Update(AnimEvalContext&) override {}
+		void Evaluate(AnimEvalContext&, Pose&) override {}
+
+		bool EvaluateBool(AnimEvalContext& ctx) override
+		{
+			const float a = ReadFloat(ctx, 0);
+			const float b = ReadFloat(ctx, 1);
+
+			switch (Operation)
+			{
+			case Op::Less:         return a < b;
+			case Op::GreaterEqual: return a >= b;
+			case Op::LessEqual:    return a <= b;
+			case Op::Equal:        return std::fabs(a - b) <= Tolerance;
+			case Op::NotEqual:     return std::fabs(a - b) > Tolerance;
+			default:               return a > b;
+			}
+		}
+
+		void Serialize(nlohmann::json& j) const override
+		{
+			j["op"] = (int)Operation;
+			j["tol"] = Tolerance;
+		}
+
+		void Deserialize(const nlohmann::json& j) override
+		{
+			Operation = (Op)j.value("op", (int)Op::Greater);
+			Tolerance = j.value("tol", 0.001f);
+		}
+	};
+
+	// Escolhe entre dois floats conforme um bool.
+	//
+	// E o no que resolve o caso concreto que motivou este conjunto: o Alpha do
+	// Control Rig indo a zero quando o personagem esta agachado.
+	//
+	//   Get Float "IsCrouching" -> Compare (> 0.5) -> Select(True=0, False=1)
+	//     -> Alpha do Control Rig
+	//
+	// BlendTime existe porque a troca crua ESTALA: Alpha pulando de 1 para 0
+	// num frame desliga o rig de uma vez, e isso aparece. Com tempo, o valor
+	// persegue o alvo. Zero mantem o comportamento instantaneo para quem
+	// quiser.
+	class AXE_API AnimNode_SelectFloat : public AnimNode
+	{
+	public:
+		float BlendTime = 0.15f;
+
+		const char* TypeName() const override { return "SelectFloat"; }
+
+		AnimNode_SelectFloat()
+		{
+			AddBoolPin("Condition", false);
+			AddFloatPin("True", 1.0f);
+			AddFloatPin("False", 0.0f);
+		}
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_SelectFloat>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		AnimPinType OutputType() const override { return AnimPinType::Float; }
+
+		void Evaluate(AnimEvalContext&, Pose&) override {}
+
+		// ATENCAO — este no TEM estado (m_Current), entao ele e a excecao a
+		// regra do bloco la em cima: precisa de Update de verdade para avancar
+		// o blend, e depende do UpdateOnce do AG2 para nao andar em dobro
+		// quando tiver dois consumidores.
+		//
+		// Update so avanca; quem calcula o alvo e o EvaluateFloat.
+		void Update(AnimEvalContext& ctx) override
+		{
+			m_Dt = ctx.DeltaTime;
+			m_Advance = ctx.AdvanceTime;
+		}
+
+		float EvaluateFloat(AnimEvalContext& ctx) override
+		{
+			const float target = ReadBool(ctx, 0) ? ReadFloat(ctx, 1) : ReadFloat(ctx, 2);
+
+			if (BlendTime <= 1e-5f || !m_Advance)
+			{
+				m_Current = target;
+				return m_Current;
+			}
+
+			if (!m_Primed)
+			{
+				// Primeiro frame comeca JA no alvo. Sem isto, todo personagem
+				// nasceria com o rig subindo de zero durante o primeiro blend,
+				// visivel no instante em que ele aparece na cena.
+				m_Current = target;
+				m_Primed = true;
+				return m_Current;
+			}
+
+			const float step = m_Dt / BlendTime;
+			const float diff = target - m_Current;
+
+			if (std::fabs(diff) <= step)
+				m_Current = target;
+			else
+				m_Current += (diff > 0.0f ? step : -step);
+
+			return m_Current;
+		}
+
+		void Reset() override
+		{
+			m_Current = 0.0f;
+			m_Primed = false;
+		}
+
+		void Serialize(nlohmann::json& j) const override { j["blend"] = BlendTime; }
+		void Deserialize(const nlohmann::json& j) override
+		{
+			BlendTime = j.value("blend", 0.15f);
+		}
+
+	private:
+		float m_Current = 0.0f;
+		float m_Dt = 0.0f;
+		bool  m_Advance = true;
+		bool  m_Primed = false;
+	};
+
+	// Aritmetica de float. Cobre o resto dos casos sem inventar um no por
+	// conta: 1-x, escalar um parametro, limitar um valor.
+	class AXE_API AnimNode_FloatMath : public AnimNode
+	{
+	public:
+		enum class Op {
+			Add = 0, Subtract = 1, Multiply = 2, Divide = 3,
+			Min = 4, Max = 5
+		};
+
+		Op Operation = Op::Add;
+
+		const char* TypeName() const override { return "FloatMath"; }
+
+		AnimNode_FloatMath()
+		{
+			AddFloatPin("A", 0.0f);
+			AddFloatPin("B", 1.0f);
+		}
+
+		std::unique_ptr<AnimNode> Clone() const override
+		{
+			auto c = std::make_unique<AnimNode_FloatMath>(*this);
+			CopyCommonTo(*c);
+			return c;
+		}
+
+		AnimPinType OutputType() const override { return AnimPinType::Float; }
+
+		void Update(AnimEvalContext&) override {}
+		void Evaluate(AnimEvalContext&, Pose&) override {}
+
+		float EvaluateFloat(AnimEvalContext& ctx) override
+		{
+			const float a = ReadFloat(ctx, 0);
+			const float b = ReadFloat(ctx, 1);
+
+			switch (Operation)
+			{
+			case Op::Subtract: return a - b;
+			case Op::Multiply: return a * b;
+
+				// Divisao por zero devolve A em vez de inf. Um inf entrando
+				// num Alpha contamina a pose inteira com NaN e o personagem
+				// some da tela — falha muito pior que um valor errado.
+			case Op::Divide:   return std::fabs(b) < 1e-6f ? a : a / b;
+
+			case Op::Min:      return a < b ? a : b;
+			case Op::Max:      return a > b ? a : b;
+			default:           return a + b;
+			}
+		}
+
+		void Serialize(nlohmann::json& j) const override { j["op"] = (int)Operation; }
+		void Deserialize(const nlohmann::json& j) override
+		{
+			Operation = (Op)j.value("op", (int)Op::Add);
 		}
 	};
 
@@ -386,132 +823,18 @@ namespace axe
 		bool m_UseSnapshot = false;
 	};
 
-	// ── Foot IK ─────────────────────────────────────────────────────────────
+	// ── Foot IK — REMOVIDO (AG1) ────────────────────────────────────────────
 	//
-	// Cola os pés no chão. A animação de idle/walk foi feita pra chão plano;
-	// numa rampa ou degrau os pés atravessam ou flutuam. Este nó, pra cada
-	// perna, faz um raycast pra baixo a partir do pé, e:
+	// O `AnimNode_FootIK` morava aqui. Saiu porque o Control Rig ja faz IK, e
+	// melhor: o rig e um grafo que o usuario monta, enquanto este no era uma
+	// solucao fechada em C++ com combos de osso no painel. Manter os dois
+	// significava duas implementacoes de two-bone IK divergindo, e duas
+	// respostas diferentes para "por que o pe nao encosta no chao".
 	//
-	//   - se o chão está ACIMA de onde a animação pôs o pé (rampa subindo),
-	//     levanta o alvo do pé até lá e dobra o joelho pra alcançar
-	//     (Two-Bone IK: coxa -> canela -> pé);
-	//   - alinha o pé à NORMAL do chão (o pé acompanha a inclinação);
-	//   - abaixa o QUADRIL o suficiente pra que a perna mais esticada ainda
-	//     alcance — senão uma perna estica reto e a outra fica no ar.
-	//
-	// É um nó como qualquer outro: entra uma pose, sai uma pose. A diferença
-	// é que ele consulta o mundo (PhysicsSystem::Get().Raycast) e por isso
-	// precisa da WorldTransform do contexto — o único nó que sai do espaço
-	// local.
-	//
-	// Genérico em N pernas (não fixo em esq/dir): um quadrúpede é só quatro
-	// pernas na lista. Cada perna são três ossos nomeados, casados por nome
-	// com o esqueleto — sem hardcode de "mixamorig:LeftFoot".
-	class AXE_API AnimNode_FootIK : public AnimNode
-	{
-	public:
-		const char* TypeName() const override { return "FootIK"; }
-
-		std::unique_ptr<AnimNode> Clone() const override
-		{
-			auto c = std::make_unique<AnimNode_FootIK>(*this);
-			CopyCommonTo(*c);
-			return c;
-		}
-
-		int InputCount() const override { return 1; }
-		const char* InputName(int) const override { return "Pose"; }
-
-		// Uma perna: os três ossos da cadeia IK, do quadril ao pé.
-		//
-		//   Upper = coxa (a raiz que roda)   ex: LeftUpLeg
-		//   Lower = canela (o joelho)        ex: LeftLeg
-		//   Foot  = pé (recebe o alinhamento) ex: LeftFoot
-		struct Leg
-		{
-			std::string Upper;
-			std::string Lower;
-			std::string Foot;
-		};
-
-		std::vector<Leg> Legs;
-
-		// Quanto o pé pode subir/descer do plano da animação, em metros. Passou
-		// disso, o nó desiste daquele pé (buraco fundo, parede) em vez de
-		// esticar a perna de forma grotesca.
-		float MaxReach = 0.5f;
-
-		// Trim vertical fino, em metros, somado ao deslocamento de TODO pe.
-		// 0 = a sola encosta exatamente onde a animacao a poe. Positivo levanta
-		// (util se a malha do pe crava um pouco no chao).
-		float FootHeight = 0.0f;
-
-		// Suavizacao temporal (1/s). O alvo do pe e a normal do chao sao
-		// perseguidos exponencialmente em vez de saltarem: raycast que muda de
-		// superficie entre um frame e outro deixa de dar POP.
-		float Smoothing = 12.0f;
-
-		// Abaixar o quadril quando um pé não alcança (pelvis dip). Sem isso, o
-		// pé baixo estica a perna reto e o corpo parece "puxado" pra cima.
-		bool  DipPelvis = true;
-
-		// Osso do quadril/raiz que desce no pelvis dip. Vazio = usa o pai comum
-		// das pernas, resolvido no primeiro Evaluate.
-		std::string PelvisBone;
-
-		// Alpha inline 1.0: um Foot IK recém-criado age INTEIRO. Se começasse
-		// em 0, você ligaria tudo certo e não veria efeito nenhum.
-		AnimNode_FootIK()
-		{
-			AddFloatPin("Alpha", 1.0f);
-
-			// Bípede por padrão, com os nomes da Mixamo (sem o prefixo
-			// "mixamorig:", que o loader do AXE já remove). Casa direto com o
-			// Y Bot; qualquer outro rig, troca nos combos do painel.
-			Legs.push_back({ "LeftUpLeg",  "LeftLeg",  "LeftFoot" });
-			Legs.push_back({ "RightUpLeg", "RightLeg", "RightFoot" });
-		}
-
-		void Serialize(nlohmann::json& j) const override;
-		void Deserialize(const nlohmann::json& j) override;
-
-		void Update(AnimEvalContext& ctx) override;
-		void Evaluate(AnimEvalContext& ctx, Pose& out) override;
-		void Reset() override;
-
-	private:
-		// Resolve os índices de osso uma vez (casamento por nome é caro pra
-		// fazer por frame). Invalida quando a lista de pernas muda no editor.
-		struct ResolvedLeg { int Upper = -1, Lower = -1, Foot = -1; };
-
-		// Estado SUAVIZADO por perna. Sem ele o IK reage instantaneamente a
-		// cada raycast, e qualquer variacao de superficie vira tremor.
-		struct LegState
-		{
-			float     Offset = 0.0f;              // deslocamento vertical do pe
-			glm::vec3 Normal{ 0.0f, 1.0f, 0.0f }; // normal do chao
-			float     Weight = 0.0f;              // 0 = pe no ar, 1 = pe no chao
-			bool      Init = false;
-		};
-
-		void ResolveBones(const Skeleton& skel);
-
-		std::vector<ResolvedLeg> m_Resolved;
-		std::vector<LegState>    m_State;
-
-		float m_PelvisOffset = 0.0f;
-
-		// DeltaTime do ultimo Update. O contexto do Evaluate vem com
-		// DeltaTime = 0 (so o Update avanca tempo), mas a suavizacao precisa
-		// de dt — e o Update SEMPRE roda antes do Evaluate no mesmo frame.
-		float m_LastDt = 0.0f;
-		int  m_PelvisIdx = -1;
-		bool m_BonesResolved = false;
-
-		// Assinatura da última resolução — detecta troca de osso no editor sem
-		// precisar de um Reset() explícito.
-		std::size_t m_ResolvedHash = 0;
-	};
+	// O tipo "FootIK" continua sendo RECONHECIDO na desserializacao — ver
+	// CreateAnimNode em anim_nodes.cpp. Ele nao cria mais nada, mas e tratado
+	// como tipo APOSENTADO em vez de desconhecido: a diferenca aparece no log
+	// que o usuario le ao abrir um .axeanim antigo.
 
 	// ── Control Rig ───────────────────────────────────────────────────────────
 	//

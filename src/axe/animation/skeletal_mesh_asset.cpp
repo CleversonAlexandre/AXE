@@ -3,7 +3,9 @@
 #include <unordered_set>
 #include <cctype>
 #include <unordered_map>
-#include "skeletal_mesh_loader.hpp"
+#include "skeletal_cooked.hpp"   // B2.2
+#include "clip_cooked.hpp"       // B2.3
+#include "axe/asset/asset_import_hooks.hpp"   // B2.4
 #include "axe/log/log.hpp"
 #include <glm/gtc/matrix_transform.hpp>   // SC34: translate/scale do socket
 #include <glm/gtx/quaternion.hpp>          // SC34: quat -> mat4
@@ -73,20 +75,74 @@ namespace axe
 			return false;
 		}
 
-		SkeletalAsset imported = SkeletalMeshLoader::Load(source.string());
+		// ── B2.2: cozido primeiro ────────────────────────────────────────────
+		//
+		// Quando ha .axeskelbin valido, malha e esqueleto vem dele e o assimp
+		// nao e tocado. Este e o caminho que o jogo empacotado vai usar, e
+		// tambem o que o editor passa a usar todo dia.
+		//
+		// Os CLIPES EMBUTIDOS ficam de fora: eles ainda vem do FBX (B2.3). Na
+		// pratica isso quase nunca importa — o fluxo Mixamo traz as animacoes
+		// em arquivos separados, e o .axeskel ja lista essas. Um glTF com
+		// clipes embutidos ainda precisa do fonte ate o B2.3.
+		bool fromCooked = false;
 
-		if (!imported.IsValid())
+		if (SkeletalCooked::IsUpToDate(m_FilePath, source))
 		{
-			AXE_CORE_ERROR("SkeletalMeshAsset '{}': falha ao importar '{}'.",
-				m_Name, source.string());
-			return false;
+			auto cooked = SkeletalCooked::Read(SkeletalCooked::PathFor(m_FilePath));
+
+			if (cooked.IsValid())
+			{
+				m_Mesh = cooked.Mesh;
+				m_Skeleton = cooked.Skeleton;
+				fromCooked = true;
+			}
 		}
 
-		m_Mesh = imported.MeshData;
-		m_Skeleton = imported.SkeletonData;
+		if (!fromCooked)
+		{
+			// B2.4 — importador registrado (editor) ou nada (jogo).
+			auto imported = AssetImportHooks::ImportSkeletal(source);
 
-		// Clipes embutidos no próprio arquivo do personagem (comum em glTF).
-		m_Clips = imported.Clips;
+			if (!imported.Mesh || !imported.Skeleton || imported.Skeleton->IsEmpty())
+			{
+				if (!AssetImportHooks::HasSkeletalImporter())
+				{
+					AXE_CORE_ERROR("SkeletalMeshAsset '{}': no cooked .axeskelbin and no "
+						"importer registered. The asset was not cooked before packaging.",
+						m_Name);
+				}
+				else
+				{
+					AXE_CORE_ERROR("SkeletalMeshAsset '{}': failed to import '{}'.",
+						m_Name, source.string());
+				}
+
+				return false;
+			}
+
+			m_Mesh = imported.Mesh;
+			m_Skeleton = imported.Skeleton;
+
+			// Clipes embutidos no próprio arquivo do personagem (comum em glTF).
+			m_Clips = imported.Clips;
+
+			// Cozinha para a proxima vez.
+			//
+			// AQUI, e nao so num ponto de import: um .axeskel que ja existia no
+			// projeto antes deste patch nunca passaria por um import, e ficaria
+			// preso ao FBX para sempre. Cozinhar no primeiro Resolve faz o
+			// projeto inteiro migrar sozinho, um asset por vez, conforme sao
+			// usados.
+			//
+			// m_FilePath vazio significa asset em memoria, ainda nao salvo —
+			// nao ha onde gravar o cozido.
+			if (!m_FilePath.empty())
+			{
+				SkeletalCooked::Write(SkeletalCooked::PathFor(m_FilePath),
+					*m_Mesh, *m_Skeleton);
+			}
+		}
 
 		// Nomes de clipe sao a CHAVE do religamento (o grafo referencia por
 		// nome) — dois clipes com o mesmo nome e o segundo fica inalcancavel,
@@ -133,7 +189,20 @@ namespace axe
 			// Religamento por NOME de osso. Os índices de bone de um arquivo
 			// de animação NUNCA batem com os do personagem — é por isso que
 			// isto funciona com os FBX separados da Mixamo.
-			auto clips = SkeletalMeshLoader::LoadClips(animPath.string(), *m_Skeleton);
+			// B2.3 — cozido primeiro; FBX so se nao houver, e ai cozinha.
+			//
+			// O religamento por nome acontece nos DOIS caminhos: o
+			// .axeclipbin grava nome de osso, nao indice, exatamente para
+			// preservar esta propriedade.
+			auto clips = ClipCooked::TryLoadFor(animPath, *m_Skeleton);
+
+			if (clips.empty())
+			{
+				clips = AssetImportHooks::ImportClips(animPath, *m_Skeleton);
+
+				if (!clips.empty())
+					ClipCooked::Write(ClipCooked::PathFor(animPath), clips, *m_Skeleton);
+			}
 
 			int takeIdx = 0;
 
@@ -254,7 +323,17 @@ namespace axe
 			}
 		}
 
-		auto clips = SkeletalMeshLoader::LoadClips(file.string(), *m_Skeleton);
+		// B2.3 — idem. Aqui o usuario acabou de escolher o arquivo, entao
+		// cozinhar agora poupa o proximo load.
+		auto clips = ClipCooked::TryLoadFor(file, *m_Skeleton);
+
+		if (clips.empty())
+		{
+			clips = AssetImportHooks::ImportClips(file, *m_Skeleton);
+
+			if (!clips.empty())
+				ClipCooked::Write(ClipCooked::PathFor(file), clips, *m_Skeleton);
+		}
 
 		if (clips.empty())
 		{

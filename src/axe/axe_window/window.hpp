@@ -54,6 +54,18 @@ namespace axe
 
 		// Input
 		virtual bool      IsKeyDown(int keycode) const = 0;
+
+		// IN1 — a contraparte de IsKeyDown para o mouse.
+		//
+		// Nao existia. O Input tinha o array s_CurrentMouse, o GetMouseButton
+		// que o lia e o enum MouseButton correto — faltava a unica peca que
+		// liga isso ao hardware. Resultado: todo binding de mouse devolvia
+		// "solto" para sempre, em silencio.
+		//
+		// `button` usa a numeracao GLFW (0 = esquerdo, 1 = direito,
+		// 2 = meio), a mesma do enum MouseButton em input_mapping.hpp.
+		virtual bool      IsMouseButtonDown(int button) const = 0;
+
 		virtual glm::vec2 GetCursorPosition()   const = 0;
 		virtual void      SetCursorPosition(float x, float y) = 0;
 

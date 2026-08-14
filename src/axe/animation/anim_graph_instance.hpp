@@ -98,6 +98,16 @@ namespace axe
 		int m_AssetVersion = -1;
 
 		PosePool m_Pool;
+
+		// AG2 — contador monotonico de Updates desta instancia.
+		//
+		// Comeca em 0 e e PRE-incrementado, entao o primeiro frame carimba 1
+		// — que e o que faz a marca inicial dos nos (0) nunca coincidir.
+		//
+		// Sobrevive ao re-clone do grafo (SetAsset) de proposito: os nos novos
+		// nascem com marca 0 e o contador segue alto, entao o primeiro Update
+		// depois de um save no editor roda normalmente.
+		std::uint64_t m_FrameId = 0;
 	};
 
 } // namespace axe

@@ -3,7 +3,8 @@
 #include "axe/script/script_component.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/mesh/mesh_factory.hpp"
-#include "axe/mesh/mesh_loader.hpp"
+#include "axe/mesh/mesh_cooked.hpp"   // B2.1
+#include "axe/asset/asset_import_hooks.hpp"   // B2.4
 #include "axe/log/log.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -574,7 +575,13 @@ namespace axe
 					{
 						auto& mc = registry.emplace<MeshComponent>(entity);
 						mc.AssetUUID = uuid;
-						mc.Data = MeshLoader::Load(record->FilePath.string()).MeshData;
+
+						// B2.1 — cozido primeiro; FBX so se nao houver.
+						mc.Data = MeshCooked::TryLoadFor(record->FilePath);
+
+						// B2.4 — importador registrado (editor) ou nada (jogo).
+						if (!mc.Data)
+							mc.Data = AssetImportHooks::ImportMesh(record->FilePath);
 					}
 					else
 					{

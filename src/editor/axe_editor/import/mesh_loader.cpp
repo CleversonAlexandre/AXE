@@ -1,4 +1,4 @@
-#include "mesh_loader.hpp"
+#include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/log/log.hpp"
 #include "axe/graphics/shader.hpp"
 

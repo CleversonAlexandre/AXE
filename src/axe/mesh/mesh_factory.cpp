@@ -1,6 +1,7 @@
 #include "mesh_factory.hpp"
 #include <filesystem>
-#include "axe/mesh/mesh_loader.hpp"
+#include "axe/mesh/mesh_cooked.hpp"   // B2.1
+#include "axe/asset/asset_import_hooks.hpp"   // B2.4
 #include "axe/asset/asset_database.hpp"
 #include "primitive_uuid.hpp"
 #include "axe/log/log.hpp"
@@ -344,6 +345,29 @@ namespace axe
 		std::error_code ec;
 		if (!std::filesystem::exists(rec->FilePath, ec)) return nullptr;
 
-		return MeshLoader::Load(rec->FilePath.string()).MeshData;
+		// B2.1 — cozido primeiro, FBX como rede.
+		//
+		// O fallback e o que torna esta fase segura: um asset ainda nao
+		// cozinhado continua abrindo pelo caminho antigo. Ele sai no B2.4,
+		// junto com o assimp — e ai um asset sem cozido simplesmente nao
+		// carrega, que e o comportamento correto para um jogo empacotado.
+		if (auto cooked = MeshCooked::TryLoadFor(rec->FilePath))
+			return cooked;
+
+		// B2.4 — sem cozido, pede ao IMPORTADOR REGISTRADO.
+		//
+		// No editor ha um (ele importa e cozinha, entao o proximo load ja vem
+		// pelo caminho de cima). No jogo nao ha, e isto devolve nullptr.
+		//
+		// Um asset sem cozido no jogo e falha de EMPACOTAMENTO, e o aviso sai
+		// aqui porque e aqui que se sabe QUAL asset e.
+		if (auto imported = AssetImportHooks::ImportMesh(rec->FilePath))
+			return imported;
+
+		AXE_CORE_ERROR("MeshFactory: '{}' has no cooked .axemesh and no importer "
+			"is registered. The asset was not cooked before packaging.",
+			rec->FilePath.filename().string());
+
+		return nullptr;
 	}
 } // namespace axe
