@@ -95,6 +95,16 @@ namespace axe
         //   [visualizacao de som]
         void RenderToFramebuffer(Framebuffer& target, const FrameParams& params);
 
+        // Mesma sequencia, mas o post-process final sai na TELA.
+        //
+        // Existe porque o jogo nao tem para onde renderizar senao o backbuffer,
+        // e nao ha objeto `Framebuffer` que o represente — `Unbind()` e o que
+        // binda o 0.
+        //
+        // A alternativa seria o jogo criar um framebuffer e copiar para a tela
+        // depois: uma passada de tela cheia por frame, para nada.
+        void RenderToScreen(const FrameParams& params);
+
         SceneRenderer* GetSceneRenderer() { return m_SceneRenderer.get(); }
 
     private:
@@ -108,6 +118,13 @@ namespace axe
         // que se move codigo e a receita para um bug que ninguem consegue
         // atribuir. Registrado como divida; ver as notas do SR2.
         void SyncEnvironment(Scene& scene, SceneEnvironment* env, float timeSeconds);
+
+        // O corpo de verdade dos dois pontos de entrada acima.
+        //
+        // `target` nulo = backbuffer. Um unico caminho, para que o frame do
+        // editor em Play e o frame do jogo nao possam divergir — que e a razao
+        // de esta classe existir.
+        void RenderInternal(Framebuffer* target, const FrameParams& params);
 
         std::unique_ptr<SceneRenderer>   m_SceneRenderer;
         SkyboxRenderer                   m_SkyboxRenderer;

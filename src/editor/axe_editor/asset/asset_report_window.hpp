@@ -1,5 +1,6 @@
 #pragma once
 #include "axe/asset/asset_dependency_graph.hpp"
+#include "axe/project/game_packager.hpp"   // PKG1
 
 #include <imgui.h>
 #include <string>
@@ -68,6 +69,21 @@ namespace axe
         // A cena inicial existe no disco mas nao esta no AssetDatabase.
         // Sintoma de indice desatualizado; invalida o relatorio inteiro.
         bool m_StartSceneUnregistered = false;
+
+        // ── Empacotamento (PKG1) ─────────────────────────────────────────────
+        //
+        // Mora nesta janela porque e a mesma pergunta vista de dois angulos: o
+        // relatorio diz O QUE vai no jogo, o botao MANDA. Separar em duas
+        // janelas faria o usuario conferir numa e empacotar na outra, sem
+        // garantia de que a analise que ele leu e a que foi usada.
+        void DrawPackageSection();
+
+        char m_PackageOutDir[512] = {};
+        char m_PackageBinDir[512] = {};
+        bool m_PackageClean = false;
+
+        bool m_HasPackageResult = false;
+        GamePackager::Result m_PackageResult;
     };
 
 } // namespace axe

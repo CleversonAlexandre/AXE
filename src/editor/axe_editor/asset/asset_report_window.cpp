@@ -193,6 +193,160 @@ namespace axe
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    void AssetReportWindow::DrawPackageSection()
+    {
+        // Fechada por padrao. O uso diario desta janela e ler o relatorio;
+        // empacotar e ocasional, e um botao que escreve em disco nao deve estar
+        // no caminho do olhar.
+        if (!ImGui::CollapsingHeader("Package game"))
+            return;
+
+        ImGui::Indent(10.0f);
+
+        // Sugestao de destino: IRMA da pasta do projeto, nunca dentro.
+        //
+        // O packager recusa destino dentro do projeto — com CleanOutput isso
+        // apagaria o trabalho do usuario. Sugerir um caminho ja valido evita
+        // que a primeira tentativa seja a recusada.
+        if (m_PackageOutDir[0] == 0 && ProjectManager::Get().HasProject())
+        {
+            const Project& proj = ProjectManager::Get().GetCurrent();
+
+            const std::string suggested =
+                (proj.RootPath.parent_path() / (proj.Name + "_Build")).string();
+
+            std::snprintf(m_PackageOutDir, sizeof(m_PackageOutDir), "%s", suggested.c_str());
+        }
+
+        // ── Assets fora do projeto (PKG2) ────────────────────────────────────
+        //
+        // ANTES dos campos de destino, e nao no meio dos resultados: se houver
+        // asset externo, o pacote SAI INCOMPLETO, e o usuario precisa resolver
+        // isto antes de clicar em empacotar — nao depois de ler 17 avisos.
+        {
+            const auto external = ProjectManager::Get().HasProject()
+                ? AssetDatabase::Get().ExternalAssets(
+                    ProjectManager::Get().GetCurrent().RootPath)
+                : std::vector<const AssetRecord*>{};
+
+            if (!external.empty())
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.30f, 1.0f),
+                    ICON_TRIANGLE_EXCLAMATION "  %d asset(s) live outside the project folder.",
+                    (int)external.size());
+
+                ImGui::TextWrapped(
+                    "Dragging a file from outside registers its ORIGINAL path - nothing is "
+                    "copied. Those assets cannot be packaged, and the project is not "
+                    "portable as it is: moving the folder to another machine loses them.");
+
+                ImGui::Spacing();
+
+                if (ui::IconButton(ICON_FOLDER_OPEN,
+                    "Copy them into Assets/Imported and update the index",
+                    ui::Accent::Warning))
+                {
+                    const auto r = AssetDatabase::Get().ImportExternalAssets(
+                        ProjectManager::Get().GetCurrent().RootPath);
+
+                    AXE_EDITOR_INFO("Asset Report: {} external asset(s) imported, {} failure(s).",
+                        r.Imported, r.Failures.size());
+
+                    for (const auto& f : r.Failures)
+                        AXE_EDITOR_ERROR("Asset Report: {}", f);
+
+                    Run();
+                }
+
+                ImGui::SameLine();
+                ImGui::TextDisabled("UUIDs are preserved - nothing needs to be reopened.");
+
+                if (ImGui::TreeNode("##externallist", "Show the %d file(s)", (int)external.size()))
+                {
+                    for (const AssetRecord* rec : external)
+                        ImGui::BulletText("%s", rec->FilePath.string().c_str());
+
+                    ImGui::TreePop();
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+        }
+
+        ImGui::TextDisabled("Output folder (must be outside the project)");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputText("##pkgout", m_PackageOutDir, sizeof(m_PackageOutDir));
+
+        ImGui::TextDisabled("Binaries folder (game.exe + axe.dll) - leave empty to copy assets only");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputText("##pkgbin", m_PackageBinDir, sizeof(m_PackageBinDir));
+
+        ImGui::Checkbox("Clean the output folder first", &m_PackageClean);
+
+        if (m_PackageClean)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.30f, 1.0f),
+                ICON_TRIANGLE_EXCLAMATION "  deletes everything in that folder");
+        }
+
+        ImGui::Spacing();
+
+        if (ui::IconButton(ICON_SAVE, "Build the package", ui::Accent::Primary))
+        {
+            GamePackager::Options opt;
+            opt.OutputDir = m_PackageOutDir;
+            opt.BinariesDir = m_PackageBinDir;
+            opt.CleanOutput = m_PackageClean;
+
+            m_PackageResult = GamePackager::Package(opt);
+            m_HasPackageResult = true;
+
+            // Reflete no relatorio o que o pacote realmente levou: as raizes do
+            // packager sao SO a cena inicial e o GameMode, e ver o relatorio de
+            // "todas as cenas" ao lado de um pacote menor confundiria.
+            Run();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Assets are copied as-is; the cooked files come from import.");
+
+        if (m_HasPackageResult)
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            const auto& r = m_PackageResult;
+
+            if (r.Success)
+            {
+                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1.0f),
+                    ICON_CHECK "  %d file(s), %.1f MB",
+                    (int)r.FilesCopied, (double)r.BytesCopied / (1024.0 * 1024.0));
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+                    ICON_TRIANGLE_EXCLAMATION "  failed - %d error(s)",
+                    (int)r.Errors.size());
+            }
+
+            for (const auto& e : r.Errors)
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "  %s", e.c_str());
+
+            // Aviso nao impede o pacote, mas o usuario tem que ver: uma
+            // referencia quebrada vira um buraco no jogo.
+            for (const auto& w : r.Warnings)
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f), "  %s", w.c_str());
+        }
+
+        ImGui::Unindent(10.0f);
+        ImGui::Spacing();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     void AssetReportWindow::Draw()
     {
         if (!m_Open)
@@ -293,6 +447,8 @@ namespace axe
             m_Filter, sizeof(m_Filter));
 
         ImGui::Separator();
+
+        DrawPackageSection();
 
         ImGui::BeginChild("##assetreportlists");
 

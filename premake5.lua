@@ -192,6 +192,15 @@ project "axe"
         {
             '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/editor" >nul 2>nul',
             '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/editor/axe.dll" >nul',
+
+            -- PKG: a mesma copia para o alvo `game`.
+            --
+            -- Feita AQUI, e nao no postbuild do game, porque quem produz o
+            -- axe.dll e este projeto: assim uma recompilacao do runtime
+            -- atualiza os dois consumidores sem depender de o outro projeto
+            -- ser reconstruido depois.
+            '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/game" >nul 2>nul',
+            '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/game/axe.dll" >nul',
             '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"',
             
                 
@@ -301,6 +310,106 @@ project "editor"
         cppdialect "C++20"
         systemversion "latest"
         debugdir "%{cfg.targetdir}" 
+
+    filter "configurations:Debug"
+        defines "AXE_DEBUG"
+        runtime "Debug"
+        symbols "On"
+
+    filter "configurations:Release"
+        defines "AXE_RELEASE"
+        runtime "Release"
+        optimize "On"
+
+    filter "configurations:Dist"
+        defines "AXE_DIST"
+        runtime "Release"
+        optimize "Full"
+
+    filter {}
+----------------GAME-------------------
+--
+-- O alvo que o PACKAGING_READINESS chamava de "a peca que falta criar".
+--
+-- ── O QUE ELE NAO LINKA, E POR QUE ISSO E O PONTO ───────────────────────────
+--
+-- Sem assimp: o runtime le apenas os formatos cozidos (B2.1-B2.4). Se um dia
+-- este projeto precisar do assimp de volta, e sinal de que alguma coisa voltou
+-- a abrir FBX em tempo de execucao.
+--
+-- Sem ImGuizmo e sem imgui-node-editor: sao ferramentas de autoria.
+--
+-- O ImGui AINDA vem junto, e nao por escolha: o projeto `axe` lista os .cpp
+-- dele explicitamente, entao ele esta dentro do axe.dll. E o B4 do
+-- PACKAGING_READINESS, e ele nao IMPEDE o jogo de rodar — so faz o jogo
+-- carregar codigo de GUI que nunca executa.
+project "game"
+    location "src/game"
+    kind "ConsoleApp"
+    language "C++"
+    targetname "game"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files
+    {
+        "src/game/**.hpp",
+        "src/game/**.cpp",
+    }
+
+    includedirs
+    {
+        "src",
+        "%{IncludeDir.GLFW}",
+        "%{IncludeDir.Glad}",
+        "src/vendor/spdlog/include",
+        "src/vendor/glm",
+        "%{IncludeDir.entt}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.Imgui}",   -- so porque axe.dll expoe headers que o alcancam
+    }
+
+    links
+    {
+        "axe",
+        "GLFW",
+        "opengl32",
+        "Glad",
+    }
+
+    defines
+    {
+        "AXE_PLATFORM_WINDOWS",
+        "FMT_HEADER_ONLY=1",
+        "IMGUI_API=__declspec(dllimport)",
+        "IMGUI_DEFINE_MATH_OPERATORS",
+    }
+
+    dependson
+    {
+        "axe"
+    }
+
+    -- Sem postbuild.
+    --
+    -- A primeira versao tinha um `if not exist ... mkdir` com o caminho
+    -- montado a mao, e ele falhava (MSB3073): `%{wks.location}` ja termina em
+    -- barra invertida, e concatenar `/bin/...` produzia `AXE\/bin/...` — que o
+    -- `mkdir` do cmd recusa, porque ele nao aceita barra normal.
+    --
+    -- O postbuild do `editor` tem o mesmo defeito e nao falha por acidente: a
+    -- pasta dele ja existe, entao o `if not exist` nunca chega a rodar o
+    -- `mkdir`. A do `game` era nova.
+    --
+    -- Quem copia o axe.dll para ca agora e o postbuild do projeto `axe`, com os
+    -- tokens {MKDIR}/{COPYFILE} do premake — que geram o separador certo para a
+    -- plataforma em vez de depender de concatenacao de string.
+
+    filter "system:windows"
+        cppdialect "C++20"
+        systemversion "latest"
+        debugdir "%{cfg.targetdir}"
 
     filter "configurations:Debug"
         defines "AXE_DEBUG"

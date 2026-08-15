@@ -44,6 +44,38 @@ namespace axe
 		bool UpdatePath(const std::string& uuid, const std::filesystem::path& newPath,
 			const std::string& newName = "");
 
+		// ── Assets fora da raiz do projeto (PKG2) ────────────────────────────
+		//
+		// Arrastar um arquivo de fora para o editor REGISTRA O CAMINHO DE
+		// ORIGEM; nada e copiado. Enquanto se usa so o editor, funciona — o
+		// arquivo esta no disco. Mas o projeto nao e portatil: mandar a pasta
+		// para outra maquina perde esses assets, e o empacotamento nao tem de
+		// onde copia-los preservando a estrutura relativa.
+		//
+		// `ExternalAssets` lista os registrados fora da raiz.
+		//
+		// `ImportExternalAssets` copia cada um para `<root>/Assets/<subfolder>`,
+		// junto com os arquivos-satelite (`.axemeta`, `.axemesh`,
+		// `.axeskelbin`, `.axeclipbin`, `.axegraph`), e atualiza o indice via
+		// UpdatePath. O arquivo de ORIGEM nao e apagado: ele nao pertence ao
+		// projeto, e apagar coisa de fora da pasta do usuario nunca deve ser
+		// efeito colateral de um botao no editor.
+		//
+		// O UUID e preservado, entao toda referencia existente continua valendo
+		// — nenhuma cena, material ou grafo precisa ser reaberto.
+		std::vector<const AssetRecord*> ExternalAssets(
+			const std::filesystem::path& projectRoot) const;
+
+		struct ImportExternalResult
+		{
+			std::size_t Imported = 0;
+			std::vector<std::string> Failures;
+		};
+
+		ImportExternalResult ImportExternalAssets(
+			const std::filesystem::path& projectRoot,
+			const std::string& subfolder = "Imported");
+
 		// Remove um asset do índice em memória (m_Records + m_PathIndex).
 		// Sem isso, excluir um asset só removia o arquivo do disco — o
 		// registro continuava vivo em memória e só desaparecia do browser

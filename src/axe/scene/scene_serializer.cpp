@@ -2,6 +2,7 @@
 #include "components.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/project/project_manager.hpp"   // PKG3 — raiz para resolver o HDRI
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/mesh_cooked.hpp"   // B2.1
 #include "axe/asset/asset_import_hooks.hpp"   // B2.4
@@ -294,7 +295,38 @@ namespace axe
 
 			if (auto* sc = registry.try_get<ScriptComponent>(entity))
 			{
-				components["Script"]["asset_path"] = sc->ScriptAssetPath;
+				// ── UUID e a referencia; o caminho e diagnostico ─────────────
+				//
+				// `asset_path` e ABSOLUTO (`C:\\Users\\...\\BP_Player.axescript`),
+				// porque vem de AssetRecord::FilePath. Isso quebra em dois
+				// cenarios reais: abrir o projeto em outra maquina, e o jogo
+				// EMPACOTADO, onde a estrutura de pastas e outra. Todo script
+				// anexado a uma entidade viraria referencia morta.
+				//
+				// E o mesmo motivo pelo qual o `dll_path` saiu daqui no SC4 —
+				// ver a nota logo abaixo. O asset_path tinha o mesmo defeito e
+				// ficou para tras.
+				//
+				// Os DOIS sao gravados de proposito:
+				//
+				//   asset_uuid — a referencia de verdade, portatil, lida
+				//                primeiro no load.
+				//   asset_path — nao e mais lido quando ha UUID. Fica porque um
+				//                `.axescene` aberto no editor de texto deve
+				//                dizer QUAL script e aquele; um UUID sozinho
+				//                torna o arquivo ilegivel para depuracao. E
+				//                serve de ultimo recurso se o UUID sumir do
+				//                banco.
+				{
+					std::string scriptUuid;
+
+					if (!sc->ScriptAssetPath.empty())
+						if (const AssetRecord* rec = AssetDatabase::Get().GetByPath(sc->ScriptAssetPath))
+							scriptUuid = rec->UUID;
+
+					components["Script"]["asset_uuid"] = scriptUuid;
+					components["Script"]["asset_path"] = sc->ScriptAssetPath;
+				}
 				// SC4 — dll_path NAO e mais gravado. E dado derivado (depende de
 				// onde o projeto esta no disco desta maquina), e ScriptWorld o
 				// reconstroi via ScriptPaths::ResolveDll no inicio da cena. Mesma
@@ -887,7 +919,36 @@ namespace axe
 			{
 				auto& t = components["Script"];
 				ScriptComponent sc;
-				sc.ScriptAssetPath = t.value("asset_path", "");
+				// UUID primeiro; caminho so para cena gravada antes desta
+				// mudanca. Uma cena antiga e migrada no proximo save, sem
+				// nenhum passo manual.
+				{
+					const std::string scriptUuid = t.value("asset_uuid", std::string{});
+
+					if (!scriptUuid.empty())
+					{
+						if (const AssetRecord* rec = AssetDatabase::Get().GetByUUID(scriptUuid))
+						{
+							sc.ScriptAssetPath = rec->FilePath.string();
+						}
+						else
+						{
+							// UUID gravado e ausente do banco. Nao e o caso de
+							// cair no caminho antigo em silencio: se o indice
+							// estiver desatualizado o caminho tambem falha, e o
+							// usuario precisa saber que a referencia se perdeu.
+							AXE_CORE_WARN("SceneSerializer: script uuid '{}' not found in the "
+								"asset database. Falling back to the stored path.",
+								scriptUuid);
+
+							sc.ScriptAssetPath = t.value("asset_path", "");
+						}
+					}
+					else
+					{
+						sc.ScriptAssetPath = t.value("asset_path", "");
+					}
+				}
 				// dll_path de cena antiga e deliberadamente descartado: aponta para
 				// bin/temp_scripts, que este patch abandonou. ScriptWorld resolve.
 				sc.ScriptName = t.value("name", "");
@@ -1100,8 +1161,53 @@ namespace axe
 				auto& envJson = root["scene"]["environment"];
 				std::string hdriPath = envJson.value("hdri_path", "");
 				env->SkyboxRotation = envJson.value("skybox_rotation", 0.0f);
-				if (!hdriPath.empty() && std::filesystem::exists(hdriPath))
-					env->LoadHDRI(hdriPath);
+
+				// ── PKG3: resolver o HDRI em mais de um lugar ────────────
+				//
+				// `hdri_path` costuma ser relativo AO DIRETORIO ATUAL
+				// ("resources/quarry_04_puresky_2k.hdr"), porque no editor o
+				// processo roda ao lado de `resources/`. O jogo empacotado nao
+				// tem essa pasta, e o `exists()` cru falhava em silencio: sem
+				// erro, sem skybox, fundo preto — foi o que apareceu no
+				// primeiro build.
+				//
+				// Ordem: como esta (absoluto ou relativo ao cwd), depois
+				// relativo a RAIZ DO PROJETO, depois ao lado do EXECUTAVEL.
+				// A raiz vem antes do executavel porque um HDRI que o usuario
+				// escolheu mora no projeto; o do executavel e o default que
+				// veio com a engine.
+				if (!hdriPath.empty())
+				{
+					std::error_code hec;
+					std::filesystem::path resolved;
+
+					auto tryPath = [&](const std::filesystem::path& p)
+						{
+							if (!resolved.empty()) return;
+							if (!p.empty() && std::filesystem::exists(p, hec))
+								resolved = p;
+						};
+
+					tryPath(hdriPath);
+
+					if (ProjectManager::Get().HasProject())
+						tryPath(ProjectManager::Get().GetCurrent().RootPath / hdriPath);
+
+					tryPath(std::filesystem::current_path(hec) / hdriPath);
+
+					if (!resolved.empty())
+					{
+						env->LoadHDRI(resolved.string());
+					}
+					else
+					{
+						// Falhar em silencio aqui custou uma sessao de
+						// depuracao: o sintoma (fundo preto) nao aponta para
+						// um arquivo faltando.
+						AXE_CORE_WARN("SceneSerializer: HDRI '{}' not found - "
+							"the scene will render without a skybox.", hdriPath);
+					}
+				}
 			}
 		}
 

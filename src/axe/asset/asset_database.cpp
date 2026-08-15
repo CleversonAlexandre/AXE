@@ -312,7 +312,35 @@ namespace axe
 		{
 			json entry;
 			entry["uuid"] = record.UUID;
-			entry["path"] = record.FilePath.string();
+			// ── PKG1: caminho RELATIVO a raiz do projeto ─────────────────
+			//
+			// Era absoluto (`C:\\Users\\Clever\\...`), com o mesmo defeito que o
+			// ScriptComponent tinha: mover a pasta do projeto, abrir em outra
+			// maquina ou EMPACOTAR invalidava o indice inteiro.
+			//
+			// Relativo tambem e o que torna o manifesto do jogo possivel: o
+			// pacote e uma pasta com outra raiz, e os caminhos precisam
+			// funcionar la sem reescrita.
+			//
+			// Fora da raiz (asset referenciado de outro lugar do disco) fica
+			// absoluto — nao ha relativo que faca sentido, e forcar um
+			// produziria um caminho que sobe pastas ate a raiz do volume.
+			{
+				std::error_code ec;
+				const auto rel = std::filesystem::relative(record.FilePath, projectRoot, ec);
+
+				// `..` no primeiro componente = o asset esta FORA da raiz.
+				// Comparar o componente inteiro, e nao o prefixo da string:
+				// uma pasta chamada "..coisa" nao deve ser confundida com
+				// subir de nivel.
+				const bool escapes = !rel.empty()
+					&& rel.begin() != rel.end()
+					&& rel.begin()->string() == "..";
+
+				const bool inside = !ec && !rel.empty() && !escapes;
+
+				entry["path"] = inside ? rel.generic_string() : record.FilePath.string();
+			}
 			entry["type"] = AssetTypeToString(record.Type);
 			entry["name"] = record.Name;
 			entry["virtual_folder"] = record.VirtualFolder;
@@ -350,7 +378,16 @@ namespace axe
 			{
 				AssetRecord record;
 				record.UUID = entry.value("uuid", "");
-				record.FilePath = entry.value("path", "");
+				// PKG1 — relativo e resolvido contra a raiz; absoluto (indice
+				// gravado antes desta mudanca) continua valendo. Um indice
+				// antigo e migrado no proximo Save, sem passo manual.
+				{
+					std::filesystem::path p = entry.value("path", "");
+
+					record.FilePath = p.is_absolute()
+						? p
+						: std::filesystem::weakly_canonical(projectRoot / p);
+				}
 				record.Type = AssetTypeFromString(entry.value("type", "Unknown"));
 
 				// A EXTENSAO NO DISCO E A VERDADE.
@@ -437,5 +474,180 @@ namespace axe
 		RegisterPrimitives();
 	}
 
+
+
+	// ─────────────────────────────────────────────────────────────────────────
+	//  Assets fora da raiz do projeto (PKG2)
+	// ─────────────────────────────────────────────────────────────────────────
+
+	namespace
+	{
+		// Arquivos gerados que acompanham um asset. Mesma lista do
+		// AssetDependencyGraph, e pela mesma razao: nenhum deles esta no
+		// AssetDatabase (a extensao nao e um tipo de asset), entao quem move o
+		// asset e o unico que pode leva-los junto.
+		//
+		// Deixar um `.axemesh` para tras nao daria erro — o runtime cairia no
+		// fonte e recozinharia. Deixar o `.axemeta` para tras SIM: o UUID mora
+		// nele, e sem ele um Scan futuro gera outro UUID para o mesmo arquivo,
+		// e toda referencia existente aponta para o vazio.
+		const char* kSatelliteExtensions[] =
+		{
+			".axemesh", ".axeskelbin", ".axeclipbin", ".axegraph",
+		};
+
+		bool IsInside(const std::filesystem::path& p, const std::filesystem::path& root)
+		{
+			std::error_code ec;
+			const auto rel = std::filesystem::relative(p, root, ec);
+
+			if (ec || rel.empty())
+				return false;
+
+			return rel.begin()->string() != "..";
+		}
+	}
+
+	std::vector<const AssetRecord*> AssetDatabase::ExternalAssets(
+		const std::filesystem::path& projectRoot) const
+	{
+		std::vector<const AssetRecord*> out;
+
+		std::error_code ec;
+		const auto root = std::filesystem::weakly_canonical(projectRoot, ec);
+
+		for (const auto& [uuid, rec] : m_Records)
+		{
+			if (rec.FilePath.empty())
+				continue;
+
+			// Primitivas do engine (Cube, Sphere...) nao tem arquivo no disco.
+			if (!std::filesystem::exists(rec.FilePath, ec))
+				continue;
+
+			if (!IsInside(rec.FilePath, root))
+				out.push_back(&rec);
+		}
+
+		return out;
+	}
+
+	AssetDatabase::ImportExternalResult AssetDatabase::ImportExternalAssets(
+		const std::filesystem::path& projectRoot, const std::string& subfolder)
+	{
+		ImportExternalResult res;
+
+		std::error_code ec;
+
+		const auto root = std::filesystem::weakly_canonical(projectRoot, ec);
+		const auto destDir = root / "Assets" / subfolder;
+
+		std::filesystem::create_directories(destDir, ec);
+
+		if (ec)
+		{
+			res.Failures.push_back("could not create " + destDir.string()
+				+ ": " + ec.message());
+			return res;
+		}
+
+		// Copia a lista ANTES de mexer: ExternalAssets devolve ponteiros para
+		// dentro de m_Records, e UpdatePath altera esse mapa. Iterar sobre os
+		// ponteiros enquanto o mapa muda seria ler memoria realocada.
+		std::vector<std::pair<std::string, std::filesystem::path>> toMove;
+
+		for (const AssetRecord* rec : ExternalAssets(root))
+			toMove.emplace_back(rec->UUID, rec->FilePath);
+
+		for (const auto& [uuid, src] : toMove)
+		{
+			std::filesystem::path dst = destDir / src.filename();
+
+			// Nome ja ocupado por OUTRO asset: desambigua em vez de
+			// sobrescrever. Dois arquivos de pastas diferentes podem ter o
+			// mesmo nome, e perder um deles em silencio seria pior que um nome
+			// feio.
+			if (std::filesystem::exists(dst, ec))
+			{
+				const AssetRecord* occupant = GetByPath(dst);
+
+				if (!occupant || occupant->UUID != uuid)
+				{
+					const std::string stem = src.stem().string();
+					const std::string ext = src.extension().string();
+
+					for (int i = 1; i < 1000; ++i)
+					{
+						dst = destDir / (stem + "_" + std::to_string(i) + ext);
+
+						if (!std::filesystem::exists(dst, ec))
+							break;
+					}
+				}
+			}
+
+			std::filesystem::copy_file(src, dst,
+				std::filesystem::copy_options::overwrite_existing, ec);
+
+			if (ec)
+			{
+				res.Failures.push_back(src.filename().string() + ": " + ec.message());
+				ec.clear();
+				continue;
+			}
+
+			// ── Satelites ────────────────────────────────────────────────────
+			//
+			// O `.axemeta` ANEXA a extensao ("a.fbx.axemeta"); os cozidos
+			// SUBSTITUEM ("a.axemesh"). A diferenca importa: tratar os dois
+			// igual deixaria o .axemeta para tras, e com ele o UUID.
+			{
+				const std::filesystem::path metaSrc(src.string() + ".axemeta");
+
+				if (std::filesystem::exists(metaSrc, ec))
+				{
+					std::filesystem::copy_file(metaSrc,
+						std::filesystem::path(dst.string() + ".axemeta"),
+						std::filesystem::copy_options::overwrite_existing, ec);
+					ec.clear();
+				}
+
+				for (const char* ext : kSatelliteExtensions)
+				{
+					std::filesystem::path satSrc = src;
+					satSrc.replace_extension(ext);
+
+					if (!std::filesystem::exists(satSrc, ec))
+						continue;
+
+					std::filesystem::path satDst = dst;
+					satDst.replace_extension(ext);
+
+					std::filesystem::copy_file(satSrc, satDst,
+						std::filesystem::copy_options::overwrite_existing, ec);
+					ec.clear();
+				}
+			}
+
+			// UpdatePath preserva o UUID e reescreve o .axemeta no destino, e e
+			// isso que faz toda referencia existente continuar valendo.
+			if (!UpdatePath(uuid, dst))
+			{
+				res.Failures.push_back(src.filename().string()
+					+ ": copied, but the index could not be updated");
+				continue;
+			}
+
+			++res.Imported;
+
+			AXE_CORE_INFO("AssetDatabase: imported '{}' into the project.",
+				dst.filename().string());
+		}
+
+		if (res.Imported)
+			Save(root);
+
+		return res;
+	}
 
 } // namespace axe

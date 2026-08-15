@@ -144,6 +144,18 @@ namespace axe
     void WorldRenderer::RenderToFramebuffer(Framebuffer& target,
         const FrameParams& params)
     {
+        RenderInternal(&target, params);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    void WorldRenderer::RenderToScreen(const FrameParams& params)
+    {
+        RenderInternal(nullptr, params);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    void WorldRenderer::RenderInternal(Framebuffer* target, const FrameParams& params)
+    {
         if (!m_HDRFramebuffer || !m_PostProcess || !m_SceneRenderer)
         {
             AXE_CORE_ERROR("WorldRenderer: Initialize() nao foi chamado.");
@@ -319,7 +331,13 @@ namespace axe
         }
 
         // ── 10. Post-process, ja no framebuffer final ────────────────────
-        target.Bind();
+        // Alvo nulo = tela. O `Unbind` de qualquer framebuffer binda o 0, e e
+        // isso que o jogo quer; usamos o HDR so por ser o que esta a mao.
+        if (target)
+            target->Bind();
+        else
+            m_HDRFramebuffer->Unbind();
+
         RenderCommand::SetViewport(0, 0, width, height);
         m_PostProcess->Execute(finalColorID, m_PostProcessSettings);
 
@@ -348,7 +366,9 @@ namespace axe
         // final. Nao antes: o HUD nao deve ser afetado por tone mapping,
         // bloom ou TAA.
 
-        target.Unbind();
+        // Na tela nao ha o que desligar — ja estamos no framebuffer 0.
+        if (target)
+            target->Unbind();
     }
 
 } // namespace axe
