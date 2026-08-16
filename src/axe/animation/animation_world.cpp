@@ -13,6 +13,7 @@
 #include "axe/asset/asset_database.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
+#include "axe/material/material_shader_cache.hpp"   // material do FX de notify
 #include "axe/audio/audio_engine.hpp"
 #include "axe/log/log.hpp"
 
@@ -437,6 +438,23 @@ namespace axe
 				tc.Data.Position = basePos + n.LocationOffset * baseScale;
 				tc.Data.Rotation = glm::radians(n.RotationOffset);
 				tc.Data.Scale = n.Scale;
+
+				// Material de cada emitter — via CACHE.
+				//
+				// Um AnimNotify de FX dispara a cada passo do personagem, e
+				// resolver do zero custaria um compile de GLSL por passo. Era
+				// por isso que este ponto nao resolvia material nenhum e o FX
+				// saia com o shader padrao do ParticleRenderer — no editor E no
+				// jogo. Falhar aqui continua caindo nesse mesmo padrao.
+				for (auto& emDef : psAsset->Emitters)
+				{
+					if (emDef.ParticleMaterialUUID.empty()) continue;
+
+					MaterialShaderCache::Resolve(emDef.ParticleMaterialUUID,
+						CookedMaterialDomain::Particle,
+						emDef.ParticleMaterialShader,
+						emDef.ParticleMaterialSamplers);
+				}
 
 				auto& ps = registry.emplace<ParticleSystemComponent>(e);
 				ps.Data = psAsset;

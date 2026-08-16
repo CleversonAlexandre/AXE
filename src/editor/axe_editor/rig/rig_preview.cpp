@@ -20,7 +20,7 @@
 #include "axe/scene/components.hpp"
 #include "axe/animation/animation_world.hpp"
 #include "axe/animation/animation_sampler.hpp"
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include "axe/renderer/scene_renderer.hpp"
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/scene/scene.hpp"

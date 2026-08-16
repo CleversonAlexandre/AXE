@@ -4,8 +4,8 @@
 // Promote to Variable, Get/Set Variable popup.
 
 #include "script_graph_window.hpp"
-#include "axe/script/script_graph.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/input/input_mapping.hpp" // popup do combo de Get Action/Axis
 #include <imgui.h>
 #include <imgui_node_editor.h>

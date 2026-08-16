@@ -493,7 +493,7 @@ namespace axe
 		// e toda referencia existente aponta para o vazio.
 		const char* kSatelliteExtensions[] =
 		{
-			".axemesh", ".axeskelbin", ".axeclipbin", ".axegraph",
+			".axemesh", ".axeskelbin", ".axeclipbin", ".axegraph", ".axeshader",
 		};
 
 		bool IsInside(const std::filesystem::path& p, const std::filesystem::path& root)

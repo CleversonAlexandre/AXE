@@ -5,7 +5,7 @@
 #include "axe/renderer/scene_renderer.hpp"
 #include "axe/graphics/renderer/taa_pass.hpp"
 #include "axe/graphics/renderer/ssr_pass.hpp"
-#include "picking_renderer.hpp"
+#include "axe/graphics/renderer/picking_renderer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/scene/transform.hpp"
@@ -19,7 +19,7 @@
 #include "axe/graphics/renderer/collider_debug_renderer.hpp"
 #include "axe/graphics/renderer/sound_visualization_renderer.hpp"
 #include "axe/graphics/game_camera.hpp"
-#include "skybox_renderer.hpp"
+#include "axe/graphics/renderer/skybox_renderer.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "axe/graphics/renderer/post_process_pass.hpp"
 #include "axe/graphics/renderer/ssao_pass.hpp"
@@ -40,7 +40,7 @@ namespace axe
 	class Scene;
 
 
-	class AXE_API ViewportRenderer
+	class ViewportRenderer
 	{
 	public:
 		void Initialize();

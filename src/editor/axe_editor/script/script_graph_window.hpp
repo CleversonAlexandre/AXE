@@ -1,10 +1,10 @@
 #include "axe/core/command_history.hpp"
 #pragma once
 #include "axe/core/types.hpp"
-#include "axe/script/script_graph.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/script/script_component.hpp"
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/scene_environment.hpp"

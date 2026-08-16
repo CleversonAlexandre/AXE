@@ -1,4 +1,4 @@
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "script_graph_compiler.hpp"
 #include "axe/log/log.hpp"
 #include <sstream>

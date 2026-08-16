@@ -7,7 +7,7 @@
 #include <backends/imgui_impl_opengl3.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include <ImGuizmo.h>
+// S0b — sem <ImGuizmo.h>: o gizmo e do editor. Ver BeginFrame().
 
 #include <filesystem>
 
@@ -175,7 +175,18 @@ namespace axe
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        ImGuizmo::BeginFrame();
+
+        // S0b — `ImGuizmo::BeginFrame()` SAIU daqui e passou a ser chamado
+        // pela ImGuiLayer, do lado do editor.
+        //
+        // Nao e cosmetica: o ImGuizmo e ferramenta de autoria (gizmo de
+        // translacao/rotacao/escala) e agora e compilado no `editor.exe`,
+        // junto do unico consumidor dele, o `viewport_renderer`. As funcoes
+        // dele sao livres, sem macro de export — chamar daqui deixaria a
+        // `axe.dll` pedindo um simbolo que o exe tem e ela nao.
+        //
+        // E, no fundo, o binding de ImGui com a janela nao deveria mesmo
+        // saber que existe gizmo.
     }
 
     void ImGuiSystem::EndFrame()

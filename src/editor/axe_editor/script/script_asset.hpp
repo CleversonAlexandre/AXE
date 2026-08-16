@@ -1,4 +1,30 @@
 #pragma once
+// script_asset.hpp — o `.axescript`: o BLUEPRINT (grafo + variaveis + defs de
+// componente) do qual o C++ e gerado.
+//
+// ── S0b: por que este arquivo mora no EDITOR ─────────────────────────────────
+//
+// Veio de `src/axe/script/`. E ferramenta de AUTORIA, nao runtime — a mesma
+// distincao do assimp (B2) e do MaterialCompiler (B4):
+//
+//   O jogo roda o C++ COMPILADO. O `ScriptWorld` — o consumidor de runtime —
+//   usa `ScriptComponent::ScriptAssetPath` apenas para resolver o nome da DLL
+//   (`<Nome>_<8 hex do uuid>.dll`) e carrega-la. Ele NUNCA abre o `.axescript`
+//   nem toca no grafo. O grafo e o desenho de onde o codigo saiu; o jogo so
+//   precisa do codigo.
+//
+// E arrastava a GUI junto: `script_graph.hpp` inclui <imgui_node_editor.h> e
+// <imgui.h>, e este header e a porta de entrada dele. Enquanto os tres viviam
+// em `src/axe/`, o `axe.dll` que vai para o jogador carregava o stack de
+// interface do editor dentro.
+//
+// `AXE_API` saiu dos tipos daqui de proposito: eles nao sao mais exportados
+// pela DLL — sao codigo do `editor.exe`. Se um `AXE_API` reaparecer aqui, e
+// sinal de que alguem tentou trazer isto de volta para o runtime.
+//
+// FRONTEIRA: nada em `src/axe/` pode incluir este arquivo. O runtime conhece
+// caminho de asset (string) e DLL compilada, e mais nada.
+
 #include "axe/core/types.hpp"
 #include "axe/asset/asset.hpp"
 #include "axe/utils/glm_config.hpp"   // SC19: ScriptValue guarda glm::vec4
@@ -334,7 +360,7 @@ namespace axe
     // Vec cobre Vec2 (xy), Vec3 (xyz), Vec4 e Quat (xyzw, w=1 = identidade).
     // Str cobre String hoje, e é onde o UUID de asset e o nome de enum vão
     // caber no S2 sem mexer em struct nenhum de novo — que é o ponto.
-    struct AXE_API ScriptValue
+    struct ScriptValue
     {
         bool        Bool = false;
         int         Int = 0;
@@ -451,7 +477,7 @@ namespace axe
     };
 
     // ── Script Asset — arquivo .axescript ────────────────────────────────────
-    class AXE_API ScriptAsset
+    class ScriptAsset
     {
     public:
         ScriptAsset() = default;

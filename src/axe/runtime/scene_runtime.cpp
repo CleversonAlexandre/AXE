@@ -4,6 +4,7 @@
 #include "axe/scene/components.hpp"
 #include "axe/scene/game_mode_asset.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/material/material_shader_cache.hpp"
 #include "axe/physics/physics_system.hpp"
 #include "axe/audio/audio_engine.hpp"
 #include "axe/script/script_base.hpp"
@@ -114,6 +115,15 @@ namespace axe
     SceneRuntime::StartResult SceneRuntime::OnStart(Scene& scene, const StartConfig& cfg)
     {
         StartResult result;
+
+        // ── 0. Cache de shader de material ───────────────────────────────
+        //
+        // Zerado a cada Play. O cache serve aos spawns de tempo de jogo
+        // (sub-emissor, FX de AnimNotify) e, no editor, um material editado
+        // entre um Play e outro precisa aparecer no proximo — sem isto, a
+        // sessao anterior mandaria na atual. No jogo isso roda uma vez, com o
+        // cache ja vazio, e nao custa nada.
+        MaterialShaderCache::Clear();
 
         // ── 1. Callbacks do Jolt -> ScriptWorld ──────────────────────────
         //

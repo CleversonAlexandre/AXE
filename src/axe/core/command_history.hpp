@@ -19,7 +19,20 @@ namespace axe
 	// Pilha de undo/redo — uma instância por contexto
 	//(MaterialEditor, SceneEditor, ScriptEditor, etc.)
 
-	class AXE_API CommandHistory
+	// S0b — SEM `AXE_API`.
+	//
+	// A classe e inteiramente INLINE (todos os metodos moram no corpo dela), e
+	// so o EDITOR a usa: undo/redo e conceito de ferramenta, nao de jogo.
+	//
+	// Enquanto o `viewport_renderer.hpp` vivia em `src/axe/`, alguma TU da DLL
+	// incluia este header e o `dllexport` emitia os metodos dentro da axe.dll —
+	// que era de onde o editor os importava. Com o viewport indo para o editor,
+	// nenhuma TU do runtime inclui mais este arquivo: a DLL parou de exportar e
+	// o editor ficou pedindo `__imp_?Push@CommandHistory...` para ninguem.
+	//
+	// Classe header-only nao precisa de export: cada projeto compila as
+	// proprias copias inline.
+	class CommandHistory
 	{
 	public:
 		//Executa um comando eo adiciona ao histórico

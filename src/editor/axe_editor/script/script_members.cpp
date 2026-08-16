@@ -4,8 +4,8 @@
 // Override Events, Event Dispatchers.
 
 #include "script_graph_window.hpp"
-#include "axe/script/script_asset.hpp"
-#include "axe/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
 #include "editor/axe_editor/editor_icon_library.hpp"
 #include <imgui.h>
 #include <imgui_node_editor.h>

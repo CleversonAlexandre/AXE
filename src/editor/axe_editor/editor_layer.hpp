@@ -13,7 +13,7 @@
 #include "axe/runtime/scene_runtime.hpp"
 
 
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/mesh/mesh_factory.hpp"
@@ -28,7 +28,7 @@
 #include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
 #include "axe/asset/asset_database.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/script/script_component.hpp"
 #include "axe/input/input.hpp"
 #include "axe/scene/game_mode_asset.hpp"

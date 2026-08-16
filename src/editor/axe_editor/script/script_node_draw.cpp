@@ -4,8 +4,8 @@
 // sincronização de tipo de variable nodes.
 
 #include "script_graph_window.hpp"
-#include "axe/script/script_graph.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/input/input_mapping.hpp"
 #include "axe/animation/anim_graph_asset.hpp" // combo de parametros do AnimGraph
 #include "axe/asset/asset_database.hpp"

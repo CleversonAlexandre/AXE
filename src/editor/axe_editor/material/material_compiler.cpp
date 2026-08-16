@@ -1,5 +1,6 @@
 #include "material_compiler.hpp"
 #include "axe/material/light_material_evaluator.hpp"
+#include "axe/material/material_cooked.hpp"   // B4 — .axeshader
 #include "axe/log/log.hpp"
 #include <sstream>
 #include <iomanip>
@@ -15,6 +16,41 @@ namespace axe
     MaterialCompiler::MaterialCompiler(MaterialGraph* graph)
         : m_Graph(graph)
     {}
+
+    // ── PKG9 — samplers por UUID, para o `.axeshader` ────────────────────────
+    //
+    // Os tres dominios nomeiam os samplers de formas diferentes ("u_AlbedoMap",
+    // "u_LightTex_N", "u_PartTex_N") e decidem em momentos diferentes QUAIS nos
+    // entram. O que todos tem em comum e o par final: `m_NodeSamplers` (no ->
+    // nome do uniform) e o mapa de texturas ja filtrado.
+    //
+    // Por isso este helper roda no FIM, sobre o mapa final: qualquer sampler que
+    // sobreviveu a filtragem do dominio entra, e nenhum outro. Derivar antes
+    // significaria repetir a regra de filtragem de cada dominio — tres copias
+    // para divergirem depois.
+    //
+    // Sampler sem UUID (textura arrastada de fora do projeto, por exemplo)
+    // simplesmente nao entra: o cozido nao tem como reencontra-la, e inventar um
+    // caminho seria pior que a ausencia.
+    void MaterialCompiler::CollectSamplerUUIDs(const MaterialCompiler& compiler,
+        MaterialGraph* graph,
+        const std::map<std::string, std::shared_ptr<Texture2D>>& finalSamplers,
+        CompiledMaterial& result)
+    {
+        if (!graph) return;
+
+        for (auto& node : graph->GetNodes())
+        {
+            if (node->Name != "Texture Sample") continue;
+            if (node->Value.TextureUUID.empty()) continue;
+
+            auto it = compiler.m_NodeSamplers.find(node->ID.Get());
+            if (it == compiler.m_NodeSamplers.end()) continue;
+            if (!finalSamplers.count(it->second)) continue;
+
+            result.SamplerTextureUUIDs[it->second] = node->Value.TextureUUID;
+        }
+    }
 
 
     CompiledMaterial MaterialCompiler::Compile(MaterialGraph* graph)
@@ -103,12 +139,24 @@ namespace axe
                 if (it == compiler.m_NodeSamplers.end()) continue;
 
                 if (it != compiler.m_NodeSamplers.end())
+                {
                     result.SamplerTextures[it->second] = node->Value.TextureVal;
 
+                    // B4 — o mesmo mapeamento, por UUID, para o `.axeshader`.
+                    if (!node->Value.TextureUUID.empty())
+                        result.SamplerTextureUUIDs[it->second] = node->Value.TextureUUID;
+                }
+
                 if (it->second == "u_AlbedoMap")
+                {
                     result.AlbedoTexture = node->Value.TextureVal;
+                    result.AlbedoSamplerName = it->second;   // B4
+                }
                 else if (it->second == "u_Texture_1")
+                {
                     result.NormalTexture = node->Value.TextureVal;
+                    result.NormalSamplerName = it->second;   // B4
+                }
                 else if (it->second == "u_Texture_2")
                     result.RoughnessTexture = node->Value.TextureVal;
                 else if (it->second == "u_Texture_3")
@@ -574,6 +622,7 @@ namespace axe
 
         result.FragmentShader = fs.str();
         result.SamplerTextures = samplerTextures;
+        CollectSamplerUUIDs(compiler, graph, samplerTextures, result);   // PKG9
         result.Success = true;
         return result;
     }
@@ -717,6 +766,27 @@ namespace axe
 
             auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
             if (!shader) return false;
+
+            // PKG9 — deixa o `.axeshader` em dia com a compilacao que acabou de
+            // acontecer. Este ponto e chamado pelo callback do EditorLayer no
+            // load de cena, entao ABRIR a cena no editor cozinha as light
+            // functions dela — mesmo efeito que o B4 tem para superficies.
+            //
+            // So cozinha se o grafo for MESMO deste dominio. O slot de Light
+            // Material aceita qualquer `.axemat` (o AssetPicker filtra por TIPO
+            // de asset, nao por dominio), e uma luz apontando para um material
+            // de SUPERFICIE faria este ponto regravar o `.axeshader` dele com um
+            // shader de luz — destruindo o cozido bom e deixando toda malha que
+            // usa aquele material com defaults no jogo. Pior: o callback roda a
+            // cada load de cena, entao recompilar o material nao salvaria.
+            //
+            // Compilar continua acontecendo nos dois casos (a luz recebe algum
+            // shader, como antes); so o COZIMENTO exige que o dominio bata.
+            if (graph.Domain == MaterialDomain::LightFunction)
+                BakeShaderToDisk(result, materialFilePath, CookedMaterialDomain::LightFunction);
+            else
+                AXE_CORE_WARN("CompileLightFunctionFromFile: '{}' nao e um material de "
+                    "Light Function - compilado, mas nao cozido.", materialFilePath.string());
 
             outShader = shader;
             outSamplers = result.SamplerTextures;
@@ -922,6 +992,7 @@ void main()
 
         result.FragmentShader = fs.str();
         result.SamplerTextures = samplerTextures;
+        CollectSamplerUUIDs(compiler, graph, samplerTextures, result);   // PKG9
         result.Success = true;
         return result;
     }
@@ -960,6 +1031,15 @@ void main()
 
             auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
             if (!shader) return false;
+
+            // PKG9 — mesma ideia do Light Function: cozinha no mesmo ponto em
+            // que o editor ja resolve o material do emitter, e pela mesma razao
+            // so quando o dominio do grafo bate (ver a nota longa la em cima).
+            if (graph.Domain == MaterialDomain::Particle)
+                BakeShaderToDisk(result, materialFilePath, CookedMaterialDomain::Particle);
+            else
+                AXE_CORE_WARN("CompileParticleFunctionFromFile: '{}' nao e um material de "
+                    "Particle - compilado, mas nao cozido.", materialFilePath.string());
 
             outShader = shader;
             outSamplers = result.SamplerTextures;
@@ -1932,5 +2012,57 @@ void main()
         case PinType::Texture2D: return "sampler2D";
         default:                 return "float";
         }
+    }
+
+    // ── B4 — cozimento do shader (.axeshader) ────────────────────────────────
+    //
+    // O formato e o Save pertencem ao RUNTIME (CookedMaterial, em
+    // src/axe/material/), pela mesma razao do skeletal_cooked: quem le e dono
+    // do formato. Aqui so se transfere o resultado da compilacao para a
+    // estrutura cozida — a dependencia aponta editor -> runtime.
+    bool MaterialCompiler::BakeToDisk(const CompiledMaterial& result,
+        const std::filesystem::path& materialFilePath,
+        const glm::vec3& bakedEmissive)
+    {
+        if (!result.Success)
+            return false;
+
+        CookedMaterialData data;
+        data.VertexShader = result.VertexShader;
+        data.FragmentShader = result.FragmentShader;
+        data.GeometryFragShader = result.GeometryFragShader;
+        data.SamplerTextureUUIDs = result.SamplerTextureUUIDs;
+        data.AlbedoSamplerName = result.AlbedoSamplerName;
+        data.NormalSamplerName = result.NormalSamplerName;
+        data.IsTransparent = result.IsTransparent;
+        data.IsMasked = result.IsMasked;
+        data.AlphaCutoff = result.AlphaCutoff;
+        data.BakedEmissive = bakedEmissive;
+
+        return CookedMaterial::Save(CookedMaterial::PathFor(materialFilePath), data);
+    }
+
+    // PKG9 — cozimento de Light Function e Particle.
+    //
+    // Mais simples que o de superficie porque estes dominios nao produzem
+    // Material: nao ha albedo/normal para apontar, nem geometry shader, nem
+    // BakedEmissive (o GI le o emissive do material de SUPERFICIE, e nenhum
+    // destes dois e superficie). Sobra o que o consumidor guarda de verdade:
+    // shader + samplers.
+    bool MaterialCompiler::BakeShaderToDisk(const CompiledMaterial& result,
+        const std::filesystem::path& materialFilePath,
+        CookedMaterialDomain domain)
+    {
+        if (!result.Success)
+            return false;
+
+        CookedMaterialData data;
+        data.Domain = domain;
+        data.VertexShader = result.VertexShader;
+        data.FragmentShader = result.FragmentShader;
+        data.SamplerTextureUUIDs = result.SamplerTextureUUIDs;
+        data.IsTransparent = result.IsTransparent;
+
+        return CookedMaterial::Save(CookedMaterial::PathFor(materialFilePath), data);
     }
 }

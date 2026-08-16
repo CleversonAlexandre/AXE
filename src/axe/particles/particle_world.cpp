@@ -4,6 +4,7 @@
 #include "axe/scene/components.hpp"
 #include "axe/utils/glm_config.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/material/material_shader_cache.hpp"   // material do sub-emissor
 
 #include <random>
 #include <cmath>
@@ -495,6 +496,24 @@ namespace axe
                 {
                     emDef.AutoDestroy = true;
                     emDef.SubEmitterUUID = ""; // sem cascade
+
+                    // Material do emitter — via CACHE.
+                    //
+                    // Este spawn acontece em tempo de jogo, e resolver do zero
+                    // custaria um compile de GLSL por sub-emissor nascido. Era
+                    // por isso que este ponto nao resolvia material nenhum e o
+                    // sub-emissor saia com o shader padrao do ParticleRenderer
+                    // — no editor E no jogo. Com o cache, o primeiro spawn paga
+                    // e os seguintes nao.
+                    //
+                    // Falhar aqui NAO e erro: sem material autorado (ou sem
+                    // cozido, num pacote incompleto) o renderer usa o shader
+                    // padrao, que e exatamente o que acontecia antes.
+                    if (!emDef.ParticleMaterialUUID.empty())
+                        MaterialShaderCache::Resolve(emDef.ParticleMaterialUUID,
+                            CookedMaterialDomain::Particle,
+                            emDef.ParticleMaterialShader,
+                            emDef.ParticleMaterialSamplers);
                 }
 
                 auto entity = scene.CreateEntity("SubEmitter");

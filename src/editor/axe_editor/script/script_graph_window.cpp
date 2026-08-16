@@ -9,10 +9,10 @@
 //   script_details.cpp      — DrawDetailsWindow / DrawScriptDetails / DrawSceneGraphWindow
 
 #include "script_graph_window.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include <nlohmann/json.hpp>
-#include "axe/script/script_graph.hpp"
-#include "axe/script/script_graph_compiler.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_graph_compiler.hpp"
 #include "axe/script/script_compiler.hpp"
 #include "axe/script/script_paths.hpp"
 #include "axe/asset/asset_database.hpp"

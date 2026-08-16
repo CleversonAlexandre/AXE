@@ -26,6 +26,7 @@ namespace
         ".axeclipbin",  // B2.3 — curvas
         ".axemeta",     // UUID e tipo do asset
         ".axegraph",    // grafo do Material Editor (irmao do .axemat)
+        ".axeshader",   // B4 — shader cozido do material (irmao do .axemat)
     };
 
     // Percorre um JSON recursivamente e entrega cada string encontrada.

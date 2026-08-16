@@ -1,7 +1,7 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include "axe/graphics/framebuffer.hpp"
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/scene_environment.hpp"
 #include "axe/mesh/mesh.hpp"

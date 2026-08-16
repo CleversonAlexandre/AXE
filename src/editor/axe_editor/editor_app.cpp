@@ -70,6 +70,14 @@ namespace axe
 		// Decide qual layer colocar primeiro
 		if (ProjectManager::Get().HasLastProject())
 		{
+			// SEMPRE logado, e pelo mesmo motivo do `main.cpp` do jogo: abrir
+			// "o ultimo projeto" em silencio significa que, quando ele NAO for
+			// o projeto que voce acha que e, nada na tela diz isso. Foi o caso
+			// em que o jogo empacotado gravava a propria copia como ultimo
+			// projeto e o editor subia na pasta de build.
+			AXE_CORE_INFO("Editor: reopening the last project '{}'",
+				ProjectManager::Get().GetLastProjectPath().string());
+
 			// Abre direto o editor
 			ProjectManager::Get().OpenProject(
 				ProjectManager::Get().GetLastProjectPath()

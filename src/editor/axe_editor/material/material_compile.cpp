@@ -4,6 +4,7 @@
 
 #include "material_editor_window.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/material/material_shader_cache.hpp"   // PKG10 — invalidacao
 #include "editor/axe_editor/material/material_compiler.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/log/log.hpp"
@@ -22,6 +23,62 @@ namespace axe
         LogInfo("Compilando shader...");
 
         if (!m_Material || !m_Graph) return;
+
+        // ── PKG9 — cozimento dos domínios que não são superfície ─────────────
+        //
+        // ANTES da compilação de superfície, e não junto com ela lá embaixo.
+        //
+        // O motivo é correção: o B4 cozinhava o resultado de
+        // `MaterialCompiler::Compile` — que é SEMPRE o domínio Surface —
+        // independentemente do domínio do grafo. Clicar em Compile num material
+        // de Light Function sobrescrevia o `.axeshader` correto (gravado pelo
+        // callback no load de cena) por um shader de superfície. O runtime
+        // recusa pelo campo `domain`, mas o arquivo bom já teria ido embora.
+        //
+        // Os dois booleanos são explícitos de propósito: `MaterialDomain` tem
+        // sete valores, e quatro deles (DeferredDecal, Volume, PostProcess,
+        // UserInterface) ainda não têm compilador. Um `!= Surface` trataria
+        // esses quatro como partícula e gravaria um cozido que não tem nada a
+        // ver com o material. Eles não cozinham nada — que é o certo enquanto
+        // não existir um compilador para eles.
+        const bool isLightDomain = (m_Graph->Domain == MaterialDomain::LightFunction);
+        const bool isParticleDomain = (m_Graph->Domain == MaterialDomain::Particle);
+
+        if ((isLightDomain || isParticleDomain) && m_Asset
+            && !m_Asset->GetFilePath().empty())
+        {
+            auto domainResult = isLightDomain
+                ? MaterialCompiler::CompileLightFunction(m_Graph.get())
+                : MaterialCompiler::CompileParticleFunction(m_Graph.get());
+
+            const auto cookedDomain = isLightDomain
+                ? CookedMaterialDomain::LightFunction
+                : CookedMaterialDomain::Particle;
+
+            if (!domainResult.Success)
+                LogError("Compilação (" + std::string(CookedMaterial::DomainName(cookedDomain))
+                    + ") falhou: " + domainResult.ErrorMessage);
+            else if (MaterialCompiler::BakeShaderToDisk(domainResult,
+                m_Asset->GetFilePath(), cookedDomain))
+                LogInfo("Shader cozido (.axeshader, "
+                    + std::string(CookedMaterial::DomainName(cookedDomain)) + ") atualizado.");
+            else
+                LogWarning("Falha ao gravar o .axeshader — o jogo empacotado vai "
+                    "carregar este material com defaults.");
+
+            // O cache de tempo de jogo guarda o shader deste material por
+            // UUID (sub-emissores, FX de AnimNotify). Sem esta linha, compilar
+            // um material de partícula e dar Play mostraria o shader ANTERIOR
+            // até reabrir o editor — o cache mentindo, que é o único jeito de
+            // ele piorar as coisas.
+            if (const AssetRecord* rec = AssetDatabase::Get().GetByPath(m_Asset->GetFilePath()))
+                MaterialShaderCache::Invalidate(rec->UUID);
+
+            // Sem `return`: o resto da função (salvar o .axemat, preview,
+            // aplicar na cena) continua exatamente como era. Só o cozimento
+            // mudou de lugar — e o cozimento de superfície lá embaixo agora
+            // sabe que não é a vez dele.
+        }
 
         auto result = MaterialCompiler::Compile(m_Graph.get());
         if (!result.Success) { LogError("Compilação falhou: " + result.ErrorMessage); return; }
@@ -76,6 +133,22 @@ namespace axe
         if (m_Asset) m_Asset->SetMaterial(m_Material);
         if (!m_Asset->GetFilePath().empty()) m_Asset->Save(m_Asset->GetFilePath());
         SaveGraph();
+
+        // B4 — cozinha o `.axeshader` junto do save, como o `.axegraph`. É o
+        // arquivo que o game.exe carrega no lugar do recompile callback.
+        //
+        // PKG9 — só para o domínio Surface: os outros dois já foram cozidos lá
+        // em cima, com o compilador do domínio deles.
+        if (m_Graph->Domain == MaterialDomain::Surface
+            && m_Asset && !m_Asset->GetFilePath().empty())
+        {
+            if (MaterialCompiler::BakeToDisk(result, m_Asset->GetFilePath(),
+                m_Material->BakedEmissive))
+                LogInfo("Shader cozido (.axeshader) atualizado.");
+            else
+                LogWarning("Falha ao gravar o .axeshader — o jogo empacotado "
+                    "vai carregar este material com defaults.");
+        }
 
         // Atualiza preview
         if (m_PreviewScene)

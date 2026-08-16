@@ -4,7 +4,7 @@
 
 #include "script_graph_window.hpp"
 #include "editor/axe_editor/import/mesh_loader.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/material/material_asset.hpp"

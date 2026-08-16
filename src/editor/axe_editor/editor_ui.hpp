@@ -15,6 +15,7 @@
 #include "editor/axe_editor/script/script_graph_window.hpp"
 #include <imgui.h>
 #include <functional>
+#include <filesystem>   // m_LoadedInputProjectRoot
 
 namespace axe
 {
@@ -70,7 +71,21 @@ namespace axe
 
         ViewportWindow  m_ViewportWindow;
 
+        // Qual projeto a janela de Input Settings ja carregou.
+        //
+        // MEMBRO, e nao `static` local: o EditorApp::RequestReopenProject
+        // DESTROI o EditorLayer — e com ele este EditorUI e a janela de Input —
+        // e cria outro. Um static sobrevive a essa troca; entao, ao reabrir o
+        // MESMO projeto, a comparacao dava "igual", o SetProjectPath nunca era
+        // chamado na janela NOVA, e ela abria com o caminho vazio: "Nenhum
+        // projeto carregado", sem poder criar nem salvar mapeamentos. Como
+        // membro, o estado morre junto com a janela a que pertence.
+        std::filesystem::path m_LoadedInputProjectRoot;
 
+        // Mesma armadilha, mesmo motivo: o layout padrao era guardado num
+        // static, e o EditorUI recriado no reopen herdava "ja construi" de um
+        // objeto que nao existe mais.
+        bool m_DefaultLayoutBuilt = false;
 
         bool m_ShowHierarchy = true;
         bool m_ShowViewport = true;

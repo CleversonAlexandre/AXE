@@ -1,6 +1,14 @@
-#include "axe/script/script_asset.hpp"
 #pragma once
+// script_graph_compiler.hpp — gera o C++ a partir do grafo.
+//
+// S0b: veio de `src/axe/script/`. E o compilador de uma ferramenta de autoria
+// — o jogo consome o produto dele (a DLL), nunca ele. Ver `script_asset.hpp`.
+//
+// (O `#include` do script_asset estava ANTES do `#pragma once` neste arquivo;
+// aproveitei a mudanca para por na ordem certa.)
+
 #include "axe/core/types.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "script_graph.hpp"
 #include <string>
 #include <set>
@@ -8,7 +16,7 @@
 
 namespace axe
 {
-    class AXE_API ScriptGraphCompiler
+    class ScriptGraphCompiler
     {
     public:
         // Gera o código C++ completo a partir do grafo

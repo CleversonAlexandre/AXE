@@ -4,7 +4,7 @@
 #include "axe/particles/particle_world.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/graphics/framebuffer.hpp"
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include "editor/axe_editor/editor_context.hpp"
 
 #include <imgui.h>

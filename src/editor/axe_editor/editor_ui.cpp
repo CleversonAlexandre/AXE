@@ -30,11 +30,14 @@ namespace axe
 		// recarregar do disco todo frame.
 		if (ProjectManager::Get().HasProject())
 		{
-			static std::filesystem::path s_LastInputProjectRoot;
+			// m_LoadedInputProjectRoot e MEMBRO — ver a nota no header. Era um
+			// static local, e por isso reabrir o MESMO projeto (File > Open
+			// Project, que recria o EditorLayer inteiro) deixava a janela nova
+			// sem caminho: "Nenhum projeto carregado".
 			auto curRoot = ProjectManager::Get().GetCurrent().RootPath;
-			if (curRoot != s_LastInputProjectRoot)
+			if (curRoot != m_LoadedInputProjectRoot)
 			{
-				s_LastInputProjectRoot = curRoot;
+				m_LoadedInputProjectRoot = curRoot;
 				m_InputSettingsWindow.SetProjectPath(curRoot);
 			}
 		}
@@ -314,11 +317,12 @@ namespace axe
 
 	void EditorUI::BuildDefaultLayout(ImGuiID dockspaceId)
 	{
-		// Só executa uma vez — na primeira vez que o programa roda
-		// O ImGui salva o layout no imgui.ini e restaura nas próximas vezes
-		static bool layoutBuilt = false;
-		if (layoutBuilt) return;
-		layoutBuilt = true;
+		// Só executa uma vez POR EditorUI — o ImGui salva o layout no
+		// imgui.ini e restaura nas próximas vezes. Membro e não static pelo
+		// mesmo motivo do m_LoadedInputProjectRoot: o reopen de projeto
+		// destrói e recria este objeto.
+		if (m_DefaultLayoutBuilt) return;
+		m_DefaultLayoutBuilt = true;
 
 		//Limpa qualquer layout existente e começa do zero
 		ImGui::DockBuilderRemoveNode(dockspaceId);

@@ -6,7 +6,7 @@
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/glm.hpp>
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 
 namespace axe
 {

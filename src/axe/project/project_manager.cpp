@@ -68,7 +68,8 @@ namespace axe
 		return true;
 	}
 
-	bool ProjectManager::OpenProject(const std::filesystem::path& projectFile)
+	bool ProjectManager::OpenProject(const std::filesystem::path& projectFile,
+		bool recordAsRecent)
 	{
 		if (!std::filesystem::exists(projectFile))
 		{
@@ -89,18 +90,24 @@ namespace axe
 
 		m_CurrentProject = std::move(project);
 
-		// Atualiza preferências
-		m_LastProjectPath = projectFile.string();
-		auto it = std::find(m_RecentProjects.begin(), m_RecentProjects.end(), m_LastProjectPath);
-		if (it != m_RecentProjects.end())
-			m_RecentProjects.erase(it);
-		m_RecentProjects.insert(m_RecentProjects.begin(), m_LastProjectPath);
+		// Atualiza preferências — SO quando quem abriu quer ser lembrado.
+		// Ver a nota no header: o jogo empacotado passa false, senao ele
+		// sequestra o "ultimo projeto" do editor apontando para a pasta de
+		// build.
+		if (recordAsRecent)
+		{
+			m_LastProjectPath = projectFile.string();
+			auto it = std::find(m_RecentProjects.begin(), m_RecentProjects.end(), m_LastProjectPath);
+			if (it != m_RecentProjects.end())
+				m_RecentProjects.erase(it);
+			m_RecentProjects.insert(m_RecentProjects.begin(), m_LastProjectPath);
 
-		// Mantém só os 10 mais recentes
-		if (m_RecentProjects.size() > 10)
-			m_RecentProjects.resize(10);
+			// Mantém só os 10 mais recentes
+			if (m_RecentProjects.size() > 10)
+				m_RecentProjects.resize(10);
 
-		SavePreferences();
+			SavePreferences();
+		}
 
 		AssetDatabase::Get().Clear();
 		AssetDatabase::Get().Load(m_CurrentProject->RootPath);

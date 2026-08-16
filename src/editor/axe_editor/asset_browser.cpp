@@ -13,7 +13,7 @@
 #include "axe/script/script_paths.hpp"
 #include "axe/material/material_asset.hpp"
 #include "axe/particles/particle_system_asset.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/scene/game_mode_asset.hpp"
 #include <imgui.h>
 #include <algorithm>

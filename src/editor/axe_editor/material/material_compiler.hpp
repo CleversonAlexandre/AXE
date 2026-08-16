@@ -1,5 +1,6 @@
 #pragma once
 #include "axe/core/types.hpp"
+#include "axe/material/material_cooked.hpp"   // PKG9 — CookedMaterialDomain
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 #include <string>
 #include <unordered_set>
@@ -25,6 +26,16 @@ namespace axe
         std::shared_ptr<Texture2D> RoughnessTexture;
         std::shared_ptr<Texture2D> MetallicTexture;
         std::map<std::string, std::shared_ptr<Texture2D>> SamplerTextures;
+
+        // B4 — os mesmos samplers, como UUID de asset em vez de instância de
+        // textura. É o que o `.axeshader` grava: o runtime resolve UUID via
+        // AssetDatabase sem precisar do grafo. AlbedoSamplerName/
+        // NormalSamplerName dizem QUAL sampler alimenta cada slot fixo do
+        // Material ("" = nenhum) — gravado junto para o par GLSL/slot nunca
+        // divergir do que foi compilado.
+        std::map<std::string, std::string> SamplerTextureUUIDs;
+        std::string AlbedoSamplerName;
+        std::string NormalSamplerName;
 
         // true se o pin "Opacity" do Material Output estiver conectado a
         // algo — sinaliza que este material precisa do forward pass de
@@ -53,6 +64,28 @@ namespace axe
     {
     public:
         static CompiledMaterial Compile(MaterialGraph* graph);
+
+        // B4 — grava o resultado de Compile() no `.axeshader` irmão do
+        // `.axemat` (via CookedMaterial::Save, formato do runtime). É isto que
+        // o jogo carrega no lugar do callback de recompile. Chamado nos dois
+        // pontos que compilam grafo de superfície: CompileAndApply (botão) e o
+        // MaterialRecompileCallback do EditorLayer (load de cena) — abrir o
+        // projeto no editor já cozinha os materiais das cenas abertas.
+        // `bakedEmissive` vem de ComputeBakedEmissive, que precisa de GL ativo.
+        static bool BakeToDisk(const CompiledMaterial& result,
+            const std::filesystem::path& materialFilePath,
+            const glm::vec3& bakedEmissive);
+
+        // PKG9 — cozimento dos domínios que produzem SÓ shader + samplers
+        // (Light Function e Particle). Não há Material para preencher: o
+        // consumidor é uma luz ou um emitter, que guardam o shader direto.
+        //
+        // Chamado de CompileLightFunctionFromFile / CompileParticleFunctionFromFile
+        // — os mesmos pontos que o editor já usa para resolver esses materiais
+        // no load de cena. Abrir a cena no editor cozinha, como no B4.
+        static bool BakeShaderToDisk(const CompiledMaterial& result,
+            const std::filesystem::path& materialFilePath,
+            CookedMaterialDomain domain);
 
         // Compila um grafo no domínio Light Function: gera um shader bem
         // menor que o de superfície — sem PBR, sem G-Buffer, sem depender
@@ -99,6 +132,13 @@ namespace axe
 
     private:
         MaterialCompiler(MaterialGraph* graph);
+
+        // PKG9 — preenche result.SamplerTextureUUIDs a partir do mapa FINAL de
+        // samplers do domínio. Ver a nota longa na implementação.
+        static void CollectSamplerUUIDs(const MaterialCompiler& compiler,
+            MaterialGraph* graph,
+            const std::map<std::string, std::shared_ptr<Texture2D>>& finalSamplers,
+            CompiledMaterial& result);
 
         // -- Percurso do grafo --
         void VisitNode(Node* node);  // DFS — processa node e seus inputs

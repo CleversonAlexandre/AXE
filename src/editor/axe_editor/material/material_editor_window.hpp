@@ -15,7 +15,7 @@
 
 #include "axe/graphics/framebuffer.hpp"
 #include "axe/graphics/editor_camera.hpp"
-#include "axe/graphics/renderer/viewport_renderer.hpp"
+#include "editor/axe_editor/viewport_renderer.hpp"
 #include <imgui.h>
 #include <entt/entt.hpp>
 

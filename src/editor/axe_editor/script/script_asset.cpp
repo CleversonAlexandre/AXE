@@ -1,5 +1,5 @@
-#include "axe/script/script_asset.hpp"
-#include "axe/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
 #include "axe/log/log.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>

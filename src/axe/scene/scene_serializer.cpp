@@ -6,6 +6,7 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/mesh_cooked.hpp"   // B2.1
 #include "axe/asset/asset_import_hooks.hpp"   // B2.4
+#include "axe/material/material_cooked.hpp"   // B4 — shader cozido (.axeshader)
 #include "axe/log/log.hpp"
 #include "axe/lighting/point_light.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -657,22 +658,56 @@ namespace axe
 				if (t.contains("material_asset_uuid"))
 				{
 					mc.MaterialAssetUUID = t["material_asset_uuid"].get<std::string>();
+
+					// EDITOR: o callback recompila do grafo — fonte da verdade,
+					// porque la o `.axegraph` pode ter mudado desde o ultimo
+					// cozimento. JOGO: callback nulo; o shader vem COZIDO do
+					// `.axeshader` que o editor gravou no compile (B4 — mesmo
+					// desenho do `.axemesh`/`.axeskelbin`).
 					auto cb = SceneSerializer::GetMaterialRecompileCallback();
 					if (cb && !mc.MaterialAssetUUID.empty())
 						cb(mc.MaterialAssetUUID, mat.get());
+					else if (!mc.MaterialAssetUUID.empty())
+					{
+						if (!CookedMaterial::LoadAndApply(mc.MaterialAssetUUID, *mat))
+							AXE_CORE_WARN("SceneSerializer: material '{}' sem .axeshader "
+								"cozido - abra a cena no editor (ou compile o material) "
+								"para gerar, e reempacote.", mc.MaterialAssetUUID);
+					}
 				}
 				registry.emplace<MaterialComponent>(entity, mc);
 			}
 
-			// Re-resolve do Light Material (shader/samplers) via callback do editor.
+			// Re-resolve do Light Material (shader/samplers).
+			//
+			// EDITOR: o callback recompila a light function do grafo. JOGO:
+			// callback nulo, e o shader vem do `.axeshader` cozido no dominio
+			// LightFunction (PKG9 — mesmo desenho do material de superficie do
+			// B4). Sem isto, a luz ficava com Color/Intensity dos defaults no
+			// jogo, e parte da diferenca de iluminacao entre editor e game.exe
+			// vinha exatamente daqui.
 			auto ResolveLightMaterial = [&](const json& t, std::string& uuid,
 				std::shared_ptr<Shader>& shader,
 				std::map<std::string, std::shared_ptr<Texture2D>>& samplers)
 				{
 					uuid = t.value("light_material_uuid", std::string());
 					if (uuid.empty()) return;
+
 					auto cb = SceneSerializer::GetLightMaterialRecompileCallback();
-					if (cb) cb(uuid, shader, samplers);
+
+					if (cb)
+					{
+						cb(uuid, shader, samplers);
+						return;
+					}
+
+					if (!CookedMaterial::LoadShaderAndSamplers(uuid,
+						CookedMaterialDomain::LightFunction, shader, samplers))
+					{
+						AXE_CORE_WARN("SceneSerializer: light material '{}' sem .axeshader "
+							"cozido - a luz vai usar os valores padrao. Abra a cena no "
+							"editor para gerar e reempacote.", uuid);
+					}
 				};
 
 			if (components.contains("Light"))
@@ -1011,21 +1046,43 @@ namespace axe
 					{
 						ps.Data = ParticleSystemAsset::LoadFromFile(record->FilePath);
 
-						// Recompila o material de partícula de cada emitter via callback.
+						// Resolve o material de partícula de cada emitter.
 						// Mesmo padrão do LightMaterial — zero GL vaza pro axe.dll.
+						//
+						// EDITOR: o callback recompila do grafo. JOGO: callback
+						// nulo, e o shader vem do `.axeshader` cozido no domínio
+						// Particle (PKG9). Sem isto o emitter ficava sem shader
+						// no jogo — as partículas apareciam no editor e não no
+						// game.exe.
 						if (ps.Data)
 						{
 							auto cb = SceneSerializer::GetParticleMaterialRecompileCallback();
-							if (cb)
+
+							for (auto& emitter : ps.Data->Emitters)
 							{
-								for (auto& emitter : ps.Data->Emitters)
+								if (emitter.ParticleMaterialUUID.empty()) continue;
+
+								if (cb)
 								{
-									if (emitter.ParticleMaterialUUID.empty()) continue;
 									cb(emitter.ParticleMaterialUUID,
 										emitter.ParticleMaterialShader,
 										emitter.ParticleMaterialSamplers);
+									continue;
+								}
+
+								if (!CookedMaterial::LoadShaderAndSamplers(
+									emitter.ParticleMaterialUUID,
+									CookedMaterialDomain::Particle,
+									emitter.ParticleMaterialShader,
+									emitter.ParticleMaterialSamplers))
+								{
+									AXE_CORE_WARN("SceneSerializer: particle material '{}' sem "
+										".axeshader cozido - o emitter vai usar o shader padrao. "
+										"Abra a cena no editor para gerar e reempacote.",
+										emitter.ParticleMaterialUUID);
 								}
 							}
+
 							ps.EmitterRuntimes.resize(ps.Data->Emitters.size());
 						}
 					}

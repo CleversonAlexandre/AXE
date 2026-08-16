@@ -73,7 +73,28 @@ project "axe"
         "src/axe/**.hpp",
         "src/axe/**.cpp",
 
-        -- ImGui do vendor
+        -- ── ImGui: fica AQUI, e o motivo nao e inercia ───────────────────
+        --
+        -- O S0b tirou daqui e o editor passou a crashar no boot, dentro de
+        -- `ImGui_ImplGlfw_Init`. A causa nao e de codigo:
+        --
+        --   GLFW e Glad sao STATIC LIBS linkadas nos DOIS binarios. Cada um
+        --   tem a propria copia do estado global. Quem chama `glfwInit` e
+        --   cria a janela e a `axe.dll`; se o backend do ImGui for compilado
+        --   no `editor.exe`, ele conversa com a OUTRA copia do GLFW — a que
+        --   nunca foi inicializada — e recebe um GLFWwindow que ela nao
+        --   conhece. O mesmo valeria para o Glad: os ponteiros de funcao GL
+        --   foram carregados na copia da DLL.
+        --
+        -- Ou seja: os backends tem que morar com o dono do estado, e o core
+        -- do ImGui vai junto porque os backends dependem dele.
+        --
+        -- O que o S0b ganhou continua valendo: NENHUM arquivo de `src/axe/`
+        -- inclui imgui. O que vive aqui e so o vendor, compilado e exportado
+        -- para o editor consumir.
+        --
+        -- ImGuizmo e imgui-node-editor NAO estao aqui: os dois so falam com o
+        -- ImGui (nada de GLFW/Glad) e sao usados so pelo editor.
         "src/vendor/imgui/imgui.cpp",
         "src/vendor/imgui/imgui_draw.cpp",
         "src/vendor/imgui/imgui_tables.cpp",
@@ -81,26 +102,14 @@ project "axe"
         "src/vendor/imgui/imgui_demo.cpp",
         "src/vendor/imgui/backends/imgui_impl_opengl3.cpp",
         "src/vendor/imgui/backends/imgui_impl_glfw.cpp",
-        "src/vendor/imguizmo/ImGuizmo.h",
-        "src/vendor/imguizmo/ImGuizmo.cpp",
-        "src/vendor/imguizmo/ImZoomSlider.h",
-    
     }
 
-    removefiles
-    {
-        "src/axe/**/imgui_impl_glfw.cpp",
-        "src/axe/**/imgui_impl_opengl3.cpp",
-        "src/axe/**/imgui.cpp",
-        "src/axe/**/imgui_draw.cpp",
-        "src/axe/**/imgui_tables.cpp",
-        "src/axe/**/imgui_widgets.cpp",
-        "src/axe/**/imgui_demo.cpp",
-    }
+    -- S0b — o `removefiles` de imgui que morava aqui foi embora junto: ele
+    -- excluia copias de imgui dentro de `src/axe/**`, e nao ha mais nenhuma.
 
     includedirs
     {
-        "src",        
+        "src",
         "src/vendor/spdlog/include",
         "src/vendor/fmt/include",
         "src/vendor/geogram/src/lib",
@@ -108,13 +117,15 @@ project "axe"
         "src/vendor/glm",
         "%{IncludeDir.GLFW}",
         "%{IncludeDir.Glad}",
+        -- Imgui volta porque este projeto compila o vendor (ver o bloco
+        -- `files`). ImGuizmo e imgui-node-editor NAO voltam: nenhum arquivo
+        -- deste projeto os toca, e sem o caminho de include um uso novo em
+        -- `src/axe/` falha na hora, no arquivo culpado, em vez de so no link.
         "%{IncludeDir.Imgui}",
-        "%{IncludeDir.ImGuizmo}",
         "%{IncludeDir.assimp}",
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.stb}",
-        "%{IncludeDir.imguinodeeditor}",
         "%{IncludeDir.Jolt}",
         "%{IncludeDir.miniaudio}",
 
@@ -151,8 +162,11 @@ project "axe"
        "FMT_HEADER_ONLY=1",
         "SIMDJSON_EXCEPTIONS=0",
         "AXE_BUILD_DLL",
+        -- Esta DLL compila e EXPORTA o ImGui (core + backends GLFW/OpenGL3)
+        -- para o editor consumir por dllimport. Ver a nota no bloco `files`
+        -- sobre por que os backends nao podem morar no executavel.
         "IMGUI_API=__declspec(dllexport)",
-        "IMGUI_DEFINE_MATH_OPERATORS" 
+        "IMGUI_DEFINE_MATH_OPERATORS"
     }
     
     dependson
@@ -162,13 +176,15 @@ project "axe"
         "Jolt"
     }
 
-    filter "files:src/vendor/imgui-node-editor/**.cpp"
-    defines { "IMGUI_DEFINE_MATH_OPERATORS" }
-    filter {}
-
-     filter "files:src/vendor/imguizmo/**.cpp"
-        pchheader "None"  -- 
-        pchsource "" 
+    -- S0b — os dois `filter "files:src/vendor/..."` que moravam aqui foram
+    -- removidos: eles configuravam o imgui-node-editor e o ImGuizmo, e nenhum
+    -- dos dois e compilado neste projeto desde que a GUI saiu. Filtro que nao
+    -- casa com arquivo nenhum e configuracao morta — e uma delas
+    -- (`pchsource ""`) ja estava no KNOWN_LIMITATIONS como suspeita.
+    --
+    -- No projeto `editor` eles nao precisam existir: o
+    -- `IMGUI_DEFINE_MATH_OPERATORS` ja e define do projeto inteiro, e nenhum
+    -- projeto usa precompiled header.
 
     filter "system:windows"
         cppdialect "C++20"
@@ -202,6 +218,20 @@ project "axe"
             '{MKDIR} "%{wks.location}/bin/' .. outputdir .. '/game" >nul 2>nul',
             '{COPYFILE} "%{cfg.targetdir}/axe.dll" "%{wks.location}/bin/' .. outputdir .. '/game/axe.dll" >nul',
             '{COPYDIR} "%{wks.location}src/editor/resources" "%{cfg.targetdir}/resources"',
+
+            -- PKG8 — `resources/` TAMBEM ao lado do game.exe.
+            --
+            -- A linha acima copia para `%{cfg.targetdir}`, que neste projeto e
+            -- `bin/<cfg>/axe` — a pasta do RUNTIME, nao a do jogo. O PKG5 dizia
+            -- que os resources iam para `bin/<cfg>/game` e nunca foram: o
+            -- empacotador procura `<BinariesDir>/resources` e avisava "no
+            -- 'resources' folder next to the binaries - a scene using the
+            -- default HDRI will render without a skybox".
+            --
+            -- La dentro esta o HDRI default (`quarry_04_puresky_2k.hdr`), que e
+            -- asset da ENGINE e nao do projeto: uma cena que nunca escolheu HDRI
+            -- aponta para ele por caminho relativo.
+            '{COPYDIR} "%{wks.location}src/editor/resources" "%{wks.location}bin/' .. outputdir .. '/game/resources"',
             
                 
         }
@@ -237,6 +267,17 @@ project "editor"
     {
         "src/editor/**.hpp",
         "src/editor/**.cpp",
+
+        -- S0b — o ImGuizmo veio do projeto `axe`, e o core do ImGui NAO.
+        --
+        -- O ImGuizmo so fala com o ImGui (nada de GLFW/Glad) e o unico
+        -- consumidor dele — o `viewport_renderer` — mora aqui agora. Ja o
+        -- core e os backends do ImGui ficaram na `axe.dll`: os backends
+        -- precisam da MESMA copia de GLFW/Glad que criou a janela, e essa
+        -- copia e a da DLL. Ver a nota longa no projeto `axe`.
+        "src/vendor/imguizmo/ImGuizmo.h",
+        "src/vendor/imguizmo/ImGuizmo.cpp",
+        "src/vendor/imguizmo/ImZoomSlider.h",
 
           "src/vendor/imgui-node-editor/imgui_node_editor.h",
         "src/vendor/imgui-node-editor/imgui_node_editor.cpp",
@@ -288,14 +329,28 @@ project "editor"
     {
         "AXE_PLATFORM_WINDOWS",
         "FMT_HEADER_ONLY=1",
+        -- O ImGui (core + backends) e compilado e exportado pela `axe.dll`;
+        -- aqui ele e importado. O ImGuizmo e o node-editor, que este projeto
+        -- compila, usam essas declaracoes importadas — e e por isso que
+        -- funciona: uma unica instancia do ImGui no processo.
         "IMGUI_API=__declspec(dllimport)",
         "IMGUI_DEFINE_MATH_OPERATORS",
-        
+
     }
 
     dependson
     {
-        "axe"
+        "axe",
+        -- O editor NAO linka o game — esta dependencia existe so pela ORDEM
+        -- de build. Sem ela, compilar/rodar o editor (F5) reconstroi axe.dll
+        -- e editor.exe e deixa o game.exe como estava; o empacotador entao
+        -- copia um executavel velho ao lado de uma DLL nova. Como quase toda
+        -- a engine vive na DLL, o pacote RODA — so que sem o que mudou em
+        -- src/game/main.cpp. Foi assim que a captura do mouse do PKG5 ficou
+        -- dois builds "aplicada mas sem efeito".
+        --
+        -- Custo: o projeto game (um .cpp) recompila junto com o editor.
+        "game"
     }
 
     postbuildcommands
@@ -367,7 +422,9 @@ project "game"
         "src/vendor/glm",
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
-        "%{IncludeDir.Imgui}",   -- so porque axe.dll expoe headers que o alcancam
+        -- S0b — `IncludeDir.Imgui` saiu tambem daqui. O comentario antigo
+        -- dizia "so porque axe.dll expoe headers que o alcancam", e isso
+        -- deixou de ser verdade: nenhum header do runtime alcanca imgui.
     }
 
     links
@@ -382,7 +439,8 @@ project "game"
     {
         "AXE_PLATFORM_WINDOWS",
         "FMT_HEADER_ONLY=1",
-        "IMGUI_API=__declspec(dllimport)",
+        -- S0b — o jogo nunca teve imgui e agora nem o define fantasma: nada
+        -- em `src/game/` ou em `axe.dll` toca na GUI.
         "IMGUI_DEFINE_MATH_OPERATORS",
     }
 

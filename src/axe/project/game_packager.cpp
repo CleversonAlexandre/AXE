@@ -48,7 +48,18 @@ namespace axe
             const std::string rootStr = root.generic_string();
             const std::string outStr = out.generic_string();
 
-            if (outStr == rootStr || outStr.rfind(rootStr + "/", 0) == 0)
+            // O caso de IGUALDADE merece mensagem propria. Ele quase nunca
+            // significa "escolhi a pasta errada": significa que o projeto
+            // ABERTO no editor JA E a saida de um build anterior — voce esta
+            // editando a copia empacotada sem saber. Dizer so "escolha outra
+            // pasta" manda o usuario mexer no campo certo pelo motivo errado.
+            if (outStr == rootStr)
+                return fail("the output folder IS the root of the open project - "
+                    "the editor is open on a PACKAGED COPY, not on your source "
+                    "project. Open the real project (File > Open Project) and "
+                    "package again.");
+
+            if (outStr.rfind(rootStr + "/", 0) == 0)
                 return fail("the output folder is inside the project folder. "
                     "Pick a folder outside it.");
         }
@@ -305,7 +316,43 @@ namespace axe
         }
 
         // ── Binarios ─────────────────────────────────────────────────────────
-        if (!options.BinariesDir.empty())
+        if (options.BinariesDir.empty())
+        {
+            // Campo vazio: "copiar so os assets" e uma opcao legitima, e por
+            // isso os dois casos abaixo sao AVISO e nao erro. Mas os dois
+            // produzem um pacote que engana, cada um a seu modo — e a diferenca
+            // entre eles e o `CleanOutput`, que ja apagou a pasta la em cima.
+            //
+            // A checagem e feita AQUI, depois do clean, olhando o estado FINAL
+            // da saida. Perguntar antes daria a resposta de um mundo que nao
+            // existe mais.
+            std::error_code bec;
+
+            const bool hasExe = fs::exists(out / "game.exe", bec);
+            const bool hasDll = fs::exists(out / "axe.dll", bec);
+
+            if (hasExe || hasDll)
+            {
+                // Assets novos sobre binarios velhos. Roda, parece completo, e
+                // se comporta como se as mudancas de codigo nao existissem —
+                // exatamente o sintoma do PKG6, entrando por outra porta.
+                res.Warnings.push_back("binaries folder left empty, but the output already "
+                    "has game.exe/axe.dll from an earlier package - they were NOT updated. "
+                    "Fill the binaries folder whenever the code changed.");
+            }
+            else
+            {
+                // Nem isso: o pacote nao tem executavel nenhum. Acontece com
+                // "Clean the output folder first" ligado e o campo vazio — o
+                // clean apagou os binarios do pacote anterior e nada os
+                // repos. O relatorio diria "104 arquivos, 60 MB" e o jogador
+                // nao teria o que abrir.
+                res.Warnings.push_back("binaries folder left empty and the output has no "
+                    "game.exe - this package contains assets only and cannot be run. "
+                    "Fill the binaries folder to produce a playable package.");
+            }
+        }
+        else
         {
             if (!fs::exists(options.BinariesDir, ec))
             {
@@ -342,6 +389,41 @@ namespace axe
                     ++res.FilesCopied;
                     res.BytesCopied += fs::file_size(dst, ec);
                     ec.clear();
+                }
+
+                // ── game.exe mais velho que axe.dll ──────────────────────────
+                //
+                // O `game` NAO e dependencia de build do `editor` na solution.
+                // Compilar ou rodar o editor reconstroi `axe.dll` e
+                // `editor.exe` e deixa o `game.exe` como estava — e o pacote
+                // sai com um executavel velho ao lado de uma DLL nova.
+                //
+                // Isso nao quebra o jogo (quase tudo mora na DLL), e por isso
+                // e tao dificil de ver: o pacote roda, mas sem as mudancas que
+                // estavam no `main.cpp`. Aconteceu com a captura do mouse do
+                // PKG5 — a camera ficou parada por dois builds enquanto
+                // material e iluminacao, que vivem na DLL, ja funcionavam.
+                //
+                // AVISO e nao erro: um executavel mais velho pode ser
+                // deliberado (empacotar um build anterior de proposito).
+                {
+                    const fs::path exePath = options.BinariesDir / "game.exe";
+                    const fs::path dllPath = options.BinariesDir / "axe.dll";
+
+                    std::error_code tec;
+
+                    if (fs::exists(exePath, tec) && fs::exists(dllPath, tec))
+                    {
+                        const auto exeTime = fs::last_write_time(exePath, tec);
+                        const auto dllTime = fs::last_write_time(dllPath, tec);
+
+                        if (!tec && exeTime < dllTime)
+                            res.Warnings.push_back(
+                                "game.exe is OLDER than axe.dll - the game project was not "
+                                "rebuilt. Changes made in src/game/main.cpp are NOT in this "
+                                "package. Build the 'game' project (it is not a dependency "
+                                "of 'editor') and package again.");
+                    }
                 }
 
                 // ── resources/ ao lado do executavel (PKG5) ──────────────────

@@ -4,6 +4,7 @@
 #include "axe/axe_window/window.hpp"
 
 #include <imgui.h>
+#include <ImGuizmo.h>   // S0b — o gizmo passou a ser iniciado aqui, ver Begin()
 
 namespace axe
 {
@@ -11,7 +12,7 @@ namespace axe
 	// Ela encapsula todo o ciclo de vida do ImGui:
 	// inicialização, begin/end frame, e shutdown
 
-	class ImGuiLayer : public Layer 
+	class ImGuiLayer : public Layer
 	{
 	public:
 		ImGuiLayer(Window* window)
@@ -46,6 +47,15 @@ namespace axe
 		void Begin()
 		{
 			m_ImGui->BeginFrame();
+
+			// S0b — o `ImGuizmo::BeginFrame()` morava dentro do
+			// `ImGuiSystem::BeginFrame`, que agora vive na `axe.dll`.
+			//
+			// O ImGuizmo e ferramenta de autoria e e compilado neste
+			// executavel, junto do `viewport_renderer`, que e quem o usa. Tem
+			// que ser chamado DEPOIS do `ImGui::NewFrame()` — que acabou de
+			// acontecer na linha acima — e antes de qualquer `Manipulate`.
+			ImGuizmo::BeginFrame();
 		}
 
 		void End()
@@ -53,7 +63,7 @@ namespace axe
 			m_ImGui->EndFrame();
 		}
 
-		
+
 
 
 	private:

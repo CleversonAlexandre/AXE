@@ -101,6 +101,25 @@ int main(int argc, char** argv)
 {
     axe::InfoLog::Init();
 
+    // ── Carimbo de build ─────────────────────────────────────────────────────
+    //
+    // PRIMEIRA linha do log, antes de qualquer outra coisa.
+    //
+    // O `game` NAO e dependencia de build do `editor` na solution: compilar ou
+    // rodar o editor (F5, ou Build no projeto editor) reconstroi `axe.dll` e
+    // `editor.exe` e NAO toca no `game.exe`. O empacotador entao copia um
+    // executavel velho ao lado de uma DLL nova — e como quase toda a engine
+    // vive na DLL, o pacote FUNCIONA, so que sem as mudancas que estavam no
+    // `main.cpp`. Foi exatamente o que aconteceu com a captura do mouse do
+    // PKG5: material e iluminacao (axe.dll) corrigidos, camera (game.exe)
+    // parada, e nada no log explicando a contradicao.
+    //
+    // __DATE__/__TIME__ sao do momento da COMPILACAO deste arquivo. Se a data
+    // nao bate com o seu ultimo build, o executavel e velho — e a duvida
+    // acaba na primeira linha do log, em vez de virar uma sessao de
+    // investigacao.
+    AXE_CORE_INFO("Game: build {} {}", __DATE__, __TIME__);
+
     const fs::path exeDir = fs::path(argv[0]).parent_path();
     const fs::path projectFile = FindProjectFile(argc, argv, exeDir);
 
@@ -153,7 +172,21 @@ int main(int argc, char** argv)
     axe::SceneRuntime::InitializeServices(window.get());
 
     // ── Projeto e assets ─────────────────────────────────────────────────────
-    if (!axe::ProjectManager::Get().OpenProject(projectFile))
+    //
+    // `recordAsRecent = false` — o jogo NAO mexe nas preferencias do editor.
+    //
+    // Elas vivem num arquivo unico por maquina
+    // (%APPDATA%/AXEEngine/editor_prefs.json), compartilhado por qualquer
+    // executavel que use o ProjectManager. Com o default `true`, cada vez que
+    // este jogo rodava ele gravava a copia EMPACOTADA do projeto como "ultimo
+    // projeto" — e o editor, no boot seguinte, abria a pasta de build em vez
+    // do projeto de trabalho. O sintoma nao apontava para ca: o Package
+    // recusava o destino ("the output folder is inside the project folder"),
+    // porque a saida do build era, naquele momento, a raiz do projeto aberto.
+    //
+    // O jogador tambem nao tem "projetos recentes" — nem esta lista deveria
+    // existir para ele.
+    if (!axe::ProjectManager::Get().OpenProject(projectFile, /*recordAsRecent*/ false))
     {
         AXE_CORE_ERROR("Game: failed to open the project.");
         return 1;
@@ -245,6 +278,32 @@ int main(int argc, char** argv)
     runtime.GetGameCamera().MouseCaptured = true;
     runtime.GetGameCamera().m_FirstMouse = true;   // evita o salto do 1o delta
     window->CaptureCursor(true);
+
+    // ── Diagnostico da camera ────────────────────────────────────────────────
+    //
+    // Tres perguntas que estavamos respondendo por adivinhacao, respondidas de
+    // uma vez, no log, todo boot:
+    //
+    //   captured=false          → esta linha nao rodou (executavel velho)
+    //   mode=FreeFly            → o GameMode nao resolveu o pawn/spring arm
+    //   target=false            → ThirdPerson sem alvo: cai no FreeFly
+    //   mouseRotates=false      → o Spring Arm do pawn tem MouseRotates
+    //                             desligado, e a camera IGNORA o mouse de
+    //                             proposito (ver UpdateThirdPerson)
+    //   sensitivity=0           → le o mouse e nao gira: delta x 0 = 0
+    {
+        const axe::GameCamera& cam = runtime.GetGameCamera();
+
+        AXE_CORE_INFO("Game: camera captured={} mode={} target={} "
+            "mouseRotates={} sensitivity={} yaw={} pitch={}",
+            cam.MouseCaptured,
+            cam.CameraMode == axe::GameCamera::Mode::ThirdPerson ? "ThirdPerson" : "FreeFly",
+            cam.HasTarget(),
+            cam.TPMouseRotates,
+            cam.Sensitivity,
+            cam.GetYaw(),
+            cam.GetPitch());
+    }
 
     // ── Loop ─────────────────────────────────────────────────────────────────
     //

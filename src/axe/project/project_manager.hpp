@@ -18,8 +18,21 @@ namespace axe
 		// Cria um novo projeto na pasta indicada
 		bool NewProject(const std::string& name, const std::filesystem::path& path);
 
-		// Abre um projeto existente a partir do axe.project
-		bool OpenProject(const std::filesystem::path& projectFile);
+		// Abre um projeto existente a partir do axe.project.
+		//
+		// `recordAsRecent` decide se este open vira "ultimo projeto" e entra na
+		// lista de recentes — preferencias do EDITOR, gravadas em
+		// %APPDATA%/AXEEngine/editor_prefs.json.
+		//
+		// O JOGO passa `false`, e isso NAO e detalhe. O prefs e um arquivo so,
+		// por maquina, compartilhado por qualquer executavel que use esta
+		// classe. Com o default, rodar o jogo empacotado gravava a copia
+		// EMPACOTADA do projeto como "ultimo projeto", e o editor abria nela no
+		// boot seguinte — trabalhando na pasta de saida do build, com o Package
+		// recusando o destino ("the output folder is inside the project
+		// folder"), ate alguem reabrir o projeto de verdade na mao.
+		bool OpenProject(const std::filesystem::path& projectFile,
+			bool recordAsRecent = true);
 
 		// Projeto atual
 		bool        HasProject() const { return m_CurrentProject != nullptr; }

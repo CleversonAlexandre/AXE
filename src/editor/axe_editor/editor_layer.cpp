@@ -804,6 +804,28 @@ namespace axe
                     material->NormalMap = result.NormalTexture;
                     material->IsTransparent = result.IsTransparent;
                     material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(&graph);
+
+                    // B4 — aproveita a compilacao que acabou de acontecer e
+                    // deixa o `.axeshader` em dia. Efeito colateral valioso:
+                    // ABRIR uma cena no editor ja cozinha todos os materiais
+                    // dela — projetos antigos entram no formato novo sem passo
+                    // manual, so abrindo o projeto uma vez antes de empacotar.
+                    //
+                    // PKG10 — SO se o grafo for de superficie. Este callback
+                    // roda para todo MaterialComponent da cena, e o `result`
+                    // acima e sempre do compilador de SUPERFICIE. Um
+                    // MaterialComponent apontando para um `.axemat` de
+                    // Particle/LightFunction — possivel, porque o AssetPicker
+                    // filtra por TIPO de asset e nao por dominio — faria este
+                    // ponto regravar o `.axeshader` daquele material como
+                    // superficie A CADA LOAD DE CENA, e a luz/emitter que o usa
+                    // cairia no shader padrao no jogo.
+                    //
+                    // Mesma guarda que ja existe nos outros tres pontos de
+                    // cozimento (CompileAndApply e os dois FromFile).
+                    if (graph.Domain == MaterialDomain::Surface)
+                        MaterialCompiler::BakeToDisk(result, record->FilePath,
+                            material->BakedEmissive);
                 }
                 catch (...) {}
             });

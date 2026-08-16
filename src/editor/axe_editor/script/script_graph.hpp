@@ -1,7 +1,13 @@
 #pragma once
+// script_graph.hpp — o grafo visual de script.
+//
+// S0b: veio de `src/axe/script/`. Este e o arquivo que fazia o `axe.dll`
+// depender de imgui e do imgui-node-editor — ver a nota longa em
+// `script_asset.hpp`. Codigo de editor, em pasta de editor.
+
 #include "axe/core/types.hpp"
 #include "axe/utils/glm_config.hpp"
-#include "axe/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
 #include <imgui_node_editor.h>
 #include <imgui.h>
 #include <string>
@@ -484,7 +490,7 @@ namespace axe
     };
 
     // Grafo completo de script de um objeto
-    class AXE_API ScriptGraph
+    class ScriptGraph
     {
     public:
         ScriptGraph() = default;
@@ -632,7 +638,7 @@ namespace axe
     };
 
     // Retorna a cor ImGui do header para cada categoria
-    AXE_API ImColor GetNodeHeaderColor(ScriptNodeCategory cat);
+    ImColor GetNodeHeaderColor(ScriptNodeCategory cat);
     // Inline — não depende de recompilação da axe.dll
     inline ImColor GetVariableNodeColor(int varTypeIndex)
     {
@@ -735,6 +741,6 @@ namespace axe
     }
 
     // Retorna a cor do pin para cada tipo
-    AXE_API ImColor GetPinColor(ScriptPinType type);
+    ImColor GetPinColor(ScriptPinType type);
 
 } // namespace axe

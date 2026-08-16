@@ -6,8 +6,8 @@
 #include "script_graph_window.hpp"
 #include <unordered_map>
 #include "editor/axe_editor/ui/editor_icons.hpp"
-#include "axe/script/script_asset.hpp"
-#include "axe/script/script_graph.hpp"
+#include "editor/axe_editor/script/script_asset.hpp"
+#include "editor/axe_editor/script/script_graph.hpp"
 #include "axe/input/input_mapping.hpp"
 #include "axe/scene/components.hpp"
 #include "axe/mesh/mesh_factory.hpp"
