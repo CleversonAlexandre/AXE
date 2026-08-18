@@ -144,6 +144,17 @@ namespace axe
 				continue;
 			}
 
+			// Pose sob controle de uma ferramenta de autoria (Sequencer).
+			//
+			// Sair ANTES de qualquer caminho de avaliacao — nao adianta pular
+			// so o BuildSkinningMatrices: avaliar o grafo aqui tambem avanca
+			// tempo, dispara notifies e mexe em state machine, e nada disso
+			// deve acontecer enquanto alguem esta autorando a pose.
+			//
+			// Ver SkeletalMeshComponent::PoseOverride.
+			if (skel.PoseOverride)
+				continue;
+
 			// Buffer de pose reaproveitado entre personagens e entre frames.
 			static thread_local Pose s_Pose;
 

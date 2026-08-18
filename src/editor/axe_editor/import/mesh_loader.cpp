@@ -120,7 +120,8 @@ namespace axe
 			// proprio JSON.
 			const std::string ext = std::filesystem::path(filepath).extension().string();
 
-			if (ext == ".axeskel" || ext == ".axeanim" || ext == ".axemat")
+			if (ext == ".axeskel" || ext == ".axeanim" || ext == ".axemat" ||
+				ext == ".axerig" || ext == ".axeseq" || ext == ".axegraph")
 			{
 				AXE_CORE_ERROR("  -> '{}' e um ASSET DO ENGINE (JSON), nao um modelo. "
 					"Alguma entidade da cena aponta pra ele como se fosse mesh — "

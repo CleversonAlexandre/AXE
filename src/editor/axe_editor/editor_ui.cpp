@@ -53,6 +53,23 @@ namespace axe
 			ImGui::End();
 		}
 
+
+
+		//if (m_SequencerWindow.m_IsOpen && OnDrawSequencer)
+		//{
+		//	if (ImGui::Begin("Sequencer", &m_SequencerWindow.m_IsOpen))
+		//	{
+		//		OnDrawSequencer();
+		//		m_SequencerWindow.Open();
+		//	}
+		//	ImGui::End();
+		//}
+		//else
+		//{
+		//	m_SequencerWindow.Close();
+		//}
+		//
+
 		// ── Game Mode Editor ──────────────────────────────────────────────────
 		if (m_ShowGameMode && ProjectManager::Get().HasProject())
 		{
@@ -289,11 +306,20 @@ namespace axe
 				ImGui::MenuItem("Hierarchy", nullptr, &m_ShowHierarchy);
 				ImGui::MenuItem("Viewport", nullptr, &m_ShowViewport);
 				ImGui::MenuItem("Inspector", nullptr, &m_ShowInspector);
-				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);
+				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);				
 				ImGui::Separator();
-				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);
+				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);										
 				ImGui::Separator();
 				ImGui::MenuItem("Game Mode", nullptr, &m_ShowGameMode);
+
+				ImGui::Separator();
+				bool seqOpen = m_SequencerWindow.IsOpen();
+				if (ImGui::MenuItem("Sequencer", nullptr, &seqOpen)) {
+					if (seqOpen) m_SequencerWindow.Open();
+					else         m_SequencerWindow.Close();
+				}
+				
+				       
 				ImGui::EndMenu();
 			}
 
@@ -310,7 +336,7 @@ namespace axe
 				ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
 				ImGui::EndMenu();
 			}
-
+			//m_SequencerWindow.OnImGuiRender();
 			ImGui::EndMenuBar();
 		}
 	}
@@ -457,4 +483,6 @@ namespace axe
 
 		ImGui::End();
 	}
+
+	
 }

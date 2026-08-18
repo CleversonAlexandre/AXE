@@ -17,6 +17,7 @@
 #include <functional>
 #include <filesystem>   // m_LoadedInputProjectRoot
 
+#include "axe_editor/animation/sequencer/sequencer_window.hpp"
 namespace axe
 {
     class ViewportRenderer;
@@ -44,6 +45,7 @@ namespace axe
         AnimClipWindow       m_AnimClipWindow;
         InputSettingsWindow  m_InputSettingsWindow;
         AssetReportWindow    m_AssetReportWindow;   // B3.2
+        SequencerWindow m_SequencerWindow;
 
         // Callbacks conectados pelo EditorLayer
         std::function<void()> OnNewScene;
@@ -57,6 +59,7 @@ namespace axe
         std::function<bool()> OnCanUndo;
         std::function<bool()> OnCanRedo;
         std::function<bool()> IsPlaying; // retorna true se estiver em Play ou Pause
+        std::function<void()> OnDrawSequencer;
 
         HierarchyWindow* GetHierarchy() { return &m_HierarchyWindow; }
         InspectorWindow m_InspectorWindow;
@@ -93,7 +96,10 @@ namespace axe
         bool m_ShowAssetBrowser = true;
         bool m_ShowEnvironment = false;
         bool m_ShowGameMode = false;
+        
 
         ViewportRenderer* m_ViewportRenderer = nullptr;
+
+        
     };
 }

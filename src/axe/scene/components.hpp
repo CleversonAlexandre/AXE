@@ -147,6 +147,27 @@ namespace axe
 		// controla se o tempo corre fora do Play.
 		bool PreviewInEditor = true;
 
+		// Quem manda na pose desta entidade NESTE frame.
+		//
+		// Normalmente e o AnimationWorld: ele avalia o AnimGraph (ou o blend
+		// space, ou o clipe) e reescreve o BonePalette INTEIRO, todo frame.
+		//
+		// Uma ferramenta de AUTORIA — o Sequencer, e amanha um pose editor —
+		// precisa ser dona da pose enquanto edita. Sem este flag, o que ela
+		// escreve e apagado microssegundos depois, no mesmo frame, e o sintoma
+		// e o pior possivel: a UI mostra a key no lugar certo e o personagem
+		// nao se mexe.
+		//
+		// Com o flag em true o AnimationWorld PULA a entidade por completo, e
+		// quem o ligou fica responsavel por escrever o BonePalette (via
+		// Pose + AnimationSampler::BuildSkinningMatrices) e por desliga-lo
+		// quando terminar.
+		//
+		// `PreviewInEditor` NAO serve para isso: ele so decide se o TEMPO
+		// avanca. Com ele em false a pose congela — e continua sendo
+		// recalculada e regravada pelo grafo a cada frame.
+		bool PoseOverride = false;
+
 		// ── Debug ────────────────────────────────────────────────────────
 		//
 		// Desenha o esqueleto como linhas por cima da malha.

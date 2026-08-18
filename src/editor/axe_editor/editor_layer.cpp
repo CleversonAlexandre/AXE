@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cctype>
 
+
+
 namespace axe
 {
     namespace
@@ -122,7 +124,7 @@ namespace axe
                 EnsureEnvironmentComponent();
                 AXE_EDITOR_INFO("Nova cena criada.");
             };
-
+        m_EditorUI->m_SequencerWindow.SetContext(&m_Context);
         m_EditorUI->OnOpenScene = [this](const std::string& path)
             {
                 if (m_EditorState != EditorState::Edit)
@@ -236,7 +238,11 @@ namespace axe
                 ImGui::Separator();
                 ImGui::DragFloat("Rotação Skybox", &m_Environment.SkyboxRotation, 1.0f, -360.0f, 360.0f);
             };
-
+        m_EditorUI->OnDrawSequencer = [this]()
+            {
+                m_SequencerWindow.IsOpen();
+               
+            };
         // ── Callback do AssetBrowser — drop de arquivo ────────────────────────
         m_EditorUI->GetAssetBrowser()->SetFileDropCallback(
             [this](const std::string& filepath)
@@ -418,7 +424,6 @@ namespace axe
                     AXE_EDITOR_INFO("Control Rig: abrindo '{}'...", record->Name);
 
                     auto rigAsset = ControlRigAsset::LoadFromFile(record->FilePath);
-
                     if (!rigAsset)
                     {
                         AXE_EDITOR_ERROR("Control Rig: falha ao ler '{}'. Arquivo corrompido?",
@@ -432,9 +437,7 @@ namespace axe
                         AssetDatabase::Get().GetByUUID(rigAsset->GetSkeletonUUID()))
                     {
                         skel = SkeletalMeshAsset::LoadFromFile(skelRec->FilePath);
-
-                        if (skel)
-                            skel->Resolve();
+                        if (skel) skel->Resolve();
                     }
                     else
                     {
@@ -666,6 +669,8 @@ namespace axe
                 if (asset.MaterialData) registry.emplace<MaterialComponent>(entity, asset.MaterialData);
                 m_Context.Select(entity);
             });
+
+            
 
         // ── Inicializa o viewport ─────────────────────────────────────────────
         ViewportWindow* viewport = m_EditorUI->GetViewport();
@@ -1172,6 +1177,7 @@ namespace axe
             m_EditorUI->m_AnimGraphWindow.Draw();
             m_EditorUI->m_ControlRigWindow.Draw();
             m_EditorUI->m_AnimClipWindow.Draw();
+            m_EditorUI->m_SequencerWindow.Draw();
 
             // ── On-screen messages (Print String) ────────────────────────────
             if (m_EditorState != EditorState::Edit)
@@ -2428,5 +2434,7 @@ namespace axe
         m_Context.Select(entity);
         AXE_EDITOR_INFO("InstantiateScriptAsset: '{}' instanciado.", scriptAsset->GetName());
     }
+
+
 
 } // namespace axe

@@ -52,8 +52,12 @@
 
 #include "axe/scene/scene_snapshot.hpp"
 
+#include "axe_editor/animation/sequencer/sequencer_window.hpp"
+
 namespace axe
 {
+    //class SequencerWindow;
+
     class EditorLayer : public Layer
     {
     public:
@@ -64,6 +68,7 @@ namespace axe
         void OnUpdate(float deltaTime) override;
         void OnRender() override;
         void OnEvent(Event& e) override;
+        
 
     private:
         // ── Estados do editor ──────────────────────────────────────────────────
@@ -81,6 +86,7 @@ namespace axe
         SceneSnapshot           m_SceneSnapshot;
         bool                    m_SceneLoaded = false;
         SceneEnvironment        m_Environment;
+        SequencerWindow         m_SequencerWindow;
 
         // ── Renderer / UI ─────────────────────────────────────────────────────
         std::unique_ptr<axe::ViewportRenderer> m_ViewportRenderer;
@@ -165,6 +171,10 @@ namespace axe
         void EnterEdit();
         void InstantiateScriptAsset(const std::filesystem::path& scriptPath,
             const std::string& assetUUID);
+      
+        
+
+
     };
 
 } // namespace axe
