@@ -142,6 +142,20 @@ namespace axe {
         std::string                     SourceClipName;
 
         int                             ClipOffset = 0;    // offset dentro do clip
+
+        // ── RATE SCALE CONGELADO NO MOMENTO EM QUE A SECTION NASCEU ──────────
+        //
+        // O Player vive em src/axe/ e NAO conhece AnimationClip: tudo que ele
+        // sabe fazer e converter frame -> segundo. O CreateClipTrack, do outro
+        // lado, calcula o comprimento da section dividindo a duracao pelo
+        // RateScale do clipe. Sem guardar o mesmo numero aqui, o mapeamento
+        // inverso (frame -> segundo do clipe) nao fecha com o direto, e a
+        // performance termina antes ou depois da borda da section.
+        //
+        // 1.0 e o default e o valor de praticamente todo clipe importado, entao
+        // `.axeseq` gravado antes deste campo carrega sem migracao nenhuma.
+        float                           ClipRateScale = 1.0f;
+
         std::vector<SequencerChannel>   Channels;
 
         bool ContainsFrame(float frame) const {
@@ -157,6 +171,40 @@ namespace axe {
         std::vector<SequencerSection>   Sections;
         bool                            Muted = false;
         bool                            Locked = false;
+
+        // ── FORA DAS SECTIONS: SEGURAR A POSE OU LARGAR? (tracks de clipe) ───
+        //
+        // true  — o playhead fora de toda section avalia a BORDA mais proxima:
+        //         antes da primeira, o primeiro frame; depois da ultima, o
+        //         ultimo. A performance congela em vez de sumir.
+        // false — a track nao produz nada, e a base volta a ser a bind pose.
+        //
+        // Default true porque o contrario e um susto: uma sequence de 125 frames
+        // com um clipe de 35 mostrava o personagem abrindo os bracos em T-pose no
+        // frame 36 e ficando assim ate o fim. E o "Keep State" do Sequencer da
+        // Unreal, que tambem e o default de la.
+        //
+        // So tem efeito em SequencerTrackType::AnimationClip — tracks de canal
+        // ja sabem se virar (uma key fora da section simplesmente nao existe).
+        bool                            HoldOutsideSections = true;
+
+        // ── O QUE ESTA PRESO NESTE SOCKET (tracks de TransformSocket) ────────
+        //
+        // UUID de um asset de Mesh ou SkeletalMesh. Vazio = a track anima o
+        // socket mas nada visivel esta preso nele.
+        //
+        // ── POR QUE MORA NA TRACK, E NAO NO SOCKET DO .axeskel ───────────────
+        //
+        // O `SkeletalMeshAsset::Socket` ja tem um `PreviewMeshUUID`, e seria
+        // tentador reusa-lo. Mas aquele campo e do ESQUELETO: mudar a arma ali
+        // muda em toda cena, toda sequence e todo personagem que use o mesmo
+        // `.axeskel`.
+        //
+        // O que o animador quer e o oposto — o socket "RightHandWeapon" e
+        // estavel, e o que troca e a peca: pistola numa sequence, fuzil na
+        // outra, nada num close de rosto. Guardando na track, trocar o objeto e
+        // trocar um UUID; o socket, as keys e o rig ficam todos de pe.
+        std::string                     AttachedAssetUUID;
 
         // Helper: acha a section ativa num frame dado. Null se nenhuma.
         SequencerSection* FindActiveSection(float frame) {
@@ -189,6 +237,26 @@ namespace axe {
         std::string                     EntityUUID;         // reservado (ver acima)
         std::string                     DisplayName;
         std::string                     RigAssetUUID;       // opcional
+
+        // ── OS CONTROLES SEGUEM A ANIMACAO? ──────────────────────────────────
+        //
+        // true  — antes do solve, todo controle que nasceu de um osso vai para
+        //         onde esse osso esta NA ANIMACAO. O Value do animador continua
+        //         valendo por cima.
+        // false — os controles ficam no repouso do rig (a bind pose), que e o
+        //         comportamento do preview do Control Rig.
+        //
+        // Default true, e a diferenca nao e sutil: com false, subir o peso de um
+        // FK Chain faz o membro SALTAR para a T-pose, e um Two Bone IK mira no
+        // controle de pe parado na posicao de bind — a animacao de tiro vira um
+        // espacate. Os dois sao o grafo funcionando corretamente sobre controles
+        // que estao no lugar errado.
+        //
+        // Fica no BINDING porque e uma decisao por personagem: um prop rig, cujo
+        // controle nao representa osso nenhum, nao quer isto (e para ele o campo
+        // e inofensivo — controle sem SourceBone nao se move).
+        bool                            RigControlsFollowAnimation = true;
+
         std::vector<SequencerTrack>     Tracks;
     };
 

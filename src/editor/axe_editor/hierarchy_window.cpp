@@ -72,6 +72,12 @@ namespace axe
         auto* nameComp = registry.try_get<NameComponent>(entity);
         if (!nameComp) return;
 
+        // Preview de ferramenta de autoria (ver EditorTransientComponent).
+        // Fica fora da hierarquia: nao e conteudo da cena, some quando a
+        // janela que a criou fecha, e listar algo que o usuario nao pode
+        // apagar nem renomear so produz a pergunta "o que e isto?".
+        if (registry.all_of<EditorTransientComponent>(entity)) return;
+
         bool isFolder = registry.any_of<FolderComponent>(entity);
         bool isLight = registry.any_of<LightComponent>(entity);
         bool isSelected = (m_Context->SelectedEntity == entity);

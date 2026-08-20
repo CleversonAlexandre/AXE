@@ -1150,6 +1150,13 @@ namespace axe
 		for (auto entity : registry.storage<entt::entity>())
 		{
 			if (!registry.valid(entity)) continue;
+
+			// Preview de ferramenta de autoria — nao vai para o arquivo.
+			// Ver EditorTransientComponent em components.hpp: sem este pulo,
+			// fechar o Sequencer e salvar deixaria a arma de preview anexada
+			// ao personagem para sempre.
+			if (registry.all_of<EditorTransientComponent>(entity)) continue;
+
 			entities.push_back(SerializeEntityToJson(entity, registry));
 		}
 
@@ -1384,6 +1391,11 @@ namespace axe
 		for (auto entity : registry.storage<entt::entity>())
 		{
 			if (!registry.valid(entity)) continue;
+
+			// Mesmo motivo do Serialize: o snapshot de Play tambem nao pode
+			// carregar preview de autoria — ele volta no Stop.
+			if (registry.all_of<EditorTransientComponent>(entity)) continue;
+
 			entities.push_back(SerializeEntityToJson(entity, registry));
 		}
 

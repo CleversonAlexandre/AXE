@@ -1201,9 +1201,34 @@ namespace axe
 	// A ordem das duas listas TEM que casar — o primeiro osso e dirigido pelo
 	// primeiro controle, e assim por diante.
 	//
-	// Nao ha problema de ordem de execucao aqui: escrever um transform LOCAL
-	// nao depende de onde o pai esta, entao os pares podem ser aplicados em
-	// qualquer sequencia.
+	// ── LOCAL OU GLOBAL, E POR QUE ISTO PRECISOU EXISTIR ─────────────────────
+	//
+	// O no so copiava LOCAL. Transform local e um numero medido no referencial
+	// do PAI, entao copia-lo de um elemento para outro so quer dizer a mesma
+	// coisa se os dois tiverem pais equivalentes.
+	//
+	// Isso vale no MIOLO de uma cadeia (ctrl_Spine1 pende de ctrl_Spine, como
+	// Spine1 pende de Spine) e falha justamente na RAIZ dela: `ctrl_Hips` pende
+	// de `ctrl_RootNode` — um controle de rig criado na origem — enquanto
+	// `mixamorig:Hips` pende de `RootNode`, o osso que carrega a conversao de
+	// eixo do FBX. Os dois referenciais diferem por uma rotacao fixa, e o
+	// quadril inteiro sai girado por ela.
+	//
+	// Nada no grafo denuncia isso: as listas estao pareadas, os nomes estao
+	// certos, e o resultado esta torto. E o no nao tinha nem como ser corrigido
+	// de fora — as entradas sao ItemArray, e nao havia onde escolher o espaco.
+	//
+	// Em GLOBAL a pergunta nem se coloca: o osso vai para ONDE O CONTROLE ESTA,
+	// e de quem cada um pende deixa de importar.
+	//
+	// Default LOCAL para nenhum `.axerig` mudar de comportamento ao abrir. Quem
+	// tiver o problema acima troca para Global; a auditoria do Sequencer aponta
+	// os pares afetados pelo nome.
+	//
+	// Ordem de execucao: em LOCAL nao importa (escrever local nao depende do
+	// pai). Em GLOBAL tambem nao, e por um motivo diferente — TODO osso da lista
+	// e escrito explicitamente, entao um pai escrito depois do filho arrasta o
+	// filho e o filho ja foi (ou sera) posto no lugar certo de qualquer forma.
 	class AXE_API RigNode_FKChain : public RigNode
 	{
 	public:
@@ -1226,6 +1251,11 @@ namespace axe
 		}
 
 		void Execute(RigExecContext& ctx) override;
+
+		void Serialize(nlohmann::json& j) const override;
+		void Deserialize(const nlohmann::json& j) override;
+
+		RigSpace Space = RigSpace::Local;
 
 	private:
 		bool m_WarnedSize = false;

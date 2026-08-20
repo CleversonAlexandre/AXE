@@ -386,6 +386,38 @@ namespace axe
 			return;
 		}
 
+		// ── FK Chain ─────────────────────────────────────────────────────────
+		//
+		// As entradas sao ItemArray, entao nao havia ONDE escolher o espaco — e
+		// o no copiava LOCAL sempre. Isso quebra na RAIZ da cadeia, onde o
+		// controle e o osso pendem de pais diferentes (`ctrl_RootNode` contra o
+		// `RootNode` do FBX). Ver a nota no cabecalho da classe.
+		if (auto* fk = dynamic_cast<RigNode_FKChain*>(n))
+		{
+			int space = (int)fk->Space;
+
+			if (ImGui::Combo("Space", &space, kSpaces, 2))
+			{
+				fk->Space = (RigSpace)space;
+				MarkEdited("Change FK Chain space");
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(
+					"Local: o osso copia o transform local do controle. So esta\n"
+					"       certo se os dois pendem de pais equivalentes — o que\n"
+					"       costuma falhar justamente no primeiro par da cadeia.\n\n"
+					"Global: o osso vai para ONDE O CONTROLE ESTA. Imune a\n"
+					"       diferenca de parentesco entre as duas arvores.");
+			}
+
+			ImGui::TextDisabled("Ligue duas listas: ossos de um lado, controles\n"
+				"do outro, na MESMA ordem.");
+
+			return;
+		}
+
 		// ── Set Transform ────────────────────────────────────────────────────
 		if (auto* st = dynamic_cast<RigNode_SetTransform*>(n))
 		{

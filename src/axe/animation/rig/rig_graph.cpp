@@ -371,6 +371,12 @@ namespace axe
 
 			node->Execute(ctx);
 
+			// Ponto UNICO por onde todo no do grafo passa — inclusive os de
+			// dentro de uma funcao, porque o subgrafo copia o contexto inteiro.
+			// Nulo no runtime. Ver RigExecContext::OnNodeExecuted.
+			if (ctx.OnNodeExecuted)
+				ctx.OnNodeExecuted(*node);
+
 			// Quem cuida do proprio fluxo (Sequence) ja rodou TODAS as saidas
 			// dentro do Execute — seguir a saida 0 aqui rodaria a primeira
 			// corrente duas vezes.

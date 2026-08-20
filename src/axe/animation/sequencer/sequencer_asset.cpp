@@ -160,6 +160,7 @@ namespace axe {
             j["source_clip_uuid"] = sec.SourceClipUUID;  // std::string direto
             j["source_clip_name"] = sec.SourceClipName;  // ver SequencerSection
             j["clip_offset"] = sec.ClipOffset;
+            j["clip_rate_scale"] = sec.ClipRateScale;
             j["channels"] = nlohmann::json::array();
             for (const auto& ch : sec.Channels) {
                 nlohmann::json jc;
@@ -177,6 +178,10 @@ namespace axe {
             // carregando, so que sem clipe — que e exatamente o que ele era.
             sec.SourceClipName = j.value("source_clip_name", std::string{});
             sec.ClipOffset = j.value("clip_offset", 0);
+            // Default 1.0, e clampado: um rate zero (ou negativo) vindo de um
+            // arquivo editado a mao congelaria o clipe no segundo 0, sem erro.
+            sec.ClipRateScale = j.value("clip_rate_scale", 1.0f);
+            if (!(sec.ClipRateScale > 0.0001f)) sec.ClipRateScale = 1.0f;
             if (j.contains("channels")) {
                 for (const auto& jc : j["channels"]) {
                     sec.Channels.push_back(DeserializeChannel(jc));
@@ -197,6 +202,8 @@ namespace axe {
             }
             j["muted"] = tr.Muted;
             j["locked"] = tr.Locked;
+            j["hold_outside"] = tr.HoldOutsideSections;
+            j["attached_asset_uuid"] = tr.AttachedAssetUUID;
         }
 
         SequencerTrack DeserializeTrack(const nlohmann::json& j) {
@@ -206,6 +213,10 @@ namespace axe {
             tr.TargetType = SequencerTargetTypeFromString(j.value("target_type", "Bone"));
             tr.Muted = j.value("muted", false);
             tr.Locked = j.value("locked", false);
+            // Default true: `.axeseq` gravado antes do campo passa a segurar a
+            // pose, que e o comportamento que ele deveria ter tido desde sempre.
+            tr.HoldOutsideSections = j.value("hold_outside", true);
+            tr.AttachedAssetUUID = j.value("attached_asset_uuid", std::string{});
             if (j.contains("sections")) {
                 for (const auto& js : j["sections"]) {
                     tr.Sections.push_back(DeserializeSection(js));
@@ -220,6 +231,7 @@ namespace axe {
             j["entity_uuid"] = b.EntityUUID;     // reservado
             j["display_name"] = b.DisplayName;
             j["rig_asset_uuid"] = b.RigAssetUUID;
+            j["rig_controls_follow_anim"] = b.RigControlsFollowAnimation;
             j["tracks"] = nlohmann::json::array();
             for (const auto& tr : b.Tracks) {
                 nlohmann::json jt;
@@ -236,6 +248,9 @@ namespace axe {
             b.EntityUUID = j.value("entity_uuid", std::string{});
             b.DisplayName = j.value("display_name", "");
             b.RigAssetUUID = j.value("rig_asset_uuid", std::string{});
+            // Default true: `.axeseq` gravado antes deste campo passa a seguir a
+            // animacao, que e o comportamento que ele deveria ter tido.
+            b.RigControlsFollowAnimation = j.value("rig_controls_follow_anim", true);
             if (j.contains("tracks")) {
                 for (const auto& jt : j["tracks"]) {
                     b.Tracks.push_back(DeserializeTrack(jt));

@@ -241,7 +241,7 @@ namespace axe
         m_EditorUI->OnDrawSequencer = [this]()
             {
                 m_SequencerWindow.IsOpen();
-               
+
             };
         // ── Callback do AssetBrowser — drop de arquivo ────────────────────────
         m_EditorUI->GetAssetBrowser()->SetFileDropCallback(
@@ -620,6 +620,55 @@ namespace axe
                     return;
                 }
 
+                // ── .axerig ARRASTADO PRA VIEWPORT ────────────────────────
+                //
+                // Este branch existia SO na lambda `instantiate` (duplo-clique).
+                // No drop, o .axerig atravessava a cadeia inteira sem casar com
+                // nada e caía no LoadMeshCooking la embaixo, onde o assimp
+                // respondia "No suitable reader found" — e o mesh_loader ainda
+                // acusava "alguma entidade da cena aponta pra ele como se fosse
+                // mesh", que e um diagnostico falso: nao havia entidade nenhuma,
+                // era o proprio drop entrando pelo caminho errado.
+                //
+                // A mesma armadilha ja tinha sido corrigida para o .axeskel e
+                // para o .axeanim, e esquecida para o .axerig. Sao duas lambdas
+                // gemeas que precisam concordar.
+                //
+                // E um Control Rig NAO VIRA ENTIDADE — nao tem geometria e nao
+                // existe ControlRigComponent. Ele e aplicado a um personagem
+                // dentro de um AnimGraph, pelo no `AnimNode_ControlRig`. Entao
+                // "colocar em cena" um .axerig quer dizer ABRIR O EDITOR DELE,
+                // exatamente como o duplo-clique ja fazia.
+                if (record->FilePath.extension() == ".axerig")
+                {
+                    AXE_EDITOR_INFO("Control Rig: abrindo '{}'...", record->Name);
+
+                    auto rigAsset = ControlRigAsset::LoadFromFile(record->FilePath);
+                    if (!rigAsset)
+                    {
+                        AXE_EDITOR_ERROR("Control Rig: falha ao ler '{}'. Arquivo corrompido?",
+                            record->FilePath.string());
+                        return;
+                    }
+
+                    std::shared_ptr<SkeletalMeshAsset> skel;
+
+                    if (const AssetRecord* skelRec =
+                        AssetDatabase::Get().GetByUUID(rigAsset->GetSkeletonUUID()))
+                    {
+                        skel = SkeletalMeshAsset::LoadFromFile(skelRec->FilePath);
+                        if (skel) skel->Resolve();
+                    }
+                    else
+                    {
+                        AXE_EDITOR_ERROR("Control Rig '{}': o esqueleto (.axeskel) referenciado "
+                            "nao foi encontrado. A janela abre, mas sem preview.", record->Name);
+                    }
+
+                    m_EditorUI->m_ControlRigWindow.OpenForAsset(rigAsset, skel);
+                    return;
+                }
+
                 // ── .axeanim ARRASTADO PRA VIEWPORT ───────────────────────
                 //
                 // Um AnimGraph nao vira entidade — ele nao tem geometria. Voce
@@ -670,7 +719,7 @@ namespace axe
                 m_Context.Select(entity);
             });
 
-            
+
 
         // ── Inicializa o viewport ─────────────────────────────────────────────
         ViewportWindow* viewport = m_EditorUI->GetViewport();
@@ -717,6 +766,15 @@ namespace axe
                     std::string info = record->Name;
                     if (record->Type == AssetType::Script && !record->ScriptClassType.empty())
                         info += " [" + record->ScriptClassType + "]";
+
+                    // .axerig e .axeanim nao viram entidade: nao ha fantasma
+                    // para mostrar, e a ausencia de feedback le como "este asset
+                    // nao pode ser arrastado". Dizer o que vai acontecer custa
+                    // uma string e mata a duvida antes do drop.
+                    const std::string ext = record->FilePath.extension().string();
+                    if (ext == ".axerig")       info += "  (abre o Control Rig)";
+                    else if (ext == ".axeanim") info += "  (abre o AnimGraph)";
+
                     return info;
                 });
 
@@ -766,6 +824,12 @@ namespace axe
         m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
         m_ViewportRenderer->SetEnvironment(&m_Environment);
         m_EditorUI->SetViewportRenderer(m_ViewportRenderer.get());
+
+        // O contexto passa a saber onde fica o viewport. Quem precisa disso sao
+        // as ferramentas que manipulam algo que nao e entidade — o Sequencer
+        // move osso, socket e controle de rig, e nenhum dos tres tem
+        // TransformComponent para o gizmo normal agarrar.
+        m_Context.Viewport = m_ViewportRenderer.get();
 
         m_ThumbnailRenderer.Initialize();
         m_EditorUI->GetAssetBrowser()->SetThumbnailRenderer(&m_ThumbnailRenderer);

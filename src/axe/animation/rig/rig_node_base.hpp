@@ -15,6 +15,11 @@ namespace axe
 {
 	class RigGraph;
 
+	// O RigExecContext, declarado antes da classe, carrega um callback que
+	// recebe um RigNode (ver OnNodeExecuted). Por referencia, entao a declaracao
+	// adiantada basta.
+	class RigNode;
+
 	// ═════════════════════════════════════════════════════════════════════════
 	//  NO DE RIG — CONTROLRIG_V1
 	//
@@ -214,6 +219,23 @@ namespace axe
 		// De onde a cena esta sendo vista. Nulo = sem camera informada.
 		// Ver RigView, acima.
 		const RigView* View = nullptr;
+
+		// ── ESPIAO DE EXECUCAO ───────────────────────────────────────────────
+		//
+		// Chamado logo DEPOIS de cada no rodar. NULO no runtime — quem liga e o
+		// editor, e so enquanto o diagnostico esta aberto.
+		//
+		// Existe porque um solve so mostra o RESULTADO. "O quadril girou 54
+		// graus" e um sintoma que atravessou o grafo inteiro, e descobrir de
+		// fora qual no fez aquilo e chute; a alternativa era desligar no por no
+		// e olhar, que e exatamente o que se estava fazendo a mao.
+		//
+		// Com o espiao, o editor fotografa a hierarquia antes de cada no e
+		// compara depois: "o Two Bone IK 'Perna E' girou o Hips em 54.3 graus".
+		//
+		// Vale dentro de funcao tambem: o subgrafo COPIA o contexto (ver o no
+		// Call), entao o callback viaja junto.
+		std::function<void(const RigNode&)> OnNodeExecuted = nullptr;
 
 		// ── BIBLIOTECA DE FUNCOES ────────────────────────────────────────────
 		//

@@ -27,6 +27,7 @@ namespace axe {
         m_CurrentFrame = m_StartFrame;
         m_Mode = SequencerPlaybackMode::Paused;
         m_LastSamples.clear();
+        m_LastClipSamples.clear();
     }
 
     void SequencerPlayer::OnUpdate(float deltaTime) {
@@ -87,6 +88,7 @@ namespace axe {
     void SequencerPlayer::OnStop() {
         m_Bindings.clear();
         m_LastSamples.clear();
+        m_LastClipSamples.clear();
         m_CurrentFrame = 0.0f;
         m_Mode = SequencerPlaybackMode::Paused;
     }
@@ -137,10 +139,113 @@ namespace axe {
     void SequencerPlayer::Resample() {
         m_LastSamples.clear();
 
+        // ── POR QUE ESTA LINHA EXISTE, E POR QUE FALTAVA ─────────────────────
+        //
+        // `m_LastClipSamples` nunca era escrito nem limpo. O editor perguntava
+        // `GetLastClipSamples()` todo frame, recebia uma lista vazia, nao achava
+        // clipe base nenhum e caia em `Pose::FromBindPose` — a T-pose. Soltar um
+        // clipe na timeline produzia uma section roxa perfeita, com duracao
+        // certa e nome resolvido, e um personagem parado de bracos abertos.
+        //
+        // Todo o resto da cadeia (SamplePose, PoseOverride, BuildSkinningMatrices)
+        // ja estava pronto e correto: o unico elo faltando era o produtor.
+        m_LastClipSamples.clear();
+
+        const float fps = (m_Fps > 0) ? static_cast<float>(m_Fps) : 30.0f;
+
         for (int bi = 0; bi < static_cast<int>(m_Bindings.size()); ++bi) {
             auto& b = m_Bindings[bi];
             for (auto& tr : b.Tracks) {
                 if (tr.Muted) continue;
+
+                // ── CAMADA BASE: track de clipe ──────────────────────────────
+                //
+                // Tratada ANTES da busca de section comum, e nao dentro dela:
+                // uma section de clipe nao TEM canais (um clipe nao se edita por
+                // componente), entao o laco de canais rodaria zero vezes e a
+                // track inteira sumiria da avaliacao.
+                if (tr.Type == SequencerTrackType::AnimationClip) {
+                    if (tr.Sections.empty()) continue;
+
+                    // Section ativa, ou — se o playhead estiver fora de todas —
+                    // a mais proxima, com o tempo grampeado na borda dela.
+                    //
+                    // ── POR QUE SEGURAR A POSE ───────────────────────────────
+                    //
+                    //   Sem isto, passar do ultimo frame da section devolvia a
+                    //   pose de repouso: o personagem terminava a animacao e
+                    //   ABRIA OS BRACOS em T-pose no frame seguinte. Numa
+                    //   sequence de 125 frames com um clipe de 35, eram 90
+                    //   frames de T-pose.
+                    //
+                    //   Segurar a borda e o que todo NLE de animacao faz (o
+                    //   "Keep State" do Sequencer da Unreal e o default de la
+                    //   tambem): fora da section a performance congela no
+                    //   primeiro/ultimo frame, e o animador enxerga o buraco
+                    //   como uma pausa, nao como um bug.
+                    //
+                    //   Quem quiser o comportamento antigo desliga
+                    //   `HoldOutsideSections` na track.
+                    SequencerSection* activeSec = nullptr;
+                    float evalFrame = m_CurrentFrame;
+
+                    for (auto& sec : tr.Sections) {
+                        if (sec.ContainsFrame(m_CurrentFrame)) { activeSec = &sec; break; }
+                    }
+
+                    if (!activeSec && tr.HoldOutsideSections) {
+                        // Section mais proxima do playhead. Com uma section so —
+                        // o caso normal — isto e simplesmente ela.
+                        float bestDist = -1.0f;
+                        for (auto& sec : tr.Sections) {
+                            const float s = static_cast<float>(sec.StartFrame);
+                            const float e = static_cast<float>(sec.EndFrame);
+                            const float d = (m_CurrentFrame < s) ? (s - m_CurrentFrame)
+                                : (m_CurrentFrame - e);
+                            if (bestDist < 0.0f || d < bestDist) {
+                                bestDist = d;
+                                activeSec = &sec;
+                            }
+                        }
+                        if (activeSec) {
+                            evalFrame = std::clamp(m_CurrentFrame,
+                                static_cast<float>(activeSec->StartFrame),
+                                static_cast<float>(activeSec->EndFrame));
+                        }
+                    }
+
+                    if (!activeSec) continue;
+
+                    const std::string& clipName = !activeSec->SourceClipName.empty()
+                        ? activeSec->SourceClipName
+                        : tr.TargetName;   // fallback: sections antigas sem o campo
+                    if (clipName.empty()) continue;
+
+                    // frame da timeline -> frame DENTRO do clipe -> segundos.
+                    //
+                    // O rate entra multiplicando porque o CreateClipTrack dividiu
+                    // por ele para achar o comprimento da section: e a inversa
+                    // exata do mesmo mapeamento (ver SequencerSection::ClipRateScale).
+                    const float rate = (activeSec->ClipRateScale > 0.0001f)
+                        ? activeSec->ClipRateScale : 1.0f;
+
+                    const float localFrame =
+                        (evalFrame - static_cast<float>(activeSec->StartFrame)) +
+                        static_cast<float>(activeSec->ClipOffset);
+
+                    SequencerClipSample cs;
+                    cs.BindingIndex = bi;
+                    cs.ClipName = clipName;
+                    cs.TimeSeconds = (localFrame / fps) * rate;
+
+                    // ClipOffset negativo daria tempo negativo. Clampar aqui e
+                    // mais honesto que deixar o WrapTime do clipe interpretar o
+                    // sinal — em clipe com loop, -0.1s viraria o FIM da animacao.
+                    if (cs.TimeSeconds < 0.0f) cs.TimeSeconds = 0.0f;
+
+                    m_LastClipSamples.push_back(cs);
+                    continue;
+                }
 
                 // Acha a section ativa no frame atual.
                 SequencerSection* activeSec = nullptr;

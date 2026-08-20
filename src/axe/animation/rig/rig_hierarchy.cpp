@@ -222,6 +222,126 @@ namespace axe
 		return true;
 	}
 
+	int RigHierarchy::SnapControlsToCurrentBones()
+	{
+		EnsureGlobals();
+
+		const std::size_t n = m_Elements.size();
+		if (n == 0)
+			return 0;
+
+		// Globais de ANTES do snap. Congelados porque o laco abaixo escreve
+		// locais enquanto le globais: sem a copia, mover um controle mudaria o
+		// alvo que o proximo iria ler.
+		const std::vector<glm::mat4> g0 = m_Globals;
+
+		// Globais de REPOUSO (Initial), num unico passe pra frente — a ordem
+		// topologica garante que o pai ja esta pronto quando chegamos no filho.
+		std::vector<glm::mat4> initG(n);
+
+		for (std::size_t i = 0; i < n; ++i)
+		{
+			const glm::mat4 local = m_Elements[i].Initial.ToMatrix();
+			const int p = m_Elements[i].Parent;
+			initG[i] = (p < 0) ? local : initG[p] * local;
+		}
+
+		// ── DUAS SAIDAS POR ELEMENTO, E ELAS PRECISAM SER DUAS ───────────────
+		//
+		//   rest[i] — onde o elemento fica com Value NEUTRO. E a "nova bind
+		//             pose", agora acompanhando a animacao.
+		//   cur[i]  — onde ele fica de fato, ja com o Value do animador E com o
+		//             dos ancestrais.
+		//
+		// Calcular so `cur` (que era o que esta funcao fazia antes) tinha um
+		// efeito colateral grave: cada controle era fixado no proprio osso, um
+		// por um, e isso APAGAVA o movimento que o pai tinha acabado de
+		// propagar. Girar ctrl_Spine nao mexia em ctrl_Spine1 — a hierarquia
+		// dos controles simplesmente deixava de existir.
+		//
+		// Separando os dois, o local de repouso do filho e medido contra o
+		// REPOUSO do pai, e o global final e composto contra o CURRENT do pai:
+		//
+		//     cur[i] = cur[pai] * (inverse(rest[pai]) * rest[i]) * Value[i]
+		//
+		// Com todos os Value neutros isto colapsa em cur[i] == rest[i] — os
+		// controles pousam exatos na animacao. Com o pai posado, o filho vai
+		// junto, que e o comportamento de qualquer rig.
+		std::vector<glm::mat4> rest(n, glm::mat4(1.0f));
+		std::vector<glm::mat4> cur(n, glm::mat4(1.0f));
+
+		int moved = 0;
+
+		for (std::size_t i = 0; i < n; ++i)
+		{
+			RigElement& e = m_Elements[i];
+
+			// Osso nao segue osso: ele JA e a animacao. Aceitar aqui criaria um
+			// segundo dono do mesmo dado — a mesma razao pela qual o
+			// SetValueFromGlobal recusa Bone.
+			if (e.Type == RigElementType::Bone)
+			{
+				rest[i] = initG[i];
+				cur[i] = g0[i];
+				continue;
+			}
+
+			const int p = e.Parent;
+
+			// Pai fora do nosso conjunto (raiz, ou um OSSO): ele nao se move, e
+			// os dois referenciais sao o mesmo — o global que ele ja tem.
+			const bool parentHandled = (p >= 0 && m_Elements[p].Type != RigElementType::Bone);
+
+			const glm::mat4 restP = (p < 0) ? glm::mat4(1.0f)
+				: (parentHandled ? rest[p] : g0[p]);
+			const glm::mat4 curP = (p < 0) ? glm::mat4(1.0f)
+				: (parentHandled ? cur[p] : g0[p]);
+
+			const int bone = e.SourceBone.empty()
+				? -1 : Find(e.SourceBone, RigElementType::Bone);
+
+			if (bone >= 0)
+			{
+				// ── O OFFSET AUTORADO E PRESERVADO ───────────────────────────
+				//
+				// Nao se cola o controle EM CIMA do osso: cola-se ele na mesma
+				// posicao relativa que o autor lhe deu, agora medida a partir do
+				// osso animado.
+				//
+				// Para um controle de FK, montado exatamente sobre o osso, o
+				// offset e a identidade e o resultado e o mesmo de antes.
+				//
+				// Para um POLE VECTOR e outra historia, e e a diferenca entre
+				// funcionar e nao funcionar: um pole vector vive DESLOCADO da
+				// junta (30cm atras do cotovelo). Colado em cima dela, o Two
+				// Bone IK fica com a direcao do polo degenerada e o membro
+				// torce para um lado arbitrario.
+				const glm::mat4 offset = glm::inverse(initG[bone]) * initG[i];
+
+				rest[i] = g0[bone] * offset;
+				++moved;
+			}
+			else
+			{
+				// Sem osso de origem: mantem o repouso autorado, relativo ao pai
+				// — que pode ter se movido. Nao se adivinha um osso.
+				rest[i] = restP * e.Initial.ToMatrix();
+			}
+
+			cur[i] = curP * (glm::inverse(restP) * rest[i]) * e.Value.ToMatrix();
+
+			// LOCAL, e nao SetGlobal: o pai deste elemento ja foi escrito neste
+			// mesmo laco, entao o local sai direto de cur[pai]. SetGlobal
+			// recalcularia o cache de globais a cada chamada — O(n^2) sem
+			// necessidade — e leria um estado meio atualizado.
+			m_Elements[i].Current = BoneTransform::FromMatrix(
+				glm::inverse(curP) * cur[i]);
+		}
+
+		MarkDirty();
+		return moved;
+	}
+
 	// ═══ Espelhamento ════════════════════════════════════════════════════════
 
 	namespace
@@ -768,6 +888,25 @@ namespace axe
 			m = m_Elements[p].Initial.ToMatrix() * m;
 
 		return m;
+	}
+
+	bool RigHierarchy::SameInitialFrame(int a, int b, float eps) const
+	{
+		if (a == b)
+			return true;
+
+		// GetInitialGlobal ja devolve identidade pra indice invalido, entao -1
+		// (espaco do mundo) entra na conta sem caso especial — e por isso um
+		// elemento identidade na raiz empata com "sem pai".
+		const glm::mat4 ga = GetInitialGlobal(a);
+		const glm::mat4 gb = GetInitialGlobal(b);
+
+		for (int c = 0; c < 4; ++c)
+			for (int r = 0; r < 4; ++r)
+				if (std::abs(ga[c][r] - gb[c][r]) > eps)
+					return false;
+
+		return true;
 	}
 
 	void RigHierarchy::SetInitialGlobal(int i, const glm::mat4& m)

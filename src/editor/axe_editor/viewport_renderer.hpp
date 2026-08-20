@@ -11,6 +11,7 @@
 #include "axe/scene/transform.hpp"
 #include "axe/core/command_history.hpp"
 #include <entt/entt.hpp>
+#include <functional>
 #include <memory>
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -82,6 +83,47 @@ namespace axe
 		ImGuizmo::OPERATION m_GuizmoOperation = ImGuizmo::TRANSLATE;
 		std::unique_ptr<EditorCamera> m_Camera;
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  GIZMO PEDIDO POR OUTRA FERRAMENTA
+		//
+		//  O caminho normal do gizmo pressupoe uma ENTIDADE com
+		//  TransformComponent. Osso de esqueleto, socket e controle de rig nao
+		//  sao entidades e nao tem transform proprio na cena — o Sequencer
+		//  precisa manipular exatamente essas tres coisas.
+		//
+		//  A alternativa seria o Sequencer chamar ImGuizmo por conta propria,
+		//  mas ele nao tem (nem deve ter) a camera, o retangulo da imagem do
+		//  viewport nem o drawlist certo. Aqui ele entrega uma matriz de mundo
+		//  e um callback, e o viewport cuida do resto — inclusive de garantir
+		//  que so exista UM gizmo na tela.
+		//
+		//  Enquanto Active for true, o gizmo de entidade NAO desenha: dois
+		//  gizmos sobrepostos disputariam o mesmo clique.
+		// ═══════════════════════════════════════════════════════════════════
+		struct ExternalGizmo
+		{
+			bool      Active = false;
+
+			// Matriz de MUNDO do que esta sendo manipulado (entrada).
+			glm::mat4 World{ 1.0f };
+
+			// Chamado a cada frame em que o usuario esta arrastando, com a
+			// matriz de mundo ja manipulada.
+			std::function<void(const glm::mat4&)> OnManipulate;
+
+			// Chamado uma vez quando o arrasto termina. E onde o Sequencer
+			// fecha o comando de undo, se houver.
+			std::function<void()> OnFinish;
+		};
+
+		void SetExternalGizmo(const ExternalGizmo& g) { m_ExternalGizmo = g; }
+		void ClearExternalGizmo() { m_ExternalGizmo = ExternalGizmo{}; }
+
+		// Qual operacao o usuario escolheu na barra do viewport (T/R/S). A
+		// ferramenta externa precisa saber para decidir QUAIS canais keyar —
+		// keyar os nove a cada toque encheria a timeline de curvas retas.
+		ImGuizmo::OPERATION GetGizmoOperation() const { return m_GuizmoOperation; }
+
 		void SetGameCamera(GameCamera* cam) { m_GameCamera = cam; }
 
 		// Força recompilação do shader do Lighting Pass — ver
@@ -124,6 +166,13 @@ namespace axe
 		CommandHistory* m_CommandHistory = nullptr;
 		bool            m_GizmoWasUsing = false;
 		Transform       m_TransformSnapshot;
+
+		// Pedido da ferramenta externa. Reposto TODO FRAME por quem o pediu —
+		// ver a nota em SequencerWindow: um gizmo que sobrevivesse ao fechar da
+		// janela ficaria pendurado no viewport manipulando um osso de uma
+		// sequence que nem esta mais aberta.
+		ExternalGizmo   m_ExternalGizmo;
+		bool            m_ExternalGizmoWasUsing = false;
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;
 

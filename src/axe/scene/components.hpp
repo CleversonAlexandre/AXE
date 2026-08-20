@@ -309,6 +309,39 @@ namespace axe
 		std::string _ResolvedFor;
 	};
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  EditorTransientComponent — entidade que so existe enquanto uma
+	//  ferramenta de autoria esta aberta.
+	//
+	//  Tag. Quem a carrega:
+	//
+	//    - NAO e serializada pelo SceneSerializer (nem no save da cena, nem
+	//      no snapshot de Play).
+	//    - NAO aparece na Hierarchy Window.
+	//
+	//  ── POR QUE ISTO PRECISOU EXISTIR ────────────────────────────────────
+	//
+	//  O Sequencer precisa mostrar a arma presa ao socket enquanto voce
+	//  anima. O caminho certo ja existia inteiro — MeshComponent +
+	//  SocketAttachmentComponent + Scene::GetWorldTransform — e desenhar um
+	//  preview por fora, direto no renderer, seria reimplementar os tres.
+	//
+	//  Faltava so uma coisa: essas entidades nao podem vazar para o arquivo
+	//  da cena. Sem a tag, fechar o Sequencer e salvar deixaria uma pistola
+	//  fantasma anexada ao personagem, e o usuario nao teria de onde deduzir
+	//  que ela veio de uma janela que nem esta mais aberta.
+	//
+	//  Generica de proposito: qualquer preview de autoria futuro (silhueta de
+	//  IK, proxy de camera, ghost de drag) usa esta tag em vez de inventar o
+	//  proprio mecanismo de exclusao — que e como se chega a tres.
+	// ═══════════════════════════════════════════════════════════════════════
+	struct EditorTransientComponent
+	{
+		// Quem criou. So diagnostico: aparece no log se alguma ferramenta
+		// esquecer de limpar as suas.
+		std::string Owner;
+	};
+
 	struct PostProcessComponent
 	{
 		PostProcessSettings Settings;

@@ -303,6 +303,62 @@ namespace axe
 		// nao no osso, entao copiar o local poria ele um elo acima do lugar.
 		bool ResetToSourceBone(int index);
 
+		// ── CONTROLES SEGUEM A POSE ATUAL DOS OSSOS ──────────────────────────
+		//
+		//  Move todo Control/Null que nasceu de um osso para onde esse osso
+		//  esta AGORA — depois do ApplyPose, ou seja, na pose da animacao — e
+		//  reaplica o Value do animador por cima.
+		//
+		//  ── POR QUE ISTO PRECISA EXISTIR ──────────────────────────────────
+		//
+		//  O ResetToInitial poe todo controle no repouso do rig, que e a bind
+		//  pose. Enquanto o rig roda sozinho (o preview do editor) isso esta
+		//  certo: nao ha animacao, e o repouso E a pose.
+		//
+		//  Com animacao debaixo — que e o caso do Sequencer e o do runtime —
+		//  fica errado, e de um jeito que so aparece no resultado final:
+		//
+		//    - um FK Chain com peso 1 copia o controle pro osso, e o membro
+		//      SALTA para a T-pose no instante em que o peso sobe;
+		//    - um Two Bone IK mira no controle de pe, que esta na posicao de
+		//      bind, e as pernas abrem — a animacao de tiro vira um espacate.
+		//
+		//  Em ambos os casos o grafo esta correto e a animacao esta correta; o
+		//  que esta fora do lugar sao os controles. Depois deste snap, peso 1
+		//  reproduz a animacao (o controle JA esta no osso animado) e o Value
+		//  do animador vira offset por cima — que e o que "ajustar a pose"
+		//  quer dizer.
+		//
+		//  E o mesmo passo que o Sequencer da Unreal executa ao ligar um
+		//  Control Rig numa sequence com animacao.
+		//
+		//  ── O OFFSET AUTORADO E PRESERVADO ────────────────────────────────
+		//
+		//  O controle nao e colado EM CIMA do osso: ele vai para a mesma
+		//  posicao relativa que o autor lhe deu, agora medida a partir do osso
+		//  animado. Para um controle de FK (montado sobre o osso) o offset e a
+		//  identidade e da no mesmo; para um POLE VECTOR, que vive deslocado da
+		//  junta, e a diferenca entre funcionar e nao funcionar — colado na
+		//  junta, a direcao do polo fica degenerada e o membro torce.
+		//
+		//  ── A HIERARQUIA DOS CONTROLES CONTINUA VALENDO ───────────────────
+		//
+		//  Cada elemento recebe DUAS matrizes: o repouso (onde ele fica com
+		//  Value neutro, agora acompanhando a animacao) e o atual (com o Value
+		//  dele E o dos ancestrais). O local sai de
+		//
+		//      cur[i] = cur[pai] * (inverse(rest[pai]) * rest[i]) * Value[i]
+		//
+		//  Fixar cada controle no proprio osso, um por um, apagaria o movimento
+		//  que o pai acabou de propagar — girar ctrl_Spine nao mexeria em
+		//  ctrl_Spine1.
+		//
+		//  Chamar DEPOIS do ApplyPose e ANTES do solve. Elemento sem SourceBone
+		//  (ou cujo osso sumiu) mantem o repouso autorado relativo ao pai.
+		//
+		//  Devolve quantos elementos foram ancorados num osso.
+		int SnapControlsToCurrentBones();
+
 		// ── Consulta ─────────────────────────────────────────────────────────
 
 		std::size_t Size() const { return m_Elements.size(); }
@@ -369,6 +425,23 @@ namespace axe
 
 		glm::mat4 GetInitialGlobal(int i) const;
 		void      SetInitialGlobal(int i, const glm::mat4& m);
+
+		// ── DOIS ELEMENTOS SAO O MESMO REFERENCIAL? ──────────────────────────
+		//
+		// Transform LOCAL so quer dizer a mesma coisa dos dois lados de uma
+		// copia se os PAIS estiverem no mesmo lugar. A pergunta aparece toda
+		// vez que alguem copia controle -> osso: FK Chain, Set Transform lendo
+		// um ctrl, e a auditoria do Sequencer.
+		//
+		// Responder por NOME (o pai do controle representa o pai do osso?) e
+		// barato e erra no caso mais comum que existe: um `ctrl_RootNode`
+		// criado na origem e o `RootNode` do FBX, os dois identidade, sao o
+		// mesmo lugar com nomes diferentes. Comparar os globais INICIAIS
+		// responde a pergunta de verdade.
+		//
+		// Indice negativo = espaco do mundo, que e a identidade — e por isso
+		// -1 e um elemento identidade SAO o mesmo referencial.
+		bool SameInitialFrame(int a, int b, float eps = 1e-3f) const;
 
 		// ── Ciclo do solve ───────────────────────────────────────────────────
 

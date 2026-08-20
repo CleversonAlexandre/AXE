@@ -1625,6 +1625,32 @@ namespace axe
 			if (b < 0 || c < 0)
 				continue;
 
+			// ── GLOBAL ───────────────────────────────────────────────────────
+			//
+			// O osso vai para ONDE O CONTROLE ESTA. Imune a diferenca de
+			// parentesco entre a arvore de controles e a de ossos — ver a nota
+			// longa no cabecalho da classe.
+			if (Space == RigSpace::Global)
+			{
+				const BoneTransform srcG = BoneTransform::FromMatrix(h.GetGlobal(c));
+
+				if (weight >= 0.9999f)
+				{
+					h.SetGlobal(b, srcG.ToMatrix(), true);
+					continue;
+				}
+
+				const BoneTransform curG = BoneTransform::FromMatrix(h.GetGlobal(b));
+
+				BoneTransform tg;
+				tg.Translation = glm::mix(curG.Translation, srcG.Translation, weight);
+				tg.Rotation = glm::slerp(curG.Rotation, srcG.Rotation, weight);
+				tg.Scale = glm::mix(curG.Scale, srcG.Scale, weight);
+
+				h.SetGlobal(b, tg.ToMatrix(), true);
+				continue;
+			}
+
 			const BoneTransform src = h.GetLocal(c);
 
 			if (weight >= 0.9999f)
@@ -1644,6 +1670,18 @@ namespace axe
 
 			h.SetLocal(b, t);
 		}
+	}
+
+	void RigNode_FKChain::Serialize(nlohmann::json& j) const
+	{
+		j["space"] = (int)Space;
+	}
+
+	void RigNode_FKChain::Deserialize(const nlohmann::json& j)
+	{
+		// Default Local: `.axerig` gravado antes deste campo abre com o
+		// comportamento que sempre teve.
+		Space = (RigSpace)j.value("space", (int)RigSpace::Local);
 	}
 
 	// ═══ Hide Controls ═══════════════════════════════════════════════════════

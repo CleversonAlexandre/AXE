@@ -600,6 +600,65 @@ namespace axe
 
 	void ViewportRenderer::DrawGuizmo(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
 	{
+		const float extW = boundsMax.x - boundsMin.x;
+		const float extH = boundsMax.y - boundsMin.y;
+
+		// ── GIZMO DE FERRAMENTA EXTERNA ──────────────────────────────────────
+		//
+		// Vem ANTES do caminho de entidade, e sai com return: dois gizmos na
+		// tela disputariam o mesmo clique, e qual deles ganharia dependeria da
+		// ordem de desenho — imprevisivel para quem esta usando.
+		//
+		// A selecao de entidade continua existindo enquanto isto esta ativo (o
+		// outliner segue mostrando o personagem); o que muda e so QUEM o gizmo
+		// manipula: o osso, e nao o objeto.
+		if (m_ExternalGizmo.Active && m_Camera && extW > 0.0f && extH > 0.0f)
+		{
+			ImGuizmo::SetOrthographic(false);
+			ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+			ImGuizmo::SetRect(boundsMin.x, boundsMin.y, extW, extH);
+
+			glm::mat4 view = m_Camera->GetViewMatrix();
+			glm::mat4 projection = m_Camera->GetProjectionMatrix();
+			glm::mat4 model = m_ExternalGizmo.World;
+
+			float snapValues[3] = { SnapValue, SnapValue, SnapValue };
+			if (m_GuizmoOperation == ImGuizmo::ROTATE)
+				snapValues[0] = snapValues[1] = snapValues[2] = SnapAngle;
+			else if (m_GuizmoOperation == ImGuizmo::SCALE)
+				snapValues[0] = snapValues[1] = snapValues[2] = SnapScale;
+
+			const float* snap = SnapEnabled ? snapValues : nullptr;
+
+			// LOCAL, como no caminho de entidade. Girar um osso nos eixos do
+			// MUNDO nao e o que o animador pensa: ele pensa "dobra o cotovelo",
+			// que e o eixo do proprio osso.
+			ImGuizmo::Manipulate(
+				glm::value_ptr(view),
+				glm::value_ptr(projection),
+				m_GuizmoOperation,
+				ImGuizmo::LOCAL,
+				glm::value_ptr(model),
+				nullptr,
+				snap);
+
+			if (ImGuizmo::IsUsing())
+			{
+				m_ExternalGizmoWasUsing = true;
+
+				if (m_ExternalGizmo.OnManipulate)
+					m_ExternalGizmo.OnManipulate(model);
+			}
+			else if (m_ExternalGizmoWasUsing)
+			{
+				m_ExternalGizmoWasUsing = false;
+
+				if (m_ExternalGizmo.OnFinish)
+					m_ExternalGizmo.OnFinish();
+			}
+
+			return;
+		}
 
 		if (!m_Scene || !m_SelectedEntity || *m_SelectedEntity == entt::null || !m_Camera)
 			return;
