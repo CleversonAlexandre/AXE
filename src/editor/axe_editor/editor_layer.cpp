@@ -323,6 +323,31 @@ namespace axe
                         AXE_EDITOR_ERROR("'{}': .axeskel invalido.", record.Name);
                     }
                 }
+                // ── .axeseq abre o Sequencer NAQUELA sequence ─────────────────
+                //
+                // Ate aqui o Sequencer so sabia carregar um caminho fixo. Com o
+                // tipo registrado, o duplo clique passa a ser o caminho normal
+                // de abrir uma cutscene — e a janela guarda de qual arquivo ela
+                // veio, que e o que faz o Ctrl+S regravar no lugar certo em vez
+                // de perguntar de novo.
+                else if (record.Type == AssetType::Sequence)
+                {
+                    m_EditorUI->m_SequencerWindow.OpenFile(record.FilePath);
+                }
+                // ── CLIPE ASSADO ──────────────────────────────────────────────
+                //
+                // O `TryOpenAnimationFile` ja resolve "de quem e este arquivo?"
+                // varrendo os `.axeskel` do projeto com
+                // FindAnimationEntryBySource — e a entrada de um clipe assado
+                // aponta para o proprio `.axeclipbin`, entao ele e encontrado
+                // pelo mesmo caminho que um FBX de animacao.
+                else if (record.Type == AssetType::AnimationClip)
+                {
+                    if (!TryOpenAnimationFile(record))
+                        AXE_EDITOR_WARN("'{}': nenhum .axeskel do projeto referencia "
+                            "este clipe. Ele foi assado para outro personagem?",
+                            record.Name);
+                }
             });
 
         // ── Callback de instanciação (drag para viewport / asset browser) ─────
@@ -728,6 +753,11 @@ namespace axe
             viewport->Initialize();
             viewport->SetGuizmoCallback([this](const glm::vec2& min, const glm::vec2& max)
                 {
+                    // Em Play o viewport e o jogo — nada de gizmo nem de formas
+                    // de Control Rig por cima dele. Ver SuppressEditorGizmos.
+                    m_ViewportRenderer->SuppressEditorGizmos =
+                        (m_EditorState == EditorState::Play);
+
                     m_ViewportRenderer->DrawGuizmo(min, max);
                 });
 
@@ -1355,13 +1385,30 @@ namespace axe
     {
         ImGuiIO& io = ImGui::GetIO();
 
-        if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
-            m_CommandHistory.Undo();
-        if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) ||
-            (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))))
-            m_CommandHistory.Redo();
+        // ── QUEM RESPONDE AO ATALHO ──────────────────────────────────────────
+        //
+        // Ctrl+Z, Ctrl+Y e Ctrl+S eram tratados aqui SEM guarda de foco. Isso
+        // funcionou enquanto o unico historico era o da cena; com o Sequencer
+        // tendo o seu, um Ctrl+Z com aquela janela em foco disparava os DOIS —
+        // desfazia a curva e, junto, um movimento de entidade no viewport que
+        // ninguem tinha pedido.
+        //
+        // O Material Editor ja tinha esta precedencia para o Ctrl+S; isto so
+        // estende a mesma regra, e agora tambem para o historico.
+        const bool sequencerHasFocus =
+            m_EditorUI->m_SequencerWindow.IsOpen() &&
+            m_EditorUI->m_SequencerWindow.IsFocused();
 
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
+        if (!sequencerHasFocus)
+        {
+            if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))
+                m_CommandHistory.Undo();
+            if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) ||
+                (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))))
+                m_CommandHistory.Redo();
+        }
+
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S) && !sequencerHasFocus)
         {
             if (m_EditorUI->m_MaterialEditorWindow.IsOpen() &&
                 m_EditorUI->m_MaterialEditorWindow.IsFocused())
@@ -1413,7 +1460,13 @@ namespace axe
             if (ImGui::IsKeyPressed(ImGuiKey_T)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::TRANSLATE;
         }
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver())
+        // `OverlayConsumedClick`: um desenho de ferramenta externa (as formas
+        // dos Controls do rig, hoje) pegou este clique. Sem esta guarda,
+        // clicar num controle tambem trocaria a entidade selecionada — e o
+        // personagem sairia da selecao no instante em que o animador tentasse
+        // pegar um controle DELE.
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt &&
+            !ImGuizmo::IsOver() && !m_ViewportRenderer->OverlayConsumedClick())
         {
             ImVec2 boundsMin = { viewport->GetBoundsMin().x, viewport->GetBoundsMin().y };
             ImVec2 mousePos = ImGui::GetMousePos();
@@ -1473,10 +1526,15 @@ namespace axe
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char ch) { return (char)std::tolower(ch); });
 
-        const bool isModelFile =
-            (ext == ".fbx" || ext == ".dae" || ext == ".gltf" || ext == ".glb");
+        // `.axeclipbin` entra junto: um clipe ASSADO pelo Sequencer e registrado
+        // no `.axeskel` exatamente como um FBX de animacao (a AnimEntry aponta
+        // para ele), entao a mesma pergunta — "de quem e este arquivo?" — tem a
+        // mesma resposta pelo mesmo caminho.
+        const bool isAnimationFile =
+            (ext == ".fbx" || ext == ".dae" || ext == ".gltf" || ext == ".glb" ||
+                ext == ".axeclipbin");
 
-        if (!isModelFile)
+        if (!isAnimationFile)
             return false;
 
         std::string scanned;

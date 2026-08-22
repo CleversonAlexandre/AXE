@@ -123,8 +123,26 @@ namespace axe
         // `outParsed` (opcional) informa se o arquivo abriu e era JSON valido.
         // Distingue "nao referencia nada" de "nao consegui ler" — que na tela
         // parecem a mesma coisa e tem causas opostas.
+        //
+        // `outCookedFiles` (opcional) recebe caminhos referenciados que
+        // EXISTEM em disco, tem extensao de arquivo cozido e NAO estao no
+        // AssetDatabase.
+        //
+        // ── POR QUE ISTO PRECISOU EXISTIR ────────────────────────────────
+        //
+        // Um cozido normalmente e IRMAO de um asset registrado
+        // (`idle.fbx` -> `idle.axeclipbin`), e o empacotador o encontra
+        // trocando a extensao do record. Isso pressupoe que todo cozido
+        // tenha um fonte registrado ao lado.
+        //
+        // O bake do Sequencer quebra a premissa: ele produz um
+        // `.axeclipbin` que NAO veio de FBX nenhum — o `.axeskel` aponta
+        // direto para ele. Sem esta lista, a animacao assada existiria no
+        // editor e sumiria do build, que e o pior lugar para descobrir uma
+        // falta.
         static std::set<std::string> DirectReferences(const std::string& uuid,
-            bool* outParsed = nullptr);
+            bool* outParsed = nullptr,
+            std::vector<std::filesystem::path>* outCookedFiles = nullptr);
 
         // true se a string tem forma de UUID (8-4-4-4-12 hex).
         static bool LooksLikeUUID(const std::string& s);

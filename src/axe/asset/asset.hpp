@@ -21,7 +21,32 @@ namespace axe
 		SkeletalMesh,   // .axeskel — personagem animado (aponta pro FBX + lista de animacoes)
 		AnimGraph,      // .axeanim — state machine de animacao
 		ControlRig,     // .axerig — hierarquia + grafo de rig (Forwards Solve)
-		SoundCue        // .axecue — grafo de selecao/parametros de som
+		SoundCue,       // .axecue — grafo de selecao/parametros de som
+
+		// ── CLIPE ASSADO (.axeclipbin vindo do Sequencer) ────────────────────
+		//
+		// NAO tem entrada em AssetTypeFromExtension, e isso e deliberado.
+		//
+		// A esmagadora maioria dos `.axeclipbin` do projeto e DERIVADA: o
+		// cozido de um FBX de animacao, irmao dele, regeravel a qualquer
+		// momento. Se a extensao mapeasse para um tipo, o Scan registraria
+		// todos eles e o Asset Browser encheria de duplicatas de cada
+		// animacao importada.
+		//
+		// O clipe ASSADO e diferente: nao veio de FBX nenhum, nao e regeravel,
+		// e o unico jeito de acha-lo e ele aparecer. Por isso o bake o REGISTRA
+		// explicitamente, com este tipo — a distincao passa a ser "alguem
+		// registrou de proposito", e nao a extensao.
+		AnimationClip,
+
+		// .axeseq — uma Sequence do Sequencer (cutscene / animacao autorada).
+		//
+		// O formato ja existia e ja serializava tudo; o que nao existia era
+		// TIPO. Sem ele o arquivo nao aparecia no Asset Browser, nao tinha
+		// UUID e nao podia ser aberto por duplo clique — na pratica so havia
+		// UMA sequence por projeto, no caminho fixo que os dois botoes da
+		// janela usavam.
+		Sequence
 	};
 
 	// Converte extensão para tipo
@@ -52,6 +77,7 @@ namespace axe
 		if (ext == ".axeanim")                                return AssetType::AnimGraph;
 		if (ext == ".axerig")                                 return AssetType::ControlRig;
 		if (ext == ".axecue")                                 return AssetType::SoundCue;
+		if (ext == ".axeseq")                                 return AssetType::Sequence;
 		return AssetType::Unknown;
 	}
 
@@ -71,6 +97,8 @@ namespace axe
 		case AssetType::AnimGraph:      return "AnimGraph";
 		case AssetType::ControlRig:     return "ControlRig";
 		case AssetType::SoundCue:       return "SoundCue";
+		case AssetType::Sequence:       return "Sequence";
+		case AssetType::AnimationClip:  return "AnimationClip";
 
 		default:					return "Unknown";
 		}
@@ -100,6 +128,8 @@ namespace axe
 		if (str == "AnimGraph")      return AssetType::AnimGraph;
 		if (str == "ControlRig")     return AssetType::ControlRig;
 		if (str == "SoundCue")       return AssetType::SoundCue;
+		if (str == "Sequence")       return AssetType::Sequence;
+		if (str == "AnimationClip")  return AssetType::AnimationClip;
 
 		return AssetType::Unknown;
 	}

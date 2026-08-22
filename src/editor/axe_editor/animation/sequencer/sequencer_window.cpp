@@ -15,11 +15,18 @@
 // (nem ImGuizmo) para todo mundo que o incluir. O EditorContext guarda o
 // ponteiro por forward declaration; a definicao completa so faz falta aqui.
 #include "editor/axe_editor/viewport_renderer.hpp"
+// Formas dos Controls — as MESMAS que o editor de rig desenha.
+#include "editor/axe_editor/rig/rig_control_gizmos.hpp"
+#include "axe/graphics/editor_camera.hpp"
 #include "editor/axe_editor/ui/editor_widgets.hpp"
 #include "editor/axe_editor/ui/editor_icons.hpp"
 #include "editor/axe_editor/asset/asset_picker.hpp"
+#include "editor/axe_editor/file_dialog.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "axe/project/project_manager.hpp"
 #include "axe/mesh/mesh_factory.hpp"
+// Bake: o binario cozido de clipe, que ja existe e ja e lido pelo .axeskel.
+#include "axe/animation/clip_cooked.hpp"
 // Auditoria estatica do grafo do rig: precisa enxergar RigNode_ItemArray para
 // ler os itens de uma lista sem executar o grafo.
 #include "axe/animation/rig/rig_nodes.hpp"
@@ -29,6 +36,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <set>
@@ -43,6 +51,768 @@ namespace axe {
 
     SequencerWindow::~SequencerWindow() {
         StopPlayer();
+    }
+
+    // ============================================================
+    // Arquivo (.axeseq)
+    // ============================================================
+
+    namespace {
+
+        // ── ASSINATURA DE CONTEUDO ───────────────────────────────────────────
+        //
+        // FNV-1a sobre tudo que o `.axeseq` grava. Serve a uma pergunta so:
+        // "o que esta na tela e igual ao que esta no disco?"
+        //
+        // Float entra pelos BITS (memcpy para uint32), e nao pelo valor: somar
+        // floats acumula erro e dois assets diferentes acabariam com a mesma
+        // soma. Comparacao de bits e exata por construcao.
+        //
+        // Nao e hash criptografico e nao precisa ser — colisao aqui custa um
+        // "salvar" que o usuario faria de qualquer jeito, nao um dado perdido.
+        std::uint64_t Fnv(std::uint64_t h, std::uint64_t v) {
+            for (int i = 0; i < 8; ++i) {
+                h ^= (v >> (i * 8)) & 0xFF;
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        std::uint64_t FnvF(std::uint64_t h, float f) {
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &f, sizeof(bits));
+            return Fnv(h, bits);
+        }
+
+        std::uint64_t FnvS(std::uint64_t h, const std::string& s) {
+            h = Fnv(h, s.size());
+            for (unsigned char c : s) {
+                h ^= c;
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        std::uint64_t SignatureOf(const SequencerAsset& asset) {
+            std::uint64_t h = 14695981039346656037ull;
+
+            h = Fnv(h, static_cast<std::uint64_t>(asset.GetFps()));
+            h = Fnv(h, static_cast<std::uint64_t>(asset.GetFrameRange().Start));
+            h = Fnv(h, static_cast<std::uint64_t>(asset.GetFrameRange().End));
+
+            for (const auto& b : asset.GetBindings()) {
+                h = FnvS(h, b.EntityName);
+                h = FnvS(h, b.DisplayName);
+                h = FnvS(h, b.RigAssetUUID);
+                h = Fnv(h, b.RigControlsFollowAnimation ? 1u : 0u);
+
+                for (const auto& tr : b.Tracks) {
+                    h = Fnv(h, static_cast<std::uint64_t>(tr.Type));
+                    h = Fnv(h, static_cast<std::uint64_t>(tr.TargetType));
+                    h = FnvS(h, tr.TargetName);
+                    h = FnvS(h, tr.AttachedAssetUUID);
+                    h = Fnv(h, (tr.Muted ? 1u : 0u) | (tr.Locked ? 2u : 0u) |
+                        (tr.HoldOutsideSections ? 4u : 0u));
+
+                    for (const auto& sec : tr.Sections) {
+                        h = Fnv(h, static_cast<std::uint64_t>(sec.StartFrame));
+                        h = Fnv(h, static_cast<std::uint64_t>(sec.EndFrame));
+                        h = Fnv(h, static_cast<std::uint64_t>(sec.ClipOffset));
+                        h = FnvF(h, sec.ClipRateScale);
+                        h = FnvS(h, sec.SourceClipName);
+                        h = FnvS(h, sec.SourceClipUUID);
+
+                        for (const auto& ch : sec.Channels) {
+                            h = Fnv(h, static_cast<std::uint64_t>(ch.Component));
+                            h = Fnv(h, ch.Keys.size());
+
+                            for (const auto& k : ch.Keys) {
+                                h = FnvF(h, k.Frame);
+                                h = FnvF(h, k.Value);
+                                h = Fnv(h, static_cast<std::uint64_t>(k.Interp));
+                                h = FnvF(h, k.TangentIn);
+                                h = FnvF(h, k.TangentOut);
+                            }
+                        }
+                    }
+                }
+            }
+            return h;
+        }
+
+        // Filtro do FileDialog. Os '\0' internos sao exigencia da API do
+        // Windows (par rotulo/padrao terminado em duplo nulo), e por isso a
+        // string PRECISA ser montada com escapes explicitos — um literal
+        // comum pararia no primeiro nulo.
+        const char* kSeqFilter = "AXE Sequence\0*.axeseq\0Todos os arquivos\0*.*\0";
+
+    } // namespace
+
+    bool SequencerWindow::IsDirty() const {
+        return SignatureOf(m_Asset) != m_SavedSignature;
+    }
+
+    std::string SequencerWindow::CurrentFileLabel() const {
+        if (m_LastLoadedPath.empty()) return "(sem titulo)";
+        return std::filesystem::path(m_LastLoadedPath).filename().string();
+    }
+
+    // ── POR QUE REGISTRAR NAO BASTAVA ────────────────────────────────────────
+    //
+    // `AssetDatabase::Register` cria o record e escreve o `.axemeta`, e eu achei
+    // que isso fosse suficiente para o arquivo aparecer no Asset Browser. Nao e,
+    // por DUAS razoes que so aparecem juntas:
+    //
+    //  1. O browser filtra por `record.VirtualFolder == pasta selecionada`, e
+    //     VirtualFolder NAO e o caminho em disco: e escriturario do editor,
+    //     preenchido so quando alguem importa ou arrasta o asset para uma pasta.
+    //     Um record novo nasce com ela vazia — o arquivo existe, tem UUID, e
+    //     aparece apenas em "/ All". Salvar dentro de `Assets/Meshes/Sequencer`
+    //     nao o poe na pasta "Meshes/Sequencer" do browser.
+    //
+    //     A convencao existe e e a inversa: o `RelocateAssets` MOVE o arquivo
+    //     para `<AssetsPath>/<VirtualFolder>`. Ou seja, a pasta virtual e a
+    //     verdade e o disco a segue. Derivar uma da outra aqui e so fechar o
+    //     ciclo no sentido que faltava.
+    //
+    //  2. O indice nao era gravado. Sem `AssetDatabase::Save`, o record vive so
+    //     nesta sessao — fechar e reabrir o editor perdia o registro.
+    //
+    // `typeOverride` existe para o clipe assado: a extensao dele
+    // (`.axeclipbin`) NAO mapeia para tipo nenhum, de proposito (ver
+    // AssetType::AnimationClip), entao o tipo tem de ser dito aqui.
+    std::string SequencerWindow::RegisterProjectAsset(const std::filesystem::path& file,
+        AssetType typeOverride) {
+        const std::string uuid = AssetDatabase::Get().Register(file);
+        if (uuid.empty()) return {};
+
+        auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
+        if (!rec) return uuid;
+
+        if (typeOverride != AssetType::Unknown)
+            rec->Type = typeOverride;
+
+        if (ProjectManager::Get().HasProject()) {
+            const auto& proj = ProjectManager::Get().GetCurrent();
+
+            std::error_code ec;
+            const auto rel = std::filesystem::relative(
+                file.parent_path(), proj.AssetsPath, ec);
+
+            // Fora da pasta Assets (ou erro): deixa a pasta virtual VAZIA, e o
+            // asset aparece em "/ All". Inventar uma pasta com ".." dentro
+            // faria o RelocateAssets tentar mover o arquivo para fora do
+            // projeto na proxima vez que alguem clicasse nele.
+            if (!ec && !rel.empty() && rel.native()[0] != '.')
+                rec->VirtualFolder = rel.generic_string();
+
+            AssetDatabase::Get().Save(proj.RootPath);
+        }
+
+        return uuid;
+    }
+
+    bool SequencerWindow::SaveToPath(const std::string& path) {
+        if (path.empty()) return false;
+
+        if (!m_Asset.SaveToFile(path)) {
+            AXE_EDITOR_ERROR("Sequencer: nao consegui gravar '{}'.", path);
+            return false;
+        }
+
+        m_LastLoadedPath = path;
+        m_SavedSignature = SignatureOf(m_Asset);
+
+        // Ver a nota em RegisterProjectAsset: registrar sozinho nao bastava.
+        RegisterProjectAsset(path, AssetType::Sequence);
+
+        AXE_EDITOR_INFO("Sequencer: '{}' salva.", path);
+        return true;
+    }
+
+    bool SequencerWindow::SaveInteractive(bool forceAsk) {
+        std::string path = m_LastLoadedPath;
+
+        if (forceAsk || path.empty()) {
+            const std::filesystem::path chosen =
+                FileDialog::Save(kSeqFilter, "Salvar Sequence", "axeseq");
+
+            if (chosen.empty()) return false;   // cancelado
+
+            std::filesystem::path p = chosen;
+
+            // O dialog nativo devolve o que o usuario digitou. Sem extensao, o
+            // arquivo nasce sem tipo: nao casa com AssetTypeFromExtension, nao
+            // entra no database, e o duplo clique nunca vai existir para ele.
+            if (p.extension() != ".axeseq")
+                p.replace_extension(".axeseq");
+
+            path = p.string();
+        }
+
+        return SaveToPath(path);
+    }
+
+    bool SequencerWindow::OpenFile(const std::filesystem::path& path) {
+        if (path.empty()) return false;
+
+        // Para o player ANTES de trocar o conteudo: ele guarda uma copia
+        // profunda das bindings e devolve o PoseOverride das entidades da
+        // sequence antiga. Sem isto, o personagem da sequence que estava
+        // aberta ficaria congelado na ultima pose dela.
+        StopPlayer();
+
+        if (!m_Asset.LoadFromFile(path.string())) {
+            AXE_EDITOR_ERROR("Sequencer: '{}' nao e um .axeseq valido.", path.string());
+            return false;
+        }
+
+        m_LastLoadedPath = path.string();
+        m_SavedSignature = SignatureOf(m_Asset);
+
+        // Estado de AUTORIA nao sobrevive a troca de arquivo: as copias de
+        // trabalho do rig, as previews de socket e a selecao apontam para
+        // indices e nomes da sequence anterior.
+        ClearRigs();
+        ClearSocketPreviews();
+        ClearKeySelection();
+        ClearPendingEdits();
+
+        m_SelectedBinding = m_SelectedTrack = m_SelectedSection = -1;
+        m_SelectedChannel = m_SelectedKey = -1;
+
+        m_Zoom = 1.0f;
+        m_TimelineScrollX = 0.0f;
+        m_TimelineScrollY = 0.0f;
+
+
+        // ── O HISTORICO NAO ATRAVESSA ARQUIVOS ───────────────────────────────
+        //
+        // Sem isto, a troca de conteudo seria vista como "uma mudanca" pelo
+        // rastreio, e um Ctrl+Z logo depois de abrir despejaria as bindings da
+        // sequence ANTERIOR dentro da recem-aberta — com o nome do arquivo novo
+        // no titulo. Um estado que nunca existiu, e impossivel de entender.
+        m_UndoStack.clear();
+        m_RedoStack.clear();
+        m_UndoPendingOpen = false;
+        m_UndoIdleFrames = 0;
+        m_LastState = TakeSnapshot();
+        m_LastSignature = SignatureOf(m_Asset);
+        m_HasLastState = true;
+        m_KeyClipboard.clear();
+
+        m_Player.Scrub(static_cast<float>(m_Asset.GetFrameRange().Start));
+        EnsurePlayerStarted();
+
+        m_IsOpen = true;
+        ImGui::SetWindowFocus("Sequencer");
+
+        AXE_EDITOR_INFO("Sequencer: '{}' aberta ({} binding(s)).",
+            path.filename().string(), (int)m_Asset.GetBindingCount());
+        return true;
+    }
+
+    void SequencerWindow::DrawConfirmNewPopup() {
+        if (m_OpenConfirmNewPopup) {
+            ImGui::OpenPopup("Descartar alteracoes?##seqnew");
+            m_OpenConfirmNewPopup = false;
+        }
+
+        if (!ImGui::BeginPopupModal("Descartar alteracoes?##seqnew", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+            return;
+
+        ImGui::TextUnformatted("Esta sequence tem alteracoes nao salvas.");
+        ImGui::TextDisabled("%s", CurrentFileLabel().c_str());
+        ImGui::Spacing();
+
+        // Salvar e sair fica em PRIMEIRO e com o acento: e a resposta certa na
+        // maioria das vezes, e a errada aqui custa o trabalho da sessao.
+        if (ui::AccentButton(ICON_SAVE " Salvar e continuar", ui::Accent::Primary)) {
+            if (SaveInteractive(false)) {
+                NewSequence();
+                ImGui::CloseCurrentPopup();
+            }
+            // Save cancelado: NAO fecha o popup. Fechar mandaria a mensagem
+            // errada — "salvei" — logo antes de descartar tudo.
+        }
+
+        ImGui::SameLine();
+        if (ui::AccentButton(ICON_TRASH " Descartar", ui::Accent::Danger)) {
+            NewSequence();
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_XMARK " Cancelar"))
+            ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
+    }
+
+
+    // ============================================================
+    // Bake — a sequence vira um clipe
+    // ============================================================
+
+    namespace {
+
+        bool NearlyEqual(const glm::vec3& a, const glm::vec3& b, float eps) {
+            return std::abs(a.x - b.x) <= eps &&
+                std::abs(a.y - b.y) <= eps &&
+                std::abs(a.z - b.z) <= eps;
+        }
+
+        bool NearlyEqual(const glm::quat& a, const glm::quat& b, float eps) {
+            // |dot| porque q e -q sao a MESMA rotacao. Comparar componente a
+            // componente marcaria como diferente um canal que so trocou de
+            // sinal — e sinal e escolha de representacao, nao de pose.
+            return std::abs(std::abs(glm::dot(a, b)) - 1.0f) <= eps;
+        }
+
+        // Curva de valor constante vira UMA key. Um bake denso produz uma key
+        // por frame para os 52 ossos; num take de 250 frames sao 39 mil keys, e
+        // a esmagadora maioria e a mesma escala 1 repetida.
+        template <typename KeyT, typename EqT>
+        void CollapseIfConstant(std::vector<KeyT>& keys, EqT eq) {
+            if (keys.size() < 2) return;
+
+            for (std::size_t i = 1; i < keys.size(); ++i)
+                if (!eq(keys[i].Value, keys[0].Value)) return;
+
+            keys.resize(1);
+            keys[0].Time = 0.0f;
+        }
+
+    } // namespace
+
+    std::filesystem::path SequencerWindow::BakeBindingToClip(int bindingIndex,
+        const std::string& clipName, bool looping) {
+        namespace fs = std::filesystem;
+
+        if (!m_Context || !m_Context->ActiveScene) return {};
+        if (clipName.empty()) {
+            AXE_EDITOR_ERROR("Sequencer: o clipe precisa de um nome.");
+            return {};
+        }
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return {};
+
+        // ── O NOME VIRA NOME DE ARQUIVO ──────────────────────────────────────
+        //
+        // A sugestao do dialogo sai do DisplayName do binding, que e o nome da
+        // entidade — e nome de entidade aceita ':' e '/' sem problema nenhum.
+        // Num caminho de arquivo os dois sao separador: 'Hero:Idle' viraria uma
+        // pasta no Windows, e o ClipCooked::Write falharia com um erro de
+        // "nao consegui abrir" que nao explica coisa nenhuma.
+        std::string safeName;
+        safeName.reserve(clipName.size());
+
+        for (char c : clipName) {
+            const bool bad = (c == '/' || c == '\\' || c == ':' || c == '*' ||
+                c == '?' || c == '"' || c == '<' || c == '>' || c == '|');
+            safeName.push_back(bad ? '_' : c);
+        }
+
+        while (!safeName.empty() && (safeName.back() == ' ' || safeName.back() == '.'))
+            safeName.pop_back();
+
+        if (safeName.empty()) {
+            AXE_EDITOR_ERROR("Sequencer: '{}' nao serve como nome de arquivo.", clipName);
+            return {};
+        }
+
+        SkeletalMeshComponent* smc = nullptr;
+        const Skeleton* skel = GetBindingSkeleton(bindingIndex, &smc);
+
+        if (!skel || !smc || !smc->Asset) {
+            AXE_EDITOR_ERROR("Sequencer: o binding '{}' nao tem um SkeletalMeshAsset "
+                "resolvido — nao ha esqueleto onde gravar o clipe.",
+                b->DisplayName);
+            return {};
+        }
+
+        const fs::path skelPath = smc->Asset->GetFilePath();
+        if (skelPath.empty()) {
+            AXE_EDITOR_ERROR("Sequencer: o personagem deste binding nao veio de um "
+                ".axeskel em disco — salve o esqueleto antes de assar.");
+            return {};
+        }
+
+        const int start = m_Asset.GetFrameRange().Start;
+        const int end = m_Asset.GetFrameRange().End;
+        const int fps = (m_Asset.GetFps() > 0) ? m_Asset.GetFps() : 30;
+
+        if (end <= start) {
+            AXE_EDITOR_ERROR("Sequencer: range invalido ({} -> {}).", start, end);
+            return {};
+        }
+
+        const int boneCount = static_cast<int>(skel->GetBones().size());
+        if (boneCount == 0) return {};
+
+        // ── AMOSTRAGEM ───────────────────────────────────────────────────────
+        //
+        // Um passo por frame, e cada passo e o EvaluateAndApply INTEIRO. Ver a
+        // nota no header sobre por que nao ha um caminho de avaliacao proprio.
+        //
+        // Custo: uma pose + BuildSkinningMatrices por frame. Num take de 250
+        // frames e o mesmo trabalho de 250 frames de scrub - quatro segundos de
+        // uso normal da janela.
+        std::vector<BoneChannel> channels(boneCount);
+        for (int i = 0; i < boneCount; ++i)
+            channels[i].BoneIndex = i;
+
+        const float savedFrame = m_Player.GetCurrentFrame();
+        const SequencerPlaybackMode savedMode = m_Player.GetMode();
+
+        EnsurePlayerStarted();
+        m_Player.SetMode(SequencerPlaybackMode::Scrubbing);
+
+        // Diagnostico desligado durante o bake: ele copia uma Pose inteira e
+        // roda a comparacao osso a osso POR FRAME. Num take de 250 frames isso
+        // e o custo dominante, e o resultado - uma lista de desvios do ultimo
+        // frame - nao serve para nada aqui.
+        const bool savedDiag = m_RigDiagnostics;
+        m_RigDiagnostics = false;
+
+        m_Baking = true;
+        m_BakeDeltaTime = 1.0f / static_cast<float>(fps);
+
+        int sampled = 0;
+
+        for (int f = start; f <= end; ++f) {
+            m_Player.Scrub(static_cast<float>(f));
+            m_Player.Resample();
+            EvaluateAndApply();
+
+            if (bindingIndex >= static_cast<int>(m_WorkPoses.size())) break;
+
+            const Pose& pose = m_WorkPoses[bindingIndex];
+            const float t = static_cast<float>(f - start) / static_cast<float>(fps);
+
+            const int n = std::min(boneCount, static_cast<int>(pose.Size()));
+
+            for (int i = 0; i < n; ++i) {
+                const BoneTransform& bt = pose[i];
+
+                channels[i].PositionKeys.push_back(VectorKey{ t, bt.Translation });
+                channels[i].ScaleKeys.push_back(VectorKey{ t, bt.Scale });
+
+                // ── CONTINUIDADE DE SINAL ────────────────────────────────────
+                //
+                // q e -q descrevem a mesma rotacao, mas o slerp entre eles vai
+                // pelo caminho LONGO - uma volta inteira entre dois frames
+                // vizinhos. O glm::slerp do sampler ja corrige na leitura; a
+                // correcao aqui e para o ARQUIVO nao carregar o problema, e
+                // para qualquer outro leitor (ou um futuro lerp otimizado) ver
+                // uma curva continua.
+                glm::quat q = glm::normalize(bt.Rotation);
+
+                if (!channels[i].RotationKeys.empty() &&
+                    glm::dot(channels[i].RotationKeys.back().Value, q) < 0.0f)
+                    q = -q;
+
+                channels[i].RotationKeys.push_back(QuatKey{ t, q });
+            }
+
+            ++sampled;
+        }
+
+        // Devolve o playhead e refaz a pose: sem isto o personagem ficaria na
+        // pose do ULTIMO frame do bake, e o usuario veria a agulha num lugar e
+        // o boneco noutro.
+        m_Baking = false;
+        m_RigDiagnostics = savedDiag;
+
+        m_Player.Scrub(savedFrame);
+        m_Player.SetMode(savedMode);
+        m_Player.Resample();
+        EvaluateAndApply();
+
+        if (sampled == 0) {
+            AXE_EDITOR_ERROR("Sequencer: o bake nao conseguiu avaliar nenhum frame.");
+            return {};
+        }
+
+        // ── LIMPEZA DAS CURVAS ───────────────────────────────────────────────
+        //
+        // Mesma regra que o ExplodeClipTrack ja aplica no sentido contrario:
+        // canal que nao varia e canal que nao descreve nada. Um osso parado na
+        // pose de repouso some inteiro - o sampler cai na LocalBindPose para
+        // quem nao tem canal, entao o resultado e identico e o arquivo fica uma
+        // ordem de grandeza menor.
+        Pose bind;
+        Pose::FromBindPose(*skel, bind);
+
+        auto clip = std::make_shared<AnimationClip>();
+        clip->SetName(safeName);
+        clip->SetDuration(static_cast<float>(end - start) / static_cast<float>(fps));
+        clip->SetLooping(looping);
+
+        const float kPosEps = 1e-5f;
+        const float kRotEps = 1e-6f;
+        const float kScaleEps = 1e-5f;
+
+        int kept = 0;
+
+        for (int i = 0; i < boneCount; ++i) {
+            BoneChannel& ch = channels[i];
+
+            CollapseIfConstant(ch.PositionKeys,
+                [&](const glm::vec3& a, const glm::vec3& c) { return NearlyEqual(a, c, kPosEps); });
+            CollapseIfConstant(ch.ScaleKeys,
+                [&](const glm::vec3& a, const glm::vec3& c) { return NearlyEqual(a, c, kScaleEps); });
+            CollapseIfConstant(ch.RotationKeys,
+                [&](const glm::quat& a, const glm::quat& c) { return NearlyEqual(a, c, kRotEps); });
+
+            const bool constant =
+                ch.PositionKeys.size() <= 1 &&
+                ch.RotationKeys.size() <= 1 &&
+                ch.ScaleKeys.size() <= 1;
+
+            if (constant && i < static_cast<int>(bind.Size())) {
+                const BoneTransform& rest = bind[i];
+
+                const bool sameAsRest =
+                    (ch.PositionKeys.empty() || NearlyEqual(ch.PositionKeys[0].Value, rest.Translation, kPosEps)) &&
+                    (ch.ScaleKeys.empty() || NearlyEqual(ch.ScaleKeys[0].Value, rest.Scale, kScaleEps)) &&
+                    (ch.RotationKeys.empty() || NearlyEqual(ch.RotationKeys[0].Value, rest.Rotation, kRotEps));
+
+                if (sameAsRest) continue;   // o sampler cai na bind pose sozinho
+            }
+
+            clip->AddChannel(ch);
+            ++kept;
+        }
+
+        if (kept == 0) {
+            AXE_EDITOR_ERROR("Sequencer: nada a assar — nenhum osso se move nesta "
+                "sequence.");
+            return {};
+        }
+
+        // ── GRAVACAO ─────────────────────────────────────────────────────────
+        //
+        // Ao lado do `.axeskel`, com o nome do clipe. O nome do ARQUIVO e o que
+        // vira o nome da entrada no `.axeskel` (o AddAnimation usa o stem), e
+        // por isso ele e o nome que o usuario escolheu - nao um derivado da
+        // sequence.
+        fs::path out = skelPath.parent_path() / (safeName + ".axeclipbin");
+
+        if (!ClipCooked::Write(out, { clip }, *skel)) {
+            AXE_EDITOR_ERROR("Sequencer: falha ao gravar '{}'.", out.string());
+            return {};
+        }
+
+        // ── REGISTRO NO .axeskel ─────────────────────────────────────────────
+        //
+        // Reassar sobrescreve o arquivo, mas o AddAnimation DEDUPLICA por
+        // caminho e devolveria 0 sem recarregar nada - o `.axeskel` continuaria
+        // com a curva antiga em memoria, e o usuario veria o bake "nao ter
+        // efeito". Remover a entrada primeiro forca a releitura.
+        const int existing = smc->Asset->FindAnimationEntryBySource(out);
+        if (existing >= 0)
+            smc->Asset->RemoveAnimation(existing);
+
+        const int added = smc->Asset->AddAnimation(out);
+
+        if (added <= 0) {
+            AXE_EDITOR_ERROR("Sequencer: '{}' foi gravado, mas o .axeskel nao o "
+                "aceitou (os nomes de osso batem?).", out.filename().string());
+            return {};
+        }
+
+        // ── O CLIPE ASSADO ENTRA NO BROWSER ──────────────────────────────────
+        //
+        // Um `.axeclipbin` normal e derivado e nao deve aparecer. Este nao veio
+        // de FBX nenhum: se nao aparecer, o unico jeito de encontra-lo e saber
+        // de cor que ele foi parar dentro da lista de animacoes do `.axeskel`.
+        // Ver AssetType::AnimationClip.
+        RegisterProjectAsset(out, AssetType::AnimationClip);
+
+        if (!smc->Asset->Save()) {
+            AXE_EDITOR_WARN("Sequencer: o clipe entrou, mas nao consegui regravar "
+                "'{}' - a entrada se perde ao recarregar o projeto.",
+                skelPath.filename().string());
+        }
+
+        // ── O CLIPE APARECE AGORA, E NAO SO NO PROXIMO LOAD ───────────────────
+        //
+        // `SkeletalMeshComponent::Clips` e uma COPIA da lista do asset, feita
+        // no momento em que a entidade foi montada. Sem reassinar, o clipe
+        // recem-assado nao apareceria no picker do proprio Sequencer que acabou
+        // de cria-lo.
+        //
+        // Todas as entidades que usam o mesmo asset, e nao so a do binding: o
+        // AnimGraph de qualquer uma delas passa a poder referenciar o clipe.
+        {
+            auto& reg = m_Context->ActiveScene->GetRegistry();
+            for (auto e : reg.view<SkeletalMeshComponent>()) {
+                auto& c = reg.get<SkeletalMeshComponent>(e);
+                if (c.Asset == smc->Asset)
+                    c.Clips = smc->Asset->GetClips();
+            }
+        }
+
+        AXE_EDITOR_INFO("Sequencer: clipe '{}' assado - {} frames, {} osso(s) com "
+            "curva, {:.2f}s. Gravado em '{}'.",
+            safeName, sampled, kept, clip->GetDuration(), out.string());
+
+        return out;
+    }
+
+    void SequencerWindow::DrawBakePopup() {
+        if (m_OpenBakePopup) {
+            ImGui::OpenPopup("Assar clipe##seqbake");
+            m_OpenBakePopup = false;
+        }
+
+        if (!ImGui::BeginPopupModal("Assar clipe##seqbake", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+            return;
+
+        const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
+
+        if (bindingCount == 0) {
+            ImGui::TextDisabled("Nenhum binding nesta sequence.");
+            if (ImGui::Button("Fechar")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+
+        if (m_BakeBinding < 0 || m_BakeBinding >= bindingCount)
+            m_BakeBinding = (m_SelectedBinding >= 0 && m_SelectedBinding < bindingCount)
+            ? m_SelectedBinding : 0;
+
+        // Quem entra no clipe. Um clipe e de UM esqueleto — assar dois
+        // personagens num arquivo so nao teria como ser tocado depois.
+        ImGui::TextDisabled("Personagem");
+        for (int i = 0; i < bindingCount; ++i) {
+            const auto* b = m_Asset.GetBinding(i);
+            if (!b) continue;
+
+            char label[160];
+            std::snprintf(label, sizeof(label), "%s##bakebind%d",
+                b->DisplayName.empty() ? b->EntityName.c_str() : b->DisplayName.c_str(), i);
+
+            if (ImGui::RadioButton(label, m_BakeBinding == i))
+                m_BakeBinding = i;
+        }
+
+        ImGui::Separator();
+
+        // Nome sugerido na primeira abertura: <sequence>_<personagem>. Deixar
+        // vazio faria o usuario inventar um nome com o dialogo ja aberto, que e
+        // o pior momento para decidir.
+        if (m_BakeClipName[0] == '\0') {
+            const auto* b = m_Asset.GetBinding(m_BakeBinding);
+            const std::string seq = m_LastLoadedPath.empty()
+                ? std::string("Sequence")
+                : std::filesystem::path(m_LastLoadedPath).stem().string();
+
+            std::snprintf(m_BakeClipName, sizeof(m_BakeClipName), "%s_%s",
+                seq.c_str(), b ? b->DisplayName.c_str() : "Bake");
+        }
+
+        ImGui::SetNextItemWidth(320);
+        ImGui::InputText("Nome do clipe", m_BakeClipName, sizeof(m_BakeClipName));
+
+        ImGui::Checkbox("Loop", &m_BakeLoop);
+
+        const int start = m_Asset.GetFrameRange().Start;
+        const int end = m_Asset.GetFrameRange().End;
+        const int fps = (m_Asset.GetFps() > 0) ? m_Asset.GetFps() : 30;
+
+        ImGui::Spacing();
+        ImGui::TextDisabled("Frames %d..%d a %d fps  =  %.2fs",
+            start, end, fps, static_cast<float>(end - start) / static_cast<float>(fps));
+
+        // Onde o arquivo vai cair, ANTES de clicar. "Gravei" sem dizer onde e
+        // metade de uma resposta.
+        {
+            SkeletalMeshComponent* smc = nullptr;
+            const Skeleton* skel = GetBindingSkeleton(m_BakeBinding, &smc);
+
+            if (skel && smc && smc->Asset && !smc->Asset->GetFilePath().empty()) {
+                const std::filesystem::path out =
+                    smc->Asset->GetFilePath().parent_path() /
+                    (std::string(m_BakeClipName) + ".axeclipbin");
+
+                ImGui::TextDisabled("-> %s", out.generic_string().c_str());
+                ImGui::TextDisabled("   e uma entrada em %s",
+                    smc->Asset->GetFilePath().filename().string().c_str());
+            }
+            else {
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.30f, 1.0f),
+                    ICON_TRIANGLE_EXCLAMATION " Este binding nao tem um .axeskel "
+                    "em disco.");
+            }
+        }
+
+        ImGui::Spacing();
+
+        // Pose pendente e trabalho que ainda nao existe no asset. Assar com ela
+        // na tela produziria um clipe que NAO corresponde ao arquivo salvo — e
+        // a diferenca so apareceria depois, sem nada que a explicasse.
+        const bool blocked = !m_PendingEdits.empty();
+
+        if (blocked) {
+            ImGui::TextColored(ui::AccentColor(ui::Accent::Warning),
+                ICON_TRIANGLE_EXCLAMATION " Ha pose nao gravada. Crave com K "
+                "(ou descarte com Esc) antes de assar.");
+        }
+
+        ImGui::BeginDisabled(blocked || m_BakeClipName[0] == '\0');
+
+        if (ui::AccentButton(ICON_FILM " Assar", ui::Accent::Primary)) {
+            if (!BakeBindingToClip(m_BakeBinding, m_BakeClipName, m_BakeLoop).empty())
+                ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+
+        if (ImGui::Button(ICON_XMARK " Cancelar"))
+            ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
+    }
+
+    void SequencerWindow::NewSequence() {
+        StopPlayer();
+
+        m_Asset = SequencerAsset{};
+        m_LastLoadedPath.clear();
+        m_SavedSignature = SignatureOf(m_Asset);
+
+        ClearRigs();
+        ClearSocketPreviews();
+        ClearKeySelection();
+        ClearPendingEdits();
+
+        m_SelectedBinding = m_SelectedTrack = m_SelectedSection = -1;
+        m_SelectedChannel = m_SelectedKey = -1;
+
+        m_Zoom = 1.0f;
+        m_TimelineScrollX = 0.0f;
+        m_TimelineScrollY = 0.0f;
+
+        // ── O HISTORICO NAO ATRAVESSA ARQUIVOS ───────────────────────────────
+        //
+        // Sem isto, a troca de conteudo seria vista como "uma mudanca" pelo
+        // rastreio, e um Ctrl+Z logo depois de abrir despejaria as bindings da
+        // sequence ANTERIOR dentro da recem-aberta — com o nome do arquivo novo
+        // no titulo. Um estado que nunca existiu, e impossivel de entender.
+        m_UndoStack.clear();
+        m_RedoStack.clear();
+        m_UndoPendingOpen = false;
+        m_UndoIdleFrames = 0;
+        m_LastState = TakeSnapshot();
+        m_LastSignature = SignatureOf(m_Asset);
+        m_HasLastState = true;
+        m_KeyClipboard.clear();
     }
 
     // ============================================================
@@ -61,6 +831,20 @@ namespace axe {
         // ── Avanco do tempo ──────────────────────────────────────────────────
         if (m_PlayerStarted && m_Player.GetMode() == SequencerPlaybackMode::Playing) {
             m_Player.OnUpdate(ImGui::GetIO().DeltaTime);
+        }
+
+        // ── A POSE PENDENTE PERTENCE A UM FRAME ──────────────────────────────
+        //
+        // Sair do frame descarta o que nao foi gravado. Nao e economia de
+        // memoria: uma pose e uma afirmacao sobre um INSTANTE. Arrastada para o
+        // frame seguinte, ela continuaria na tela sobrepondo a animacao — e o
+        // Key gravaria num frame que o usuario nao estava olhando quando posou.
+        //
+        // Tolerancia de meio frame porque o playhead e float e o scrub passa por
+        // valores fracionarios.
+        if (!m_PendingEdits.empty() &&
+            std::abs(m_Player.GetCurrentFrame() - m_PendingFrame) > 0.5f) {
+            ClearPendingEdits();
         }
 
         // ── Aplicacao da pose, TODO FRAME ────────────────────────────────────
@@ -90,6 +874,11 @@ namespace axe {
         // como um tremor durante o arrasto.
         UpdateGizmo();
 
+        // Irmao do gizmo, e reposto pela mesma razao: um pedido de desenho que
+        // sobrevivesse ao fechar da janela desenharia os controles de uma
+        // sequence que nem esta mais aberta.
+        UpdateViewportOverlay();
+
         // Quem aparece neste frame — grupos dobrados e filtro ja resolvidos.
         // UMA vez, antes do outliner e da timeline: os dois leem desta lista, e
         // e isso que garante que a linha no outliner e a lane na timeline
@@ -98,7 +887,29 @@ namespace axe {
 
         ImGui::SetNextWindowSize(ImVec2(1100.0f, 520.0f), ImGuiCond_FirstUseEver);
         bool open = m_IsOpen;
-        if (ImGui::Begin("Sequencer", &open)) {
+
+        // ── TITULO COM O ARQUIVO, ID FIXO ────────────────────────────────────
+        //
+        // O `###Sequencer` e obrigatorio, nao enfeite: o ImGui identifica
+        // janela pelo rotulo, e um titulo que muda a cada save/load seria uma
+        // janela DIFERENTE a cada vez — o dock, o tamanho e a posicao que o
+        // usuario ajustou se perderiam no instante em que ele abrisse um
+        // arquivo. Com `###`, so o que aparece muda.
+        //
+        // Todo mundo que chama SetWindowFocus("Sequencer") continua achando a
+        // janela: o ImGui casa pela parte depois do `###`.
+        char title[256];
+        std::snprintf(title, sizeof(title), "Sequencer - %s%s###Sequencer",
+            CurrentFileLabel().c_str(), IsDirty() ? " *" : "");
+
+        // Fora do `if`: uma janela fechada (colapsada ou fora do dock visivel)
+        // nao esta em foco, e deixar a flag do frame anterior de pe faria o
+        // editor continuar achando que o Ctrl+Z e nosso.
+        m_IsFocused = false;
+
+        if (ImGui::Begin(title, &open)) {
+            m_IsFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
             DrawToolbar();
 
             // ── ATALHOS DE SELECAO ───────────────────────────────────────────
@@ -114,11 +925,55 @@ namespace axe {
                 !ImGui::GetIO().WantTextInput) {
                 const ImGuiIO& io = ImGui::GetIO();
 
+                // ── HISTORICO E AREA DE TRANSFERENCIA ────────────────────
+                //
+                // Antes dos outros atalhos porque sao os que o usuario aperta
+                // por reflexo, e um Ctrl+Z que as vezes nao responde e pior que
+                // nenhum.
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                    if (io.KeyShift) Redo();
+                    else             Undo();
+                }
+
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+                    Redo();
+
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+                    CopySelectedKeys(false);
+
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false))
+                    CopySelectedKeys(true);
+
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false))
+                    PasteClipboardAtPlayhead();
+
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+                    DuplicateSelectedKeys();
+
+                // Ctrl+S / Ctrl+Shift+S. O Shift e testado PRIMEIRO: sem isso,
+                // "Salvar como" cairia no ramo do "Salvar" e regravaria no
+                // arquivo atual — o oposto do que foi pedido.
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+                    SaveInteractive(io.KeyShift);
+
                 if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
                     SelectAllKeys();
 
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-                    ClearKeySelection();
+                // K crava a pose. Com pendencia, promove o que esta na tela;
+                // sem pendencia (REC ligado, ou nada tocado), captura todas as
+                // tracks do binding — que e o gesto de "guarda este instante".
+                if (ImGui::IsKeyPressed(ImGuiKey_K, false)) {
+                    if (CommitPendingEdits() == 0)
+                        CaptureAllTracksAtPlayhead(m_SelectedBinding);
+                }
+
+                // Esc descarta a pose pendente ANTES de mexer na selecao: com
+                // pose na tela, "cancelar" quer dizer aquilo, e nao desmarcar
+                // keys que o usuario nem esta olhando.
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                    if (!m_PendingEdits.empty()) ClearPendingEdits();
+                    else                         ClearKeySelection();
+                }
 
                 if (!m_SelectedKeys.empty() &&
                     (ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
@@ -189,6 +1044,8 @@ namespace axe {
             // Popups por ultimo: precisam estar no mesmo escopo de janela em que
             // o botao que os abriu vive, senao o ImGui nao acha o ID.
             DrawAddBindingPopup();
+            DrawConfirmNewPopup();
+            DrawBakePopup();
             if (m_AddTrackForBinding >= 0)
                 DrawAddTrackPopup(m_AddTrackForBinding);
             if (m_AddClipForBinding >= 0)
@@ -199,6 +1056,14 @@ namespace axe {
                 DrawAddControlPopup(m_AddControlForBinding);
         }
         ImGui::End();
+
+        // ── NO FIM, E NAO NO COMECO ──────────────────────────────────────────
+        //
+        // Tudo que muta o asset neste frame ja aconteceu: os popups, os
+        // atalhos, o outliner, a timeline — e tambem o gizmo, que roda mais
+        // cedo, no desenho do viewport. Rastrear no comeco perderia um frame e,
+        // pior, atribuiria a mudanca ao gesto seguinte.
+        TrackUndoState();
 
         if (!open) {
             m_IsOpen = false;
@@ -490,7 +1355,7 @@ namespace axe {
 
         if (sockets.empty()) {
             ImGui::TextWrapped("Este esqueleto ainda nao tem socket nenhum.\n"
-                "Crie um abaixo — ele passa a existir no .axeskel e vale para\n"
+                "Crie um abaixo - ele passa a existir no .axeskel e vale para\n"
                 "o gameplay tambem, nao so para esta sequence.");
         }
         else {
@@ -623,22 +1488,64 @@ namespace axe {
     // ============================================================
 
     void SequencerWindow::DrawToolbar() {
-        // Save
-        if (ui::IconButton(ICON_SAVE, "Salvar .axeseq (Ctrl+S)", ui::Accent::Primary)) {
-            std::string path = m_LastLoadedPath.empty()
-                ? "Assets/sequencer.axeseq" : m_LastLoadedPath;
-            if (m_Asset.SaveToFile(path)) m_LastLoadedPath = path;
+        // ── ARQUIVO ──────────────────────────────────────────────────────────
+        //
+        // Os dois botoes anteriores caiam num caminho FIXO
+        // ("Assets/sequencer.axeseq") sempre que m_LastLoadedPath estava vazio.
+        // Na pratica isso queria dizer: uma sequence por projeto, e criar a
+        // segunda sobrescrevia a primeira sem perguntar.
+        const bool dirty = IsDirty();
+
+        if (ui::IconButton(ICON_FILE, "Nova sequence")) {
+            // Confirma so quando ha o que perder. Um dialogo em cima de uma
+            // sequence vazia e ruido puro.
+            if (dirty) m_OpenConfirmNewPopup = true;
+            else       NewSequence();
         }
 
         ImGui::SameLine();
-        if (ui::IconButton(ICON_FOLDER_OPEN, "Carregar .axeseq")) {
-            std::string path = m_LastLoadedPath.empty()
-                ? "Assets/sequencer.axeseq" : m_LastLoadedPath;
-            if (m_Asset.LoadFromFile(path)) {
-                m_LastLoadedPath = path;
-                StopPlayer();
-            }
+        if (ui::IconButton(ICON_FOLDER_OPEN, "Abrir .axeseq")) {
+            const std::filesystem::path chosen =
+                FileDialog::Open(kSeqFilter, "Abrir Sequence", "axeseq");
+            if (!chosen.empty()) OpenFile(chosen);
         }
+
+        ImGui::SameLine();
+
+        // O asterisco no rotulo, e o acento so quando ha mudanca: um botao de
+        // salvar permanentemente aceso deixa de comunicar qualquer coisa.
+        if (ui::AccentButton(dirty ? ICON_SAVE " *" : ICON_SAVE,
+            dirty ? ui::Accent::Warning : ui::Accent::Neutral,
+            "Salvar (Ctrl+S).\nSem arquivo ainda, pergunta onde.")) {
+            SaveInteractive(false);
+        }
+
+        ImGui::SameLine();
+        if (ui::IconButton(ICON_CLONE, "Salvar como... (Ctrl+Shift+S)")) {
+            SaveInteractive(true);
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s%s", CurrentFileLabel().c_str(), dirty ? " *" : "");
+
+        // ── HISTORICO ────────────────────────────────────────────────────────
+        //
+        // Os botoes existem apesar do Ctrl+Z: um undo que so tem atalho e um
+        // undo cuja EXISTENCIA metade das pessoas nao descobre — e a pessoa que
+        // nao sabe que ha undo trabalha com medo, evitando experimentar.
+        ui::ToolbarSeparator();
+
+        ImGui::BeginDisabled(!CanUndo());
+        if (ui::IconButton(ICON_UNDO, "Desfazer (Ctrl+Z)"))
+            Undo();
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!CanRedo());
+        if (ui::IconButton(ICON_REDO, "Refazer (Ctrl+Y)"))
+            Redo();
+        ImGui::EndDisabled();
 
         ui::ToolbarSeparator();
 
@@ -698,6 +1605,61 @@ namespace axe {
 
         ImGui::SameLine();
 
+        // ── TAMANHO DA TIMELINE ──────────────────────────────────────────────
+        //
+        // O range JA existia no data model (`SequencerFrameRange`, serializado
+        // no `.axeseq` desde a v1) e JA era lido pela regua, pelo slider de
+        // transporte, pelo clamp do playhead e pelo nascimento de toda section.
+        // O que nao existia era um jeito de MUDAR: `{0, 90}` era o default e o
+        // unico valor possivel, a nao ser importando um clipe mais longo (o
+        // CreateClipTrack estica o range) ou editando o JSON a mao.
+        //
+        // O modelo e o do Blender: comeca em Start (0 na esmagadora maioria das
+        // vezes) e vai ate o frame que o usuario decidir.
+        //
+        // Nao ha SetFrameRange no player aqui: o `SyncFrom` do inicio do Draw
+        // ja copia o range do asset todo frame, e ele proprio reclampa o
+        // playhead se o fim encolheu por baixo da agulha. Escrever nos dois
+        // lugares criaria duas fontes da verdade para o mesmo numero.
+        SequencerFrameRange range = m_Asset.GetFrameRange();
+        bool rangeChanged = false;
+
+        ImGui::TextDisabled("Range");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tamanho da timeline: do frame inicial ao final.\n"
+                "A regua, o slider de transporte e as sections novas seguem daqui.");
+        ImGui::SameLine();
+
+        ImGui::SetNextItemWidth(64);
+        if (ImGui::DragInt("##seq_range_start", &range.Start, 1.0f, 0, 100000, "ini %d"))
+            rangeChanged = true;
+        ImGui::SameLine();
+
+        ImGui::SetNextItemWidth(64);
+        if (ImGui::DragInt("##seq_range_end", &range.End, 1.0f, 0, 100000, "fim %d"))
+            rangeChanged = true;
+
+        if (rangeChanged) {
+            // Start nunca negativo, e End sempre pelo menos um frame adiante.
+            //
+            // Um range invertido (ou de comprimento zero) nao e um estado
+            // "estranho mas inofensivo": o frameWidth da timeline divide por
+            // (End - Start), e o loop do player faz fmod pela mesma diferenca.
+            // Clampar na entrada e mais barato que blindar os dois consumidores.
+            if (range.Start < 0) range.Start = 0;
+            if (range.End <= range.Start) range.End = range.Start + 1;
+
+            m_Asset.SetFrameRange(range);
+
+            // A pose pendente foi autorada num frame que pode ter deixado de
+            // existir. Ver m_PendingFrame.
+            if (m_Player.GetCurrentFrame() < static_cast<float>(range.Start) ||
+                m_Player.GetCurrentFrame() > static_cast<float>(range.End))
+                ClearPendingEdits();
+        }
+
+        ImGui::SameLine();
+
         // Snap toggle (ToggleButton com icone de ima).
         if (ui::ToggleButton(ICON_MAGNET " Snap", m_SnapEnabled, "Snap pra frames inteiros")) {
             m_SnapEnabled = !m_SnapEnabled;
@@ -741,12 +1703,125 @@ namespace axe {
 
         if (ui::ToggleButton(ICON_ARROWS " Gizmo", m_GizmoEnabled,
             "Gizmo no viewport para o osso/socket/controle da track selecionada.\n"
-            "T/R/S do viewport escolhem a operacao — e so a operacao ativa vira key.\n"
+            "T/R/S do viewport escolhem a operacao - e so a operacao ativa vira key.\n"
+            "Local/World do viewport escolhem o espaco dos eixos.\n"
             "Desligado, o gizmo volta a ser o da entidade selecionada.")) {
             m_GizmoEnabled = !m_GizmoEnabled;
         }
 
+        ImGui::SameLine();
+
+        // ── CONTROLES NO VIEWPORT ────────────────────────────────────────────
+        //
+        // Desligavel porque as formas ficam POR CIMA da imagem, sem teste de
+        // profundidade (e de proposito — um controle escondido atras da perna
+        // e um controle que nao se consegue clicar). Vinte delas atrapalham
+        // quem esta olhando a cena, e nao o personagem.
+        if (ui::ToggleButton(ICON_CIRCLE_NODES " Controles", m_ShowViewportControls,
+            "Desenha as formas dos Controls do rig no viewport, como no editor\n"
+            "de Control Rig. Clique numa forma para seleciona-la.\n\n"
+            "Ctrl (ou Shift) + clique SOMA ao grupo. Com varios selecionados,\n"
+            "todos recebem a mesma transformacao local, cada um no proprio\n"
+            "pivo - e o que faz uma cadeia de spine arquear em vez de girar\n"
+            "como um bloco.\n\n"
+            "Selecionar NAO cria track: ela nasce na primeira vez que voce\n"
+            "move, gira ou escala o controle.")) {
+            m_ShowViewportControls = !m_ShowViewportControls;
+
+            if (!m_ShowViewportControls) {
+                m_ViewportControlBinding = -1;
+                m_ViewportControlName.clear();
+                m_ViewportHovered.clear();
+            }
+        }
+
+        // ── REC ──────────────────────────────────────────────────────────────
+        //
+        // Ver a nota longa em `m_Recording` no header. Ligar o REC COMETE o que
+        // estiver pendente, em vez de descartar: quem posou e depois apertou
+        // REC quis guardar aquilo — descartar seria perder trabalho por causa
+        // da ordem em que dois botoes foram clicados.
+        ui::ToolbarSeparator();
+
+        if (ui::ToggleButton(ICON_FILM " REC", m_Recording,
+            "GRAVANDO: toda mudanca no viewport vira keyframe no frame atual.\n"
+            "Desligado: a mudanca aparece na tela mas NAO e gravada - use o\n"
+            "botao Key (ou a tecla K) para cravar a pose quando ela estiver boa.",
+            ui::Accent::Danger)) {
+            m_Recording = !m_Recording;
+            if (m_Recording) CommitPendingEdits();
+        }
+
+        // Ponto vermelho pulsando ao lado do botao. Um toggle aceso e facil de
+        // nao notar quando a atencao esta no viewport, e "por que apareceu uma
+        // key aqui?" e uma pergunta cara de responder depois.
+        if (m_Recording) {
+            ImGui::SameLine();
+            const float t = static_cast<float>(ImGui::GetTime());
+            const float pulse = 0.55f + 0.45f * std::sin(t * 6.0f);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float r = ImGui::GetTextLineHeight() * 0.30f;
+
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(p.x + r + 2.0f, p.y + ImGui::GetFrameHeight() * 0.5f), r,
+                IM_COL32(230, 60, 60, static_cast<int>(120 + 135 * pulse)));
+
+            ImGui::Dummy(ImVec2(r * 2.0f + 6.0f, ImGui::GetFrameHeight()));
+        }
+
+        ImGui::SameLine();
+
+        // Key manual. Existe com REC ligado tambem — e o jeito de cravar uma
+        // key sem tocar no gizmo (segurar a pose por N frames, por exemplo).
+        {
+            const bool hasPending = !m_PendingEdits.empty();
+
+            char keyLabel[64];
+            std::snprintf(keyLabel, sizeof(keyLabel), ICON_PLUS " Key%s",
+                hasPending ? "*" : "");
+
+            if (ui::AccentButton(keyLabel,
+                hasPending ? ui::Accent::Warning : ui::Accent::Neutral,
+                "Crava a pose atual como keyframe no frame do playhead (K).\n"
+                "O asterisco avisa que ha pose na tela ainda nao gravada.")) {
+                if (CommitPendingEdits() == 0)
+                    CaptureAllTracksAtPlayhead(m_SelectedBinding);
+            }
+        }
+
+        ImGui::SameLine();
+
+        if (ui::IconButton(ICON_CAMERA, "Capturar TODAS as tracks deste binding no\n"
+            "frame atual, com o valor que elas tem na tela.")) {
+            CaptureAllTracksAtPlayhead(m_SelectedBinding);
+        }
+
+        // ── BAKE ─────────────────────────────────────────────────────────────
+        //
+        // A saida da ferramenta. Ate aqui a sequence so existia como sequence:
+        // para usar a animacao num AnimGraph, ou no jogo, nao havia caminho.
+        ui::ToolbarSeparator();
+
+        if (ui::AccentButton(ICON_FILM " Bake", ui::Accent::Add,
+            "Assar a sequence num clipe de animacao (.axeclipbin) e registra-lo\n"
+            "no .axeskel do personagem.\n\n"
+            "Amostra a pose FINAL frame a frame - clipe base, tracks de osso e\n"
+            "o solve do Control Rig, tudo achatado em curvas de osso.")) {
+            m_OpenBakePopup = true;
+            m_BakeBinding = m_SelectedBinding;
+            m_BakeClipName[0] = '\0';   // renomeia a sugestao pelo binding atual
+        }
+
         ImGui::Separator();
+
+        // Faixa de aviso: pose na tela que nao existe no arquivo. Sem ela, o
+        // sintoma seria "eu movi o braco, salvei, reabri e o braco voltou".
+        if (!m_PendingEdits.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::AccentColor(ui::Accent::Warning));
+            ImGui::TextUnformatted(ICON_TRIANGLE_EXCLAMATION
+                "  Pose nao gravada (REC desligado) - K crava, Esc descarta.");
+            ImGui::PopStyleColor();
+        }
     }
 
     // ============================================================
@@ -765,7 +1840,10 @@ namespace axe {
         // tempo esta correndo (fps zero foi um bug real, e mudo).
         {
             const int bindings = static_cast<int>(m_Asset.GetBindingCount());
-            const int samples = static_cast<int>(m_Player.GetLastSamples().size());
+            // A lista EFETIVA (keys + pose pendente), e nao a do player: com REC
+            // desligado o que esta na tela inclui edicoes que ainda nao viraram
+            // key, e um diagnostico que nao as conta contradiz o viewport.
+            const int samples = static_cast<int>(m_EffectiveSamples.size());
 
             const bool healthy = (bindings > 0 && m_AppliedBindings == bindings);
 
@@ -782,8 +1860,13 @@ namespace axe {
 
             if (!m_SelectedKeys.empty()) {
                 ImGui::TextColored(ImVec4(0.47f, 0.75f, 1.0f, 1.0f),
-                    "%d key(s) selecionada(s)  —  Del apaga, Esc limpa",
+                    "%d key(s) selecionada(s)  |  Del apaga  |  Ctrl+C/X/V  |  Ctrl+D",
                     (int)m_SelectedKeys.size());
+            }
+
+            if (!m_KeyClipboard.empty()) {
+                ImGui::TextDisabled("%d key(s) na area de transferencia - "
+                    "Ctrl+V cola no playhead", (int)m_KeyClipboard.size());
             }
 
             if (bindings > 0 && m_AppliedBindings == 0) {
@@ -791,7 +1874,7 @@ namespace axe {
                     "A entidade do binding nao foi encontrada na cena.");
             }
             else if (m_AppliedBindings > 0 && samples == 0 && clips == 0) {
-                ImGui::TextDisabled("Sem clipe e sem key — a pose fica a de repouso.");
+                ImGui::TextDisabled("Sem clipe e sem key - a pose fica a de repouso.");
             }
 
             // O unico erro que TODO o resto do diagnostico dava como saudavel:
@@ -815,7 +1898,7 @@ namespace axe {
             // certo?" — e esta linha responde sem debugger.
             if (samples > 0 && ImGui::TreeNodeEx("Samples do frame",
                 ImGuiTreeNodeFlags_SpanAvailWidth)) {
-                const auto& ss = m_Player.GetLastSamples();
+                const auto& ss = m_EffectiveSamples;
                 const int shown = (int)ss.size() > 12 ? 12 : (int)ss.size();
                 for (int i = 0; i < shown; ++i) {
                     ImGui::TextDisabled("%s . %s = %.3f",
@@ -1153,7 +2236,7 @@ namespace axe {
                     }
                 }
                 else if (const Skeleton* sk = GetBindingSkeleton(bindingIndex)) {
-                    ImGui::TextDisabled(ICON_BONE " %s — %d ossos",
+                    ImGui::TextDisabled(ICON_BONE " %s - %d ossos",
                         b->EntityName.c_str(), (int)sk->GetBoneCount());
                 }
             }
@@ -1225,7 +2308,7 @@ namespace axe {
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip(
                                 "Compara a pose que ENTRA no rig com a que SAI.\n"
-                                "Sem controle posado, o rig deveria ser transparente —\n"
+                                "Sem controle posado, o rig deveria ser transparente -\n"
                                 "todo osso que aparecer na lista o grafo esta mexendo\n"
                                 "por conta propria.");
                         }
@@ -1251,7 +2334,7 @@ namespace axe {
                                     ImGui::SetTooltip(
                                         "A leitura estatica so enxerga pino com valor digitado\n"
                                         "e lista vinda de um no Item Array. Pino ligado por fio\n"
-                                        "ela pula — entao isto nao e um atestado.\n\n"
+                                        "ela pula - entao isto nao e um atestado.\n\n"
                                         "O rastreio no a no, abaixo, nao depende de ler nada.");
                                 }
                             }
@@ -1424,7 +2507,7 @@ namespace axe {
 
                             if (broken == 0) {
                                 if (localCopied.empty())
-                                    ImGui::TextDisabled("nenhum no copia LOCAL de controle — "
+                                    ImGui::TextDisabled("nenhum no copia LOCAL de controle - "
                                         "a hierarquia dos controles nao interfere");
                                 else
                                     ImGui::TextDisabled("os %d controle(s) copiados em LOCAL "
@@ -1435,7 +2518,7 @@ namespace axe {
                             ImGui::Separator();
 
                             if (m_RigPosedControls > 0) {
-                                ImGui::TextDisabled("%d controle(s) posado(s) — parte do desvio "
+                                ImGui::TextDisabled("%d controle(s) posado(s) - parte do desvio "
                                     "abaixo e seu.", m_RigPosedControls);
                             }
 
@@ -1463,7 +2546,7 @@ namespace axe {
                                 ImGui::TextDisabled("nenhum no escreveu em osso neste frame");
                             }
                             else {
-                                ImGui::TextDisabled("na ordem do solve — quem mexeu em que:");
+                                ImGui::TextDisabled("na ordem do solve - quem mexeu em que:");
                                 for (const auto& fx : m_RigTrace) {
                                     ImGui::TextColored(
                                         fx.Degrees > 20.0f ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
@@ -1485,7 +2568,7 @@ namespace axe {
                                     "O snap usa o campo SourceBone de cada controle, gravado\n"
                                     "quando o rig e criado a partir do esqueleto. Sem ele nao ha\n"
                                     "como adivinhar qual osso o controle representa, e nada se\n"
-                                    "move — o efeito e o mesmo de deixar a opcao desligada.");
+                                    "move - o efeito e o mesmo de deixar a opcao desligada.");
                             }
                         }
                     }
@@ -1707,15 +2790,25 @@ namespace axe {
         // abertos vira uma parede de milhares de linhas no outliner.
         const bool manyTracks = (b->Tracks.size() > 8);
 
+        // O realce mostra o GRUPO, nao so o ativo: uma selecao de cinco tracks
+        // em que so uma acende nao parece uma selecao de cinco.
+        const bool inGroup = IsTargetSelected(
+            TargetRef{ bindingIndex, tr.TargetType, tr.TargetName });
+
+        const bool highlighted = selected || inGroup;
+
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-            ((manyTracks && !selected) ? 0 : ImGuiTreeNodeFlags_DefaultOpen) |
-            (selected ? ImGuiTreeNodeFlags_Selected : 0);
+            ((manyTracks && !highlighted) ? 0 : ImGuiTreeNodeFlags_DefaultOpen) |
+            (highlighted ? ImGuiTreeNodeFlags_Selected : 0);
 
         bool open = ImGui::TreeNodeEx(label, flags);
         if (ImGui::IsItemClicked()) {
-            m_SelectedBinding = bindingIndex;
-            m_SelectedTrack = trackIndex;
-            m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+            const ImGuiIO& io = ImGui::GetIO();
+
+            SelectTarget(TargetRef{ bindingIndex, tr.TargetType, tr.TargetName },
+                io.KeyCtrl || io.KeyShift);
+
+            SyncActiveFromTargets();
         }
 
         // Mute / Lock toggle buttons.
@@ -1836,7 +2929,7 @@ namespace axe {
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "Malha ou skeletal mesh que fica presa neste socket.\n"
-                        "Vale so para esta sequence — o socket continua sendo do\n"
+                        "Vale so para esta sequence - o socket continua sendo do\n"
                         "esqueleto, entao trocar o objeto nao invalida nenhuma key.");
                 }
 
@@ -2150,19 +3243,102 @@ namespace axe {
             k.Value = value;
         }
 
-        // Interp dropdown.
+        // ── INTERPOLACAO: DE QUAL TRECHO ESTAMOS FALANDO ─────────────────────
+        //
+        // A curva de um trecho vem da key da ESQUERDA. Isto e padrao em todo
+        // NLE, e produzia aqui uma armadilha silenciosa: escolher Bezier na key
+        // de CHEGADA e ajustar o Tangent In nao mudava nada, porque quem manda
+        // no trecho que chega e a key anterior.
+        //
+        // O painel nao dizia isso em lugar nenhum. Agora diz, e avisa quando o
+        // numero que a pessoa acabou de digitar e inerte.
+        const bool hasPrev = (m_SelectedKey > 0);
+        const bool hasNext = (m_SelectedKey + 1 < static_cast<int>(ch.Keys.size()));
+
+        ImGui::Spacing();
+        ImGui::TextDisabled("Curva DESTA key ate a proxima");
+
         ImGui::SetNextItemWidth(-1);
         int interp = static_cast<int>(k.Interp);
-        const char* interpItems = "Step\0Linear\0CubicEaseIn\0CubicEaseOut\0Bezier\0";
+
+        const char* interpItems =
+            "Step\0"
+            "Linear\0"
+            "CubicEaseIn\0"
+            "CubicEaseOut\0"
+            "Bezier\0"
+            "EaseInStrong (segura e dispara)\0"
+            "EaseOutStrong (dispara e assenta)\0"
+            "EaseInOut (suave nas duas pontas)\0"
+            "EaseOutBack (passa do ponto e volta)\0"
+            "EaseOutBounce (quica)\0";
+
         if (ImGui::Combo("Interp", &interp, interpItems)) {
             k.Interp = static_cast<SequencerInterp>(interp);
         }
 
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Vale para o trecho que SAI desta key.\n\n"
+                "Para um impacto (coice de arma, batida):\n"
+                "  EaseOutStrong na key de repouso -> o golpe\n"
+                "  EaseOutBack   na key do pico    -> a volta passa do ponto\n\n"
+                "Curva nenhuma salva um pico distante: se o golpe leva 20\n"
+                "frames para chegar, ele nao e um golpe. Aproxime as keys\n"
+                "primeiro, a curva depois.");
+        }
+
+        if (!hasNext) {
+            ImGui::TextDisabled("(ultima key do canal - a curva nao tem trecho)");
+        }
+
         if (k.Interp == SequencerInterp::Bezier) {
             ImGui::SetNextItemWidth(-1);
-            ImGui::InputFloat("Tangent In", &k.TangentIn, 0.1f, 1.0f, "%.3f");
-            ImGui::SetNextItemWidth(-1);
             ImGui::InputFloat("Tangent Out", &k.TangentOut, 0.1f, 1.0f, "%.3f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Puxa o inicio do trecho que SAI desta key.");
+        }
+
+        // ── O TANGENT IN PERTENCE AO TRECHO ANTERIOR ─────────────────────────
+        //
+        // Por isso ele aparece separado, e por isso ha um aviso quando a key
+        // anterior nao e Bezier: nesse caso o valor esta gravado e nao e lido
+        // por ninguem. Era exatamente este o caso de "mudei a interpolacao e
+        // nao mudou nada".
+        if (hasPrev) {
+            const SequencerKey& prev = ch.Keys[m_SelectedKey - 1];
+            const bool prevIsBezier = (prev.Interp == SequencerInterp::Bezier);
+
+            if (prevIsBezier || k.TangentIn != 0.0f) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Trecho que CHEGA nesta key");
+
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputFloat("Tangent In", &k.TangentIn, 0.1f, 1.0f, "%.3f");
+
+                if (!prevIsBezier) {
+                    ImGui::TextColored(ui::AccentColor(ui::Accent::Warning),
+                        ICON_TRIANGLE_EXCLAMATION " Sem efeito: a key do frame "
+                        "%.0f nao e Bezier.", prev.Frame);
+
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Corrigir")) {
+                        ch.Keys[m_SelectedKey - 1].Interp = SequencerInterp::Bezier;
+                    }
+                }
+            }
+        }
+
+        if (k.Interp == SequencerInterp::EaseOutBack ||
+            k.Interp == SequencerInterp::EaseOutBounce) {
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputFloat("Overshoot", &k.Overshoot, 0.1f, 0.5f, "%.3f");
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Quanto passa do ponto. 0 = padrao (~10%%).\n"
+                    "E o unico numero que se mexe para tunar 'quanto a arma pula'.");
+
+            if (k.Overshoot < 0.0f) k.Overshoot = 0.0f;
         }
 
         ImGui::Spacing();
@@ -2192,7 +3368,7 @@ namespace axe {
         }
 
         if (selCount > 1) {
-            ImGui::TextDisabled("%d keys selecionadas — o painel edita a de cor "
+            ImGui::TextDisabled("%d keys selecionadas - o painel edita a de cor "
                 "ambar; Delete apaga todas.", selCount);
         }
     }
@@ -2401,6 +3577,42 @@ namespace axe {
         }
         m_TimelineScrollY = std::clamp(m_TimelineScrollY, 0.0f, maxScroll);
 
+        // ── CAIXA DE SELECAO: O RETANGULO DESTE FRAME ────────────────────────
+        //
+        // Calculado ANTES do laco porque e ele quem colhe: cada key testa a
+        // propria posicao de tela contra esta caixa no mesmo ponto em que ja
+        // calcula onde desenhar o losango. Um segundo passe teria de recalcular
+        // as mesmas posicoes, e duas contas do mesmo numero acabam divergindo.
+        ImRect boxRect;
+        const bool boxActive = m_BoxSelecting;
+
+        if (boxActive) {
+            const ImVec2 mp = ImGui::GetMousePos();
+            boxRect = ImRect(
+                ImVec2(std::min(m_BoxStartPos.x, mp.x), std::min(m_BoxStartPos.y, mp.y)),
+                ImVec2(std::max(m_BoxStartPos.x, mp.x), std::max(m_BoxStartPos.y, mp.y)));
+            m_BoxHits.clear();
+        }
+
+        // ── ACAO ADIADA DO MENU DE CONTEXTO ──────────────────────────────────
+        //
+        // Copiar, colar, recortar e apagar mudam a ESTRUTURA (numero de keys,
+        // de canais, de sections). Executar isso dentro do laco que esta
+        // percorrendo essa mesma estrutura invalidaria os indices sob os pes do
+        // proprio laco.
+        //
+        // O Delete antigo escapava com um `break`, e funcionava porque so mexia
+        // no canal corrente. Colar nao tem esse luxo: pode criar canal em
+        // varias tracks de uma vez. Adiar e o unico jeito que continua correto
+        // quando a lista de operacoes cresce.
+        enum class DeferredKeyOp {
+            None, Copy, Cut, Paste, Duplicate, Delete,
+            SelectChannel, SelectTrack
+        };
+
+        DeferredKeyOp deferredOp = DeferredKeyOp::None;
+        KeyRef        deferredRef{};
+
         // Recorta as lanes na area delas: sem isto uma lane meio rolada desenha
         // por cima da regua de frames.
         dl->PushClipRect(ImVec2(origin.x, lanesTop),
@@ -2528,6 +3740,15 @@ namespace axe {
                             const float r = 7.0f;
                             const KeyRef ref{ bi, ti, si, ci, ki };
 
+                            // Track travada nao entra na caixa. Um cadeado que
+                            // deixa a key ser pega e apagada em grupo e meio
+                            // cadeado — a mesma regra que ja vale para o gizmo.
+                            if (boxActive && !tr.Locked &&
+                                kx >= boxRect.Min.x && kx <= boxRect.Max.x &&
+                                ky >= boxRect.Min.y && ky <= boxRect.Max.y) {
+                                m_BoxHits.push_back(ref);
+                            }
+
                             const bool isPrimary = (m_SelectedBinding == bi &&
                                 m_SelectedTrack == ti &&
                                 m_SelectedSection == si &&
@@ -2604,15 +3825,62 @@ namespace axe {
                                     ICON_TRASH " Delete%s",
                                     selCount > 1 ? "  (selecao inteira)" : "");
 
-                                if (ImGui::MenuItem(delLabel)) {
-                                    if (selCount > 1) DeleteSelectedKeys();
-                                    else {
-                                        m_Asset.RemoveKey(bi, ti, si, ci, ki);
-                                        ClearKeySelection();
-                                        m_SelectedKey = -1;
-                                    }
-                                    ImGui::EndPopup();
-                                    break;   // os indices deste canal mudaram
+                                // Todas as operacoes de ESTRUTURA sao adiadas —
+                                // ver a nota em DeferredKeyOp. O menu so
+                                // registra a intencao.
+                                if (ImGui::MenuItem(delLabel, "Del")) {
+                                    deferredOp = DeferredKeyOp::Delete;
+                                    deferredRef = ref;
+                                }
+
+                                ImGui::Separator();
+
+                                char copyLabel[64];
+                                std::snprintf(copyLabel, sizeof(copyLabel),
+                                    ICON_COPY " Copiar%s",
+                                    selCount > 1 ? "  (selecao)" : "");
+
+                                if (ImGui::MenuItem(copyLabel, "Ctrl+C")) {
+                                    deferredOp = DeferredKeyOp::Copy;
+                                    deferredRef = ref;
+                                }
+
+                                char cutLabel[64];
+                                std::snprintf(cutLabel, sizeof(cutLabel),
+                                    ICON_CUT " Recortar%s",
+                                    selCount > 1 ? "  (selecao)" : "");
+
+                                if (ImGui::MenuItem(cutLabel, "Ctrl+X")) {
+                                    deferredOp = DeferredKeyOp::Cut;
+                                    deferredRef = ref;
+                                }
+
+                                // Desabilitado com a area vazia, e nao escondido:
+                                // um item que some faz o menu mudar de tamanho
+                                // entre um clique e outro, e a pessoa erra o
+                                // alvo. Cinza diz "existe, mas nao agora".
+                                ImGui::BeginDisabled(m_KeyClipboard.empty());
+                                if (ImGui::MenuItem(ICON_PASTE " Colar no playhead", "Ctrl+V")) {
+                                    deferredOp = DeferredKeyOp::Paste;
+                                    deferredRef = ref;
+                                }
+                                ImGui::EndDisabled();
+
+                                if (ImGui::MenuItem(ICON_CLONE " Duplicar", "Ctrl+D")) {
+                                    deferredOp = DeferredKeyOp::Duplicate;
+                                    deferredRef = ref;
+                                }
+
+                                ImGui::SeparatorText("Selecionar");
+
+                                if (ImGui::MenuItem("Todas as keys deste canal")) {
+                                    deferredOp = DeferredKeyOp::SelectChannel;
+                                    deferredRef = ref;
+                                }
+
+                                if (ImGui::MenuItem("Todas as keys desta track")) {
+                                    deferredOp = DeferredKeyOp::SelectTrack;
+                                    deferredRef = ref;
                                 }
 
                                 ImGui::SeparatorText(selCount > 1
@@ -2636,6 +3904,19 @@ namespace axe {
                                 if (ImGui::MenuItem("CubicEaseIn"))   applyInterp(SequencerInterp::CubicEaseIn);
                                 if (ImGui::MenuItem("CubicEaseOut"))  applyInterp(SequencerInterp::CubicEaseOut);
                                 if (ImGui::MenuItem("Bezier"))        applyInterp(SequencerInterp::Bezier);
+
+                                // As curvas de IMPACTO ficam num grupo proprio:
+                                // sao as unicas que o animador procura quando o
+                                // problema e "isto esta suave demais", e
+                                // misturadas na mesma lista elas se perdiam.
+                                ImGui::SeparatorText("Impacto");
+
+                                if (ImGui::MenuItem("EaseInStrong"))   applyInterp(SequencerInterp::EaseInStrong);
+                                if (ImGui::MenuItem("EaseOutStrong"))  applyInterp(SequencerInterp::EaseOutStrong);
+                                if (ImGui::MenuItem("EaseInOut"))      applyInterp(SequencerInterp::EaseInOut);
+                                if (ImGui::MenuItem("EaseOutBack"))    applyInterp(SequencerInterp::EaseOutBack);
+                                if (ImGui::MenuItem("EaseOutBounce"))  applyInterp(SequencerInterp::EaseOutBounce);
+
                                 ImGui::EndPopup();
                             }
 
@@ -2661,6 +3942,65 @@ namespace axe {
         }
 
         dl->PopClipRect();
+
+        // ── A ACAO ADIADA, FORA DO LACO ──────────────────────────────────────
+        //
+        // Aqui os indices podem mudar a vontade: ninguem esta iterando a
+        // estrutura. Ver a nota em DeferredKeyOp.
+        switch (deferredOp) {
+        case DeferredKeyOp::Delete:
+            if (static_cast<int>(m_SelectedKeys.size()) > 1) {
+                DeleteSelectedKeys();
+            }
+            else {
+                m_Asset.RemoveKey(deferredRef.Binding, deferredRef.Track,
+                    deferredRef.Section, deferredRef.Channel, deferredRef.Key);
+                ClearKeySelection();
+                m_SelectedKey = -1;
+            }
+            break;
+
+        case DeferredKeyOp::Copy:      CopySelectedKeys(false);      break;
+        case DeferredKeyOp::Cut:       CopySelectedKeys(true);       break;
+        case DeferredKeyOp::Paste:     PasteClipboardAtPlayhead();   break;
+        case DeferredKeyOp::Duplicate: DuplicateSelectedKeys();      break;
+
+        case DeferredKeyOp::SelectChannel:
+            SelectAllKeysInChannel(deferredRef.Binding, deferredRef.Track,
+                deferredRef.Section, deferredRef.Channel);
+            break;
+
+        case DeferredKeyOp::SelectTrack:
+            SelectAllKeysInTrack(deferredRef.Binding, deferredRef.Track);
+            break;
+
+        default: break;
+        }
+
+        // ── O RETANGULO DA CAIXA ─────────────────────────────────────────────
+        //
+        // Desenhado depois das lanes para ficar por cima delas, e recortado na
+        // area da timeline: arrastar para fora da janela nao deve pintar por
+        // cima do resto do editor.
+        if (boxActive) {
+            dl->PushClipRect(ImVec2(origin.x, origin.y),
+                ImVec2(origin.x + size.x, origin.y + size.y), true);
+
+            dl->AddRectFilled(boxRect.Min, boxRect.Max, IM_COL32(120, 190, 255, 40));
+            dl->AddRect(boxRect.Min, boxRect.Max, IM_COL32(120, 190, 255, 200), 0.0f, 0, 1.5f);
+
+            // Contagem ao vivo. Numa caixa que atravessa vinte lanes, "quantas
+            // peguei?" e a pergunta que decide se solta agora ou continua
+            // arrastando — e responde-la depois de soltar e tarde.
+            if (!m_BoxHits.empty()) {
+                char cnt[48];
+                std::snprintf(cnt, sizeof(cnt), "%d key(s)", (int)m_BoxHits.size());
+                dl->AddText(ImVec2(boxRect.Max.x + 6.0f, boxRect.Min.y),
+                    IM_COL32(160, 210, 255, 255), cnt);
+            }
+
+            dl->PopClipRect();
+        }
 
         // ── ARRASTO DO GRUPO DE KEYS ─────────────────────────────────────────
         //
@@ -2830,9 +4170,14 @@ namespace axe {
             m_DraggingPlayhead = true;  // começa drag a partir do click
         }
 
-        // Double-click na lane: adiciona key.
+        // Double-click na lane: adiciona key. E, desde a caixa de selecao, a
+        // area onde um arrasto no vazio comeca a selecionar.
+        //
+        // O fundo vai ate `lanesBottom`, e nao ate a ultima lane: com tres
+        // tracks sobra meia janela vazia, e comecar a caixa ali e o gesto mais
+        // natural que existe — de fora, para dentro.
         ImRect lanesRect(ImVec2(origin.x, origin.y + rulerHeight),
-            ImVec2(origin.x + size.x, laneY));
+            ImVec2(origin.x + size.x, std::max(laneY, lanesBottom)));
         ImGui::SetCursorScreenPos(lanesRect.Min);
         ImGui::InvisibleButton("lanes_click",
             ImVec2(lanesRect.GetWidth(), lanesRect.GetHeight()));
@@ -2842,6 +4187,41 @@ namespace axe {
                 AddKeyAtPlayhead(m_SelectedBinding, m_SelectedTrack,
                     m_SelectedSection, m_SelectedChannel);
             }
+        }
+
+        // ── COMECA A CAIXA ───────────────────────────────────────────────────
+        //
+        // Este botao so fica "hovered" quando NAO ha key sob o cursor: as keys
+        // sao submetidas antes e, no ImGui, o primeiro item a reivindicar o
+        // hover vence. Entao "hovered aqui" e exatamente "clicou no vazio".
+        //
+        // Os outros tres estados sao testados porque um arrasto de key, do
+        // playhead ou de pan pode passar por cima desta area, e comecar uma
+        // caixa no meio deles seria um segundo gesto por cima do primeiro.
+        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !m_DraggingKey && !m_DraggingPlayhead && !m_PanningTimeline) {
+            const ImGuiIO& io = ImGui::GetIO();
+
+            m_BoxSelecting = true;
+            m_BoxStartPos = ImGui::GetMousePos();
+            m_BoxMode = io.KeyShift ? BoxMode::Add
+                : io.KeyCtrl ? BoxMode::Remove
+                : BoxMode::Replace;
+            m_BoxHits.clear();
+        }
+
+        // ── E FECHA ──────────────────────────────────────────────────────────
+        //
+        // Fora do teste de hover, de proposito: soltar o botao com o cursor ja
+        // fora da timeline (ou por cima de uma key) tem de valer igual. Sem
+        // isso, uma caixa arrastada para fora ficaria acesa para sempre.
+        //
+        // `m_BoxHits` foi colhido pelo laco DESTE frame, entao neste ponto ele
+        // descreve o retangulo exato que o usuario esta vendo.
+        if (m_BoxSelecting && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            ApplyBoxSelection();
+            m_BoxSelecting = false;
+            m_BoxHits.clear();
         }
     }
 
@@ -3238,7 +4618,11 @@ namespace axe {
         if (!m_Context || !m_Context->ActiveScene) return;
 
         auto& reg = m_Context->ActiveScene->GetRegistry();
-        const auto& samples = m_Player.GetLastSamples();
+        // Keys + pose pendente, nesta ordem de precedencia. UMA vez por frame,
+        // antes de qualquer consumidor — os tres (pose de osso, SolveRig,
+        // preview de socket) leem desta lista.
+        RebuildEffectiveSamples();
+        const auto& samples = m_EffectiveSamples;
         const auto& clipSamples = m_Player.GetLastClipSamples();
 
         const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
@@ -3438,8 +4822,15 @@ namespace axe {
         // osso de uma sequence que nem esta mais aberta — com o agravante de
         // que o gizmo externo SUPRIME o de entidade, entao o usuario perderia o
         // gizmo normal sem entender por que.
-        if (m_Context && m_Context->Viewport)
+        if (m_Context && m_Context->Viewport) {
             m_Context->Viewport->ClearExternalGizmo();
+            m_Context->Viewport->ClearExternalOverlay();
+        }
+
+        m_ViewportControlBinding = -1;
+        m_ViewportControlName.clear();
+        m_ViewportHovered.clear();
+        ClearTargetSelection();
 
         // As copias de trabalho do rig tambem: elas guardam a pose do animador
         // (RigElement::Value) e uma cena trocada com a janela aberta as deixaria
@@ -3681,14 +5072,14 @@ namespace axe {
         // usuario nao tem como saber qual dos dois aconteceu.
         const AnimationClip* clip = FindBindingClip(bindingIndex, clipName);
         if (!clip) {
-            AXE_EDITOR_ERROR("Sequencer: clipe '{}' nao existe nesta entidade — "
+            AXE_EDITOR_ERROR("Sequencer: clipe '{}' nao existe nesta entidade - "
                 "nada a explodir.", clipName);
             return 0;
         }
 
         const Skeleton* skel = GetBindingSkeleton(bindingIndex);
         if (!skel) {
-            AXE_EDITOR_ERROR("Sequencer: binding sem esqueleto resolvido — "
+            AXE_EDITOR_ERROR("Sequencer: binding sem esqueleto resolvido - "
                 "nao da para explodir o clipe '{}'.", clipName);
             return 0;
         }
@@ -3880,7 +5271,7 @@ namespace axe {
         }
         else {
             AXE_EDITOR_ERROR("Sequencer: clipe '{}' tem {} canais, mas nenhum difere "
-                "da bind pose — nenhuma track criada.",
+                "da bind pose - nenhuma track criada.",
                 clipName, (int)clip->GetChannelCount());
         }
 
@@ -4121,12 +5512,12 @@ namespace axe {
                                 "par " + std::to_string(i) + " em LOCAL: '" + ctrlName +
                                 "' pende de '" + h[cp].Name + "' e '" + boneName +
                                 "' pende de '" + h[bp].Name +
-                                "' — referenciais diferentes", true });
+                                "' - referenciais diferentes", true });
                         }
 
                         if (frameMismatch > 0) {
                             m_RigAudit.push_back({ where, n.Title,
-                                "ponha o Space deste FK Chain em GLOBAL — em Local os "
+                                "ponha o Space deste FK Chain em GLOBAL - em Local os "
                                 "pares acima copiam entre referenciais diferentes", true });
                         }
                     }
@@ -4235,7 +5626,7 @@ namespace axe {
                                 m_RigAudit.push_back({ where, n.Title,
                                     std::string("le '") + src + "' em " + spaceName(getN->Space) +
                                     " e escreve '" + dst + "' em " + spaceName(setN->Space) +
-                                    " — espacos diferentes", true });
+                                    " - espacos diferentes", true });
                             }
                             else if (setN->Space == RigSpace::Local &&
                                 !src.empty() && !dst.empty()) {
@@ -4266,7 +5657,7 @@ namespace axe {
                                             (sp >= 0 ? h[sp].Name : std::string("raiz")) +
                                             "') para '" + dst + "' (pai '" +
                                             (dp >= 0 ? h[dp].Name : std::string("raiz")) +
-                                            "') — referenciais diferentes. Ponha os dois em GLOBAL.",
+                                            "') - referenciais diferentes. Ponha os dois em GLOBAL.",
                                             true });
                                     }
                                 }
@@ -4298,7 +5689,7 @@ namespace axe {
                         if (h[mi].Parent != ri) {
                             m_RigAudit.push_back({ where, n.Title,
                                 "'" + mid + "' nao e filho direto de '" + root +
-                                "' — o solve vai girar '" + root + "'", true });
+                                "' - o solve vai girar '" + root + "'", true });
                         }
 
                         if (h[ei].Parent != mi) {
@@ -4331,7 +5722,36 @@ namespace axe {
         //    aparecia no ResetToInitial do frame SEGUINTE — um quadro de atraso
         //    permanente entre a key e a pose. Invisivel parado, visivel como
         //    arrasto durante o scrub.
-        for (const auto& s : m_Player.GetLastSamples()) {
+        // ── O VALUE VOLTA AO NEUTRO ANTES DE SER REESCRITO ───────────────────
+        //
+        // `RigElement::Value` e o unico estado do solve que NAO e recomposto do
+        // zero a cada frame: o ResetToInitial resolve `Current = Initial *
+        // Value` e deixa o Value como esta, de proposito (senao um interruptor
+        // voltaria ao padrao a cada quadro).
+        //
+        // Enquanto todo arrasto de gizmo virava key, isso nao aparecia — o
+        // proximo frame reescrevia o mesmo numero a partir da key e o resultado
+        // era identico. Com o REC desligado deixa de ser: uma pose descartada
+        // (Esc, ou troca de frame) ficaria pendurada no controle para sempre,
+        // sem key nenhuma explicando de onde veio, e o `.axerig` recebe Value no
+        // save — a pose vazaria para o asset.
+        //
+        // So os controles que TEM track neste binding sao zerados. Controle sem
+        // track nao e dirigido por esta janela, e mexer nele aqui apagaria o que
+        // o proprio grafo tiver posto la.
+        for (const auto& tr : b->Tracks) {
+            if (tr.TargetType != SequencerTargetType::Control) continue;
+
+            const int idx = rt->Hierarchy.Find(tr.TargetName, RigElementType::Control);
+            if (idx < 0) continue;
+
+            RigElement& el = rt->Hierarchy[idx];
+            if (el.ValueType != RigControlValue::Transform) continue;
+
+            el.Value = BoneTransform{};   // identidade = neutro
+        }
+
+        for (const auto& s : m_EffectiveSamples) {
             if (s.BindingIndex != bindingIndex) continue;
             if (s.TargetType != SequencerTargetType::Control) continue;
 
@@ -4423,7 +5843,7 @@ namespace axe {
         // resultado de um mundo que ainda nao existe.
         rc.AllowWorldQueries = false;
         rc.UseEditorGround = false;
-        rc.DeltaTime = ImGui::GetIO().DeltaTime;
+        rc.DeltaTime = m_Baking ? m_BakeDeltaTime : ImGui::GetIO().DeltaTime;
         rc.Graph = &rt->Graph;
         rc.Blackboard = nullptr;   // sem AnimGraph, sem parametros de gameplay
 
@@ -4632,34 +6052,52 @@ namespace axe {
         // a pose se somar ao que o grafo ja mandou em vez de brigar com ele.
         // Refazer essa conta aqui fora seria manter duas versoes da mesma
         // matematica, e a de fora nem tem acesso ao BoneTransform::ToMatrix.
+        // ANTES do SetValueFromGlobal: o instantaneo tem de ser o estado
+        // pre-arrasto, e essa chamada ja escreve no Value.
+        if (!m_GroupDragActive && m_SelectedTargets.size() > 1) BeginGroupDrag();
+
         rt->Hierarchy.SetValueFromGlobal(idx, glm::inverse(entityWorld) * world);
 
         const RigElement& el = rt->Hierarchy[idx];
 
-        const int si = SectionAtPlayhead(bindingIndex, trackIndex);
-        if (si < 0) return;
+        // ── SECTION SO QUANDO VAI VIRAR KEY ──────────────────────────────────
+        //
+        // Com REC desligado nao ha nada a gravar, e o SectionAtPlayhead CRIA
+        // section numa track que ainda nao tem nenhuma. Chama-lo aqui faria uma
+        // pose descartada deixar uma section vazia para tras — um efeito
+        // colateral permanente de um gesto explicitamente temporario.
+        const int si = m_Recording ? SectionAtPlayhead(bindingIndex, trackIndex) : -1;
+        if (m_Recording && si < 0) return;
 
         const ImGuizmo::OPERATION op = m_Context->Viewport
             ? m_Context->Viewport->GetGizmoOperation() : ImGuizmo::TRANSLATE;
 
+        TargetLocal now;
+        now.T = el.Value.Translation;
+        now.R = el.Value.Rotation;
+        now.S = el.Value.Scale;
+
         if (op == ImGuizmo::TRANSLATE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::X, el.Value.Translation.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::Y, el.Value.Translation.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::Z, el.Value.Translation.z);
+            ApplyGroupDelta(now, GizmoChannel::Translate);
         }
         else if (op == ImGuizmo::ROTATE) {
-            SetRotationKeysAtPlayhead(bindingIndex, trackIndex, si, el.Value.Rotation);
+            WriteRotation(bindingIndex, trackIndex, si, el.Value.Rotation);
+            ApplyGroupDelta(now, GizmoChannel::Rotate);
         }
         else if (op == ImGuizmo::SCALE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::ScaleX, el.Value.Scale.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::ScaleY, el.Value.Scale.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si,
+            WriteChannelValue(bindingIndex, trackIndex, si,
                 SequencerChannelComponent::ScaleZ, el.Value.Scale.z);
+            ApplyGroupDelta(now, GizmoChannel::Scale);
         }
     }
 
@@ -4821,56 +6259,85 @@ namespace axe {
         m_Asset.AddKey(bindingIndex, trackIndex, sectionIndex, ci, k);
     }
 
-    void SequencerWindow::SetRotationKeysAtPlayhead(int bindingIndex, int trackIndex,
-        int sectionIndex, const glm::quat& rotation) {
-        // ── DESEMBRULHO CONTRA A KEY ANTERIOR ────────────────────────────────
-        //
-        // O mesmo problema do bake de clipe, agora ao vivo: `glm::eulerAngles`
-        // devolve a forma canonica, e arrastar o gizmo por cima de um limite de
-        // ramo cravaria uma key com -179 ao lado de uma de +179. Na reproducao,
-        // o osso daria uma volta completa entre dois frames vizinhos.
-        //
-        // A referencia e a key de rotacao mais proxima ANTES do playhead. Sem
-        // key anterior, a canonica serve — nao ha com o que ser continuo.
+    // ── EULER CONTINUO: A REFERENCIA CERTA ───────────────────────────────────
+    //
+    // Extraido do SetRotationKeysAtPlayhead porque agora HA DOIS caminhos que
+    // precisam da mesma resposta (a key, com REC ligado, e a pose pendente, com
+    // REC desligado). Duas copias divergiriam, e a divergencia apareceria como
+    // um salto de 360 graus no instante em que a pose pendente virasse key —
+    // exatamente o bug que o desembrulho existe para evitar.
+    //
+    // Ordem das referencias:
+    //
+    //   1. A PENDENCIA, se houver. Enquanto o usuario arrasta com REC
+    //      desligado, o angulo anterior e o que ele mesmo acabou de produzir;
+    //      medir contra a key antiga faria o valor pular no meio do gesto.
+    //   2. A key de rotacao mais proxima ANTES do playhead.
+    //   3. Nada — a forma canonica serve, nao ha com o que ser continuo.
+    glm::vec3 SequencerWindow::ResolveContinuousEuler(int bindingIndex, int trackIndex,
+        int sectionIndex, const glm::quat& rotation) const {
         glm::vec3 prev(0.0f);
         bool hasPrev = false;
 
-        auto* b = m_Asset.GetBinding(bindingIndex);
-        if (b && trackIndex >= 0 && trackIndex < static_cast<int>(b->Tracks.size())) {
-            auto& tr = b->Tracks[trackIndex];
-            if (sectionIndex >= 0 && sectionIndex < static_cast<int>(tr.Sections.size())) {
-                auto& sec = tr.Sections[sectionIndex];
-                const float now = m_Player.GetCurrentFrame();
+        const SequencerChannelComponent rot[3] = {
+            SequencerChannelComponent::RotX,
+            SequencerChannelComponent::RotY,
+            SequencerChannelComponent::RotZ
+        };
 
-                const SequencerChannelComponent rot[3] = {
-                    SequencerChannelComponent::RotX,
-                    SequencerChannelComponent::RotY,
-                    SequencerChannelComponent::RotZ
-                };
+        const auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size()))
+            return ContinuousEuler(rotation, prev, hasPrev);
 
-                for (int axis = 0; axis < 3; ++axis) {
-                    for (const auto& ch : sec.Channels) {
-                        if (ch.Component != rot[axis]) continue;
+        const SequencerTrack& tr = b->Tracks[trackIndex];
 
-                        float best = 0.0f;
-                        float bestFrame = -std::numeric_limits<float>::max();
+        // 1. Pendencia.
+        for (const auto& p : m_PendingEdits) {
+            if (p.BindingIndex != bindingIndex) continue;
+            if (p.TargetType != tr.TargetType) continue;
+            if (p.TargetName != tr.TargetName) continue;
 
-                        for (const auto& k : ch.Keys) {
-                            if (k.Frame <= now && k.Frame > bestFrame) {
-                                bestFrame = k.Frame;
-                                best = k.Value;
-                            }
+            for (int axis = 0; axis < 3; ++axis) {
+                if (p.Component != rot[axis]) continue;
+                prev[axis] = p.Value;
+                hasPrev = true;
+            }
+        }
+        if (hasPrev) return ContinuousEuler(rotation, prev, hasPrev);
+
+        // 2. Key anterior.
+        if (sectionIndex >= 0 && sectionIndex < static_cast<int>(tr.Sections.size())) {
+            const auto& sec = tr.Sections[sectionIndex];
+            const float now = m_Player.GetCurrentFrame();
+
+            for (int axis = 0; axis < 3; ++axis) {
+                for (const auto& ch : sec.Channels) {
+                    if (ch.Component != rot[axis]) continue;
+
+                    float best = 0.0f;
+                    float bestFrame = -std::numeric_limits<float>::max();
+
+                    for (const auto& k : ch.Keys) {
+                        if (k.Frame <= now && k.Frame > bestFrame) {
+                            bestFrame = k.Frame;
+                            best = k.Value;
                         }
-                        if (bestFrame > -std::numeric_limits<float>::max()) {
-                            prev[axis] = best;
-                            hasPrev = true;
-                        }
+                    }
+                    if (bestFrame > -std::numeric_limits<float>::max()) {
+                        prev[axis] = best;
+                        hasPrev = true;
                     }
                 }
             }
         }
 
-        const glm::vec3 euler = ContinuousEuler(rotation, prev, hasPrev);
+        return ContinuousEuler(rotation, prev, hasPrev);
+    }
+
+    void SequencerWindow::SetRotationKeysAtPlayhead(int bindingIndex, int trackIndex,
+        int sectionIndex, const glm::quat& rotation) {
+        const glm::vec3 euler =
+            ResolveContinuousEuler(bindingIndex, trackIndex, sectionIndex, rotation);
 
         SetChannelKeyAtPlayhead(bindingIndex, trackIndex, sectionIndex,
             SequencerChannelComponent::RotX, euler.x);
@@ -4878,6 +6345,294 @@ namespace axe {
             SequencerChannelComponent::RotY, euler.y);
         SetChannelKeyAtPlayhead(bindingIndex, trackIndex, sectionIndex,
             SequencerChannelComponent::RotZ, euler.z);
+    }
+
+    // ============================================================
+    // REC — auto-key, pose pendente e captura
+    // ============================================================
+
+    void SequencerWindow::SetPendingEdit(int bindingIndex, const SequencerTrack& track,
+        SequencerChannelComponent component, float value) {
+        // O frame de autoria e reafirmado a cada escrita. Durante um arrasto o
+        // playhead nao anda, entao isto e sempre o mesmo numero; o que ele
+        // impede e a pendencia de um frame anterior ser adotada por este.
+        m_PendingFrame = m_Player.GetCurrentFrame();
+
+        for (auto& p : m_PendingEdits) {
+            if (p.BindingIndex == bindingIndex &&
+                p.TargetType == track.TargetType &&
+                p.TargetName == track.TargetName &&
+                p.Component == component) {
+                p.Value = value;
+                return;
+            }
+        }
+
+        SequencerSample s;
+        s.BindingIndex = bindingIndex;
+        s.TargetName = track.TargetName;
+        s.TargetType = track.TargetType;
+        s.Component = component;
+        s.Value = value;
+        m_PendingEdits.push_back(s);
+    }
+
+    void SequencerWindow::ClearPendingEdits() {
+        m_PendingEdits.clear();
+        m_PendingFrame = -1.0f;
+
+        // Os controles de rig precisam de uma palavra a mais.
+        //
+        // Osso e socket sao recompostos do zero todo frame (Pose::FromBindPose /
+        // o transform neutro do preview), entao esquecer a pendencia ja os
+        // devolve ao lugar. `RigElement::Value` NAO: o gizmo escreveu ali via
+        // SetValueFromGlobal, e nem o ResetToInitial nem o solve limpam esse
+        // campo — descartar a pose deixaria o controle onde o usuario largou,
+        // sem key nenhuma explicando por que.
+        //
+        // O SolveRig zera o Value das tracks de controle antes de reescrever a
+        // partir dos samples; basta, portanto, nao ter mais o sample — e por
+        // isso nao ha nada a desfazer aqui.
+    }
+
+    void SequencerWindow::WriteChannelValue(int bindingIndex, int trackIndex,
+        int sectionIndex, SequencerChannelComponent component, float value) {
+        if (m_Recording) {
+            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, sectionIndex,
+                component, value);
+            return;
+        }
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size()))
+            return;
+
+        SetPendingEdit(bindingIndex, b->Tracks[trackIndex], component, value);
+    }
+
+    void SequencerWindow::WriteRotation(int bindingIndex, int trackIndex,
+        int sectionIndex, const glm::quat& rotation) {
+        if (m_Recording) {
+            SetRotationKeysAtPlayhead(bindingIndex, trackIndex, sectionIndex, rotation);
+            return;
+        }
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size()))
+            return;
+
+        const glm::vec3 euler =
+            ResolveContinuousEuler(bindingIndex, trackIndex, sectionIndex, rotation);
+
+        const SequencerTrack& tr = b->Tracks[trackIndex];
+        SetPendingEdit(bindingIndex, tr, SequencerChannelComponent::RotX, euler.x);
+        SetPendingEdit(bindingIndex, tr, SequencerChannelComponent::RotY, euler.y);
+        SetPendingEdit(bindingIndex, tr, SequencerChannelComponent::RotZ, euler.z);
+    }
+
+    // ── A LISTA QUE A AVALIACAO LE ───────────────────────────────────────────
+    //
+    // Samples do player + pendencias POR CIMA. A ordem importa: sem a
+    // precedencia, posar num frame que ja tem key nao teria efeito visivel, e o
+    // sintoma seria "o gizmo nao funciona em cima de uma key" — que e onde o
+    // animador mais precisa dele.
+    //
+    // A substituicao e por (binding, alvo, componente), e nao um append cego:
+    // dois samples do mesmo canal fariam o consumidor depender da ordem de
+    // iteracao — o de osso pega o ULTIMO, o de socket tambem, mas o de controle
+    // recompoe o quaternion a cada eixo e o resultado dependeria de qual veio
+    // primeiro.
+    void SequencerWindow::RebuildEffectiveSamples() {
+        m_EffectiveSamples = m_Player.GetLastSamples();
+
+        if (m_PendingEdits.empty()) return;
+
+        for (const auto& p : m_PendingEdits) {
+            bool replaced = false;
+
+            for (auto& s : m_EffectiveSamples) {
+                if (s.BindingIndex == p.BindingIndex &&
+                    s.TargetType == p.TargetType &&
+                    s.TargetName == p.TargetName &&
+                    s.Component == p.Component) {
+                    s.Value = p.Value;
+                    replaced = true;
+                    break;
+                }
+            }
+
+            if (!replaced) m_EffectiveSamples.push_back(p);
+        }
+    }
+
+    int SequencerWindow::CommitPendingEdits() {
+        if (m_PendingEdits.empty()) return 0;
+
+        // O frame de destino e o da AUTORIA, nao o de agora. Na pratica sao o
+        // mesmo numero (mudar de frame descarta a pendencia — ver Draw), mas
+        // depender disso implicitamente seria contar com um invariante mantido
+        // em outro arquivo.
+        const float authored = m_PendingFrame;
+        const float current = m_Player.GetCurrentFrame();
+
+        if (authored >= 0.0f && std::abs(authored - current) > 0.5f) {
+            AXE_EDITOR_WARN("Sequencer: pose pendente e do frame {:.0f}, o playhead "
+                "esta em {:.0f}. Descartada.", authored, current);
+            ClearPendingEdits();
+            return 0;
+        }
+
+        // Cópia: SetChannelKeyAtPlayhead pode criar section e canal, e o
+        // ClearPendingEdits no fim invalidaria o vetor sob o laco.
+        const std::vector<SequencerSample> pending = m_PendingEdits;
+        int written = 0;
+
+        for (const auto& p : pending) {
+            auto* b = m_Asset.GetBinding(p.BindingIndex);
+            if (!b) continue;
+
+            // Do alvo de volta para o indice da track. A pendencia guarda NOME
+            // (como o sample), e nao indice, porque uma track removida entre a
+            // pose e o Key deslocaria todos os indices seguintes.
+            int ti = -1;
+            for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+                if (b->Tracks[i].TargetType == p.TargetType &&
+                    b->Tracks[i].TargetName == p.TargetName) {
+                    ti = i;
+                    break;
+                }
+            }
+            if (ti < 0) continue;
+            if (b->Tracks[ti].Locked) continue;
+
+            const int si = SectionAtPlayhead(p.BindingIndex, ti);
+            if (si < 0) continue;
+
+            // Os valores JA estao no espaco da curva (graus para rotacao,
+            // desembrulhados contra a key anterior no momento em que foram
+            // produzidos). Nao passam de novo pelo ContinuousEuler: refazer o
+            // desembrulho contra si mesmo e como ele acaba somando 360.
+            SetChannelKeyAtPlayhead(p.BindingIndex, ti, si, p.Component, p.Value);
+            ++written;
+        }
+
+        // Ordena os canais tocados — mesma razao do OnFinish do gizmo.
+        for (const auto& p : pending) {
+            auto* b = m_Asset.GetBinding(p.BindingIndex);
+            if (!b) continue;
+            for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+                if (b->Tracks[i].TargetType != p.TargetType) continue;
+                if (b->Tracks[i].TargetName != p.TargetName) continue;
+                for (int si = 0; si < static_cast<int>(b->Tracks[i].Sections.size()); ++si)
+                    for (int ci = 0; ci < static_cast<int>(b->Tracks[i].Sections[si].Channels.size()); ++ci)
+                        SortChannelAndRemap(p.BindingIndex, i, si, ci);
+            }
+        }
+
+        ClearPendingEdits();
+
+        if (written > 0)
+            AXE_EDITOR_INFO("Sequencer: {} canal(is) gravado(s) no frame {:.0f}.",
+                written, current);
+
+        return written;
+    }
+
+    // ── CAPTURAR O QUE ESTA NA TELA ──────────────────────────────────────────
+    //
+    // Quais canais capturar e a unica decisao interessante aqui, e ela tem
+    // precedente no proprio arquivo: o ExplodeClipTrack ja nao cria canal que
+    // nao varia, e o ApplyGizmoToBone ja key so a operacao ativa. O motivo e o
+    // mesmo — canal de escala constante 1 e translacao igual a de repouso
+    // enchem a timeline de curvas retas que ninguem pediu, e cada uma delas
+    // depois CONGELA o osso se o esqueleto mudar.
+    //
+    // Entao:
+    //   - track que JA tem canais: captura exatamente esses. E o registro do
+    //     que o animador decidiu animar nesta track.
+    //   - track ainda sem canal nenhum: translacao + rotacao. Escala fica de
+    //     fora ate alguem pedir escala com o gizmo.
+    int SequencerWindow::CaptureAllTracksAtPlayhead(int bindingIndex) {
+        const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
+        if (bindingCount == 0) return 0;
+
+        const int first = (bindingIndex >= 0) ? bindingIndex : 0;
+        const int last = (bindingIndex >= 0) ? bindingIndex : bindingCount - 1;
+        if (first < 0 || last >= bindingCount) return 0;
+
+        static const SequencerChannelComponent kDefault[6] = {
+            SequencerChannelComponent::X,
+            SequencerChannelComponent::Y,
+            SequencerChannelComponent::Z,
+            SequencerChannelComponent::RotX,
+            SequencerChannelComponent::RotY,
+            SequencerChannelComponent::RotZ
+        };
+
+        int written = 0;
+
+        for (int bi = first; bi <= last; ++bi) {
+            auto* b = m_Asset.GetBinding(bi);
+            if (!b) continue;
+
+            const int trackCount = static_cast<int>(b->Tracks.size());
+
+            for (int ti = 0; ti < trackCount; ++ti) {
+                // Re-obtido a cada volta: SectionAtPlayhead e AddChannel mexem
+                // nos vetores do asset e invalidam qualquer referencia guardada.
+                auto* bb = m_Asset.GetBinding(bi);
+                if (!bb || ti >= static_cast<int>(bb->Tracks.size())) break;
+
+                const SequencerTrack& tr = bb->Tracks[ti];
+
+                if (tr.Locked || tr.Muted) continue;
+                if (tr.Type == SequencerTrackType::AnimationClip) continue;
+                if (tr.Type == SequencerTrackType::Event) continue;
+
+                const int si = SectionAtPlayhead(bi, ti);
+                if (si < 0) continue;
+
+                // Snapshot dos componentes ANTES de escrever: gravar a primeira
+                // key cria canais, e iterar sobre a lista que esta crescendo
+                // capturaria os canais recem-criados de novo.
+                std::vector<SequencerChannelComponent> comps;
+                {
+                    auto* b2 = m_Asset.GetBinding(bi);
+                    const auto& sec = b2->Tracks[ti].Sections[si];
+                    for (const auto& ch : sec.Channels)
+                        comps.push_back(ch.Component);
+                }
+
+                if (comps.empty()) {
+                    // Property (controle de canal) carrega UM valor, no canal X.
+                    // Dar-lhe seis seria inventar eixos que o controle nao tem.
+                    if (tr.Type == SequencerTrackType::Property)
+                        comps.push_back(SequencerChannelComponent::X);
+                    else
+                        comps.assign(kDefault, kDefault + 6);
+                }
+
+                for (SequencerChannelComponent c : comps) {
+                    auto* b3 = m_Asset.GetBinding(bi);
+                    if (!b3 || ti >= static_cast<int>(b3->Tracks.size())) break;
+
+                    float v = 0.0f;
+                    if (!CaptureChannelValue(bi, b3->Tracks[ti], c, v)) continue;
+
+                    SetChannelKeyAtPlayhead(bi, ti, si, c, v);
+                    ++written;
+                }
+            }
+        }
+
+        if (written > 0)
+            AXE_EDITOR_INFO("Sequencer: {} canal(is) capturado(s) do viewport no "
+                "frame {:.0f}.", written, m_Player.GetCurrentFrame());
+        else
+            AXE_EDITOR_WARN("Sequencer: nada para capturar - nenhuma track de "
+                "transform destravada no playhead.");
+
+        return written;
     }
 
     bool SequencerWindow::GizmoTargetWorld(int bindingIndex, const SequencerTrack& track,
@@ -4956,6 +6711,826 @@ namespace axe {
         }
     }
 
+
+
+    // ============================================================
+    // Undo / Redo por snapshot
+    // ============================================================
+
+    namespace {
+
+        // Estimativa grosseira do que um snapshot ocupa. Nao precisa ser exata:
+        // serve para decidir quando parar de guardar, e errar por 20% so muda o
+        // numero de passos que cabem.
+        std::size_t SnapshotBytes(const std::vector<SequencerBinding>& bindings) {
+            std::size_t n = 0;
+
+            for (const auto& b : bindings) {
+                n += sizeof(SequencerBinding) + b.EntityName.size() + b.DisplayName.size();
+
+                for (const auto& tr : b.Tracks) {
+                    n += sizeof(SequencerTrack) + tr.TargetName.size();
+
+                    for (const auto& sec : tr.Sections) {
+                        n += sizeof(SequencerSection) + sec.SourceClipName.size();
+
+                        for (const auto& ch : sec.Channels)
+                            n += sizeof(SequencerChannel) +
+                            ch.Keys.size() * sizeof(SequencerKey);
+                    }
+                }
+            }
+            return n;
+        }
+
+        // Teto de MEMORIA, e nao so de passos.
+        //
+        // Um clipe explodido produz dezenas de tracks com centenas de keys cada.
+        // Guardar 64 snapshots disso passaria facil de 100 MB — e o usuario
+        // descobriria isso como "o editor comeu a RAM", sem nenhuma ligacao
+        // aparente com o Ctrl+Z.
+        constexpr std::size_t kUndoBudgetBytes = 48u * 1024u * 1024u;
+        constexpr std::size_t kUndoMaxEntries = 64;
+
+    } // namespace
+
+    SequencerWindow::Snapshot SequencerWindow::TakeSnapshot() const {
+        Snapshot s;
+        s.Bindings = m_Asset.GetBindings();
+        s.Range = m_Asset.GetFrameRange();
+        s.Fps = m_Asset.GetFps();
+        return s;
+    }
+
+    void SequencerWindow::RestoreSnapshot(const Snapshot& s) {
+        m_Asset.SetBindings(s.Bindings);
+        m_Asset.SetFrameRange(s.Range);
+        m_Asset.SetFps(s.Fps);
+        m_Player.SetFps(s.Fps);
+    }
+
+    void SequencerWindow::TrackUndoState() {
+        const std::uint64_t sig = SignatureOf(m_Asset);
+
+        if (!m_HasLastState) {
+            m_LastState = TakeSnapshot();
+            m_LastSignature = sig;
+            m_HasLastState = true;
+            return;
+        }
+
+        if (sig != m_LastSignature) {
+            // Primeira mudanca do gesto: o estado do frame ANTERIOR e para
+            // onde o Ctrl+Z vai voltar.
+            if (!m_UndoPendingOpen) {
+                m_UndoPending = m_LastState;
+                m_UndoPendingOpen = true;
+            }
+
+            // `m_LastState` NAO e refeito aqui de proposito. Durante um arrasto
+            // isso seria uma copia da arvore inteira por frame, e ela nao serve
+            // para nada: o ponto de retorno do gesto ja foi capturado acima. A
+            // copia acontece uma vez so, quando o gesto fecha.
+            m_LastSignature = sig;
+            m_UndoIdleFrames = 0;
+            return;
+        }
+
+        if (!m_UndoPendingOpen)
+            return;
+
+        // ── QUANDO O GESTO FECHA ─────────────────────────────────────────────
+        //
+        // Botao solto E assinatura parada por dois frames. Os dois testes
+        // importam: sem o do mouse, uma pausa no meio de um arrasto lento
+        // partiria o gesto em dois undos; sem os frames de folga, uma edicao por
+        // teclado (que muda num frame e para) so fecharia no proximo evento.
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            m_UndoIdleFrames = 0;
+            return;
+        }
+
+        if (++m_UndoIdleFrames < 2)
+            return;
+
+        m_UndoStack.push_back(std::move(m_UndoPending));
+        m_UndoPendingOpen = false;
+        m_UndoIdleFrames = 0;
+
+        // Agora sim: o estado estavel de agora e o ponto de retorno do PROXIMO
+        // gesto.
+        m_LastState = TakeSnapshot();
+
+        // Uma acao nova invalida o caminho para a frente. E o comportamento de
+        // todo editor, e a alternativa (manter o redo) produziria um "refazer"
+        // que reconstroi um estado que nunca existiu nesta linha do tempo.
+        m_RedoStack.clear();
+
+        while (m_UndoStack.size() > kUndoMaxEntries)
+            m_UndoStack.erase(m_UndoStack.begin());
+
+        std::size_t total = 0;
+        for (const auto& s : m_UndoStack)
+            total += SnapshotBytes(s.Bindings);
+
+        while (total > kUndoBudgetBytes && m_UndoStack.size() > 1) {
+            total -= SnapshotBytes(m_UndoStack.front().Bindings);
+            m_UndoStack.erase(m_UndoStack.begin());
+        }
+    }
+
+    void SequencerWindow::AfterHistoryJump() {
+        // Indices guardados apontam para uma arvore que acabou de ser
+        // substituida. Clampar em vez de zerar: voltar um passo e continuar
+        // olhando a mesma track e o que se espera.
+        const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
+
+        if (m_SelectedBinding >= bindingCount) m_SelectedBinding = bindingCount - 1;
+        if (m_SelectedBinding < 0) m_SelectedTrack = -1;
+
+        if (m_SelectedTrack >= 0) {
+            const auto* b = m_Asset.GetBinding(m_SelectedBinding);
+            if (!b || m_SelectedTrack >= static_cast<int>(b->Tracks.size()))
+                m_SelectedTrack = -1;
+        }
+
+        m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+
+        // A selecao de keys e a pose pendente descrevem um estado que nao existe
+        // mais. Manter qualquer uma das duas faria o proximo Delete (ou o
+        // proximo K) escrever num lugar que o usuario nao esta vendo.
+        ClearKeySelection();
+        ClearPendingEdits();
+
+        m_ViewportControlBinding = -1;
+        m_ViewportControlName.clear();
+        ClearTargetSelection();
+
+        // O historico nao pode virar mudanca no historico.
+        m_LastState = TakeSnapshot();
+        m_LastSignature = SignatureOf(m_Asset);
+        m_UndoPendingOpen = false;
+        m_UndoIdleFrames = 0;
+
+        if (m_PlayerStarted) {
+            m_Player.SyncFrom(m_Asset);
+            EvaluateAndApply();
+        }
+    }
+
+    void SequencerWindow::Undo() {
+        // Gesto ainda aberto conta como uma entrada. Sem isto, Ctrl+Z logo
+        // depois de soltar o gizmo desfaria o passo ANTERIOR ao arrasto e
+        // deixaria o arrasto de pe — o oposto do pedido.
+        if (m_UndoPendingOpen) {
+            m_UndoStack.push_back(std::move(m_UndoPending));
+            m_UndoPendingOpen = false;
+        }
+
+        if (m_UndoStack.empty()) {
+            AXE_EDITOR_INFO("Sequencer: nada a desfazer.");
+            return;
+        }
+
+        m_RedoStack.push_back(TakeSnapshot());
+        RestoreSnapshot(m_UndoStack.back());
+        m_UndoStack.pop_back();
+
+        AfterHistoryJump();
+    }
+
+    void SequencerWindow::Redo() {
+        if (m_RedoStack.empty()) {
+            AXE_EDITOR_INFO("Sequencer: nada a refazer.");
+            return;
+        }
+
+        m_UndoStack.push_back(TakeSnapshot());
+        RestoreSnapshot(m_RedoStack.back());
+        m_RedoStack.pop_back();
+
+        AfterHistoryJump();
+    }
+
+    // ============================================================
+    // Copiar / recortar / colar keys
+    // ============================================================
+
+    void SequencerWindow::CopySelectedKeys(bool cut) {
+        if (m_SelectedKeys.empty()) {
+            AXE_EDITOR_INFO("Sequencer: nenhuma key selecionada.");
+            return;
+        }
+
+        std::vector<KeyClip> clips;
+        clips.reserve(m_SelectedKeys.size());
+
+        float minFrame = std::numeric_limits<float>::max();
+
+        for (const auto& r : m_SelectedKeys) {
+            const auto* b = m_Asset.GetBinding(r.Binding);
+            if (!b) continue;
+            if (r.Track < 0 || r.Track >= static_cast<int>(b->Tracks.size())) continue;
+
+            const auto& tr = b->Tracks[r.Track];
+            if (r.Section < 0 || r.Section >= static_cast<int>(tr.Sections.size())) continue;
+
+            const auto& sec = tr.Sections[r.Section];
+            if (r.Channel < 0 || r.Channel >= static_cast<int>(sec.Channels.size())) continue;
+
+            const auto& ch = sec.Channels[r.Channel];
+            if (r.Key < 0 || r.Key >= static_cast<int>(ch.Keys.size())) continue;
+
+            KeyClip c;
+            c.Binding = r.Binding;
+            c.TargetType = tr.TargetType;
+            c.TargetName = tr.TargetName;
+            c.Component = ch.Component;
+            c.Key = ch.Keys[r.Key];
+            c.FrameOffset = c.Key.Frame;   // vira relativo logo abaixo
+
+            minFrame = std::min(minFrame, c.Key.Frame);
+            clips.push_back(std::move(c));
+        }
+
+        if (clips.empty()) return;
+
+        // Relativo ao INICIO do recorte, e nao ao playhead do momento da copia:
+        // assim colar sempre poe a primeira key sob a agulha, independente de
+        // onde ela estava quando a copia foi feita.
+        for (auto& c : clips)
+            c.FrameOffset -= minFrame;
+
+        m_KeyClipboard = std::move(clips);
+
+        if (cut) DeleteSelectedKeys();
+
+        AXE_EDITOR_INFO("Sequencer: {} key(s) {}.",
+            (int)m_KeyClipboard.size(), cut ? "recortada(s)" : "copiada(s)");
+    }
+
+    int SequencerWindow::PasteKeys(const std::vector<KeyClip>& clips) {
+        if (clips.empty()) return 0;
+
+        float base = m_Player.GetCurrentFrame();
+        if (m_SnapEnabled && m_SnapFrame > 0)
+            base = std::round(base / m_SnapFrame) * m_SnapFrame;
+
+        const int rangeStart = m_Asset.GetFrameRange().Start;
+        const int rangeEnd = m_Asset.GetFrameRange().End;
+
+        std::vector<KeyRef> pasted;
+        int written = 0;
+
+        for (const auto& c : clips) {
+            auto* b = m_Asset.GetBinding(c.Binding);
+            if (!b) continue;
+
+            // Track pelo ALVO, nunca por indice — ver a nota em KeyClip.
+            int ti = -1;
+            for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+                if (b->Tracks[i].TargetType != c.TargetType) continue;
+                if (b->Tracks[i].TargetName != c.TargetName) continue;
+                ti = i;
+                break;
+            }
+            if (ti < 0) continue;
+            if (b->Tracks[ti].Locked) continue;
+
+            const float frame = std::clamp(base + c.FrameOffset,
+                static_cast<float>(rangeStart), static_cast<float>(rangeEnd));
+
+            // A section do FRAME DE DESTINO, e nao a do playhead: um recorte
+            // longo pode atravessar a borda, e cravar tudo na section da agulha
+            // poria keys fora do trecho que elas descrevem.
+            int si = -1;
+            for (int i = 0; i < static_cast<int>(b->Tracks[ti].Sections.size()); ++i) {
+                if (b->Tracks[ti].Sections[i].ContainsFrame(frame)) { si = i; break; }
+            }
+            if (si < 0) si = SectionAtPlayhead(c.Binding, ti);
+            if (si < 0) continue;
+
+            const int ci = EnsureChannel(c.Binding, ti, si, c.Component);
+            if (ci < 0) continue;
+
+            SequencerKey k = c.Key;
+            k.Frame = frame;
+
+            const int ki = m_Asset.AddKey(c.Binding, ti, si, ci, k);
+            if (ki < 0) continue;
+
+            pasted.push_back(KeyRef{ c.Binding, ti, si, ci, ki });
+            ++written;
+        }
+
+        // Selecionar o que acabou de ser colado e o que permite arrastar o
+        // bloco inteiro em seguida — que e quase sempre o proximo gesto.
+        m_SelectedKeys = std::move(pasted);
+
+        if (!m_SelectedKeys.empty()) {
+            const KeyRef& f = m_SelectedKeys.front();
+            m_SelectedBinding = f.Binding;
+            m_SelectedTrack = f.Track;
+            m_SelectedSection = f.Section;
+            m_SelectedChannel = f.Channel;
+            m_SelectedKey = f.Key;
+        }
+
+        if (written > 0)
+            AXE_EDITOR_INFO("Sequencer: {} key(s) colada(s) a partir do frame {:.0f}.",
+                written, base);
+        else
+            AXE_EDITOR_WARN("Sequencer: nada colado - as tracks de origem nao "
+                "existem mais (ou estao travadas).");
+
+        return written;
+    }
+
+    void SequencerWindow::PasteClipboardAtPlayhead() {
+        if (m_KeyClipboard.empty()) {
+            AXE_EDITOR_INFO("Sequencer: area de transferencia vazia.");
+            return;
+        }
+        PasteKeys(m_KeyClipboard);
+    }
+
+    void SequencerWindow::DuplicateSelectedKeys() {
+        // NAO passa pela area de transferencia: duplicar nao deve apagar o que
+        // o usuario copiou tres gestos atras.
+        const std::vector<KeyClip> saved = m_KeyClipboard;
+
+        CopySelectedKeys(false);
+        const std::vector<KeyClip> dup = m_KeyClipboard;
+
+        m_KeyClipboard = saved;
+
+        PasteKeys(dup);
+    }
+
+
+    // ============================================================
+    // Selecao multipla de alvos + pivo individual
+    // ============================================================
+
+    bool SequencerWindow::IsTargetSelected(const TargetRef& t) const {
+        for (const auto& s : m_SelectedTargets)
+            if (s == t) return true;
+        return false;
+    }
+
+    SequencerWindow::TargetRef SequencerWindow::ActiveTarget() const {
+        if (m_SelectedTargets.empty()) return TargetRef{};
+        return m_SelectedTargets.back();
+    }
+
+    void SequencerWindow::ClearTargetSelection() {
+        m_SelectedTargets.clear();
+        EndGroupDrag();
+    }
+
+    void SequencerWindow::SelectTarget(const TargetRef& t, bool additive) {
+        if (t.Name.empty() || t.Binding < 0) return;
+
+        // Um arrasto em curso mede o delta contra um instantaneo tirado no
+        // comeco dele. Mudar o grupo no meio deixaria as duas listas com
+        // tamanhos diferentes, e o alvo i passaria a seguir o instantaneo de
+        // outro. Fechar o gesto e mais honesto que tentar remendar.
+        EndGroupDrag();
+
+        if (!additive) {
+            m_SelectedTargets.clear();
+            m_SelectedTargets.push_back(t);
+            return;
+        }
+
+        for (std::size_t i = 0; i < m_SelectedTargets.size(); ++i) {
+            if (!(m_SelectedTargets[i] == t)) continue;
+
+            // Ja estava dentro. Se NAO era o ativo, vira o ativo — clicar de
+            // novo num membro do grupo quase sempre quer dizer "agora mexe por
+            // este". Se ja era, sai do grupo.
+            if (i + 1 == m_SelectedTargets.size()) {
+                m_SelectedTargets.pop_back();
+            }
+            else {
+                const TargetRef moved = m_SelectedTargets[i];
+                m_SelectedTargets.erase(m_SelectedTargets.begin() + i);
+                m_SelectedTargets.push_back(moved);
+            }
+            return;
+        }
+
+        m_SelectedTargets.push_back(t);
+    }
+
+    void SequencerWindow::SyncActiveFromTargets() {
+        const TargetRef act = ActiveTarget();
+
+        if (act.Binding < 0 || act.Name.empty()) {
+            m_SelectedTrack = -1;
+            m_ViewportControlBinding = -1;
+            m_ViewportControlName.clear();
+            return;
+        }
+
+        m_SelectedBinding = act.Binding;
+        m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+
+        int ti = -1;
+        if (const auto* b = m_Asset.GetBinding(act.Binding)) {
+            for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+                if (b->Tracks[i].TargetType != act.Type) continue;
+                if (b->Tracks[i].TargetName != act.Name) continue;
+                ti = i;
+                break;
+            }
+        }
+
+        m_SelectedTrack = ti;
+
+        // Sem track e sendo controle: o gizmo mira pelo NOME. Ver a nota de
+        // precedencia em UpdateGizmo.
+        if (ti < 0 && act.Type == SequencerTargetType::Control) {
+            m_ViewportControlBinding = act.Binding;
+            m_ViewportControlName = act.Name;
+        }
+        else {
+            m_ViewportControlBinding = -1;
+            m_ViewportControlName.clear();
+        }
+    }
+
+    bool SequencerWindow::ReadTargetLocal(const TargetRef& t, TargetLocal& out) const {
+        // ── UM ALVO SINTETICO ────────────────────────────────────────────────
+        //
+        // `CaptureChannelValue` pede uma SequencerTrack, mas so le tres campos
+        // dela (Type, TargetType, TargetName) — e um alvo do grupo pode ainda
+        // nao ter track nenhuma. Montar uma track de mentira aqui reusa a
+        // captura JA testada, com as regras dela (o neutro do socket, o Value do
+        // controle e nao o Current, a pose de trabalho do osso) em vez de
+        // reescrever uma segunda versao que vai divergir.
+        SequencerTrack tmp;
+        tmp.TargetType = t.Type;
+        tmp.TargetName = t.Name;
+
+        switch (t.Type) {
+        case SequencerTargetType::Control: tmp.Type = SequencerTrackType::TransformControl; break;
+        case SequencerTargetType::Socket:  tmp.Type = SequencerTrackType::TransformSocket;  break;
+        default:                           tmp.Type = SequencerTrackType::TransformBone;    break;
+        }
+
+        float v[9] = { 0,0,0, 0,0,0, 1,1,1 };
+
+        static const SequencerChannelComponent kAll[9] = {
+            SequencerChannelComponent::X,      SequencerChannelComponent::Y,      SequencerChannelComponent::Z,
+            SequencerChannelComponent::RotX,   SequencerChannelComponent::RotY,   SequencerChannelComponent::RotZ,
+            SequencerChannelComponent::ScaleX, SequencerChannelComponent::ScaleY, SequencerChannelComponent::ScaleZ
+        };
+
+        for (int i = 0; i < 9; ++i) {
+            float got = v[i];
+            if (!CaptureChannelValue(t.Binding, tmp, kAll[i], got)) return false;
+            v[i] = got;
+        }
+
+        out.T = glm::vec3(v[0], v[1], v[2]);
+        out.R = glm::quat(glm::radians(glm::vec3(v[3], v[4], v[5])));   // graus na curva
+        out.S = glm::vec3(v[6], v[7], v[8]);
+        return true;
+    }
+
+    void SequencerWindow::WriteTargetLocal(const TargetRef& t, const TargetLocal& val,
+        GizmoChannel op) {
+        int ti = -1;
+
+        auto* b = m_Asset.GetBinding(t.Binding);
+        if (!b) return;
+
+        for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+            if (b->Tracks[i].TargetType != t.Type) continue;
+            if (b->Tracks[i].TargetName != t.Name) continue;
+            ti = i;
+            break;
+        }
+
+        if (ti < 0) {
+            // Mesma regra do alvo unico: a track nasce na MANIPULACAO. So vale
+            // para controle — osso e socket nao tem como estar no grupo sem
+            // track, porque a unica forma de seleciona-los e pelo outliner, que
+            // lista tracks.
+            if (t.Type != SequencerTargetType::Control) return;
+
+            ti = CreateControlTrack(t.Binding, t.Name);
+            if (ti < 0) return;
+        }
+
+        if (b->Tracks[ti].Locked) return;
+
+        const int si = m_Recording ? SectionAtPlayhead(t.Binding, ti) : -1;
+        if (m_Recording && si < 0) return;
+
+        switch (op) {
+        case GizmoChannel::Translate:
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::X, val.T.x);
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::Y, val.T.y);
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::Z, val.T.z);
+            break;
+
+        case GizmoChannel::Rotate:
+            WriteRotation(t.Binding, ti, si, val.R);
+            break;
+
+        case GizmoChannel::Scale:
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::ScaleX, val.S.x);
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::ScaleY, val.S.y);
+            WriteChannelValue(t.Binding, ti, si, SequencerChannelComponent::ScaleZ, val.S.z);
+            break;
+        }
+    }
+
+    void SequencerWindow::BeginGroupDrag() {
+        m_GroupStart.clear();
+        m_GroupStart.reserve(m_SelectedTargets.size());
+
+        for (const auto& t : m_SelectedTargets) {
+            TargetLocal l;
+            if (!ReadTargetLocal(t, l)) l = TargetLocal{};
+            m_GroupStart.push_back(l);
+        }
+
+        m_GroupDragActive = true;
+    }
+
+    void SequencerWindow::ApplyGroupDelta(const TargetLocal& activeNow, GizmoChannel op) {
+        if (!m_GroupDragActive) return;
+        if (m_SelectedTargets.size() < 2) return;
+        if (m_GroupStart.size() != m_SelectedTargets.size()) return;
+
+        const TargetLocal& a0 = m_GroupStart.back();   // o ativo e o ultimo
+
+        const glm::vec3 dT = activeNow.T - a0.T;
+        const glm::quat dR = activeNow.R * glm::inverse(a0.R);
+
+        // Razao, e nao diferenca: escala e multiplicativa, e somar deltas faria
+        // um alvo que comeca em 2.0 crescer o dobro do que comeca em 1.0.
+        // Denominador zero nao existe em escala util, mas um asset editado a mao
+        // pode traze-lo — 1.0 ali quer dizer "nao mexe".
+        const glm::vec3 dS(
+            std::abs(a0.S.x) > 1e-6f ? activeNow.S.x / a0.S.x : 1.0f,
+            std::abs(a0.S.y) > 1e-6f ? activeNow.S.y / a0.S.y : 1.0f,
+            std::abs(a0.S.z) > 1e-6f ? activeNow.S.z / a0.S.z : 1.0f);
+
+        // Todos MENOS o ultimo: o ativo ja foi escrito pelo ApplyGizmoTo* que
+        // chamou esta funcao.
+        for (std::size_t i = 0; i + 1 < m_SelectedTargets.size(); ++i) {
+            TargetLocal v = m_GroupStart[i];
+
+            switch (op) {
+            case GizmoChannel::Translate: v.T = m_GroupStart[i].T + dT;       break;
+            case GizmoChannel::Rotate:    v.R = dR * m_GroupStart[i].R;       break;
+            case GizmoChannel::Scale:     v.S = m_GroupStart[i].S * dS;       break;
+            }
+
+            WriteTargetLocal(m_SelectedTargets[i], v, op);
+        }
+    }
+
+    // ============================================================
+    // Controles do rig no viewport
+    // ============================================================
+
+    int SequencerWindow::FindControlTrack(int bindingIndex,
+        const std::string& controlName) const {
+        const auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b || controlName.empty()) return -1;
+
+        for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+            if (b->Tracks[i].TargetType != SequencerTargetType::Control) continue;
+            if (b->Tracks[i].TargetName == controlName) return i;
+        }
+        return -1;
+    }
+
+    bool SequencerWindow::ControlWorld(int bindingIndex, const std::string& controlName,
+        glm::mat4& outWorld) const {
+        if (!m_Context || !m_Context->ActiveScene) return false;
+
+        const auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return false;
+
+        auto it = m_Rigs.find(bindingIndex);
+        if (it == m_Rigs.end() || !it->second.Ready) return false;
+
+        // Revalidado contra o UUID, como todo uso de m_Rigs: remover um binding
+        // desloca os indices, e uma copia presa ao indice antigo dirigiria o
+        // personagem errado.
+        if (it->second.SourceUUID != b->RigAssetUUID) return false;
+
+        const int idx = it->second.Hierarchy.Find(controlName, RigElementType::Control);
+        if (idx < 0) return false;
+
+        const entt::entity e = ResolveBindingEntity(*b);
+        if (e == entt::null) return false;
+
+        outWorld = m_Context->ActiveScene->GetWorldTransform(e)
+            * it->second.Hierarchy.GetGlobal(idx);
+        return true;
+    }
+
+    void SequencerWindow::SelectControlFromViewport(int bindingIndex,
+        const std::string& controlName, bool additive) {
+        if (controlName.empty()) return;
+
+        SelectTarget(TargetRef{ bindingIndex, SequencerTargetType::Control, controlName },
+            additive);
+
+        ClearKeySelection();
+        SyncActiveFromTargets();
+
+        // O grupo dobrado esconderia a linha que acabamos de selecionar.
+        if (m_SelectedTrack >= 0)
+            SetGroupOpen(bindingIndex, TrackGroup::Control, true);
+    }
+
+    void SequencerWindow::ApplyGizmoToControlByName(int bindingIndex,
+        const std::string& controlName, const glm::mat4& world) {
+        int ti = FindControlTrack(bindingIndex, controlName);
+
+        if (ti < 0) {
+            // ── A TRACK NASCE AQUI ───────────────────────────────────────────
+            //
+            // Nao no clique: selecionar e olhar, e olhar nao deve escrever no
+            // asset. Chegar nesta funcao ja e uma manipulacao — o usuario
+            // arrastou o gizmo.
+            ti = CreateControlTrack(bindingIndex, controlName);
+            if (ti < 0) return;
+
+            m_SelectedBinding = bindingIndex;
+            m_SelectedTrack = ti;
+            m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+
+            // A partir daqui a selecao e por TRACK. Limpar o nome e o que faz o
+            // UpdateGizmo devolver o controle ao caminho normal no proximo
+            // frame, sem nenhum ramo especial.
+            m_ViewportControlBinding = -1;
+            m_ViewportControlName.clear();
+
+            SetGroupOpen(bindingIndex, TrackGroup::Control, true);
+
+            AXE_EDITOR_INFO("Sequencer: track do controle '{}' criada na primeira "
+                "manipulacao.", controlName);
+        }
+
+        ApplyGizmoToControl(bindingIndex, ti, world);
+    }
+
+    bool SequencerWindow::DrawViewportControls(const glm::vec2& boundsMin,
+        const glm::vec2& boundsMax) {
+        if (!m_IsOpen || !m_ShowViewportControls) return false;
+        if (!m_Context || !m_Context->ActiveScene || !m_Context->Viewport) return false;
+
+        const EditorCamera* cam = m_Context->Viewport->m_Camera.get();
+        if (!cam) return false;
+
+        const ImVec2 imgMin(boundsMin.x, boundsMin.y);
+        const ImVec2 imgSize(boundsMax.x - boundsMin.x, boundsMax.y - boundsMin.y);
+        if (imgSize.x <= 0.0f || imgSize.y <= 0.0f) return false;
+
+        const glm::mat4 vp = cam->GetViewProjectionMatrix();
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // ── QUANDO NAO SE DEVE PEGAR O CLIQUE ────────────────────────────────
+        //
+        // Sobre o gizmo: a seta que o usuario quer arrastar costuma estar EM
+        // CIMA do controle, e perder o arrasto para uma reselecao do mesmo
+        // controle seria o pior tipo de conflito — o que parece aleatorio.
+        //
+        // Com Alt: e a camera. Orbitar por cima de um controle nao e clicar
+        // nele.
+        //
+        // `ImGuizmo::IsOver()` reflete o frame ANTERIOR (o overlay desenha
+        // antes do Manipulate). Um frame de atraso num teste de hover nao e
+        // perceptivel, e a alternativa — desenhar depois — poria as formas por
+        // cima do gizmo.
+        const ImGuiIO& io = ImGui::GetIO();
+
+        const bool canPick =
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !io.KeyAlt &&
+            !ImGuizmo::IsOver() &&
+            !ImGuizmo::IsUsing();
+
+        bool consumed = false;
+
+        const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
+
+        for (int bi = 0; bi < bindingCount; ++bi) {
+            const auto* b = m_Asset.GetBinding(bi);
+            if (!b || b->RigAssetUUID.empty()) continue;
+
+            auto it = m_Rigs.find(bi);
+            if (it == m_Rigs.end() || !it->second.Ready) continue;
+            if (it->second.SourceUUID != b->RigAssetUUID) continue;
+
+            const entt::entity e = ResolveBindingEntity(*b);
+            if (e == entt::null) continue;
+
+            const RigHierarchy& h = it->second.Hierarchy;
+
+            // Qual elemento esta destacado NESTE binding. Duas fontes, e a
+            // ordem importa: a selecao por track e a que vale quando existe,
+            // porque e ela que o resto da janela mostra.
+            // O ATIVO e o ultimo do grupo — e o unico que o gizmo manipula
+            // diretamente. Sem grupo, cai no comportamento antigo (a track
+            // selecionada, ou o controle escolhido no viewport sem track).
+            int selectedIdx = -1;
+            {
+                std::string name;
+
+                const TargetRef act = ActiveTarget();
+
+                if (act.Binding == bi && act.Type == SequencerTargetType::Control) {
+                    name = act.Name;
+                }
+                else if (m_SelectedBinding == bi && m_SelectedTrack >= 0 &&
+                    m_SelectedTrack < static_cast<int>(b->Tracks.size()) &&
+                    b->Tracks[m_SelectedTrack].TargetType == SequencerTargetType::Control) {
+                    name = b->Tracks[m_SelectedTrack].TargetName;
+                }
+                else if (m_ViewportControlBinding == bi) {
+                    name = m_ViewportControlName;
+                }
+
+                if (!name.empty())
+                    selectedIdx = h.Find(name, RigElementType::Control);
+            }
+
+            // Os DEMAIS do grupo, para acenderem junto. Reconstruido por frame:
+            // sao poucos, e guardar indices entre frames os deixaria apontando
+            // para uma hierarquia que pode ter sido reclonada.
+            std::vector<int> groupIdx;
+            groupIdx.reserve(m_SelectedTargets.size());
+
+            for (const auto& t : m_SelectedTargets) {
+                if (t.Binding != bi) continue;
+                if (t.Type != SequencerTargetType::Control) continue;
+
+                const int gi = h.Find(t.Name, RigElementType::Control);
+                if (gi >= 0 && gi != selectedIdx) groupIdx.push_back(gi);
+            }
+
+            int prevHovered = -1;
+            if (auto hv = m_ViewportHovered.find(bi); hv != m_ViewportHovered.end())
+                prevHovered = hv->second;
+
+            const glm::mat4 model = m_Context->ActiveScene->GetWorldTransform(e);
+
+            const int hovered = ui::DrawRigControlGizmos(
+                dl, h, vp, model, imgMin, imgSize, selectedIdx, prevHovered,
+                groupIdx.empty() ? nullptr : &groupIdx);
+
+            m_ViewportHovered[bi] = hovered;
+
+            if (hovered >= 0) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+                // Nome sob o cursor. Vinte controles com formas parecidas viram
+                // um enigma sem isto — e "qual e este?" e a pergunta que faz o
+                // animador voltar para a lista, que e justamente o que este
+                // recurso existe para evitar.
+                if (!consumed)
+                    ImGui::SetTooltip("%s", h[hovered].Name.c_str());
+
+                if (canPick && !consumed) {
+                    const ImGuiIO& mio = ImGui::GetIO();
+                    SelectControlFromViewport(bi, h[hovered].Name,
+                        mio.KeyCtrl || mio.KeyShift);
+                    consumed = true;
+                }
+            }
+        }
+
+        return consumed;
+    }
+
+    void SequencerWindow::UpdateViewportOverlay() {
+        if (!m_Context || !m_Context->Viewport) return;
+
+        if (!m_IsOpen || !m_ShowViewportControls) {
+            m_Context->Viewport->ClearExternalOverlay();
+            return;
+        }
+
+        ViewportRenderer::ExternalOverlay o;
+        o.Active = true;
+        o.OnDraw = [this](const glm::vec2& mn, const glm::vec2& mx) {
+            return DrawViewportControls(mn, mx);
+            };
+
+        m_Context->Viewport->SetExternalOverlay(o);
+    }
+
     void SequencerWindow::UpdateGizmo() {
         if (!m_Context || !m_Context->Viewport) return;
 
@@ -4965,6 +7540,64 @@ namespace axe {
         auto clear = [&]() { m_Context->Viewport->ClearExternalGizmo(); };
 
         if (!m_IsOpen || !m_GizmoEnabled) { clear(); return; }
+
+        // ── PRECEDENCIA: TRACK VENCE NOME ────────────────────────────────────
+        //
+        // `m_ViewportControlName` so vale enquanto NAO ha track selecionada.
+        // Isto e o que faz clicar numa track no outliner tirar o gizmo do
+        // controle escolhido no viewport, sem que nenhum dos ~6 pontos que
+        // atribuem m_SelectedTrack precise saber que este estado existe.
+        if (m_SelectedTrack >= 0 && !m_ViewportControlName.empty()) {
+            m_ViewportControlBinding = -1;
+            m_ViewportControlName.clear();
+        }
+
+        // ── CONTROLE SEM TRACK ───────────────────────────────────────────────
+        //
+        // O caminho normal parte de uma track. Um controle recem-clicado no
+        // viewport ainda nao tem uma — e nao deve ter, porque selecionar nao
+        // escreve no asset. Este ramo mira nele mesmo assim; a track nasce no
+        // ApplyGizmoToControlByName, na primeira manipulacao.
+        if (m_ViewportControlBinding >= 0 && !m_ViewportControlName.empty()) {
+            glm::mat4 world(1.0f);
+
+            if (ControlWorld(m_ViewportControlBinding, m_ViewportControlName, world)) {
+                const int         cbi = m_ViewportControlBinding;
+                const std::string cname = m_ViewportControlName;
+
+                ViewportRenderer::ExternalGizmo g;
+                g.Active = true;
+                g.World = world;
+
+                g.OnManipulate = [this, cbi, cname](const glm::mat4& m) {
+                    ApplyGizmoToControlByName(cbi, cname, m);
+                    };
+
+                g.OnFinish = [this, cbi, cname]() {
+                    EndGroupDrag();
+
+                    // A track ja existe neste ponto (o OnManipulate a criou);
+                    // se o usuario clicou sem arrastar, nao ha nada a ordenar.
+                    const int ti = FindControlTrack(cbi, cname);
+                    if (ti < 0) return;
+
+                    auto* bb = m_Asset.GetBinding(cbi);
+                    if (!bb) return;
+
+                    auto& t = bb->Tracks[ti];
+                    for (int si = 0; si < static_cast<int>(t.Sections.size()); ++si)
+                        for (int ci = 0; ci < static_cast<int>(t.Sections[si].Channels.size()); ++ci)
+                            SortChannelAndRemap(cbi, ti, si, ci);
+                    };
+
+                m_Context->Viewport->SetExternalGizmo(g);
+                return;
+            }
+
+            // O controle sumiu (rig trocado, binding removido): esquece.
+            m_ViewportControlBinding = -1;
+            m_ViewportControlName.clear();
+        }
 
         const int bi = m_SelectedBinding;
         const int ti = m_SelectedTrack;
@@ -4997,6 +7630,8 @@ namespace axe {
             };
 
         g.OnFinish = [this, bi, ti]() {
+            EndGroupDrag();
+
             // Ordena os canais tocados: o arrasto cravou keys via AddKey, que
             // ja mantem ordem, mas uma key criada num frame anterior ao playhead
             // (scrub para tras no meio do gesto) pode ter entrado fora de lugar.
@@ -5015,6 +7650,9 @@ namespace axe {
     void SequencerWindow::ApplyGizmoToBone(int bindingIndex, int trackIndex,
         const glm::mat4& world) {
         if (!m_Context || !m_Context->ActiveScene) return;
+
+        // Instantaneo do grupo ANTES de qualquer escrita. Ver ApplyGroupDelta.
+        if (!m_GroupDragActive && m_SelectedTargets.size() > 1) BeginGroupDrag();
 
         auto* b = m_Asset.GetBinding(bindingIndex);
         if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size())) return;
@@ -5053,8 +7691,14 @@ namespace axe {
         glm::quat q;
         if (!glm::decompose(local, s, q, t, skew, persp)) return;
 
-        const int si = SectionAtPlayhead(bindingIndex, trackIndex);
-        if (si < 0) return;
+        // ── SECTION SO QUANDO VAI VIRAR KEY ──────────────────────────────────
+        //
+        // Com REC desligado nao ha nada a gravar, e o SectionAtPlayhead CRIA
+        // section numa track que ainda nao tem nenhuma. Chama-lo aqui faria uma
+        // pose descartada deixar uma section vazia para tras — um efeito
+        // colateral permanente de um gesto explicitamente temporario.
+        const int si = m_Recording ? SectionAtPlayhead(bindingIndex, trackIndex) : -1;
+        if (m_Recording && si < 0) return;
 
         // ── SO OS CANAIS DA OPERACAO ATIVA ───────────────────────────────────
         //
@@ -5065,24 +7709,33 @@ namespace axe {
         const ImGuizmo::OPERATION op = m_Context->Viewport
             ? m_Context->Viewport->GetGizmoOperation() : ImGuizmo::TRANSLATE;
 
+        TargetLocal now;
+        now.T = t; now.R = q; now.S = s;
+
         if (op == ImGuizmo::TRANSLATE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::X, t.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::Y, t.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::Z, t.z);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::X, t.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Y, t.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Z, t.z);
+            ApplyGroupDelta(now, GizmoChannel::Translate);
         }
         else if (op == ImGuizmo::ROTATE) {
-            SetRotationKeysAtPlayhead(bindingIndex, trackIndex, si, q);
+            WriteRotation(bindingIndex, trackIndex, si, q);
+            ApplyGroupDelta(now, GizmoChannel::Rotate);
         }
         else if (op == ImGuizmo::SCALE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleX, s.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleY, s.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleZ, s.z);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleX, s.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleY, s.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleZ, s.z);
+            ApplyGroupDelta(now, GizmoChannel::Scale);
         }
     }
 
     void SequencerWindow::ApplyGizmoToSocket(int bindingIndex, int trackIndex,
         const glm::mat4& world) {
         if (!m_Context || !m_Context->ActiveScene) return;
+
+        // Instantaneo do grupo ANTES de qualquer escrita. Ver ApplyGroupDelta.
+        if (!m_GroupDragActive && m_SelectedTargets.size() > 1) BeginGroupDrag();
 
         auto* b = m_Asset.GetBinding(bindingIndex);
         if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size())) return;
@@ -5116,24 +7769,36 @@ namespace axe {
         glm::quat q;
         if (!glm::decompose(local, s, q, t, skew, persp)) return;
 
-        const int si = SectionAtPlayhead(bindingIndex, trackIndex);
-        if (si < 0) return;
+        // ── SECTION SO QUANDO VAI VIRAR KEY ──────────────────────────────────
+        //
+        // Com REC desligado nao ha nada a gravar, e o SectionAtPlayhead CRIA
+        // section numa track que ainda nao tem nenhuma. Chama-lo aqui faria uma
+        // pose descartada deixar uma section vazia para tras — um efeito
+        // colateral permanente de um gesto explicitamente temporario.
+        const int si = m_Recording ? SectionAtPlayhead(bindingIndex, trackIndex) : -1;
+        if (m_Recording && si < 0) return;
 
         const ImGuizmo::OPERATION op = m_Context->Viewport
             ? m_Context->Viewport->GetGizmoOperation() : ImGuizmo::TRANSLATE;
 
+        TargetLocal now;
+        now.T = t; now.R = q; now.S = s;
+
         if (op == ImGuizmo::TRANSLATE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::X, t.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::Y, t.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::Z, t.z);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::X, t.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Y, t.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Z, t.z);
+            ApplyGroupDelta(now, GizmoChannel::Translate);
         }
         else if (op == ImGuizmo::ROTATE) {
-            SetRotationKeysAtPlayhead(bindingIndex, trackIndex, si, q);
+            WriteRotation(bindingIndex, trackIndex, si, q);
+            ApplyGroupDelta(now, GizmoChannel::Rotate);
         }
         else if (op == ImGuizmo::SCALE) {
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleX, s.x);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleY, s.y);
-            SetChannelKeyAtPlayhead(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleZ, s.z);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleX, s.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleY, s.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleZ, s.z);
+            ApplyGroupDelta(now, GizmoChannel::Scale);
         }
     }
 
@@ -5216,6 +7881,102 @@ namespace axe {
 
         AXE_EDITOR_INFO("Sequencer: {} key(s) selecionada(s).",
             (int)m_SelectedKeys.size());
+    }
+
+
+    // ============================================================
+    // Selecao em caixa
+    // ============================================================
+
+    void SequencerWindow::ApplyBoxSelection() {
+        // Caixa vazia com clique simples: o gesto foi "clicar no vazio", que em
+        // qualquer editor quer dizer desmarcar. So no modo Replace — com Shift
+        // ou Ctrl o usuario esta somando/tirando, e zerar seria o contrario do
+        // pedido.
+        if (m_BoxMode == BoxMode::Replace)
+            ClearKeySelection();
+
+        for (const auto& r : m_BoxHits) {
+            if (m_BoxMode == BoxMode::Remove) {
+                for (std::size_t i = 0; i < m_SelectedKeys.size(); ++i) {
+                    if (m_SelectedKeys[i] == r) {
+                        m_SelectedKeys.erase(m_SelectedKeys.begin() + i);
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            if (!IsKeySelected(r))
+                m_SelectedKeys.push_back(r);
+        }
+
+        // A primaria (a que o painel edita) passa a ser a primeira da caixa.
+        // Sem isto o painel continuaria mostrando uma key que pode nem estar
+        // mais no grupo.
+        if (!m_BoxHits.empty() && m_BoxMode != BoxMode::Remove) {
+            const KeyRef& f = m_BoxHits.front();
+            m_SelectedBinding = f.Binding;
+            m_SelectedTrack = f.Track;
+            m_SelectedSection = f.Section;
+            m_SelectedChannel = f.Channel;
+            m_SelectedKey = f.Key;
+        }
+        else if (m_SelectedKeys.empty()) {
+            m_SelectedKey = -1;
+        }
+    }
+
+    void SequencerWindow::SelectAllKeysInChannel(int bindingIndex, int trackIndex,
+        int sectionIndex, int channelIndex) {
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return;
+        if (trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size())) return;
+
+        auto& tr = b->Tracks[trackIndex];
+        if (sectionIndex < 0 || sectionIndex >= static_cast<int>(tr.Sections.size())) return;
+
+        auto& sec = tr.Sections[sectionIndex];
+        if (channelIndex < 0 || channelIndex >= static_cast<int>(sec.Channels.size())) return;
+
+        ClearKeySelection();
+
+        const auto& ch = sec.Channels[channelIndex];
+        for (int ki = 0; ki < static_cast<int>(ch.Keys.size()); ++ki)
+            m_SelectedKeys.push_back(KeyRef{ bindingIndex, trackIndex, sectionIndex,
+                                             channelIndex, ki });
+
+        if (!m_SelectedKeys.empty()) {
+            m_SelectedBinding = bindingIndex;
+            m_SelectedTrack = trackIndex;
+            m_SelectedSection = sectionIndex;
+            m_SelectedChannel = channelIndex;
+            m_SelectedKey = 0;
+        }
+    }
+
+    void SequencerWindow::SelectAllKeysInTrack(int bindingIndex, int trackIndex) {
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return;
+        if (trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size())) return;
+
+        ClearKeySelection();
+
+        auto& tr = b->Tracks[trackIndex];
+
+        for (int si = 0; si < static_cast<int>(tr.Sections.size()); ++si)
+            for (int ci = 0; ci < static_cast<int>(tr.Sections[si].Channels.size()); ++ci)
+                for (int ki = 0; ki < static_cast<int>(tr.Sections[si].Channels[ci].Keys.size()); ++ki)
+                    m_SelectedKeys.push_back(KeyRef{ bindingIndex, trackIndex, si, ci, ki });
+
+        if (!m_SelectedKeys.empty()) {
+            const KeyRef& f = m_SelectedKeys.front();
+            m_SelectedBinding = f.Binding;
+            m_SelectedTrack = f.Track;
+            m_SelectedSection = f.Section;
+            m_SelectedChannel = f.Channel;
+            m_SelectedKey = f.Key;
+        }
     }
 
     void SequencerWindow::DeleteSelectedKeys() {
@@ -5506,7 +8267,7 @@ namespace axe {
                 tc.Data.Rotation = glm::vec3(0.0f);
                 tc.Data.Scale = glm::vec3(1.0f);
 
-                for (const auto& s : m_Player.GetLastSamples()) {
+                for (const auto& s : m_EffectiveSamples) {
                     if (s.BindingIndex != bi) continue;
                     if (s.TargetType != SequencerTargetType::Socket) continue;
                     if (s.TargetName != tr.TargetName) continue;
@@ -5586,6 +8347,12 @@ namespace axe {
         m_Player.OnStop();
         m_PlayerStarted = false;
         m_WorkPoses.clear();
+
+        // Sem player nao ha EvaluateAndApply, e portanto ninguem reconstroi a
+        // lista efetiva. Deixa-la para tras faria a barra de status do outliner
+        // reportar os samples de uma sessao que acabou.
+        m_EffectiveSamples.clear();
+        ClearPendingEdits();
 
         // Devolve a pose ao AnimationWorld. `PreviewInEditor` nao e mais tocado
         // aqui: ele nunca foi o gate certo (so decide se o TEMPO avanca) e mexer

@@ -132,6 +132,73 @@ namespace axe {
             float u = 1.0f - t;
             return u * u * u * v0 + 3 * u * u * t * v1 + 3 * u * t * t * v2 + t * t * t * v3;
         }
+
+                                    // ── AS CURVAS DE IMPACTO ─────────────────────────────────────────────
+                                    //
+                                    // Todas escrevem como `mix(a, b, f(t))`, com f(0)=0 e f(1)=1. Isso
+                                    // garante que as duas pontas do trecho passam EXATAMENTE pelos valores
+                                    // das keys — o que importa quando o frame 0 e o frame final tem de
+                                    // devolver a pose de repouso identica. `EaseOutBack` e a excecao
+                                    // deliberada NO MEIO: f passa de 1 e volta, e e justamente esse trecho
+                                    // acima de 1 que produz a ultrapassagem.
+        case SequencerInterp::EaseInStrong: {
+            const float f = t * t * t * t;
+            return left.Value + (right.Value - left.Value) * f;
+        }
+
+        case SequencerInterp::EaseOutStrong: {
+            const float u = 1.0f - t;
+            const float f = 1.0f - u * u * u * u;
+            return left.Value + (right.Value - left.Value) * f;
+        }
+
+        case SequencerInterp::EaseInOut: {
+            // Smootherstep (6t^5-15t^4+10t^3): derivada E segunda derivada
+            // zeradas nas duas pontas. Encadear duas smoothstep comuns deixa um
+            // "canto" de aceleracao na emenda, visivel como um tranco.
+            const float f = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+            return left.Value + (right.Value - left.Value) * f;
+        }
+
+        case SequencerInterp::EaseOutBack: {
+            // 1.70158 e a constante classica (~10% de ultrapassagem). O campo
+            // Overshoot substitui quando o animador quer mais coice.
+            const float s = (left.Overshoot > 0.0001f) ? left.Overshoot : 1.70158f;
+            const float u = t - 1.0f;
+            const float f = 1.0f + (s + 1.0f) * u * u * u + s * u * u;
+            return left.Value + (right.Value - left.Value) * f;
+        }
+
+        case SequencerInterp::EaseOutBounce: {
+            // Quique classico: quatro parabolas com alturas decrescentes.
+            const float n1 = 7.5625f;
+            const float d1 = 2.75f;
+            float x = t;
+            float f;
+
+            if (x < 1.0f / d1) {
+                f = n1 * x * x;
+            }
+            else if (x < 2.0f / d1) {
+                x -= 1.5f / d1;
+                f = n1 * x * x + 0.75f;
+            }
+            else if (x < 2.5f / d1) {
+                x -= 2.25f / d1;
+                f = n1 * x * x + 0.9375f;
+            }
+            else {
+                x -= 2.625f / d1;
+                f = n1 * x * x + 0.984375f;
+            }
+
+            // Overshoot > 0 exagera a altura dos quiques sem mexer no tempo
+            // deles — mesma leitura do campo no EaseOutBack.
+            if (left.Overshoot > 0.0001f)
+                f = 1.0f - (1.0f - f) * left.Overshoot;
+
+            return left.Value + (right.Value - left.Value) * f;
+        }
         }
         return left.Value;  // fallback
     }

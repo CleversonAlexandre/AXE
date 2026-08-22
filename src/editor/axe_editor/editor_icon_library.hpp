@@ -25,6 +25,14 @@ namespace axe
 		// Retorna ícone de script pelo ScriptClassType string
 		std::shared_ptr<Texture2D> GetScriptForClass(const std::string& classType) const;
 		std::shared_ptr<Texture2D> GetAudio() const { return m_IconAudio; }
+
+		// Arte dedicada, em vez de reaproveitar cena/malha. Os tres tipos
+		// dividiam icone com outros (Sequence e GameMode com Scene,
+		// ParticleSystem com Mesh) e por isso dependiam da etiqueta de texto
+		// para se distinguir — que era remendo, nao solucao.
+		std::shared_ptr<Texture2D> GetSequence()  const { return m_IconSequence; }
+		std::shared_ptr<Texture2D> GetGameMode()  const { return m_IconGameMode; }
+		std::shared_ptr<Texture2D> GetParticle()  const { return m_IconParticle; }
 		std::shared_ptr<Texture2D> GetMaterial() const { return m_Material; }
 		std::shared_ptr<Texture2D> GetDirectionalLight() const { return m_IconDirectionalLight; }
 		std::shared_ptr<Texture2D> GetPointLight()       const { return m_IconPointLight; }
@@ -73,6 +81,9 @@ namespace axe
 		std::shared_ptr<Texture2D> m_IconScriptStatic;
 		std::shared_ptr<Texture2D> m_IconScriptTrigger;
 		std::shared_ptr<Texture2D> m_IconAudio;
+		std::shared_ptr<Texture2D> m_IconSequence;
+		std::shared_ptr<Texture2D> m_IconGameMode;
+		std::shared_ptr<Texture2D> m_IconParticle;
 		std::shared_ptr<Texture2D> m_Material;
 		std::shared_ptr<Texture2D> m_IconDirectionalLight;
 		std::shared_ptr<Texture2D> m_IconPointLight;

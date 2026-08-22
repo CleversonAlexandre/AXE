@@ -3849,6 +3849,34 @@ namespace axe
 					"The rig did not load. Save/reopen the graph or check the file.");
 
 			ImGui::Spacing();
+
+			// ── O CHECKBOX QUE FALTAVA ───────────────────────────────────
+			//
+			// Ver a nota longa em AnimNode_ControlRig::ControlsFollowAnimation.
+			// Resumo: desligado, os controles ficam no repouso enquanto os
+			// ossos vao para a animacao, e todo IK que mira num controle passa
+			// a mirar na T-pose. O sintoma e postura torta na animacao que mais
+			// se afasta do repouso — em geral a de mira.
+			if (ImGui::Checkbox("Controls follow the animation",
+				&cr->ControlsFollowAnimation))
+				MarkEdited();
+
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(
+					"Leva cada controle ate o osso que ele representa antes do\n"
+					"solve, preservando o offset autorado (o pole vector fica no\n"
+					"lugar).\n\n"
+					"Desligado, um Two Bone IK mira no controle parado na bind\n"
+					"pose: a perna vai atras, o quadril compensa e o tronco sai\n"
+					"torto. Quanto mais a animacao se afasta do repouso, pior.\n\n"
+					"So desligue num rig cujos controles sao alvos ABSOLUTOS no\n"
+					"mundo (uma mao presa a um objeto fixo).");
+
+			if (!cr->ControlsFollowAnimation)
+				ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.30f, 1.0f),
+					"Off: IK aims at bind-pose controls.");
+
+			ImGui::Spacing();
 			ImGui::TextDisabled("The Alpha pin controls the intensity (0..1).");
 			return;
 		}

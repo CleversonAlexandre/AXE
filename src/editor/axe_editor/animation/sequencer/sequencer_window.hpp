@@ -27,6 +27,8 @@
 #include "axe/animation/rig/rig_hierarchy.hpp"
 #include "axe/animation/rig/rig_graph.hpp"
 #include "axe/utils/glm_config.hpp"
+// AssetType: o registro do .axeseq e do clipe assado passa por aqui.
+#include "axe/asset/asset.hpp"
 
 #include <imgui.h>
 // ImRect e SeparatorEx vivem em imgui_internal.h (mesmo padrao do AXE).
@@ -34,6 +36,7 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -57,11 +60,31 @@ namespace axe
         void Close() { m_IsOpen = false; }
         bool IsOpen() const { return m_IsOpen; }
 
+        // Abre um `.axeseq` especifico e traz a janela para a frente. E o que o
+        // duplo clique no Asset Browser chama.
+        //
+        // Publico porque quem sabe qual arquivo o usuario escolheu e o
+        // editor_layer, nao esta janela — o mesmo padrao de
+        // AnimClipWindow::OpenForAsset e MaterialEditorWindow::OpenMaterial.
+        bool OpenFile(const std::filesystem::path& path);
+
+        // ── QUEM RESPONDE AO Ctrl+Z ──────────────────────────────────────────
+        //
+        // O `HandleSceneInput` do editor_layer trata Ctrl+Z / Ctrl+Y / Ctrl+S
+        // SEM guarda de foco. Com o undo do Sequencer no ar, um Ctrl+Z com esta
+        // janela em foco dispararia os DOIS: desfazia a edicao da curva e,
+        // junto, um movimento de entidade no viewport que ninguem pediu.
+        //
+        // A precedencia ja existia no editor para o Material Editor
+        // (`IsOpen() && IsFocused()`); isto so estende a mesma regra.
+        bool IsFocused() const { return m_IsFocused; }
+
         SequencerAsset& GetAsset() { return m_Asset; }
         SequencerPlayer& GetPlayer() { return m_Player; }
 
     private:
         bool           m_IsOpen = false;
+        bool           m_IsFocused = false;
         SequencerAsset m_Asset;
         SequencerPlayer m_Player;
         bool           m_PlayerStarted = false;
@@ -88,8 +111,226 @@ namespace axe
         // Drag state para playhead.
         bool  m_DraggingPlayhead = false;
 
-        // Toolbar state.
+        // ═══════════════════════════════════════════════════════════════════
+        //  ARQUIVO
+        //
+        //  `m_LastLoadedPath` ja existia, mas os dois botoes da toolbar caiam
+        //  em "Assets/sequencer.axeseq" quando ele estava vazio — o que
+        //  significa que, na pratica, havia UMA sequence por projeto e abrir
+        //  uma segunda sobrescrevia a primeira.
+        //
+        //  Agora: Novo / Abrir / Salvar / Salvar como, com o FileDialog nativo
+        //  que o editor ja usa para cena e material.
+        // ═══════════════════════════════════════════════════════════════════
         std::string m_LastLoadedPath;
+
+        // ── MARCA DE SUJO POR ASSINATURA, E NAO POR FLAG ─────────────────────
+        //
+        // Um `m_Dirty = true` teria de ser escrito em cada um dos ~15 pontos
+        // que mutam o asset (add/remove binding, track, section, channel, key,
+        // drag, interp, valor, explode, range, fps, mute, lock, attach...), e
+        // o primeiro que alguem esquecesse produziria exatamente o pior
+        // resultado possivel: fechar sem aviso e perder o trabalho.
+        //
+        // A assinatura percorre o asset inteiro uma vez por frame. Nao e caro
+        // perto do que a janela ja faz: o `SyncFrom` COPIA a mesma estrutura
+        // toda, todo frame, e ninguem nota.
+        std::uint64_t m_SavedSignature = 0;
+
+        bool IsDirty() const;
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  UNDO / REDO
+        //
+        //  ── POR QUE SNAPSHOT, E NAO COMANDO ────────────────────────────────
+        //
+        //  O padrao do editor e o `CommandHistory` (par do/undo por acao), e e
+        //  o certo para o viewport: mover UMA entidade e uma acao com comeco e
+        //  fim claros.
+        //
+        //  Aqui nao. O Sequencer muta o asset por uns quinze caminhos — add e
+        //  remove de binding, track, section, canal e key; drag de key; drag de
+        //  playhead com REC ligado; explode; range; fps; mute; lock; anexo de
+        //  socket; captura; bake. Escrever um comando para cada e a mesma
+        //  aposta da marca de sujo por flag: o primeiro que alguem esquecesse
+        //  produziria um Ctrl+Z que nao desfaz — e um undo em que nao se pode
+        //  confiar e pior que nenhum, porque o animador so descobre depois de
+        //  ja ter apostado nele.
+        //
+        //  O snapshot nao depende de ninguem lembrar de nada.
+        //
+        //  ── O CUSTO, MEDIDO CONTRA O QUE JA ACONTECE ───────────────────────
+        //
+        //  Um snapshot e uma copia de `std::vector<SequencerBinding>`. O
+        //  `SequencerPlayer::SyncFrom` faz exatamente essa copia SESSENTA VEZES
+        //  POR SEGUNDO, e ninguem nota. Guardar algumas dezenas delas custa
+        //  memoria, nao tempo — e a memoria e limitada logo abaixo.
+        //
+        //  ── COMO UM GESTO VIRA UMA ENTRADA ─────────────────────────────────
+        //
+        //  A deteccao e por ASSINATURA, a mesma da marca de sujo. Mas um
+        //  arrasto muda a assinatura a cada frame, e sessenta entradas por
+        //  segundo transformariam o Ctrl+Z num nanico inutil.
+        //
+        //  Entao o gesto e AGRUPADO: a primeira mudanca abre um pendente com o
+        //  estado anterior, e ele so e empilhado quando o mouse esta solto e a
+        //  assinatura ficou parada. Um arrasto inteiro vira UM undo, que e o
+        //  que a pessoa espera desfazer.
+        // ═══════════════════════════════════════════════════════════════════
+        struct Snapshot
+        {
+            std::vector<SequencerBinding> Bindings;
+            SequencerFrameRange           Range;
+            int                           Fps = 30;
+        };
+
+        std::vector<Snapshot> m_UndoStack;
+        std::vector<Snapshot> m_RedoStack;
+
+        // Estado do frame anterior — o candidato a ponto de retorno.
+        Snapshot      m_LastState;
+        bool          m_HasLastState = false;
+        std::uint64_t m_LastSignature = 0;
+
+        // Gesto em andamento.
+        Snapshot m_UndoPending;
+        bool     m_UndoPendingOpen = false;
+        int      m_UndoIdleFrames = 0;
+
+        Snapshot TakeSnapshot() const;
+        void     RestoreSnapshot(const Snapshot& s);
+
+        // Uma vez por frame, no FIM do Draw: tudo que muta o asset neste frame
+        // (inclusive o gizmo, que roda no desenho do viewport) ja aconteceu.
+        void TrackUndoState();
+
+        void Undo();
+        void Redo();
+
+        bool CanUndo() const { return !m_UndoStack.empty() || m_UndoPendingOpen; }
+        bool CanRedo() const { return !m_RedoStack.empty(); }
+
+        // Reassenta selecao, pendencias e player depois de um salto no
+        // historico. Indices guardados apontam para uma arvore que acabou de
+        // ser substituida.
+        void AfterHistoryJump();
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  AREA DE TRANSFERENCIA DE KEYS
+        //
+        //  O recorte guarda o ALVO por nome (binding, tipo, nome da track,
+        //  componente) e o frame RELATIVO ao inicio do recorte. Nao guarda
+        //  indice de nada: colar depois de apagar uma track deslocaria todos os
+        //  indices seguintes e as keys cairiam no osso errado — em silencio, que
+        //  e o pior jeito de errar.
+        //
+        //  O frame relativo e o que faz "copiei o coice do frame 18 ao 24, colo
+        //  no 40" funcionar sem conta nenhuma do lado do usuario.
+        // ═══════════════════════════════════════════════════════════════════
+        struct KeyClip
+        {
+            int                       Binding = -1;
+            SequencerTargetType       TargetType = SequencerTargetType::Bone;
+            std::string               TargetName;
+            SequencerChannelComponent Component = SequencerChannelComponent::X;
+            float                     FrameOffset = 0.0f;
+            SequencerKey              Key;
+        };
+
+        std::vector<KeyClip> m_KeyClipboard;
+
+        // cut = true recorta (copia e apaga).
+        void CopySelectedKeys(bool cut);
+
+        // Cola a partir do playhead. Devolve quantas keys entraram.
+        int  PasteKeys(const std::vector<KeyClip>& clips);
+
+        void PasteClipboardAtPlayhead();
+        void DuplicateSelectedKeys();
+
+        // Registra um arquivo recem-criado no AssetDatabase: UUID, `.axemeta`,
+        // pasta virtual derivada do caminho em disco e gravacao do indice. Ver
+        // a nota longa na implementacao — as tres coisas sao necessarias, e
+        // faltando qualquer uma o arquivo nao aparece no Asset Browser.
+        std::string RegisterProjectAsset(const std::filesystem::path& file,
+            AssetType typeOverride);
+
+        // Grava e reassenta a assinatura. Devolve false com log de erro.
+        bool SaveToPath(const std::string& path);
+
+        // Salvar: usa o caminho conhecido; sem caminho, cai no Salvar como.
+        bool SaveInteractive(bool forceAsk);
+
+        // Descarta tudo e comeca uma sequence vazia. NAO pergunta — quem
+        // pergunta e o botao, que so chama isto depois do usuario confirmar.
+        void NewSequence();
+
+        // Nome de exibicao do arquivo atual ("(sem titulo)" quando nao ha).
+        std::string CurrentFileLabel() const;
+
+        // Confirmacao de "Nova sequence" com trabalho nao salvo.
+        bool m_OpenConfirmNewPopup = false;
+        void DrawConfirmNewPopup();
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  BAKE — SAIR DO SEQUENCER COM UM CLIPE
+        //
+        //  ── ONDE O CLIPE VAI PARAR, E POR QUE ─────────────────────────────
+        //
+        //  No AXE um AnimationClip NAO e asset: nao existe AssetType para ele
+        //  nem extensao de autoria. Um clipe vive dentro do `.axeskel` como
+        //  uma AnimEntry apontando para um arquivo, e o binario cozido
+        //  (`.axeclipbin`) ja tem leitura e escrita prontas em ClipCooked.
+        //
+        //  Entao o bake nao inventa formato nenhum: grava um `.axeclipbin` ao
+        //  lado do `.axeskel` e registra a entrada. A partir dai o clipe
+        //  aparece no AnimGraph, no Animation Editor, no picker do proprio
+        //  Sequencer e toca no jogo — de graca, porque e o caminho que o
+        //  engine ja percorre.
+        //
+        //  O detalhe que fez isso caber em zero linha de runtime: o
+        //  `Resolve()` do `.axeskel` chama `ClipCooked::TryLoadFor(source)`
+        //  ANTES de tentar importar o FBX, e `PathFor` de um `.axeclipbin`
+        //  devolve ele mesmo. Uma entrada que aponta direto para o cozido
+        //  carrega pelo caminho rapido e nunca chega no importador.
+        //
+        //  ── O QUE E AMOSTRADO ─────────────────────────────────────────────
+        //
+        //  A pose FINAL, frame a frame: clipe base + tracks de osso + solve do
+        //  Control Rig. E o que 'bake' quer dizer em qualquer DCC, e o
+        //  resultado toca sem precisar do rig.
+        //
+        //  A amostragem reusa o EvaluateAndApply INTEIRO, um frame por vez.
+        //  Poderia haver uma funcao de avaliacao dedicada, mais rapida; ela
+        //  seria uma SEGUNDA versao da mesma cadeia, e no dia em que as duas
+        //  divergissem o sintoma seria "o clipe assado nao e o que eu via" —
+        //  o pior bug possivel numa ferramenta de animacao.
+        // ═══════════════════════════════════════════════════════════════════
+        bool m_OpenBakePopup = false;
+        int  m_BakeBinding = -1;
+        char m_BakeClipName[96] = { 0 };
+        bool m_BakeLoop = false;
+
+        void DrawBakePopup();
+
+        // ── O TEMPO DURANTE O BAKE ───────────────────────────────────────────
+        //
+        // O SolveRig entrega `RigExecContext::DeltaTime` ao grafo, e fora do
+        // bake esse valor e o dt do FRAME DE UI. Isso esta certo enquanto o
+        // usuario esta olhando: um no de mola ou de amortecimento deve reagir
+        // no tempo real da tela.
+        //
+        // Num bake, nao: os 250 passos aconteceriam todos com o mesmo dt de
+        // ~16ms independentemente do fps da sequence, e um rig com qualquer
+        // no dependente de tempo assaria uma curva que nao corresponde a
+        // nenhuma reproducao possivel. Aqui o dt e 1/fps, que e exatamente o
+        // intervalo entre os frames que estao sendo gravados.
+        bool  m_Baking = false;
+        float m_BakeDeltaTime = 0.0f;
+
+        // Devolve o caminho gravado, ou vazio em caso de falha (com log).
+        std::filesystem::path BakeBindingToClip(int bindingIndex,
+            const std::string& clipName, bool looping);
 
         // --- Sub-rotinas de UI --------------------------------------------
         void DrawToolbar();
@@ -468,6 +709,254 @@ namespace axe
 
         bool m_GizmoEnabled = true;
 
+        // ═══════════════════════════════════════════════════════════════════
+        //  CONTROLES DO RIG NO VIEWPORT
+        //
+        //  ── O QUE FALTAVA ─────────────────────────────────────────────────
+        //
+        //  Para posar um controle era preciso ACHA-LO NA LISTA: abrir o grupo
+        //  Controles no outliner e reconhecer "ctrl_LeftHand" entre vinte
+        //  nomes. O personagem estava na tela, o controle estava desenhado no
+        //  editor de rig, e mesmo assim o gesto natural — apontar e clicar —
+        //  nao existia.
+        //
+        //  As formas sao as MESMAS do editor de rig (`ui::DrawRigControlGizmos`
+        //  desenha as duas), entao o que se ve aqui e o que se autorou la:
+        //  mesma cor, mesmo tamanho, mesma orientacao.
+        //
+        //  ── A TRACK NASCE NA MANIPULACAO, NAO NO CLIQUE ───────────────────
+        //
+        //  Selecionar um controle nao cria track. Uma track por clique encheria
+        //  o outliner de linhas vazias so por olhar, e "apagar o que eu nao
+        //  pedi" e trabalho que a ferramenta inventou.
+        //
+        //  Isso obriga o gizmo a saber mirar num controle que ainda NAO tem
+        //  track — dai `m_ViewportControlName` existir ao lado de
+        //  `m_SelectedTrack`. A track e criada no primeiro
+        //  ApplyGizmoToControlByName, e a partir dai o caminho normal (por
+        //  track) assume.
+        // ═══════════════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════════
+        //  SELECAO MULTIPLA DE ALVOS (ossos, controles, sockets)
+        //
+        //  ── PIVO INDIVIDUAL ───────────────────────────────────────────────
+        //
+        //  Todos os alvos recebem a MESMA transformacao LOCAL, cada um em torno
+        //  da propria origem — o "Individual Origins" do Blender.
+        //
+        //  Para uma cadeia e a unica opcao que faz sentido: girar 5 graus em
+        //  tres vertebras da 15 graus de curvatura acumulada, que e o gesto de
+        //  arquear as costas. Um pivo COMUM giraria o spine inteiro como um
+        //  bloco rigido, que e o oposto do que se quer de um FK.
+        //
+        //  ── POR QUE PRE-MULTIPLICA ────────────────────────────────────────
+        //
+        //  O delta do alvo ativo e `dR = R_agora * inverse(R_inicio)` — uma
+        //  rotacao no referencial do PAI dele. Aplicada nos outros como
+        //  `dR * R_inicio_i`, cada um gira o mesmo tanto em relacao ao proprio
+        //  pai. Pos-multiplicar (`R_inicio_i * dR`) giraria no referencial do
+        //  proprio corpo de cada um, e numa cadeia isso produz torcao em vez de
+        //  dobra.
+        //
+        //  ── O ALVO E O NOME, NAO O INDICE ─────────────────────────────────
+        //
+        //  Mesma razao do KeyClip: um controle escolhido no viewport pode nem
+        //  ter track ainda (a track so nasce na primeira manipulacao), e
+        //  indices deslizam quando alguem remove uma track no meio.
+        // ═══════════════════════════════════════════════════════════════════
+        struct TargetRef
+        {
+            int                 Binding = -1;
+            SequencerTargetType Type = SequencerTargetType::Control;
+            std::string         Name;
+
+            bool operator==(const TargetRef& o) const {
+                return Binding == o.Binding && Type == o.Type && Name == o.Name;
+            }
+        };
+
+        // O ULTIMO e o ATIVO: e nele que o gizmo aparece, e e o delta dele que
+        // os outros seguem. Ultimo, e nao primeiro, porque o gesto natural e
+        // "seleciono a cadeia e mexo no que cliquei por ultimo".
+        std::vector<TargetRef> m_SelectedTargets;
+
+        bool      IsTargetSelected(const TargetRef& t) const;
+        void      SelectTarget(const TargetRef& t, bool additive);
+        void      ClearTargetSelection();
+        TargetRef ActiveTarget() const;
+
+        // ── UMA FONTE DA VERDADE PARA "QUEM E O ATIVO" ───────────────────────
+        //
+        // Reescreve m_Selected{Binding,Track} e m_ViewportControl* a partir do
+        // ULTIMO alvo do grupo.
+        //
+        // Existe porque um Ctrl+clique pode REMOVER o ativo: o grupo passa a
+        // ter outro ultimo, mas os campos antigos continuariam apontando para o
+        // que acabou de sair — e o gizmo ficaria manipulando um controle que o
+        // outliner ja mostra como nao selecionado.
+        void SyncActiveFromTargets();
+
+        // Qual componente do gizmo esta em uso. Enum PROPRIO em vez de
+        // ImGuizmo::OPERATION: este header nao inclui ImGuizmo de proposito
+        // (ver a nota no topo do .cpp), e arrastar o renderer inteiro para
+        // quem so quer o Sequencer seria pagar caro por tres valores.
+        enum class GizmoChannel : std::uint8_t { Translate, Rotate, Scale };
+
+        // Transform LOCAL de um alvo, na moeda em que os tres tipos coincidem:
+        // local ao pai (osso), local ao repouso (controle), offset sobre o
+        // socket. E o mesmo espaco em que as curvas gravam.
+        struct TargetLocal
+        {
+            glm::vec3 T{ 0.0f };
+            glm::quat R{ 1.0f, 0.0f, 0.0f, 0.0f };
+            glm::vec3 S{ 1.0f };
+        };
+
+        bool m_GroupDragActive = false;
+
+        // Paralelo a m_SelectedTargets, tirado no PRIMEIRO frame do arrasto.
+        // Sem o instantaneo, cada frame mediria o delta contra o frame anterior
+        // e os erros se acumulariam — o grupo iria escorregando.
+        std::vector<TargetLocal> m_GroupStart;
+
+        bool ReadTargetLocal(const TargetRef& t, TargetLocal& out) const;
+        void WriteTargetLocal(const TargetRef& t, const TargetLocal& v, GizmoChannel op);
+
+        void BeginGroupDrag();
+        void EndGroupDrag() { m_GroupDragActive = false; m_GroupStart.clear(); }
+
+        // Chamado pelos tres ApplyGizmoTo* com o local JA manipulado do alvo
+        // ativo. Nao faz nada com menos de dois alvos.
+        void ApplyGroupDelta(const TargetLocal& activeNow, GizmoChannel op);
+
+        bool m_ShowViewportControls = true;
+
+        // Controle escolhido no viewport que ainda nao tem track. Vazio quando
+        // a selecao ja e por track — ver a nota de precedencia em UpdateGizmo.
+        int         m_ViewportControlBinding = -1;
+        std::string m_ViewportControlName;
+
+        // Sob o mouse no frame anterior, por binding. So muda a espessura do
+        // traco; o retorno do hit-test e recalculado do zero todo frame.
+        std::unordered_map<int, int> m_ViewportHovered;
+
+        // Repoe (ou limpa) o pedido de desenho no viewport. Todo frame, pela
+        // mesma razao do gizmo: um pedido que sobrevivesse ao fechar da janela
+        // desenharia controles de uma sequence que nem esta mais aberta.
+        void UpdateViewportOverlay();
+
+        // Chamado DE DENTRO da janela do Viewport. Devolve true se consumiu o
+        // clique — ver ViewportRenderer::ExternalOverlay.
+        bool DrawViewportControls(const glm::vec2& boundsMin, const glm::vec2& boundsMax);
+
+        void SelectControlFromViewport(int bindingIndex, const std::string& controlName,
+            bool additive);
+
+        // Track de controle deste binding por nome, ou -1. NAO cria.
+        int  FindControlTrack(int bindingIndex, const std::string& controlName) const;
+
+        // Matriz de mundo de um controle pelo NOME — o mesmo calculo do ramo
+        // Control de GizmoTargetWorld, mas sem exigir que a track exista.
+        bool ControlWorld(int bindingIndex, const std::string& controlName,
+            glm::mat4& outWorld) const;
+
+        // Manipulacao de um controle escolhido no viewport. E AQUI que a track
+        // nasce, quando ainda nao existe.
+        void ApplyGizmoToControlByName(int bindingIndex, const std::string& controlName,
+            const glm::mat4& world);
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  REC — AUTO-KEY
+        //
+        //  ── O QUE ESTAVA ERRADO ─────────────────────────────────────────
+        //
+        //  Todo arrasto de gizmo cravava key, sempre, sem jeito de desligar.
+        //  A nota antiga em ApplyGizmoToBone chamava isso de obrigatorio ("a
+        //  pose e recalculada das keys todo frame, entao uma edicao que nao
+        //  virasse key desapareceria no quadro seguinte"). O raciocinio esta
+        //  certo; a conclusao e que faltava a OUTRA metade, nao que auto-key
+        //  tinha de ser permanente.
+        //
+        //  Na pratica isso quer dizer que nao havia como olhar uma pose antes
+        //  de aceita-la: girar o ombro para ver como fica ja sujava a curva, e
+        //  desfazer era caçar a key no canal certo e apagar.
+        //
+        //  ── COMO FICA ───────────────────────────────────────────────────
+        //
+        //  REC LIGADO   → como era: qualquer mudanca vira key no playhead.
+        //  REC DESLIGADO → a mudanca vai para m_PendingEdits, uma camada que
+        //                  entra na avaliacao mas NAO existe no asset. O
+        //                  personagem se move na tela, o disco nao muda, e o
+        //                  botao Key (tecla K) e quem promove a pose a
+        //                  keyframe — o mesmo gesto do "I" do Blender.
+        //
+        //  Default DESLIGADO: gravar sem ter pedido e o comportamento que
+        //  surpreende, e a surpresa aqui custa a curva do animador.
+        // ═══════════════════════════════════════════════════════════════════
+        bool m_Recording = false;
+
+        // Edicoes ainda nao keyadas.
+        //
+        // O tipo e SequencerSample de proposito: uma edicao pendente E um
+        // sample — mesmo binding, mesmo alvo, mesmo componente, mesmo escalar.
+        // A unica diferenca e a origem (o gizmo, e nao uma key). Reusar o tipo
+        // e o que permite que os TRES consumidores de sample (pose de osso,
+        // SolveRig, preview de socket) recebam a pose pendente sem nenhum
+        // ramo novo — ver m_EffectiveSamples.
+        std::vector<SequencerSample> m_PendingEdits;
+
+        // Frame em que a pose pendente foi autorada. Mudar de frame descarta a
+        // pendencia: uma pose e uma afirmacao SOBRE UM INSTANTE, e carrega-la
+        // para o frame seguinte faria o Key gravar no lugar errado sem que o
+        // usuario percebesse.
+        float m_PendingFrame = -1.0f;
+
+        // A lista que a avaliacao realmente le: samples do player + pendencias
+        // por cima (a pendencia VENCE a key, senao posar em cima de um frame ja
+        // keyado nao teria efeito nenhum).
+        //
+        // Reconstruida uma vez por frame, no comeco do EvaluateAndApply.
+        std::vector<SequencerSample> m_EffectiveSamples;
+
+        void RebuildEffectiveSamples();
+
+        // Grava (ou empilha como pendencia) UM canal. Todo caminho de gizmo
+        // passa por aqui — e o unico ponto em que o REC e consultado, o que
+        // impede a bifurcacao de se espalhar por tres funcoes de Apply.
+        void WriteChannelValue(int bindingIndex, int trackIndex, int sectionIndex,
+            SequencerChannelComponent component, float value);
+
+        // Idem para rotacao, que nao se escreve eixo a eixo — ver
+        // SetRotationKeysAtPlayhead.
+        void WriteRotation(int bindingIndex, int trackIndex, int sectionIndex,
+            const glm::quat& rotation);
+
+        // Euler continuo do alvo desta track no playhead, com a referencia
+        // certa: a pendencia se houver, senao a key anterior. Extraido de
+        // SetRotationKeysAtPlayhead para os dois caminhos usarem a MESMA
+        // desembrulhagem — duas versoes divergiriam e a pose pendente saltaria
+        // 360 graus no instante em que virasse key.
+        glm::vec3 ResolveContinuousEuler(int bindingIndex, int trackIndex,
+            int sectionIndex, const glm::quat& rotation) const;
+
+        void SetPendingEdit(int bindingIndex, const SequencerTrack& track,
+            SequencerChannelComponent component, float value);
+        void ClearPendingEdits();
+
+        // Promove tudo que esta pendente a keyframe no playhead. E o botao Key.
+        int  CommitPendingEdits();
+
+        // ── CAPTURA DO VIEWPORT ─────────────────────────────────────────────
+        //
+        // Crava key em TODOS os canais de todas as tracks de transform de um
+        // binding (ou de todos, com bindingIndex < 0), com o valor que o alvo
+        // tem AGORA na tela.
+        //
+        // E a resposta para "gravar o que estou vendo": o Capture por canal ja
+        // existia, mas exigia clicar canal a canal — com um clipe explodido sao
+        // dezenas de tracks e centenas de canais, e ninguem faz isso a mao.
+        int  CaptureAllTracksAtPlayhead(int bindingIndex);
+
         // Popups de escolha (entidade / osso / clipe / socket).
         void DrawAddBindingPopup();
         void DrawAddTrackPopup(int bindingIndex);
@@ -546,6 +1035,48 @@ namespace axe
         // partir do frame ja movido, e as diferencas entre elas encolheriam a
         // cada quadro do arrasto.
         std::vector<float>  m_DragOriginalFrames;
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  SELECAO EM CAIXA (rubber band)
+        //
+        //  Ate aqui a unica forma de pegar varias keys era Ctrl+clique, uma a
+        //  uma. Num coice de arma com seis controles isso e trinta cliques para
+        //  fazer uma coisa que e um gesto so.
+        //
+        //  ── POR QUE NAO PRECISOU DE UM ITEM NOVO DO ImGui ──────────────────
+        //
+        //  O `lanes_click` (o InvisibleButton do duplo-clique) ja cobre a area
+        //  das lanes e ja e submetido DEPOIS das keys — e no ImGui o PRIMEIRO
+        //  item a reivindicar o hover vence. Ou seja: ele so fica "hovered"
+        //  quando NAO ha key sob o cursor, que e exatamente a condicao para
+        //  comecar uma caixa. Reusa-lo evita mexer no allow-overlap, que muda
+        //  de nome entre versoes do ImGui.
+        //
+        //  ── UM FRAME DE ATRASO, DE PROPOSITO ───────────────────────────────
+        //
+        //  As keys sao testadas contra a caixa DENTRO do laco que ja as desenha
+        //  — nao ha um segundo passe. Como o laco roda antes da deteccao do
+        //  clique, a caixa comeca a colher no frame seguinte ao clique. E
+        //  imperceptivel, e o que se ganha e nao ter duas listas de posicoes de
+        //  key que podem discordar.
+        // ═══════════════════════════════════════════════════════════════════
+        enum class BoxMode : std::uint8_t { Replace = 0, Add = 1, Remove = 2 };
+
+        bool    m_BoxSelecting = false;
+        ImVec2  m_BoxStartPos{ 0.0f, 0.0f };
+        BoxMode m_BoxMode = BoxMode::Replace;
+
+        // Colhido a cada frame pelo laco de desenho, consumido no soltar.
+        std::vector<KeyRef> m_BoxHits;
+
+        void ApplyBoxSelection();
+
+        // Atalhos do menu de contexto. "Todas deste canal" e o que resolve o
+        // caso comum de querer a curva inteira sem arrastar uma caixa por cima
+        // de vinte lanes.
+        void SelectAllKeysInChannel(int bindingIndex, int trackIndex,
+            int sectionIndex, int channelIndex);
+        void SelectAllKeysInTrack(int bindingIndex, int trackIndex);
 
         bool IsKeySelected(const KeyRef& k) const;
         void ToggleKeySelection(const KeyRef& k);

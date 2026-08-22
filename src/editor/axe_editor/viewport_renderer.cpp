@@ -603,6 +603,29 @@ namespace axe
 		const float extW = boundsMax.x - boundsMin.x;
 		const float extH = boundsMax.y - boundsMin.y;
 
+		// ── DESENHO DE FERRAMENTA EXTERNA, ANTES DE TUDO ─────────────────────
+		//
+		// Antes do gizmo porque o ImDrawList e uma pilha: o gizmo tem de ficar
+		// POR CIMA das formas, senao um controle grande cobriria a seta que o
+		// usuario esta tentando arrastar.
+		//
+		// A flag e zerada aqui e nao no fim: se o overlay for embora entre dois
+		// frames, um "consumiu" esquecido bloquearia a selecao de entidade para
+		// sempre, sem nada na tela que explicasse por que clicar parou de
+		// funcionar.
+		m_OverlayConsumedClick = false;
+
+		// A flag e zerada ANTES da saida: um "consumiu" esquecido em Play
+		// bloquearia a selecao de entidade quando voltasse ao Edit.
+		if (SuppressEditorGizmos)
+			return;
+
+		if (m_ExternalOverlay.Active && m_ExternalOverlay.OnDraw &&
+			extW > 0.0f && extH > 0.0f)
+		{
+			m_OverlayConsumedClick = m_ExternalOverlay.OnDraw(boundsMin, boundsMax);
+		}
+
 		// ── GIZMO DE FERRAMENTA EXTERNA ──────────────────────────────────────
 		//
 		// Vem ANTES do caminho de entidade, e sai com return: dois gizmos na
@@ -630,14 +653,22 @@ namespace axe
 
 			const float* snap = SnapEnabled ? snapValues : nullptr;
 
-			// LOCAL, como no caminho de entidade. Girar um osso nos eixos do
-			// MUNDO nao e o que o animador pensa: ele pensa "dobra o cotovelo",
-			// que e o eixo do proprio osso.
+			// O espaco vem da barra do viewport, como no caminho de entidade.
+			//
+			// O default continua sendo LOCAL, e por um motivo: girar um osso
+			// nos eixos do MUNDO nao e o que o animador pensa — ele pensa
+			// "dobra o cotovelo", que e o eixo do proprio osso. Mas alinhar uma
+			// mao com o chao, ou empurrar um socket meio metro para tras, sao
+			// pedidos em espaco de MUNDO, e forcar local ali obrigava a girar o
+			// alvo ate os eixos coincidirem antes de poder mexer.
+			//
+			// Nada mais muda: o ApplyGizmoTo* recebe uma matriz de mundo nos
+			// dois modos, e a conversao para o local do pai e identica.
 			ImGuizmo::Manipulate(
 				glm::value_ptr(view),
 				glm::value_ptr(projection),
 				m_GuizmoOperation,
-				ImGuizmo::LOCAL,
+				m_GuizmoMode,
 				glm::value_ptr(model),
 				nullptr,
 				snap);
@@ -704,7 +735,7 @@ namespace axe
 			glm::value_ptr(view),
 			glm::value_ptr(projection),
 			m_GuizmoOperation,
-			ImGuizmo::LOCAL,
+			m_GuizmoMode,
 			glm::value_ptr(model),
 			nullptr,
 			snap

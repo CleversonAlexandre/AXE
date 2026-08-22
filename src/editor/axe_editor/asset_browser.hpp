@@ -174,6 +174,10 @@ namespace axe
         std::unordered_set<std::string> m_AnimationSourceUUIDs;
         std::size_t m_AnimSourcesStamp = (std::size_t)-1;
 
+        // Sigla curta desenhada sobre o icone dos tipos que COMPARTILHAM
+        // desenho. nullptr para quem ja tem icone proprio. Ver o ponto de uso.
+        static const char* AssetTypeTag(AssetType type);
+
         void EnsureAnimationSources();
         int m_FramesSinceStart = 0;
 

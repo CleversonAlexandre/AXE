@@ -58,12 +58,46 @@ namespace axe {
         ScaleX = 6, ScaleY = 7, ScaleZ = 8
     };
 
+    // ── COMO O VALOR CAMINHA ENTRE DUAS KEYS ─────────────────────────────────
+    //
+    // A curva de um TRECHO vem da key da ESQUERDA (a que comeca o trecho). E a
+    // convencao de todo NLE, e vale a pena dizer em voz alta porque ela produz
+    // uma armadilha real: por o Bezier na key de CHEGADA nao muda o trecho que
+    // chega nela. Ver a nota no painel de key.
+    //
+    // ── POR QUE OS QUATRO NOVOS EXISTEM ──────────────────────────────────────
+    //
+    // Step/Linear/Cubic* cobrem movimento CONTINUO — um corpo que se desloca. O
+    // que faltava era o vocabulario de IMPACTO: coice de arma, batida, tranco.
+    //
+    // Um impacto tem duas metades e nenhuma delas e simetrica:
+    //
+    //   1. a batida, que quase nao tem duracao. `EaseOutStrong` chega em ~80%
+    //      do valor no primeiro quinto do trecho e depois so assenta — e o que
+    //      transforma uma rampa suave num golpe sem precisar de key extra.
+    //
+    //   2. a volta, que PASSA DO PONTO e retorna. `EaseOutBack` faz exatamente
+    //      isso. Sem ultrapassagem, a arma "desliza" de volta ao repouso, e e
+    //      esse deslizar que faz o coice parecer de brinquedo.
+    //
+    // `CubicEaseIn`/`CubicEaseOut` sao, na verdade, QUADRATICAS (t*t). Os nomes
+    // ficam como estao — sao o que vai gravado no `.axeseq` desde a v1 — mas as
+    // versoes fortes existem porque uma quadratica e fraca demais para impacto.
     enum class SequencerInterp : uint8_t {
         Step = 0,
         Linear = 1,
         CubicEaseIn = 2,
         CubicEaseOut = 3,
-        Bezier = 4   // tangents explicitos (TangentIn/TangentOut)
+        Bezier = 4,   // tangents explicitos (TangentIn/TangentOut)
+
+        // Acrescentados DEPOIS do Bezier, e nunca no meio: o valor numerico vai
+        // para o `.axeseqbin` futuro, e renumerar trocaria a curva de todo
+        // arquivo ja gravado.
+        EaseInStrong = 5,   // t^4        — segura, e dispara no fim
+        EaseOutStrong = 6,  // 1-(1-t)^4  — dispara, e assenta
+        EaseInOut = 7,      // smootherstep — parte e chega parado
+        EaseOutBack = 8,    // ultrapassa e volta: o coice
+        EaseOutBounce = 9   // quica ate assentar
     };
 
     // ============================================================
@@ -95,6 +129,18 @@ namespace axe {
         SequencerInterp    Interp = SequencerInterp::Linear;
         float              TangentIn = 0.0f;   // so Bezier
         float              TangentOut = 0.0f;   // so Bezier
+
+        // ── QUANTO PASSA DO PONTO (EaseOutBack / EaseOutBounce) ──────────────
+        //
+        // Campo PROPRIO, e nao um TangentOut reaproveitado. Reaproveitar teria
+        // sido barato e e exatamente o erro que o `RigElement::Initial` ja
+        // custou caro neste projeto: um campo com dois significados vira dois
+        // bugs que parecem um so.
+        //
+        // 0 = a constante classica (1.70158, ~10% de ultrapassagem). Valores
+        // maiores exageram o coice; e o unico numero que se mexe para tunar
+        // "quanto a arma pula".
+        float              Overshoot = 0.0f;
 
         // Comparacao para estabilidade do sort (keys sao mantidas ordenadas
         // por Frame dentro de cada Channel — SortKeys() faz isso no Sample()).

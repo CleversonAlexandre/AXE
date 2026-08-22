@@ -1900,6 +1900,23 @@ namespace axe
     //  verde reintroduziria exatamente a confusao que a faixa veio resolver —
     //  e ele fica de fora sozinho, porque nao esta em m_Animations.
     // ─────────────────────────────────────────────────────────────────────────
+    // Ver a nota no ponto de uso. nullptr = o icone do tipo ja e unico.
+    const char* AssetBrowser::AssetTypeTag(AssetType type)
+    {
+        switch (type)
+        {
+            // GameMode, ParticleSystem e Sequence SAIRAM: ganharam icone proprio, e
+            // uma etiqueta sobre um desenho que ja e inconfundivel e so ruido.
+            // A etiqueta e remendo enquanto falta arte — nao um enfeite permanente.
+        case AssetType::SoundCue:       return "CUE";
+        case AssetType::AnimationClip:  return "CLIP";
+        case AssetType::SkeletalMesh:   return "SKEL";
+        case AssetType::AnimGraph:      return "ANIM";
+        case AssetType::ControlRig:     return "RIG";
+        default:                        return nullptr;
+        }
+    }
+
     void AssetBrowser::EnsureAnimationSources()
     {
         auto& db = AssetDatabase::Get();
@@ -1940,7 +1957,10 @@ namespace axe
             std::transform(ext.begin(), ext.end(), ext.begin(),
                 [](unsigned char ch) { return (char)std::tolower(ch); });
 
-            if (ext != ".fbx" && ext != ".dae" && ext != ".gltf" && ext != ".glb")
+            // `.axeclipbin` assado tambem: ele e uma animacao registrada num
+            // `.axeskel` como qualquer outra, e merece a mesma faixa.
+            if (ext != ".fbx" && ext != ".dae" && ext != ".gltf" && ext != ".glb" &&
+                ext != ".axeclipbin")
                 continue;
 
             for (const auto& skel : skeletons)
@@ -2187,8 +2207,17 @@ namespace axe
             case AssetType::Script:   icon = icons.GetScriptForClass(record.ScriptClassType);  break;
             case AssetType::Audio:    icon = icons.GetAudio();                                  break;
             case AssetType::SoundCue: icon = icons.GetAudio(); /* TODO: icone dedicado */      break;
-            case AssetType::GameMode: icon = icons.GetScene();                                  break;
-            case AssetType::ParticleSystem: icon = icons.GetMesh(); /* TODO: ícone dedicado */ break;
+                // Os tres tem arte propria agora. O `? :` nao e zelo excessivo: se o
+                // PNG nao estiver ao lado do executavel, o load devolve nullptr e
+                // sem o fallback o asset ficaria com um quadrado cinza em vez do
+                // icone antigo.
+            case AssetType::GameMode:
+                icon = icons.GetGameMode() ? icons.GetGameMode() : icons.GetScene();  break;
+            case AssetType::ParticleSystem:
+                icon = icons.GetParticle() ? icons.GetParticle() : icons.GetMesh();   break;
+            case AssetType::Sequence:
+                icon = icons.GetSequence() ? icons.GetSequence() : icons.GetScene();  break;
+            case AssetType::AnimationClip: icon = icons.GetMesh();                              break;
             default:                  icon = icons.GetMesh();                                   break;
             }
 
@@ -2207,6 +2236,7 @@ namespace axe
                 record.Type == AssetType::Mesh ||
                 record.Type == AssetType::Script ||
                 record.Type == AssetType::ControlRig ||   // SC32: personagem do rig
+                record.Type == AssetType::AnimationClip ||
                 record.FilePath.extension() == ".axeskel" ||
                 record.FilePath.extension() == ".axeanim";
 
@@ -2356,6 +2386,23 @@ namespace axe
             {
                 if (m_AssetOpenCallback) m_AssetOpenCallback(record);
             }
+            // ── Sequence ABRE, nao instancia ─────────────────────────────
+            //
+            // Mesma razao do .axeskel logo acima: o ramo generico chama os
+            // DOIS callbacks, e instanciar uma cutscene na cena nao quer
+            // dizer nada — nao ha o que instanciar. Uma sequence so tem um
+            // gesto util no duplo clique, que e abrir o Sequencer nela.
+            else if (record.FilePath.extension() == ".axeseq")
+            {
+                if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            }
+            // Clipe assado: ABRE o Animation Editor do personagem dono, no
+            // clipe certo. Instanciar uma curva na cena nao quer dizer nada —
+            // mesma razao do .axeskel e do .axeseq.
+            else if (record.Type == AssetType::AnimationClip)
+            {
+                if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            }
             else
             {
                 AXE_EDITOR_INFO("AssetBrowser: duplo-clique em '{}' (tipo {}, arquivo {}).",
@@ -2420,6 +2467,41 @@ namespace axe
                 ImVec2(iconMin.x, iconMax.y - barH),
                 ImVec2(iconMax.x, iconMax.y),
                 accent, 4.0f, ImDrawFlags_RoundCornersBottom);
+        }
+
+        // ── ETIQUETA DE TIPO ─────────────────────────────────────────────
+        //
+        // ── POR QUE ISTO EXISTE ──────────────────────────────────────────
+        //
+        // Os icones acabaram. Ha mais TIPOS de asset do que PNGs no
+        // editor_icon_library, e o que aconteceu foi o previsivel: Sound Cue
+        // usa o icone de audio, GameMode e Sequence usam o de cena,
+        // ParticleSystem e clipe assado usam o de malha. Cinco tipos, dois
+        // desenhos — e a faixa colorida sozinha exige decorar um codigo de
+        // cores.
+        //
+        // Tres letras resolvem sem nenhum asset novo, e resolvem melhor: um
+        // icone dedicado para cada tipo novo seria um PNG a desenhar toda vez
+        // que o engine ganhasse um formato, e a duvida ("qual e este?")
+        // continuaria existindo ate o dia em que ele fosse desenhado.
+        //
+        // So aparece para quem COMPARTILHA icone. Malha, textura, som,
+        // script, material e cena tem desenho proprio e reconhecivel — poluir
+        // os seis para desambiguar os cinco seria trocar um problema por
+        // outro maior.
+        if (const char* tag = AssetTypeTag(record.Type))
+        {
+            const float pad = std::max(2.0f, m_IconSize * 0.04f);
+            const ImVec2 ts = ImGui::CalcTextSize(tag);
+
+            const ImVec2 tagMin(iconMin.x + pad, iconMin.y + pad);
+            const ImVec2 tagMax(tagMin.x + ts.x + 6.0f, tagMin.y + ts.y + 2.0f);
+
+            // Fundo escuro semi-opaco: a etiqueta cai por cima de miniaturas
+            // claras e escuras, e texto puro some numa das duas.
+            draw->AddRectFilled(tagMin, tagMax, IM_COL32(0, 0, 0, 170), 3.0f);
+            draw->AddText(ImVec2(tagMin.x + 3.0f, tagMin.y + 1.0f),
+                IM_COL32(235, 235, 235, 255), tag);
         }
 
         // Botao de tocar por cima do icone, so para audio.

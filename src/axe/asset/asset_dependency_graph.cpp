@@ -99,7 +99,8 @@ namespace axe
 
     // ─────────────────────────────────────────────────────────────────────────
     std::set<std::string> AssetDependencyGraph::DirectReferences(const std::string& uuid,
-        bool* outParsed)
+        bool* outParsed,
+        std::vector<fs::path>* outCookedFiles)
     {
         std::set<std::string> out;
 
@@ -203,6 +204,33 @@ namespace axe
                     {
                         if (r->UUID != uuid)
                             out.insert(r->UUID);
+                        return;
+                    }
+
+                    // ── COZIDO SEM FONTE REGISTRADO ──────────────────────────
+                    //
+                    // Chegar aqui quer dizer: o arquivo EXISTE, alguem o
+                    // referencia, e o AssetDatabase nao o conhece. Para um
+                    // cozido isso e normal — a extensao dele nao e um tipo de
+                    // asset, de proposito, para nao poluir o Asset Browser.
+                    //
+                    // O empacotador achava esses arquivos trocando a extensao
+                    // do record irmao (`idle.fbx` -> `idle.axeclipbin`). O bake
+                    // do Sequencer produz um `.axeclipbin` que nao tem fonte
+                    // nenhum ao lado, e por isso escapava da rede inteira: a
+                    // animacao assada funcionava no editor e sumia do build.
+                    if (!outCookedFiles)
+                        return;
+
+                    std::string cext = candidate.extension().generic_string();
+                    std::transform(cext.begin(), cext.end(), cext.begin(),
+                        [](unsigned char ch) { return (char)std::tolower(ch); });
+
+                    for (const char* ext : kDerivedExtensions)
+                    {
+                        if (cext != ext) continue;
+                        outCookedFiles->push_back(candidate);
+                        break;
                     }
                 });
 
@@ -249,6 +277,10 @@ namespace axe
         // StartScene e a varredura de cenas registradas). O `push` acima ja
         // deduplica no conjunto, mas listar a mesma raiz duas vezes na UI faria
         // a contagem mentir — e reparsearia o arquivo a toa.
+        // Cozidos referenciados por caminho que nao tem record proprio. Ver a
+        // nota em DirectReferences.
+        std::vector<fs::path> cookedNoRecord;
+
         std::set<std::string> seenRoots;
 
         for (const auto& r : roots)
@@ -263,7 +295,7 @@ namespace axe
                 info.Name = rec->Name;
 
             bool parsed = false;
-            info.DirectRefs = DirectReferences(r, &parsed).size();
+            info.DirectRefs = DirectReferences(r, &parsed, &cookedNoRecord).size();
             info.Parsed = parsed;
 
             res.Roots.push_back(info);
@@ -285,7 +317,10 @@ namespace axe
             const std::string cur = queue.front();
             queue.pop_front();
 
-            for (const auto& dep : DirectReferences(cur))
+            // Os cozidos sem fonte registrada viajam pelo mesmo passo em que
+            // as referencias sao descobertas: quem sabe que o `.axeskel` aponta
+            // para um `.axeclipbin` avulso e o parse dele, e mais ninguem.
+            for (const auto& dep : DirectReferences(cur, nullptr, &cookedNoRecord))
                 push(dep);
         }
 
@@ -318,6 +353,24 @@ namespace axe
                 if (fs::exists(d, ec))
                     res.Files.push_back(d);
             }
+        }
+
+        // Os cozidos avulsos entram DEPOIS, e deduplicados: um `.axeclipbin`
+        // pode ter sido achado pelos dois caminhos (irmao de um record E
+        // referenciado por caminho), e copiar o mesmo arquivo duas vezes faria
+        // o relatorio de tamanho do build mentir.
+        for (const auto& c : cookedNoRecord)
+        {
+            const std::string key = c.generic_string();
+
+            bool already = false;
+            for (const auto& f : res.Files)
+            {
+                if (f.generic_string() == key) { already = true; break; }
+            }
+
+            if (!already && fs::exists(c, ec))
+                res.Files.push_back(c);
         }
 
         // ── Nao alcancados ───────────────────────────────────────────────────

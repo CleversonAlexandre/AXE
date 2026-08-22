@@ -875,6 +875,7 @@ namespace axe
 			CopyCommonTo(*c);
 			c->RigUUID = RigUUID;
 			c->RigAsset = RigAsset;   // compartilha o molde; a cópia de trabalho nasce depois
+			c->ControlsFollowAnimation = ControlsFollowAnimation;
 			return c;
 		}
 
@@ -890,6 +891,50 @@ namespace axe
 		// e é COMPARTILHADO entre as instâncias — cada uma clona a própria cópia
 		// de trabalho a partir dele.
 		std::shared_ptr<ControlRigAsset> RigAsset;
+
+		// ═══════════════════════════════════════════════════════════════════
+		//  OS CONTROLES SEGUEM A ANIMACAO
+		//
+		//  ── O SINTOMA QUE ISTO RESOLVE ────────────────────────────────────
+		//
+		//  "O personagem aponta para o lado quando o rig esta ligado", ou fica
+		//  com a postura torta em UMA animacao especifica — quase sempre a de
+		//  mira, que e a que mais se afasta da bind pose.
+		//
+		//  Nao e o clipe, e nao e o grafo. E que o `ResetToInitial` devolve os
+		//  controles ao REPOUSO e o `ApplyPose` troca so os OSSOS pela
+		//  animacao. Os dois passos estao certos e sao necessarios — mas
+		//  deixam os controles parados na posicao de BIND enquanto o corpo ja
+		//  saiu de la.
+		//
+		//  Um Two Bone IK que mira no controle do pe passa entao a mirar onde
+		//  o pe estaria na T-pose. A perna vai atras, o quadril compensa, e o
+		//  tronco sai torto. Quanto mais a animacao se afasta do repouso,
+		//  maior o desvio — por isso a mira e a pior de todas e as outras
+		//  parecem certas.
+		//
+		//  `SnapControlsToCurrentBones` leva cada controle ate o osso que ele
+		//  representa PRESERVANDO o offset autorado (o pole vector continua no
+		//  lugar). Depois dele, peso 1 reproduz a animacao e o `Value` do
+		//  animador vira ajuste POR CIMA dela.
+		//
+		//  ── POR QUE O DEFAULT E true ──────────────────────────────────────
+		//
+		//  Um `.axeanim` gravado antes deste campo existir passa a seguir a
+		//  animacao — que e o comportamento que ele deveria ter tido desde
+		//  sempre. Mesmo criterio do `HoldOutsideSections` no Sequencer.
+		//
+		//  Desligar so faz sentido num rig cujos controles sao alvos ABSOLUTOS
+		//  no mundo (uma mao presa a um objeto fixo), onde seguir a animacao e
+		//  justamente o que nao se quer.
+		//
+		//  ── ONDE ISTO JA EXISTIA ──────────────────────────────────────────
+		//
+		//  No Sequencer, como `SequencerBinding::RigControlsFollowAnimation`.
+		//  Era o unico chamador do snap no engine inteiro — e por isso o mesmo
+		//  rig ficava certo na janela de autoria e torto no jogo.
+		// ═══════════════════════════════════════════════════════════════════
+		bool ControlsFollowAnimation = true;
 
 		// Alpha inline 1.0: um Control Rig recém-criado age INTEIRO. Começar em
 		// 0 faria você ligar tudo certo e não ver efeito nenhum — a mesma

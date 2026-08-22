@@ -580,11 +580,17 @@ namespace axe
 	void AnimNode_ControlRig::Serialize(nlohmann::json& j) const
 	{
 		j["rig"] = RigUUID;
+		j["controls_follow_anim"] = ControlsFollowAnimation;
 	}
 
 	void AnimNode_ControlRig::Deserialize(const nlohmann::json& j)
 	{
 		RigUUID = j.value("rig", std::string{});
+
+		// Default true: um `.axeanim` gravado antes deste campo existir passa a
+		// seguir a animacao — o comportamento que ele deveria ter tido desde
+		// sempre. Ver a nota longa no header.
+		ControlsFollowAnimation = j.value("controls_follow_anim", true);
 	}
 
 	void AnimNode_ControlRig::ResolveRig(const Skeleton* skel, const char* graphName)
@@ -731,6 +737,26 @@ namespace axe
 		//    são o do runtime.
 		m_Hierarchy.ResetToInitial();
 		m_Hierarchy.ApplyPose(*ctx.Skel, out);
+
+		// 3b. OS CONTROLES VAO ATE A ANIMACAO.
+		//
+		//     Este passo faltava, e era a diferenca entre o mesmo rig ficar
+		//     certo no Sequencer e torto no jogo: ate aqui o
+		//     SnapControlsToCurrentBones tinha UM unico chamador no engine
+		//     inteiro, e era a janela de autoria.
+		//
+		//     Sem ele, os passos 3 deixam os controles no REPOUSO enquanto os
+		//     ossos ja foram para a pose da animacao. Um Two Bone IK que mira
+		//     no controle do pe passa a mirar onde o pe estaria na T-pose — a
+		//     perna vai atras, o quadril compensa, e o tronco sai torto. O
+		//     desvio cresce com a distancia entre a animacao e o repouso, e por
+		//     isso a mira e a pior de todas enquanto as outras parecem certas.
+		//
+		//     DEPOIS do ApplyPose e ANTES do solve, exatamente como no
+		//     SequencerWindow::SolveRig: o snap precisa dos ossos ja na pose
+		//     final, e o grafo precisa dos controles ja no lugar.
+		if (ControlsFollowAnimation)
+			m_Hierarchy.SnapControlsToCurrentBones();
 
 		// 4. Roda o Forwards Solve sobre a hierarquia da instância.
 		RigExecContext rc;

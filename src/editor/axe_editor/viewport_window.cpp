@@ -8,8 +8,40 @@
 #include <glm/glm.hpp>
 #include "editor/axe_editor/viewport_renderer.hpp"
 
+// A barra do viewport era o unico lugar do editor que ainda desenhava
+// ImGui::Button com texto puro e cores digitadas a mao. Ver a nota em
+// editor_widgets.hpp: o custo de duplicar nao e o codigo, e a interface ficar
+// com tres azuis ligeiramente diferentes.
+#include "editor/axe_editor/ui/editor_widgets.hpp"
+#include "editor/axe_editor/ui/editor_icons.hpp"
+
+#include <initializer_list>
+
 namespace axe
 {
+	namespace
+	{
+		// Largura que um botao vai ocupar, para poder ancorar um GRUPO a
+		// direita/ao centro antes de desenhar o primeiro item dele.
+		//
+		// Medida, e nao constante: os rotulos agora levam glifo de icone, e a
+		// fonte de icone e um subset carregado em runtime — chutar 60px daria
+		// grupos desalinhados em qualquer DPI diferente do da maquina de quem
+		// escreveu o numero.
+		float BtnW(const char* label)
+		{
+			return ImGui::CalcTextSize(label, nullptr, true).x
+				+ ImGui::GetStyle().FramePadding.x * 2.0f;
+		}
+
+		float GroupW(std::initializer_list<const char*> labels, float extra = 0.0f)
+		{
+			float w = 0.0f;
+			const float gap = ImGui::GetStyle().ItemSpacing.x;
+			for (const char* l : labels) w += BtnW(l) + gap;
+			return (w > 0.0f ? w - gap : 0.0f) + extra;
+		}
+	}
 	ViewportWindow::ViewportWindow()
 	{
 		//AXE_CORE_INFO("ViewportWindow created (no GPU resources yet)");
@@ -184,134 +216,230 @@ namespace axe
 		return (ImTextureID)0;
 	}
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  BARRA DO VIEWPORT
+	//
+	//  ── DUAS MUDANCAS, E POR QUE ─────────────────────────────────────────
+	//
+	//  1. ICONES E WIDGETS COMPARTILHADOS. Os botoes eram ImGui::Button com
+	//     texto puro e seis cores digitadas a mao. O resto do editor (Sequencer,
+	//     Control Rig, Anim Graph, Script) usa ui::IconButton/ToggleButton com
+	//     os ICON_* da Font Awesome subsetada. A barra do viewport era a ultima
+	//     ilha, e era a mais visivel de todas.
+	//
+	//  2. ESPACO DO GIZMO (Local/World) e as operacoes T/R/S. O espaco era
+	//     LOCAL fixo dentro do viewport_renderer.cpp; T/R/S so existiam como
+	//     tecla, e tecla e coisa que metade das pessoas nunca descobre.
+	//
+	//  ── LAYOUT ────────────────────────────────────────────────────────────
+	//
+	//  Ferramentas a ESQUERDA, transporte ao CENTRO. Nao e gosto: e onde a
+	//  Unity e a Unreal poem, e um grupo ancorado a direita colidia com o
+	//  transporte assim que a janela encolhia — que era o comportamento antigo,
+	//  com os 220px fixos.
+	//
+	//  As larguras sao MEDIDAS (ver BtnW/GroupW). Com glifo de icone dentro do
+	//  rotulo e fonte carregada em runtime, largura constante desalinha em
+	//  qualquer DPI que nao seja o de quem escreveu o numero.
+	// ═══════════════════════════════════════════════════════════════════════
 	void ViewportWindow::DrawToolbar()
 	{
 		if (!m_PlayStateCallback || !m_PlayActionCallback) return;
 
-		int state = m_PlayStateCallback(); //0=Edit, 1=Play, 2=Pause
+		const int state = m_PlayStateCallback(); // 0=Edit, 1=Play, 2=Pause
 
-		//Posição da toolbar - centralizada no topo do viewport
 		ImDrawList* draw = ImGui::GetWindowDrawList();
-		ImVec2 wpos = ImGui::GetWindowPos();
-		ImVec2 wsize = ImGui::GetWindowSize();
+		const ImVec2 wpos = ImGui::GetWindowPos();
+		const ImVec2 wsize = ImGui::GetWindowSize();
 
-		float btnW = 60.0f;
-		float btnH = 24.0f;
-		float gap = 4.0f;
-		float totalW = btnW * 3 + gap * 2;
-		float startX = wpos.x + (wsize.x - totalW) * 0.5f;
-		float startY = wpos.y + 28.0f; //Abaixo do titulo da janela
+		const float btnH = ImGui::GetFrameHeight();
+		const float startY = wpos.y + 28.0f;   // abaixo do titulo da janela
 
-		//Fundo da toolbar 
+		// ── Grupo de TRANSPORTE, centralizado ────────────────────────────────
+		const char* kPlay = ICON_PLAY "  Play";
+		const char* kPause = ICON_PAUSE "  Pause";
+		const char* kStop = ICON_STOP "  Stop";
+
+		const float transportW = GroupW({ kPlay, kPause, kStop });
+		const float transportX = wpos.x + (wsize.x - transportW) * 0.5f;
+
 		draw->AddRectFilled(
-			ImVec2(startX - 6, startY - 4),
-			ImVec2(startX + totalW + 6, startY + btnH + 4),
-			IM_COL32(30, 30, 30, 200), 4.0f
-		);
+			ImVec2(transportX - 6, startY - 4),
+			ImVec2(transportX + transportW + 6, startY + btnH + 4),
+			IM_COL32(30, 30, 30, 200), 4.0f);
 
-		//Botão Play
-		ImGui::SetCursorScreenPos(ImVec2(startX, startY));
-		if (state == 1)
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-		else
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.24f, 0.25f, 1.0f));
-		if (ImGui::Button("Play", ImVec2(btnW, btnH)))
+		ImGui::SetCursorScreenPos(ImVec2(transportX, startY));
+
+		// Play — verde quando rodando. Aceita clique tanto em Edit quanto em
+		// Pause (retomar), que e o comportamento que ja existia.
+		if (ui::ToggleButton(kPlay, state == 1,
+			"Entrar no modo Play (ou retomar de Pause)", ui::Accent::Add))
 		{
-			if (state == 0) m_PlayActionCallback(0);
-			if (state == 2) m_PlayActionCallback(0);
+			if (state == 0 || state == 2) m_PlayActionCallback(0);
 		}
-		ImGui::PopStyleColor();
+		ImGui::SameLine();
 
-		// Botão Pause
-		ImGui::SetCursorScreenPos(ImVec2(startX + btnW + gap, startY));
-		if (state == 2)
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
-		else
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-		if (ImGui::Button("Pause", ImVec2(btnW, btnH)) && state == 1)
+		// Pause — ambar quando pausado, e so responde durante o Play.
+		if (ui::ToggleButton(kPause, state == 2,
+			"Pausar a simulacao", ui::Accent::Warning) && state == 1)
+		{
 			m_PlayActionCallback(1);
-		ImGui::PopStyleColor();
+		}
+		ImGui::SameLine();
 
-		// Botão Stop — desabilitado no modo editor
-		ImGui::SetCursorScreenPos(ImVec2(startX + (btnW + gap) * 2, startY));
+		// Stop — desabilitado no modo editor: nao ha o que parar, e um botao
+		// que aceita clique sem fazer nada e pior que um botao apagado.
 		if (state == 0)
 		{
-			// Modo editor — botão cinza escuro desabilitado
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
 			ImGui::BeginDisabled(true);
-			ImGui::Button("Stop", ImVec2(btnW, btnH));
+			ui::AccentButton(kStop, ui::Accent::Neutral);
 			ImGui::EndDisabled();
-			ImGui::PopStyleColor(4);
 		}
-		else
+		else if (ui::AccentButton(kStop, ui::Accent::Danger,
+			"Parar e restaurar a cena de edicao"))
 		{
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-			if (ImGui::Button("Stop", ImVec2(btnW, btnH)))
-				m_PlayActionCallback(2);
-			ImGui::PopStyleColor();
+			m_PlayActionCallback(2);
 		}
 
-		// Aviso visual durante Play — só desenho, não afeta layout dos botões
+		// Aviso visual durante Play — so desenho, nao afeta o layout.
 		if (state == 1 || state == 2)
 		{
-			float warnW = 340.0f;
-			float warnX = wpos.x + (wsize.x - warnW) * 0.5f;
-			float warnY = startY + btnH + 6.0f;
+			const char* warn = "Modo Play - modificacoes serao descartadas ao dar Stop";
+			const float warnW = ImGui::CalcTextSize(warn).x + 16.0f;
+			const float warnX = wpos.x + (wsize.x - warnW) * 0.5f;
+			const float warnY = startY + btnH + 6.0f;
+
 			draw->AddRectFilled(
 				ImVec2(warnX, warnY),
-				ImVec2(warnX + warnW, warnY + 18.0f),
+				ImVec2(warnX + warnW, warnY + ImGui::GetTextLineHeight() + 6.0f),
 				IM_COL32(160, 70, 0, 200), 3.0f);
 			draw->AddText(
 				ImVec2(warnX + 8, warnY + 3),
-				IM_COL32(255, 220, 100, 255),
-				"Modo Play — modificacoes serao descartadas ao dar Stop");
+				IM_COL32(255, 220, 100, 255), warn);
 		}
 
-		// Controles de Grid e Snap — lado direito da toolbar
+		// ── Grupo de FERRAMENTAS, a esquerda ─────────────────────────────────
 		if (m_ViewportRenderer)
 		{
-			float rightX = wpos.x + wsize.x - 220.0f;
-			float rightY = startY;
+			const char* kMove = ICON_ARROWS;
+			const char* kRot = ICON_ROTATE;
+			const char* kScale = ICON_EXPAND;
+			const char* kLocal = ICON_CUBE "  Local";
+			const char* kWorld = ICON_BORDER_ALL "  World";
+			const char* kGrid = ICON_TABLE_CELLS "  Grid";
+			const char* kSnap = ICON_MAGNET "  Snap";
 
-			// Grid toggle
-			ImGui::SetCursorScreenPos(ImVec2(rightX, rightY));
-			bool& showGrid = m_ViewportRenderer->ShowGrid;
-			if (showGrid)
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
-			else
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-			if (ImGui::Button("Grid", ImVec2(50, btnH)))
-				showGrid = !showGrid;
-			ImGui::PopStyleColor();
+			auto& vr = *m_ViewportRenderer;
+			const bool snapOn = vr.SnapEnabled;
 
-			// Snap toggle
-			ImGui::SetCursorScreenPos(ImVec2(rightX + 54, rightY));
-			bool& snapEnabled = m_ViewportRenderer->SnapEnabled;
-			if (snapEnabled)
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.1f, 1.0f));
-			else
-				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-			if (ImGui::Button("Snap", ImVec2(50, btnH)))
-				snapEnabled = !snapEnabled;
-			ImGui::PopStyleColor();
+			// O campo de valor do snap so existe quando o snap esta ligado —
+			// por isso entra na medida condicionalmente, senao o grupo "reserva"
+			// espaco de um widget que nao esta la.
+			const float toolsW = GroupW({ kMove, kRot, kScale, kLocal, kWorld, kGrid, kSnap },
+				snapOn ? 90.0f + ImGui::GetStyle().ItemSpacing.x : 0.0f)
+				+ 48.0f;   // os dois separadores
 
-			// Valor do snap
-			if (snapEnabled)
+			const float toolsX = wpos.x + 8.0f;
+
+			// Se nao ha largura para os dois grupos lado a lado, as ferramentas
+			// cedem: perder o Play por sobreposicao seria muito pior que perder
+			// os toggles, que tem tecla equivalente.
+			const bool roomForTools =
+				(toolsX + toolsW + 16.0f) < transportX;
+
+			if (roomForTools)
 			{
-				ImGui::SetCursorScreenPos(ImVec2(rightX + 108, rightY));
-				ImGui::SetNextItemWidth(100.0f);
+				draw->AddRectFilled(
+					ImVec2(toolsX - 6, startY - 4),
+					ImVec2(toolsX + toolsW + 6, startY + btnH + 4),
+					IM_COL32(30, 30, 30, 200), 4.0f);
 
-				if (m_ViewportRenderer->m_GuizmoOperation == ImGuizmo::ROTATE)
-					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapAngle, 1.0f, 1.0f, 90.0f, "%.0f°");
-				else if (m_ViewportRenderer->m_GuizmoOperation == ImGuizmo::SCALE)
-					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapScale, 0.05f, 0.05f, 2.0f, "%.2f");
-				else
-					ImGui::DragFloat("##snap", &m_ViewportRenderer->SnapValue, 0.1f, 0.1f, 10.0f, "%.1f");
+				ImGui::SetCursorScreenPos(ImVec2(toolsX, startY));
+
+				// Operacao do gizmo. As mesmas teclas T/R/S do editor_layer —
+				// os botoes nao substituem o atalho, dao a ele um rosto.
+				if (ui::ToggleButton(kMove, vr.m_GuizmoOperation == ImGuizmo::TRANSLATE,
+					"Mover (T)"))
+					vr.m_GuizmoOperation = ImGuizmo::TRANSLATE;
+				ImGui::SameLine();
+
+				if (ui::ToggleButton(kRot, vr.m_GuizmoOperation == ImGuizmo::ROTATE,
+					"Girar (R)"))
+					vr.m_GuizmoOperation = ImGuizmo::ROTATE;
+				ImGui::SameLine();
+
+				if (ui::ToggleButton(kScale, vr.m_GuizmoOperation == ImGuizmo::SCALE,
+					"Escalar (S)"))
+					vr.m_GuizmoOperation = ImGuizmo::SCALE;
+
+				ui::ToolbarSeparator();   // ja faz SameLine dos dois lados
+
+				// ── ESPACO DO GIZMO ──────────────────────────────────────────
+				//
+				// Em SCALE o ImGuizmo ignora o modo e opera sempre em local —
+				// escalar nos eixos do mundo produziria shear, que a
+				// decomposicao T/R/S nao representa. Desabilitar ali e mais
+				// honesto que deixar o usuario clicar em World e nao ver
+				// diferenca nenhuma.
+				const bool spaceMatters = (vr.m_GuizmoOperation != ImGuizmo::SCALE);
+				ImGui::BeginDisabled(!spaceMatters);
+
+				if (ui::ToggleButton(kLocal, vr.m_GuizmoMode == ImGuizmo::LOCAL,
+					"Eixos do PROPRIO alvo.\n"
+					"E o que se quer para animar: 'dobra o cotovelo' e o eixo do osso."))
+					vr.m_GuizmoMode = ImGuizmo::LOCAL;
+				ImGui::SameLine();
+
+				if (ui::ToggleButton(kWorld, vr.m_GuizmoMode == ImGuizmo::WORLD,
+					"Eixos do MUNDO, alinhados com o grid.\n"
+					"E o que se quer para posicionar: 'desce meio metro' nao depende\n"
+					"de como o alvo esta girado."))
+					vr.m_GuizmoMode = ImGuizmo::WORLD;
+
+				ImGui::EndDisabled();
+
+				if (!spaceMatters && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+					ImGui::SetTooltip("Escala so existe em espaco local - o ImGuizmo\n"
+						"ignora World aqui de proposito.");
+
+				ui::ToolbarSeparator();   // ja faz SameLine dos dois lados
+
+				if (ui::ToggleButton(kGrid, vr.ShowGrid, "Grid do chao"))
+					vr.ShowGrid = !vr.ShowGrid;
+				ImGui::SameLine();
+
+				if (ui::ToggleButton(kSnap, vr.SnapEnabled,
+					"Prender o gizmo a incrementos", ui::Accent::Warning))
+					vr.SnapEnabled = !vr.SnapEnabled;
+
+				// Valor do snap — o campo segue a operacao ativa, porque
+				// "0.5" quer dizer meio metro em translacao e meio grau em
+				// rotacao, e um numero so para os tres seria sempre errado
+				// para dois deles.
+				if (vr.SnapEnabled)
+				{
+					ImGui::SameLine();
+					ImGui::SetNextItemWidth(90.0f);
+
+					if (vr.m_GuizmoOperation == ImGuizmo::ROTATE)
+						ImGui::DragFloat("##snap", &vr.SnapAngle, 1.0f, 1.0f, 90.0f, "%.0f deg");
+					else if (vr.m_GuizmoOperation == ImGuizmo::SCALE)
+						ImGui::DragFloat("##snap", &vr.SnapScale, 0.05f, 0.05f, 2.0f, "%.2f");
+					else
+						ImGui::DragFloat("##snap", &vr.SnapValue, 0.1f, 0.1f, 10.0f, "%.1f");
+				}
 			}
 		}
+
+		// Cursor num lugar DETERMINISTICO antes de devolver.
+		//
+		// Os grupos acima sao posicionados com SetCursorScreenPos, e onde o
+		// cursor para depende de qual foi o ultimo widget desenhado — que agora
+		// varia (o campo de snap aparece e some). Sem esta linha, a imagem do
+		// viewport mudaria de altura conforme o snap estivesse ligado ou nao.
+		ImGui::SetCursorScreenPos(ImVec2(
+			wpos.x + ImGui::GetStyle().WindowPadding.x,
+			startY + btnH + 8.0f));
 	}
 
 

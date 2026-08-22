@@ -75,12 +75,47 @@ namespace axe
 		// jogadores nao precisa dele — quem precisa liga, e a partir dai vale
 		// em Play tambem.
 		bool  ShowSoundVisualization = false;
+		// ── GIZMOS DO EDITOR EM MODO PLAY ────────────────────────────────────
+		//
+		// Em Play o viewport e o JOGO. O gizmo de manipulacao e as formas dos
+		// Controls do rig sao ferramentas de AUTORIA: ali elas nao tem o que
+		// manipular (o Stop descarta as edicoes), aparecem por cima da cena que
+		// se esta testando e ainda roubam o clique de quem esta jogando.
+		//
+		// Em Pause NAO suprime: o editor continua ativo ali de proposito (o
+		// HandleViewportCameraInput ja roda em Edit e Pause), e inspecionar uma
+		// entidade pausada e um uso legitimo.
+		bool  SuppressEditorGizmos = false;
+
 		bool  SnapEnabled = false;
 		float SnapValue = 0.5f;   // unidades para translate
 		float SnapAngle = 15.0f;  // graus para rotate
 		float SnapScale = 0.1f;   // para scale
 
 		ImGuizmo::OPERATION m_GuizmoOperation = ImGuizmo::TRANSLATE;
+
+		// ═══════════════════════════════════════════════════════════════════
+		//  ESPACO DO GIZMO (LOCAL / WORLD)
+		//
+		//  Era LOCAL fixo, escrito a mao nas duas chamadas de Manipulate. O
+		//  custo disso aparece quando o alvo esta girado: para arrastar um osso
+		//  ao longo do eixo X do MUNDO era preciso primeiro zerar a rotacao,
+		//  mover, e girar de volta — ou combinar dois eixos no olho.
+		//
+		//  LOCAL continua sendo o default, e continua sendo o certo para
+		//  animacao ("dobra o cotovelo" e o eixo do proprio osso). WORLD e o
+		//  certo para posicionar no cenario ("desce meio metro"). Nao ha
+		//  resposta unica: por isso vira escolha do usuario, na barra do
+		//  viewport, e nao uma constante no codigo.
+		//
+		//  NOTA sobre SCALE: o ImGuizmo IGNORA o modo em escala e sempre opera
+		//  em local — escalar nos eixos do mundo produziria shear, que a
+		//  decomposicao Translation/Rotation/Scale nao sabe representar. Por
+		//  isso os botoes ficam desabilitados quando a operacao e SCALE, em vez
+		//  de mentir que a escolha teve efeito.
+		// ═══════════════════════════════════════════════════════════════════
+		ImGuizmo::MODE m_GuizmoMode = ImGuizmo::LOCAL;
+
 		std::unique_ptr<EditorCamera> m_Camera;
 
 		// ═══════════════════════════════════════════════════════════════════
@@ -119,10 +154,52 @@ namespace axe
 		void SetExternalGizmo(const ExternalGizmo& g) { m_ExternalGizmo = g; }
 		void ClearExternalGizmo() { m_ExternalGizmo = ExternalGizmo{}; }
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  DESENHO PEDIDO POR OUTRA FERRAMENTA
+		//
+		//  Irmao do ExternalGizmo, e pela mesma razao: a ferramenta tem o QUE
+		//  desenhar, o viewport tem ONDE. As formas dos Controls do rig sao o
+		//  primeiro caso — elas nascem de uma copia de trabalho que so o
+		//  Sequencer conhece, e precisam da camera e do retangulo da imagem que
+		//  so o viewport tem.
+		//
+		//  ── POR QUE O CALLBACK DEVOLVE bool ────────────────────────────────
+		//
+		//  Porque um desenho que se pode CLICAR disputa o clique com a selecao
+		//  de entidade. Sem essa resposta, clicar num controle do rig tambem
+		//  trocaria a entidade selecionada — e o personagem inteiro sairia da
+		//  selecao no instante em que o animador tentasse pegar um controle
+		//  dele.
+		//
+		//  Desenhado ANTES do gizmo, de proposito: o ImDrawList e uma pilha, e
+		//  o gizmo tem de ficar POR CIMA das formas. E o mesmo motivo pelo qual
+		//  quem consome o clique testa `ImGuizmo::IsOver()` primeiro.
+		// ═══════════════════════════════════════════════════════════════════
+		struct ExternalOverlay
+		{
+			bool Active = false;
+
+			// Recebe o retangulo da imagem do viewport, em coordenadas de tela.
+			// Devolve true se consumiu o clique deste frame.
+			std::function<bool(const glm::vec2&, const glm::vec2&)> OnDraw;
+		};
+
+		void SetExternalOverlay(const ExternalOverlay& o) { m_ExternalOverlay = o; }
+		void ClearExternalOverlay() { m_ExternalOverlay = ExternalOverlay{}; }
+
+		// Lido pelo editor_layer antes de fazer picking de entidade.
+		bool OverlayConsumedClick() const { return m_OverlayConsumedClick; }
+
 		// Qual operacao o usuario escolheu na barra do viewport (T/R/S). A
 		// ferramenta externa precisa saber para decidir QUAIS canais keyar —
 		// keyar os nove a cada toque encheria a timeline de curvas retas.
 		ImGuizmo::OPERATION GetGizmoOperation() const { return m_GuizmoOperation; }
+
+		// Espaco escolhido na barra do viewport. A ferramenta externa NAO
+		// precisa dele para converter nada — ela recebe uma matriz de MUNDO em
+		// qualquer um dos dois modos, e a conversao para local ao pai e a mesma.
+		// Existe para a UI conseguir mostrar o estado.
+		ImGuizmo::MODE GetGizmoMode() const { return m_GuizmoMode; }
 
 		void SetGameCamera(GameCamera* cam) { m_GameCamera = cam; }
 
@@ -173,6 +250,9 @@ namespace axe
 		// sequence que nem esta mais aberta.
 		ExternalGizmo   m_ExternalGizmo;
 		bool            m_ExternalGizmoWasUsing = false;
+
+		ExternalOverlay m_ExternalOverlay;
+		bool            m_OverlayConsumedClick = false;
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;
 

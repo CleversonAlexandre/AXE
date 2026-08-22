@@ -12,6 +12,8 @@
 #include "axe/animation/skeleton.hpp"
 #include "axe/animation/animation_clip.hpp"
 #include "axe/animation/animation_sampler.hpp"
+// Miniatura do clipe assado: le as curvas direto do binario cozido.
+#include "axe/animation/clip_cooked.hpp"
 #include "editor/axe_editor/import/skeletal_mesh_loader.hpp"
 #include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/material/material_asset.hpp"
@@ -303,6 +305,51 @@ namespace axe
                 if (auto asset = SkeletalMeshAsset::LoadFromFile(skelPath); asset && asset->Resolve())
                     return MeshFromSkeletalAsset(asset);
             }
+            return nullptr;
+        }
+
+        // ── Clipe ASSADO (.axeclipbin) ───────────────────────────────────────
+        //
+        // Aqui a pergunta "de qual esqueleto e este clipe?" tem resposta EXATA,
+        // e nao uma deducao — ao contrario do FBX de animacao mais abaixo, que
+        // depende de o projeto ter um unico `.axeskel`.
+        //
+        // O motivo: o bake REGISTRA o `.axeclipbin` como AnimEntry no `.axeskel`
+        // do personagem. Entao basta perguntar a cada esqueleto "este arquivo e
+        // teu?" — que e literalmente o que FindAnimationEntryBySource responde,
+        // e o mesmo caminho que o duplo clique ja usa para abrir o Animation
+        // Editor no clipe certo.
+        //
+        // (A saida definitiva para o caso do FBX e esta mesma: registrar o dono.
+        // Aqui ele ja esta registrado, entao a heuristica nao precisa existir.)
+        if (ext == ".axeclipbin")
+        {
+            for (const auto& [u, rec] : AssetDatabase::Get().GetAll())
+            {
+                if (rec.FilePath.extension() != ".axeskel") continue;
+
+                auto a = SkeletalMeshAsset::LoadFromFile(rec.FilePath);
+                if (!a) continue;
+
+                if (a->FindAnimationEntryBySource(filePath) < 0) continue;
+                if (!a->Resolve()) continue;
+
+                // Relido do arquivo, e nao pescado de `a->GetClips()` por
+                // indice: a lista de clipes do asset mistura os embutidos no
+                // personagem com os de cada arquivo importado, e casar por
+                // posicao ali e o tipo de suposicao que quebra no dia em que
+                // alguem importa mais uma animacao.
+                auto clips = ClipCooked::Read(filePath, *a->GetSkeleton());
+
+                if (!clips.empty())
+                    if (auto posed = MakePosedFromClip(a->GetMesh(), a->GetSkeleton(), clips[0]))
+                        return posed;
+
+                // Sem curvas legiveis: a silhueta do dono ainda identifica de
+                // quem e o clipe, que e a pergunta que a miniatura responde.
+                return MakeStaticFromSkinned(a->GetMesh());
+            }
+
             return nullptr;
         }
 

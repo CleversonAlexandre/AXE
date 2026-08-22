@@ -2,6 +2,7 @@
 #include "axe/log/log.hpp"
 
 #include <filesystem>
+#include <initializer_list>
 
 namespace axe
 {
@@ -35,6 +36,39 @@ namespace axe
 		m_IconScriptStatic = load("icon_script_static.png");
 		m_IconScriptTrigger = load("icon_script_trigger.png");
 		m_IconAudio = load("icon_audio.png");
+
+		// ── VARIANTES DE NOME ────────────────────────────────────────────
+		//
+		// A pasta mistura duas convencoes que ja convivem acima
+		// (`icon_mesh.png` e `save.png`), entao tentar as duas e mais barato
+		// que exigir que quem desenhou o icone acerte qual delas era.
+		//
+		// `loadAny` so avisa no log quando NENHUMA variante existe — e ai a
+		// mensagem lista o que foi procurado, que e a informacao util.
+		auto loadAny = [&](std::initializer_list<const char*> names)
+			-> std::shared_ptr<Texture2D>
+			{
+				std::string tried;
+
+				for (const char* n : names)
+				{
+					const std::string path = resourcesPath + "/icons/" + n;
+
+					if (std::filesystem::exists(path))
+						return Texture2D::Create(path);
+
+					if (!tried.empty()) tried += ", ";
+					tried += path;
+				}
+
+				AXE_CORE_WARN("EditorIconLibrary: icone nao encontrado (procurei: {})",
+					tried);
+				return nullptr;
+			};
+
+		m_IconSequence = loadAny({ "sequencer.png", "icon_sequencer.png", "sequence.png" });
+		m_IconGameMode = loadAny({ "game_mode.png", "icon_game_mode.png", "gamemode.png" });
+		m_IconParticle = loadAny({ "particle.png", "icon_particle.png", "particles.png" });
 		m_Material = load("icon_material.png");
 		m_IconSave = load("save.png");
 		m_IconUndo = load("arrow_left.png");

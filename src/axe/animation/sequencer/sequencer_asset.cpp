@@ -91,6 +91,11 @@ namespace axe {
         case SequencerInterp::CubicEaseIn:  return "CubicEaseIn";
         case SequencerInterp::CubicEaseOut: return "CubicEaseOut";
         case SequencerInterp::Bezier:       return "Bezier";
+        case SequencerInterp::EaseInStrong:  return "EaseInStrong";
+        case SequencerInterp::EaseOutStrong: return "EaseOutStrong";
+        case SequencerInterp::EaseInOut:     return "EaseInOut";
+        case SequencerInterp::EaseOutBack:   return "EaseOutBack";
+        case SequencerInterp::EaseOutBounce: return "EaseOutBounce";
         }
         return "Linear";
     }
@@ -101,6 +106,15 @@ namespace axe {
         if (s == "CubicEaseIn")  return SequencerInterp::CubicEaseIn;
         if (s == "CubicEaseOut") return SequencerInterp::CubicEaseOut;
         if (s == "Bezier")       return SequencerInterp::Bezier;
+        if (s == "EaseInStrong")  return SequencerInterp::EaseInStrong;
+        if (s == "EaseOutStrong") return SequencerInterp::EaseOutStrong;
+        if (s == "EaseInOut")     return SequencerInterp::EaseInOut;
+        if (s == "EaseOutBack")   return SequencerInterp::EaseOutBack;
+        if (s == "EaseOutBounce") return SequencerInterp::EaseOutBounce;
+
+        // Fallback Linear, e nao um erro: um `.axeseq` gravado por uma versao
+        // mais nova abre numa mais velha com a curva errada, mas ABRE — perder
+        // a sequence inteira por causa de um nome de curva seria pior.
         return SequencerInterp::Linear;
     }
 
@@ -118,6 +132,13 @@ namespace axe {
                 j["tangent_in"] = k.TangentIn;
                 j["tangent_out"] = k.TangentOut;
             }
+            // Gravado so quando significa alguma coisa. Um campo "overshoot: 0"
+            // em cada key de um bake denso engordaria o arquivo em megabytes
+            // sem dizer nada.
+            if (k.Interp == SequencerInterp::EaseOutBack ||
+                k.Interp == SequencerInterp::EaseOutBounce) {
+                j["overshoot"] = k.Overshoot;
+            }
         }
 
         SequencerKey DeserializeKey(const nlohmann::json& j) {
@@ -129,6 +150,7 @@ namespace axe {
                 k.TangentIn = j.value("tangent_in", 0.0f);
                 k.TangentOut = j.value("tangent_out", 0.0f);
             }
+            k.Overshoot = j.value("overshoot", 0.0f);
             return k;
         }
 
