@@ -17,6 +17,25 @@ namespace axe
 
         void OnUpdate(float deltaTime, Window* window);
 
+        // ── A CONVENCAO DE "FRENTE", NUM LUGAR SO ────────────────────────────
+        //
+        // Era um `static CalcForward` local do .cpp. Virou publica porque tres
+        // lugares precisam da MESMA resposta e nenhum deles e a GameCamera:
+        //
+        //   - o SceneRuntime, que posiciona a camera do Play a partir do
+        //     transform de uma entidade-camera;
+        //   - o desenho do frustum no viewport, que tem de apontar para onde a
+        //     camera vai apontar de verdade;
+        //   - o "ver pela camera", que pilota a EditorCamera.
+        //
+        // Copiada nos tres, ela divergiria no primeiro dia em que alguem
+        // decidisse que camera zerada olha para -Z em vez de +X. Aqui, mudar a
+        // convencao e mudar uma funcao.
+        //
+        // Angulos em GRAUS (yaw em torno de Y, pitch em torno do eixo lateral).
+        // Com os dois em zero, a frente e +X.
+        static glm::vec3 ForwardFromYawPitch(float yawDegrees, float pitchDegrees);
+
         glm::mat4 GetViewMatrix() const;
         glm::mat4 GetProjectionMatrix(float aspectRatio) const;
         glm::mat4 GetViewProjectionMatrix(float aspectRatio) const;

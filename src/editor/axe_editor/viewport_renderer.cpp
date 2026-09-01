@@ -598,6 +598,449 @@ namespace axe
 	void ViewportRenderer::OnMousePan(const glm::vec2& delta) { if (m_Camera) m_Camera->Pan(delta); }
 	void ViewportRenderer::OnMouseZoom(float delta) { if (m_Camera) m_Camera->Zoom(delta); }
 
+
+	// ── DIRECAO DE UMA ENTIDADE-CAMERA ───────────────────────────────────────
+	//
+	// A MESMA conta que o SceneRuntime usa para posicionar a camera do Play:
+	// yaw vem de Rotation.y, pitch de Rotation.x, os dois em radianos no
+	// Transform e em graus na GameCamera.
+	//
+	// Passa pela `GameCamera::ForwardFromYawPitch` de proposito. Reescrever o
+	// cos/sin aqui daria um frustum que aponta para um lado e um Play que
+	// aponta para outro — e o desenho estaria mentindo exatamente sobre a
+	// unica coisa que ele existe para mostrar.
+	static glm::vec3 CameraEntityForward(const Transform& t)
+	{
+		return GameCamera::ForwardFromYawPitch(
+			glm::degrees(t.Rotation.y), glm::degrees(t.Rotation.x));
+	}
+
+	entt::entity ViewportRenderer::PickPilotTarget() const
+	{
+		if (!m_Scene) return entt::null;
+
+		auto& reg = m_Scene->GetRegistry();
+
+		if (m_SelectedEntity && *m_SelectedEntity != entt::null &&
+			reg.valid(*m_SelectedEntity) &&
+			reg.all_of<CameraComponent>(*m_SelectedEntity) &&
+			reg.all_of<TransformComponent>(*m_SelectedEntity))
+		{
+			return *m_SelectedEntity;
+		}
+
+		entt::entity first = entt::null;
+
+		for (auto e : reg.view<CameraComponent, TransformComponent>())
+		{
+			if (first == entt::null) first = e;
+			if (reg.get<CameraComponent>(e).IsPrimary) return e;
+		}
+
+		return first;
+	}
+
+	void ViewportRenderer::StopPilot()
+	{
+		if (m_PilotSaved && m_Camera)
+		{
+			m_Camera->SetOrbit(m_PilotSavedFocal, m_PilotSavedDistance,
+				m_PilotSavedYaw, m_PilotSavedPitch);
+			m_Camera->m_FovDegrees = m_PilotSavedFov;
+		}
+
+		m_PilotSaved = false;
+		PilotCamera = entt::null;
+	}
+
+	bool ViewportRenderer::UpdatePilotCamera()
+	{
+		if (PilotCamera == entt::null) return false;
+
+		if (!m_Scene || !m_Camera)
+		{
+			StopPilot();
+			return false;
+		}
+
+		auto& reg = m_Scene->GetRegistry();
+
+		// A entidade pode ter sido apagada, ou perdido o CameraComponent, entre
+		// dois frames. Sair sozinho e melhor que pilotar um fantasma.
+		if (!reg.valid(PilotCamera) ||
+			!reg.all_of<CameraComponent>(PilotCamera) ||
+			!reg.all_of<TransformComponent>(PilotCamera))
+		{
+			StopPilot();
+			return false;
+		}
+
+		// Guarda a vista do usuario UMA vez, no frame em que o modo comeca.
+		if (!m_PilotSaved)
+		{
+			m_PilotSavedFocal = m_Camera->GetFocalPoint();
+			m_PilotSavedDistance = m_Camera->GetDistance();
+			m_PilotSavedYaw = m_Camera->GetYaw();
+			m_PilotSavedPitch = m_Camera->GetPitch();
+			m_PilotSavedFov = m_Camera->m_FovDegrees;
+			m_PilotSaved = true;
+		}
+
+		const auto& tc = reg.get<TransformComponent>(PilotCamera);
+		const auto& cc = reg.get<CameraComponent>(PilotCamera);
+
+		// TODO FRAME, e nao uma vez: e isto que faz arrastar o playhead do
+		// Sequencer virar "assistir a cutscene". A camera segue o transform que
+		// a sequence esta escrevendo.
+		m_Camera->PointAt(tc.Data.Position, CameraEntityForward(tc.Data));
+
+		// O FOV junto: um enquadramento visto com o FOV errado nao e o
+		// enquadramento. E a diferenca entre conferir o plano e achar que
+		// conferiu.
+		m_Camera->m_FovDegrees = cc.Fov;
+
+		return true;
+	}
+
+	// ── O DESENHO DA CAMERA ──────────────────────────────────────────────────
+	//
+	// Ver a nota em ShowCameras: ImDrawList por cima, e nao wireframe no GPU.
+	// ═══════════════════════════════════════════════════════════════════════
+	//  EDITOR DE CAMINHO
+	// ═══════════════════════════════════════════════════════════════════════
+	//
+	// Ver a nota na declaracao. Como as formas do Control Rig e o frustum da
+	// camera, tudo aqui e ImDrawList POR CIMA da cena: um ponto de controle
+	// escondido atras de uma parede e um ponto que nao se consegue arrastar —
+	// e um trilho de camera passa por dentro de cenario o tempo todo.
+	bool ViewportRenderer::DrawSplineEditor(const glm::vec2& boundsMin,
+		const glm::vec2& boundsMax)
+	{
+		if (!m_Scene || !m_Camera) return false;
+
+		const float extW = boundsMax.x - boundsMin.x;
+		const float extH = boundsMax.y - boundsMin.y;
+		if (extW <= 0.0f || extH <= 0.0f) return false;
+
+		auto& registry = m_Scene->GetRegistry();
+
+		const entt::entity sel =
+			(m_SelectedEntity && *m_SelectedEntity != entt::null &&
+				registry.valid(*m_SelectedEntity)) ? *m_SelectedEntity : entt::null;
+
+		// Trocar de entidade solta o ponto. Sem isto, selecionar outra curva
+		// deixaria o gizmo no indice antigo — que pode nem existir na nova.
+		if (sel != m_SplineOwner)
+		{
+			m_SplineOwner = sel;
+			SelectedSplinePoint = -1;
+		}
+
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		if (!dl) return false;
+
+		const glm::mat4 viewProj =
+			m_Camera->GetProjectionMatrix() * m_Camera->GetViewMatrix();
+
+		// Mundo -> tela. Devolve false ATRAS da camera: sem esse teste o ponto
+		// aparece espelhado do lado oposto da tela.
+		auto project = [&](const glm::vec3& world, ImVec2& out) -> bool
+			{
+				const glm::vec4 clip = viewProj * glm::vec4(world, 1.0f);
+				if (clip.w <= 0.0001f) return false;
+
+				const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+				out = ImVec2(
+					boundsMin.x + (ndc.x * 0.5f + 0.5f) * extW,
+					boundsMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * extH);
+				return true;
+			};
+
+		bool handledGizmo = false;
+
+		auto view = registry.view<SplineComponent, TransformComponent>();
+
+		for (auto e : view)
+		{
+			auto& sp = view.get<SplineComponent>(e);
+			const bool isSel = (e == sel);
+
+			if (!isSel && !sp.AlwaysVisible) continue;
+			if (sp.Points.size() < 2 && !isSel) continue;
+
+			const glm::mat4 world = m_Scene->GetWorldTransform(e);
+
+			// ── A LINHA ──────────────────────────────────────────────────────
+			//
+			// Amostrada no PARAMETRO, e nao por distancia: para desenhar, o
+			// espacamento desigual nao incomoda ninguem, e assim o desenho nao
+			// depende da tabela de comprimento estar construida.
+			if (sp.Points.size() >= 2)
+			{
+				const int segs = sp.Closed
+					? static_cast<int>(sp.Points.size())
+					: static_cast<int>(sp.Points.size()) - 1;
+
+				const int steps = segs * 24;
+
+				const ImU32 lineCol = isSel
+					? IM_COL32(255, 190, 80, 235)
+					: IM_COL32(150, 160, 180, 150);
+
+				ImVec2 prev;
+				bool havePrev = false;
+
+				for (int i = 0; i <= steps; ++i)
+				{
+					const float t = static_cast<float>(i) / 24.0f;
+					const glm::vec3 lp =
+						SplinePath::EvaluateParam(sp.Points, sp.Closed, t);
+
+					ImVec2 cur;
+					if (!project(glm::vec3(world * glm::vec4(lp, 1.0f)), cur))
+					{
+						havePrev = false;
+						continue;
+					}
+
+					if (havePrev)
+						dl->AddLine(prev, cur, lineCol, isSel ? 2.4f : 1.6f);
+
+					prev = cur;
+					havePrev = true;
+				}
+			}
+
+			if (!isSel) continue;
+
+			// ── OS PONTOS DE CONTROLE ────────────────────────────────────────
+			const ImVec2 mouse = ImGui::GetMousePos();
+			const bool   clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+			int   hovered = -1;
+			float hoveredDist = 1e9f;
+
+			for (int i = 0; i < static_cast<int>(sp.Points.size()); ++i)
+			{
+				const glm::vec3 wp = glm::vec3(world * glm::vec4(sp.Points[i], 1.0f));
+
+				ImVec2 s;
+				if (!project(wp, s)) continue;
+
+				const bool isPointSel = (i == SelectedSplinePoint);
+
+				const float dx = mouse.x - s.x;
+				const float dy = mouse.y - s.y;
+				const float d = std::sqrt(dx * dx + dy * dy);
+
+				if (d < 12.0f && d < hoveredDist)
+				{
+					hoveredDist = d;
+					hovered = i;
+				}
+
+				const float r = isPointSel ? 7.0f : 5.0f;
+
+				const ImU32 fill = isPointSel
+					? IM_COL32(255, 235, 150, 255)
+					: IM_COL32(40, 45, 55, 220);
+
+				const ImU32 edge = isPointSel
+					? IM_COL32(255, 255, 255, 255)
+					: IM_COL32(255, 190, 80, 235);
+
+				// Quadrado, e nao circulo: distingue o ponto de caminho da
+				// forma de Control Rig, que e sempre redonda. Com as duas na
+				// tela ao mesmo tempo, a diferenca de silhueta e o que evita
+				// agarrar a coisa errada.
+				dl->AddRectFilled(ImVec2(s.x - r, s.y - r), ImVec2(s.x + r, s.y + r), fill);
+				dl->AddRect(ImVec2(s.x - r, s.y - r), ImVec2(s.x + r, s.y + r), edge,
+					0.0f, 0, 2.0f);
+
+				// O primeiro ponto ganha um anel: sem ele, "onde a curva
+				// comeca" e invisivel — e o sentido de percurso e o que decide
+				// se a camera anda para frente ou para tras.
+				if (i == 0)
+					dl->AddCircle(s, r + 4.0f, IM_COL32(120, 255, 140, 230), 12, 2.0f);
+			}
+
+			// Clique fora do gizmo escolhe um ponto. `IsUsing` evita roubar o
+			// clique no meio de um arrasto do proprio gizmo.
+			if (clicked && hovered >= 0 && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver())
+			{
+				SelectedSplinePoint = hovered;
+				m_OverlayConsumedClick = true;
+			}
+
+			if (SelectedSplinePoint >= static_cast<int>(sp.Points.size()))
+				SelectedSplinePoint = -1;
+
+			// ── O GIZMO VAI PARA O PONTO ─────────────────────────────────────
+			if (SelectedSplinePoint >= 0)
+			{
+				ImGuizmo::SetOrthographic(false);
+				ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+				ImGuizmo::SetRect(boundsMin.x, boundsMin.y, extW, extH);
+
+				glm::mat4 vw = m_Camera->GetViewMatrix();
+				glm::mat4 pj = m_Camera->GetProjectionMatrix();
+
+				// So TRANSLACAO: um ponto de controle nao tem rotacao nem
+				// escala. Oferecer as outras operacoes daria um gizmo que gira
+				// sem efeito nenhum — e o usuario passaria um tempo tentando
+				// entender o que esta quebrado.
+				glm::mat4 model = world *
+					glm::translate(glm::mat4(1.0f), sp.Points[SelectedSplinePoint]);
+
+				float snapValues[3] = { SnapValue, SnapValue, SnapValue };
+				const float* snap = SnapEnabled ? snapValues : nullptr;
+
+				ImGuizmo::Manipulate(
+					glm::value_ptr(vw), glm::value_ptr(pj),
+					ImGuizmo::TRANSLATE, ImGuizmo::WORLD,
+					glm::value_ptr(model), nullptr, snap);
+
+				if (ImGuizmo::IsUsing())
+				{
+					// Mundo -> LOCAL da entidade. Os pontos sao locais (ver
+					// SplineComponent): gravar mundo faria o caminho escorregar
+					// no instante em que alguem movesse a entidade.
+					const glm::vec3 lp = glm::vec3(
+						glm::inverse(world) * glm::vec4(glm::vec3(model[3]), 1.0f));
+
+					sp.Points[SelectedSplinePoint] = lp;
+					sp._Dirty = true;
+				}
+
+				handledGizmo = true;
+			}
+		}
+
+		return handledGizmo;
+	}
+
+	void ViewportRenderer::DrawCameraGizmos(const glm::vec2& boundsMin,
+		const glm::vec2& boundsMax)
+	{
+		if (!ShowCameras || !m_Scene || !m_Camera) return;
+
+		const float w = boundsMax.x - boundsMin.x;
+		const float h = boundsMax.y - boundsMin.y;
+		if (w <= 0.0f || h <= 0.0f) return;
+
+		auto& reg = m_Scene->GetRegistry();
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		const glm::mat4 vp = m_Camera->GetViewProjectionMatrix();
+
+		for (auto e : reg.view<CameraComponent, TransformComponent>())
+		{
+			// Pilotando ESTA camera: desenhar o proprio frustum de dentro dele
+			// encheria a tela de linhas na borda, sem informar nada.
+			if (e == PilotCamera) continue;
+
+			const auto& tc = reg.get<TransformComponent>(e);
+			const auto& cc = reg.get<CameraComponent>(e);
+
+			const glm::vec3 pos = tc.Data.Position;
+			const glm::vec3 fwd = CameraEntityForward(tc.Data);
+
+			// Base ortonormal a partir da frente. O "up do mundo" como
+			// referencia e o mesmo que a GameCamera usa no lookAt — uma camera
+			// de cutscene nao tem roll, e inventar um aqui faria o desenho
+			// discordar do que o Play mostra.
+			glm::vec3 right = glm::cross(fwd, glm::vec3(0.0f, 1.0f, 0.0f));
+
+			// Olhando reto para cima ou para baixo, o cross degenera. Qualquer
+			// eixo perpendicular serve, e +X e tao bom quanto outro.
+			if (glm::dot(right, right) < 1e-6f)
+				right = glm::vec3(1.0f, 0.0f, 0.0f);
+
+			right = glm::normalize(right);
+			const glm::vec3 up = glm::normalize(glm::cross(right, fwd));
+
+			// Comprimento FIXO, e nao o FarClip: um frustum de 982 unidades
+			// (o Far Clip padrao) cobriria o nivel inteiro de linhas. O que o
+			// desenho precisa dizer e a DIRECAO e a ABERTURA, e para isso um
+			// cone curto basta.
+			const float len = 1.25f;
+			const float aspect = (h > 0.0f) ? (w / h) : 1.6f;
+
+			const float th = std::tan(glm::radians(cc.Fov * 0.5f)) * len;
+			const float tw = th * aspect;
+
+			const glm::vec3 c = pos + fwd * len;
+
+			const glm::vec3 corners[4] = {
+				c + up * th - right * tw,
+				c + up * th + right * tw,
+				c - up * th + right * tw,
+				c - up * th - right * tw,
+			};
+
+			bool behind = false;
+
+			auto project = [&](const glm::vec3& p, ImVec2& out) -> bool
+				{
+					const glm::vec4 clip = vp * glm::vec4(p, 1.0f);
+					if (clip.w <= 0.0001f) { behind = true; return false; }
+
+					const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+
+					out = ImVec2(
+						boundsMin.x + (ndc.x * 0.5f + 0.5f) * w,
+						boundsMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * h);
+					return true;
+				};
+
+			ImVec2 sp, sc[4];
+			if (!project(pos, sp)) continue;
+
+			bool ok = true;
+			for (int i = 0; i < 4; ++i)
+				if (!project(corners[i], sc[i])) { ok = false; break; }
+
+			if (!ok || behind) continue;
+
+			const bool selected = (m_SelectedEntity && *m_SelectedEntity == e);
+
+			const ImU32 col = selected ? IM_COL32(255, 210, 90, 255)
+				: cc.IsPrimary ? IM_COL32(120, 200, 255, 220)
+				: IM_COL32(150, 150, 160, 190);
+
+			const float thick = selected ? 2.2f : 1.4f;
+
+			// Os quatro raios e o retangulo da abertura.
+			for (int i = 0; i < 4; ++i)
+			{
+				dl->AddLine(sp, sc[i], col, thick);
+				dl->AddLine(sc[i], sc[(i + 1) % 4], col, thick);
+			}
+
+			// Corpo: um losango no ponto da camera, para ela existir na tela
+			// mesmo vista de tras (com o frustum apontando para longe).
+			dl->AddQuadFilled(
+				ImVec2(sp.x, sp.y - 6.0f), ImVec2(sp.x + 6.0f, sp.y),
+				ImVec2(sp.x, sp.y + 6.0f), ImVec2(sp.x - 6.0f, sp.y), col);
+
+			// ── QUAL LADO E O DE CIMA ────────────────────────────────────────
+			//
+			// Sem isto, um frustum girado 180 graus no roll seria identico ao
+			// nao girado — e "a imagem esta de cabeca para baixo" viraria um
+			// misterio. O tracinho marca o topo do quadro.
+			const ImVec2 topMid((sc[0].x + sc[1].x) * 0.5f, (sc[0].y + sc[1].y) * 0.5f);
+			const ImVec2 upTip(
+				topMid.x + (topMid.x - sp.x) * 0.16f,
+				topMid.y + (topMid.y - sp.y) * 0.16f);
+
+			dl->AddLine(sc[0], upTip, col, thick);
+			dl->AddLine(sc[1], upTip, col, thick);
+
+			if (const auto* nm = reg.try_get<NameComponent>(e))
+				dl->AddText(ImVec2(sp.x + 9.0f, sp.y - 7.0f), col, nm->Name.c_str());
+		}
+	}
+
 	void ViewportRenderer::DrawGuizmo(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
 	{
 		const float extW = boundsMax.x - boundsMin.x;
@@ -619,6 +1062,10 @@ namespace axe
 		// bloquearia a selecao de entidade quando voltasse ao Edit.
 		if (SuppressEditorGizmos)
 			return;
+
+		// Antes de tudo: e informacao de cena, nao ferramenta. Fica atras do
+		// gizmo e das formas do rig, que sao o que se agarra.
+		DrawCameraGizmos(boundsMin, boundsMax);
 
 		if (m_ExternalOverlay.Active && m_ExternalOverlay.OnDraw &&
 			extW > 0.0f && extH > 0.0f)
@@ -690,6 +1137,14 @@ namespace axe
 
 			return;
 		}
+
+		// ── CAMINHOS ─────────────────────────────────────────────────────────
+		//
+		// Depois do gizmo externo (o Sequencer manda quando esta ativo) e antes
+		// do caminho de entidade: com um ponto de controle escolhido, o gizmo
+		// e dele.
+		if (DrawSplineEditor(boundsMin, boundsMax))
+			return;
 
 		if (!m_Scene || !m_SelectedEntity || *m_SelectedEntity == entt::null || !m_Camera)
 			return;

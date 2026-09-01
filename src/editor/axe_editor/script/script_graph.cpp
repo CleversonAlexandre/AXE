@@ -1091,6 +1091,38 @@ namespace axe
             node->Outputs.emplace_back(m_NextId++, "Camera Right", ScriptPinType::Vec3, ed::PinKind::Output);
             return node;
         }
+        // ── Cutscene ─────────────────────────────────────────────────────
+        //
+        // O alvo e o NOME da entidade que carrega o Sequence Player. Ver a
+        // nota em ScriptSequenceProxy sobre por que nome e nao entidade: quem
+        // dispara uma cutscene (um volume, uma tecla, o fim de uma fase) quase
+        // nunca tem o objeto dela em maos.
+        if (t == "PlaySequence")
+        {
+            auto node = makeNode(baseId, "Play Sequence", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Entity Name", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "StopSequence")
+        {
+            auto node = makeNode(baseId, "Stop Sequence", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Entity Name", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "IsSequencePlaying")
+        {
+            // Sem pinos de Flow: e uma PERGUNTA, nao uma acao. Ligar num
+            // Branch e o uso normal ("so abre a porta quando a cutscene
+            // acabar").
+            auto node = makeNode(baseId, "Is Sequence Playing", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Entity Name", ScriptPinType::String, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Playing", ScriptPinType::Bool, ed::PinKind::Output);
+            return node;
+        }
         if (t == "CameraShake")
         {
             auto node = makeNode(baseId, "Camera Shake", ScriptNodeCategory::Action);

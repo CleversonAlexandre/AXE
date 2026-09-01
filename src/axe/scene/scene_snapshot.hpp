@@ -54,6 +54,8 @@ namespace axe
 
 		CameraComponent,
 		SpringArmComponent,
+		SequencePlayerComponent,
+		SplineComponent,
 
 		RigidbodyComponent,
 		ColliderComponent,

@@ -42,14 +42,65 @@ namespace axe {
         TransformSocket = 2,    // v1.1
         AnimationClip = 3,
         Property = 4,
-        Event = 5
+        Event = 5,
+
+        // ── O TRANSFORM DA PROPRIA ENTIDADE ──────────────────────────────────
+        //
+        // Anima o `TransformComponent` da entidade do binding — nao um osso
+        // dela.
+        //
+        // ── POR QUE "ENTIDADE" E NAO "CAMERA" ────────────────────────────────
+        //
+        // O pedido era uma camera de cutscene. Mas uma camera, no AXE, e uma
+        // entidade com CameraComponent: nao ha tipo proprio, e nao deveria
+        // haver um aqui.
+        //
+        // Um `TransformCamera` obrigaria a inventar um segundo caminho no dia
+        // em que alguem quisesse animar uma porta, um elevador, o foco de uma
+        // luz ou a arma na mao — todos "mover uma entidade no tempo", que e
+        // exatamente isto. A camera passa a ser o primeiro USO, e nao um caso
+        // especial.
+        //
+        // Acrescentado DEPOIS do Event, e nunca no meio: o valor numerico vai
+        // para o `.axeseqbin` futuro.
+        TransformEntity = 6,
+
+        // ── DE QUAL CAMERA A CENA E VISTA ────────────────────────────────────
+        //
+        // `TargetName` e o nome da ENTIDADE de camera. Cada key diz "deste
+        // frame em diante, esta camera" — semantica de degrau, como uma key
+        // Step: o corte vale ate a proxima key, de qualquer track de corte.
+        //
+        // ── POR QUE NAO E UMA TRACK DE EVENT ─────────────────────────────────
+        //
+        // Era o encaixe obvio, e esta errado por um motivo so, mas decisivo:
+        // evento e um instante CRUZADO, e por isso nao dispara em scrub (ver
+        // SequencerEventSample). Um corte de camera nao e um instante — e um
+        // ESTADO. A pergunta que ele responde e "de qual camera se ve o frame
+        // 47?", e ela tem resposta mesmo que o playhead tenha sido arrastado
+        // para la, ou aberto direto ali.
+        //
+        // Com evento, o Play mostraria os cortes e o scrub do editor nao —
+        // o animador enquadraria um plano olhando pela camera errada.
+        //
+        // ── POR QUE O NOME VAI NA TRACK, E UMA TRACK POR CAMERA ──────────────
+        //
+        // Uma key nao tem campo de texto, e nao vai ganhar um: acrescentar
+        // string em SequencerKey engordaria TODA key do arquivo por causa de
+        // um caso. Com o nome na track, "corta para a CamA" e uma key numa
+        // linha chamada CamA — e a timeline passa a mostrar uma faixa por
+        // camera, que e exatamente como um NLE desenha isso.
+        CameraCut = 7
     };
 
     enum class SequencerTargetType : uint8_t {
         Bone = 0,
         Control = 1,
         Null = 2,
-        Socket = 3   // v1.1
+        Socket = 3,  // v1.1
+
+        // A propria entidade do binding. Ver TransformEntity acima.
+        Entity = 4
     };
 
     enum class SequencerChannelComponent : uint8_t {
@@ -129,6 +180,35 @@ namespace axe {
         SequencerInterp    Interp = SequencerInterp::Linear;
         float              TangentIn = 0.0f;   // so Bezier
         float              TangentOut = 0.0f;   // so Bezier
+
+        // ── O PESO HORIZONTAL DA TANGENTE ────────────────────────────────────
+        //
+        // Fracao do TRECHO que a alca ocupa no eixo do tempo. Junto com
+        // TangentIn/Out (que sao o eixo do valor), formam a alca 2D que o
+        // editor de curvas desenha e arrasta.
+        //
+        // ── POR QUE 1/3, E POR QUE ISSO NAO MUDA NENHUM ARQUIVO ──────────────
+        //
+        // A implementacao antiga do Bezier era, na aparencia, "1D": interpolava
+        // o valor por um cubico com t uniforme. Mas ela E um bezier 2D com as
+        // alcas fixas em 1/3 e 2/3 — a conta fecha exatamente:
+        //
+        //     x(u) = 3(1-u)^2*u*(1/3) + 3(1-u)*u^2*(2/3) + u^3
+        //          = u*[(1-u) + u]^2 = u
+        //
+        // Ou seja: com peso 1/3 dos dois lados, x(u) = u e a formula parametrica
+        // colapsa na antiga, termo a termo. Toda key ja gravada avalia
+        // IDENTICA — nao ha caminho duplo nem migracao.
+        //
+        // O que muda e que agora a alca pode sair de 1/3, e ai x(u) != u e o
+        // avaliador resolve u a partir de x. E o que permite "segura e dispara"
+        // com duas keys so.
+        //
+        // Clampado em [0.01, 0.99] no avaliador: sao os limites que garantem
+        // x(u) monotonico (a mesma restricao da cubic-bezier do CSS). Fora
+        // deles a curva dobraria no tempo — dois valores para o mesmo frame.
+        float              TangentInWeight = 1.0f / 3.0f;
+        float              TangentOutWeight = 1.0f / 3.0f;
 
         // ── QUANTO PASSA DO PONTO (EaseOutBack / EaseOutBounce) ──────────────
         //
@@ -349,6 +429,27 @@ namespace axe {
         int         BindingIndex = -1;
         std::string ClipName;
         float       TimeSeconds = 0.0f;
+    };
+
+    // ── SAIDA DAS TRACKS DE EVENT ────────────────────────────────────────────
+    //
+    // Um evento nao e um VALOR amostrado, e um INSTANTE cruzado. A diferenca
+    // decide o formato: `SequencerSample` responde "quanto vale este canal
+    // agora?", e a resposta existe em todo frame. Aqui a pergunta e "o playhead
+    // passou por cima desta key desde a ultima vez?", e a resposta e quase
+    // sempre "nao".
+    //
+    // POR QUE ISSO NAO PODE SAIR DO Resample():
+    //   `Resample()` roda tambem em scrub, e roda varias vezes no mesmo frame
+    //   (o editor chama depois de cada Scrub). Disparar evento dali faria o
+    //   animador arrastar o playhead para tras e para frente e ouvir o tiro
+    //   trinta vezes. Evento so nasce quando o TEMPO ANDA — em OnUpdate, e so
+    //   no modo Playing.
+    struct AXE_API SequencerEventSample {
+        int         BindingIndex = -1;
+        std::string EventName;
+        float       Value = 0.0f;
+        float       Frame = 0.0f;
     };
 
 } // namespace axe

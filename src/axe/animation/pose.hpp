@@ -72,6 +72,56 @@ namespace axe
 		static void BlendMasked(const Pose& base, const Pose& layer,
 			const BoneMask& mask, float alpha, Pose& out);
 
+		// ── BLEND MASCARADO EM ESPACO DE MALHA (so a ROTACAO) ────────────
+		//
+		// ── O PROBLEMA QUE ISTO RESOLVE ──────────────────────────────────
+		//
+		// O BlendMasked acima mistura rotacao LOCAL — local ao pai. Isso e
+		// certo quando as duas poses partem da mesma base, e errado quando a
+		// mascara CORTA a hierarquia no meio.
+		//
+		// O caso concreto: locomocao na base, mira na camada, mascara a
+		// partir do Spine. O Hips fica de fora da mascara, entao vem da
+		// locomocao. Mas as rotacoes locais do Spine da camada foram
+		// autoradas em cima do Hips DELA — que numa pose de mira costuma
+		// estar girado. Enxertadas num Hips diferente, elas acumulam a
+		// diferenca: o tronco inteiro sai torto, e a arma aponta para o lado.
+		//
+		// Trocar a raiz da mascara para Hips "conserta" porque ai a camada
+		// substitui o corpo todo — e ai as pernas param de andar. Os dois
+		// sintomas sao o mesmo problema visto de dois lados.
+		//
+		// ── A CORRECAO ───────────────────────────────────────────────────
+		//
+		// Compor a rotacao ate o espaco da MALHA, interpolar LA, e so entao
+		// voltar para local contra o pai ja resolvido. A camada passa a
+		// carregar "para onde este osso APONTA", e nao "quanto ele gira em
+		// relacao ao pai" — entao a direcao da mira sobrevive a qualquer
+		// coisa que a base faca com o quadril.
+		//
+		// SO a rotacao. Translacao em espaco de malha brigaria com a posicao
+		// do quadril que a base acabou de definir, e o personagem se
+		// desmontaria. E a mesma divisao que o "Mesh Space Rotation Blend"
+		// da Unreal faz, e pelo mesmo motivo.
+		//
+		// O esqueleto e necessario para os indices de pai; a ordem topologica
+		// (ParentIndex < i, garantida pelo Skeleton) e o que permite resolver
+		// tudo numa passada so.
+		//
+		// `scratch` existe para nao alocar tres vetores por frame por
+		// personagem — quem chama e um no de AnimGraph, que ja guarda estado
+		// por instancia.
+		struct MeshSpaceScratch
+		{
+			std::vector<glm::quat> Base;
+			std::vector<glm::quat> Layer;
+			std::vector<glm::quat> Out;
+		};
+
+		static void BlendMaskedMeshSpace(const Pose& base, const Pose& layer,
+			const BoneMask& mask, float alpha, const Skeleton& skeleton,
+			MeshSpaceScratch& scratch, Pose& out);
+
 		// ── Additive ─────────────────────────────────────────────────────
 		// Aditivo é a DIFERENÇA entre uma pose e uma referência. É como
 		// funciona um "hit reaction" ou uma respiração: você não substitui

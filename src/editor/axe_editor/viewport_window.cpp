@@ -408,6 +408,34 @@ namespace axe
 					vr.ShowGrid = !vr.ShowGrid;
 				ImGui::SameLine();
 
+				// ── VER PELA CAMERA ──────────────────────────────────────────
+				//
+				// Pilota a camera SELECIONADA se ela for uma; senao a marcada
+				// como Principal. Escolher a selecao primeiro e o que permite
+				// conferir uma camera secundaria sem ter de marca-la como
+				// principal so para olhar.
+				{
+					const bool piloting = (vr.PilotCamera != entt::null);
+					const entt::entity target = vr.PickPilotTarget();
+
+					ImGui::BeginDisabled(!piloting && target == entt::null);
+
+					if (ui::ToggleButton(ICON_CAMERA " Ver", piloting,
+						"Ve pela camera da cena, sem dar Play.\n\n"
+						"Pilota a camera SELECIONADA, ou a marcada como Principal.\n"
+						"Com o Sequencer animando o transform dela, arrastar o\n"
+						"playhead vira assistir a cutscene.\n\n"
+						"A navegacao do viewport fica travada enquanto isso — os\n"
+						"dois nao podem mandar na mesma camera."))
+					{
+						if (piloting) vr.StopPilot();
+						else          vr.PilotCamera = target;
+					}
+
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+				}
+
 				if (ui::ToggleButton(kSnap, vr.SnapEnabled,
 					"Prender o gizmo a incrementos", ui::Accent::Warning))
 					vr.SnapEnabled = !vr.SnapEnabled;
@@ -429,6 +457,27 @@ namespace axe
 						ImGui::DragFloat("##snap", &vr.SnapValue, 0.1f, 0.1f, 10.0f, "%.1f");
 				}
 			}
+		}
+
+		// ── AVISO DE QUE A VISTA NAO E SUA ───────────────────────────────────
+		//
+		// Sem isto, a navegacao travada parece o editor quebrado. A faixa diz o
+		// que esta acontecendo e como sair.
+		if (m_ViewportRenderer && m_ViewportRenderer->PilotCamera != entt::null)
+		{
+			const char* msg = ICON_CAMERA "  Vendo pela camera da cena "
+				"— navegacao travada. Clique em 'Ver' para sair.";
+
+			const float bw = ImGui::CalcTextSize(msg).x + 16.0f;
+			const float bx = wpos.x + (wsize.x - bw) * 0.5f;
+			const float by = startY + btnH + 6.0f;
+
+			draw->AddRectFilled(ImVec2(bx, by),
+				ImVec2(bx + bw, by + ImGui::GetTextLineHeight() + 6.0f),
+				IM_COL32(30, 90, 140, 210), 3.0f);
+
+			draw->AddText(ImVec2(bx + 8, by + 3),
+				IM_COL32(190, 230, 255, 255), msg);
 		}
 
 		// Cursor num lugar DETERMINISTICO antes de devolver.

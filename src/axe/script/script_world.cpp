@@ -95,6 +95,7 @@ namespace axe
                 ScriptContext ctx;
                 ctx.Entity = entity;
                 ctx.ScenePtr = &scene;
+                ctx.SequencePtr = m_SequenceWorld;
                 sc.Instance->SetContext(ctx);
 
                 sc.Instance->OnStart();

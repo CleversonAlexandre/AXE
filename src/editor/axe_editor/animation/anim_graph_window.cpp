@@ -3789,6 +3789,33 @@ namespace axe
 
 				ImGui::EndCombo();
 			}
+
+			ImGui::Spacing();
+
+			// ── A OPCAO QUE RESOLVE O TRONCO TORTO ───────────────────────
+			//
+			// Ver a nota longa em AnimNode_LayeredBlend::MeshSpaceRotation.
+			if (ImGui::Checkbox("Mesh space rotation", &lb->MeshSpaceRotation))
+				MarkEdited();
+
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(
+					"Ligue quando a camada e uma pose de MIRA (ou qualquer\n"
+					"coisa que precise apontar) sobre uma locomocao.\n\n"
+					"Sintoma que isto resolve: com a mascara no Spine as pernas\n"
+					"andam certo mas o tronco fica torto; passando a raiz para o\n"
+					"Hips o tronco endireita e as pernas param de animar. Os dois\n"
+					"sao o mesmo problema, e nenhuma raiz resolve os dois.\n\n"
+					"Causa: o blend padrao mistura rotacao LOCAL AO PAI, e as\n"
+					"rotacoes do Spine da camada foram autoradas sobre o quadril\n"
+					"DELA. Num quadril diferente, a diferenca se acumula.\n\n"
+					"Ligado, a rotacao e interpolada em espaco de MALHA: a camada\n"
+					"passa a dizer para onde o osso APONTA, e a direcao da mira\n"
+					"sobrevive ao que a base faz com o quadril.\n\n"
+					"So a rotacao. Translacao continua local — em espaco de malha\n"
+					"ela brigaria com a posicao do quadril e o corpo se\n"
+					"desmontaria.");
+
 			return;
 		}
 

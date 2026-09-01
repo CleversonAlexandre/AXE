@@ -42,8 +42,15 @@ namespace axe
         void SetActiveCamera(class GameCamera* cam) { m_ActiveCamera = cam; }
         class GameCamera* GetActiveCamera() const { return m_ActiveCamera; }
 
+        // Idem para as cutscenes. Tem de ser chamado ANTES do OnSceneStart:
+        // e la que o ScriptContext e montado, e uma cutscene de abertura
+        // disparada no OnStart de um script e um caso normal demais para
+        // exigir esperar um frame.
+        void SetSequenceWorld(class SequenceWorld* seq) { m_SequenceWorld = seq; }
+
     private:
         class GameCamera* m_ActiveCamera = nullptr;
+        class SequenceWorld* m_SequenceWorld = nullptr;
     };
 
 } // namespace axe

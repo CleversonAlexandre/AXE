@@ -717,6 +717,43 @@ namespace axe
 		// as duas animações fica uma dobra rígida no meio das costas.
 		int   FeatherBones = 2;
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  ROTACAO EM ESPACO DE MALHA
+		//
+		//  ── O SINTOMA ─────────────────────────────────────────────────────
+		//
+		//  Locomocao na base, mira na camada, mascara a partir do Spine: as
+		//  pernas andam certo, mas o tronco fica levemente torto e a arma
+		//  aponta um pouco para o lado.
+		//
+		//  Trocar a raiz da mascara para o Hips "conserta" a torcao — e ai as
+		//  pernas param de animar, porque o Hips e a raiz de tudo e a camada
+		//  passa a substituir o corpo inteiro. Os dois sintomas sao o MESMO
+		//  problema visto de dois lados, e por isso nao existe raiz de mascara
+		//  que resolva os dois.
+		//
+		//  ── A CAUSA ───────────────────────────────────────────────────────
+		//
+		//  O blend padrao mistura rotacao LOCAL AO PAI. As rotacoes locais do
+		//  Spine da camada foram autoradas em cima do Hips DELA, que numa pose
+		//  de mira esta girado. Enxertadas num Hips que veio da locomocao,
+		//  elas acumulam a diferenca — e a diferenca e exatamente o angulo que
+		//  o tronco sai torto.
+		//
+		//  ── A CORRECAO ────────────────────────────────────────────────────
+		//
+		//  Ligado, a rotacao e composta ate o espaco da MALHA, interpolada la,
+		//  e so entao devolvida a local. A camada passa a dizer "para onde
+		//  este osso APONTA" em vez de "quanto ele gira em relacao ao pai", e
+		//  a direcao da mira sobrevive a qualquer coisa que a base faca com o
+		//  quadril.
+		//
+		//  Custo: uma passada extra pela hierarquia e tres quaternions por
+		//  osso. Desligado por padrao porque local continua correto — e mais
+		//  barato — quando as duas poses partem da mesma base.
+		// ═══════════════════════════════════════════════════════════════════
+		bool  MeshSpaceRotation = false;
+
 		// Alpha inline em 1.0: uma camada recem-criada aparece INTEIRA.
 		// Se comecasse em 0, voce ligaria tudo certo e nao veria nada acontecer.
 		AnimNode_LayeredBlend() { AddFloatPin("Alpha", 1.0f); }
@@ -731,6 +768,11 @@ namespace axe
 		BoneMask m_Mask;
 		bool m_MaskBuilt = false;
 		std::string m_BuiltFor;   // detecta troca de RootBone em runtime
+
+		// Buffers do blend em espaco de malha, por INSTANCIA. Membro para nao
+		// alocar tres vetores por frame por personagem — mesma razao do
+		// m_Solved no AnimNode_ControlRig.
+		Pose::MeshSpaceScratch m_MeshScratch;
 	};
 
 	// ── Apply Additive ────────────────────────────────────────────────────────

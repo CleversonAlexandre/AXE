@@ -260,7 +260,11 @@ namespace axe
 		EvalInput(ctx, 0, base);
 		EvalInput(ctx, 1, layer);
 
-		Pose::BlendMasked(base, layer, m_Mask, alpha, out);
+		if (MeshSpaceRotation)
+			Pose::BlendMaskedMeshSpace(base, layer, m_Mask, alpha, *ctx.Skel,
+				m_MeshScratch, out);
+		else
+			Pose::BlendMasked(base, layer, m_Mask, alpha, out);
 	}
 
 	// ═══ Apply Additive ══════════════════════════════════════════════════════
@@ -970,12 +974,18 @@ namespace axe
 	{
 		j["root_bone"] = RootBone;
 		j["feather"] = FeatherBones;
+		j["mesh_space_rotation"] = MeshSpaceRotation;
 	}
 
 	void AnimNode_LayeredBlend::Deserialize(const nlohmann::json& j)
 	{
 		RootBone = j.value("root_bone", std::string("Spine"));
 		FeatherBones = j.value("feather", 2);
+
+		// Default FALSE, ao contrario do ControlsFollowAnimation: local nao e
+		// um bug, e um modo — e continua sendo o certo quando as duas poses
+		// partem da mesma base. Ligar sozinho mudaria grafos que ja estao bons.
+		MeshSpaceRotation = j.value("mesh_space_rotation", false);
 	}
 
 	// ── State Machine ─────────────────────────────────────────────────────────

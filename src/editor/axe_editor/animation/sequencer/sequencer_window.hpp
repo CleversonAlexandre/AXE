@@ -56,6 +56,20 @@ namespace axe
         void Draw();
         void SetContext(EditorContext* context) { m_Context = context; }
 
+        // ── QUEM DIRIGE A CENA DURANTE O PLAY ────────────────────────────────
+        //
+        // Em Play quem toca a sequence e o SequenceWorld, a partir do
+        // SequencePlayerComponent que estiver na cena. Se a janela continuasse
+        // aplicando a pose, os dois escreveriam no mesmo BonePalette todo frame
+        // e venceria quem rodasse por ultimo — que e a janela, porque a UI
+        // desenha depois do SceneRuntime.
+        //
+        // O sintoma seria enganoso ao extremo: a cutscene funcionando no Play
+        // apenas enquanto o Sequencer estivesse aberto, e no frame em que o
+        // usuario a fechasse, mudando de comportamento. Vale para o gizmo e
+        // para as formas do rig pela mesma razao.
+        void SetScenePlaying(bool playing) { m_ScenePlaying = playing; }
+
         void Open() { m_IsOpen = true; }
         void Close() { m_IsOpen = false; }
         bool IsOpen() const { return m_IsOpen; }
@@ -89,6 +103,11 @@ namespace axe
         SequencerPlayer m_Player;
         bool           m_PlayerStarted = false;
         EditorContext* m_Context = nullptr;
+
+        // Ver SetScenePlaying. `m_ReleasedForPlay` evita chamar
+        // ReleasePoseOverride() todo frame do Play — ele varre a cena inteira.
+        bool           m_ScenePlaying = false;
+        bool           m_ReleasedForPlay = false;
 
         // --- Estado de UI -------------------------------------------------
         int m_SelectedBinding = -1;
@@ -355,12 +374,30 @@ namespace axe
         // FK cru, que e o que mais existe e o que menos se procura).
         enum class TrackGroup : std::uint8_t
         {
-            Clip = 0,
-            Socket = 1,
-            Control = 2,
-            Bone = 3,
-            Other = 4,
-            Count = 5
+            // A ordem E a de exibicao. `Entity` primeiro porque e o objeto
+            // INTEIRO — onde a camera esta, para onde a porta abre. Tudo o
+            // mais na lista e uma parte dele.
+            //
+            // Os valores nao vao para disco (a chave de dobra e uma string de
+            // runtime), entao reordenar aqui e seguro.
+            Entity = 0,
+            Clip = 1,
+            Socket = 2,
+            Control = 3,
+            Bone = 4,
+
+            // Eventos ficam ANTES de "Outras" e depois de tudo que anima: sao
+            // poucos, e sao a unica linha da timeline que nao descreve
+            // movimento. Jogados em "Outras" junto com o que o Sequencer ainda
+            // nao classifica, seriam o unico grupo cujo conteudo importa.
+            Event = 5,
+
+            // Cortes de camera. Logo depois dos eventos porque sao parentes —
+            // as duas sao linhas de keys que nao descrevem movimento.
+            Cut = 6,
+
+            Other = 7,
+            Count = 8
         };
 
         static TrackGroup  GroupOf(const SequencerTrack& track);
@@ -403,6 +440,64 @@ namespace axe
         // um rig e raso (6 ou 7 niveis) e a indentacao e o que faz a lista LER
         // como a hierarquia que o autor montou, em vez de um monte de nomes.
         int ControlDepth(int bindingIndex, const std::string& controlName);
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  TRANSFORM DA PROPRIA ENTIDADE
+        //
+        //  E o que faz a CAMERA de cutscene existir — mas nao e um recurso de
+        //  camera. Ver a nota em SequencerTrackType::TransformEntity: uma
+        //  camera no AXE e uma entidade com CameraComponent, e "mover uma
+        //  entidade no tempo" cobre tambem porta, elevador, prop e a luz.
+        //
+        //  ── O QUE PRECISOU MUDAR ALEM DE UM TIPO NOVO ─────────────────────
+        //
+        //  Um binding assumia esqueleto em tres lugares: o picker so listava
+        //  entidades com SkeletalMeshComponent, o CreateBindingForEntity
+        //  exigia um, e o EvaluateAndApply desistia do binding inteiro quando
+        //  nao havia. Uma camera nao tem nenhum.
+        // ═══════════════════════════════════════════════════════════════════
+        int  CreateEntityTransformTrack(int bindingIndex);
+
+        // Track de EVENTO: nao anima, avisa. Ver a nota no .cpp sobre por que o
+        // nome do evento mora na track e nao na key.
+        int  CreateEventTrack(int bindingIndex, const std::string& eventName);
+
+        // Estado do popup de nome do evento.
+        int  m_AddEventForBinding = -1;
+        bool m_OpenAddEventPopup = false;
+        char m_NewEventName[64] = { 0 };
+
+        // Track de CORTE de camera: de qual camera a cena e vista a partir de
+        // cada key. Ver a nota no .cpp sobre por que nao e uma track de evento.
+        int  CreateCameraCutTrack(int bindingIndex, const std::string& cameraName);
+
+        int  m_AddCameraCutForBinding = -1;
+        bool m_OpenAddCameraCutPopup = false;
+
+        // Faz o "Ver" do viewport trocar de camera no frame do corte.
+        void SyncPilotToCameraCut();
+        bool BindingHasEntityTrack(int bindingIndex) const;
+
+        // Escreve o transform amostrado nas entidades. Chamado do
+        // EvaluateAndApply, ANTES do caminho de esqueleto — que um binding de
+        // camera nunca alcanca.
+        void ApplyEntityTransforms();
+
+        // ── O ORIGINAL DE CADA ENTIDADE DIRIGIDA ─────────────────────────────
+        //
+        // Osso e socket voltam sozinhos (a pose e recomposta todo frame; o
+        // preview do socket e transiente). O TransformComponent de uma entidade
+        // da CENA nao: o que a sequence escreve nele FICA.
+        //
+        // Sem isto, fechar o Sequencer deixaria a camera parada no frame do
+        // playhead — e um Ctrl+S na cena gravaria essa pose como se fosse a
+        // posicao autorada. E o `PoseOverride` das entidades, devolvido no
+        // mesmo lugar.
+        std::unordered_map<entt::entity, Transform> m_EntityRestore;
+
+        void RestoreEntityTransforms();
+
+        void ApplyGizmoToEntity(int bindingIndex, int trackIndex, const glm::mat4& world);
 
         // Cria track para TODOS os controles de transform do rig, na ordem da
         // hierarquia. E o gesto normal: quem liga um Control Rig quer o rig, nao
@@ -610,6 +705,8 @@ namespace axe
 
         int  CreateControlTrack(int bindingIndex, const std::string& controlName);
         void DrawAddControlPopup(int bindingIndex);
+        void DrawAddEventPopup(int bindingIndex);
+        void DrawAddCameraCutPopup(int bindingIndex);
 
         int  m_AddControlForBinding = -1;
         bool m_OpenAddControlPopup = false;
@@ -971,6 +1068,11 @@ namespace axe
         bool m_OpenAddClipPopup = false;
         char m_PickerFilter[64] = { 0 };
 
+        // O picker lista personagens e cameras por padrao. Uma cena tem dezenas
+        // de entidades, e listar todas o transformaria num despejo — mas o
+        // interruptor existe porque animar uma porta ou um elevador e legitimo.
+        bool m_PickerShowAllEntities = false;
+
         // Explodir o clipe em tracks de osso assim que ele entra na timeline.
         // Ligado por default: quem poe um clipe no Sequencer quer editar aquela
         // animacao, nao acumular uma camada opaca por cima dela.
@@ -983,6 +1085,67 @@ namespace axe
         // coubessem eram simplesmente cortadas. Com uma track por osso isso
         // deixou de ser detalhe — um clipe explodido produz dezenas de lanes.
         float m_TimelineScrollY = 0.0f;
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  EDITOR DE CURVAS
+        //
+        //  ── POR QUE E UM MODO DA TIMELINE, E NAO OUTRO PAINEL ──────────────
+        //
+        //  Dope sheet e grafico respondem perguntas diferentes sobre a MESMA
+        //  coisa: "quando acontece" e "como acontece". Compartilham o
+        //  mapeamento frame->pixel, o zoom, o pan, a regua, o playhead, a
+        //  selecao de keys, o arrasto em grupo, a caixa de selecao e o undo.
+        //
+        //  Um painel separado teria de duplicar tudo isso, e a partir do
+        //  segundo dia as duas metades discordariam sobre onde esta o frame 20.
+        //
+        //  ── O EIXO DO VALOR ───────────────────────────────────────────────
+        //
+        //  O horizontal ja existe (frame). O vertical e novo e precisa de zoom
+        //  proprio: rotacao em graus vive na casa das dezenas, translacao em
+        //  metros na casa dos decimos. Uma escala unica esmagaria uma das duas.
+        // ═══════════════════════════════════════════════════════════════════
+        bool  m_CurveMode = false;
+
+        // Valor que fica no MEIO da area, e quantos pixels vale uma unidade.
+        float m_CurveCenter = 0.0f;
+        float m_CurvePixelsPerUnit = 8.0f;
+
+        // Enquadra automaticamente na proxima vez que desenhar. Ligado ao
+        // entrar no modo e ao trocar de selecao: cair num grafico onde a curva
+        // esta fora da tela e a primeira impressao de "isto nao funciona".
+        bool  m_CurveFitPending = true;
+
+        // Filtros por grupo de canal. Tres alvos selecionados dao 27 curvas
+        // sobrepostas; quase sempre se quer olhar so a rotacao.
+        bool  m_CurveShowT = true;
+        bool  m_CurveShowR = true;
+        bool  m_CurveShowS = true;
+
+        // Endereco de um canal para o grafico. Sem indice de key: aqui a
+        // unidade e a CURVA inteira.
+        struct CurveRef
+        {
+            int Binding = -1, Track = -1, Section = -1, Channel = -1;
+        };
+
+        std::vector<CurveRef> CollectCurveChannels() const;
+
+        // Desenha e trata a area de curvas. Recebe a geometria que o
+        // DrawTimeline ja calculou — os dois modos compartilham o eixo do tempo
+        // por construcao, e nao por coincidencia.
+        void DrawCurveArea(ImDrawList* dl,
+            const ImVec2& origin, const ImVec2& size,
+            float areaTop, float areaBottom,
+            float startFrame, float frameWidth,
+            bool timelineHovered,
+            const ImRect& boxRect, bool boxActive);
+
+        // Valor original de cada key no inicio do arrasto — o eixo vertical do
+        // que o m_DragOriginalFrames ja faz no horizontal, e pela mesma razao
+        // (somar o delta ao valor ATUAL comprimiria o grupo).
+        std::vector<float> m_DragOriginalValues;
+        float m_DragStartMouseY = 0.0f;
 
         // ── Zoom e pan horizontal ────────────────────────────────────────────
         //
@@ -1029,6 +1192,15 @@ namespace axe
         };
 
         std::vector<KeyRef> m_SelectedKeys;
+
+        // Arrasto de alca de tangente no editor de curvas. Lado: 1 = a alca que
+        // SAI da key (manda no trecho seguinte), 2 = a que CHEGA nela.
+        //
+        // Declarado aqui, e nao junto do resto do estado de curva, porque
+        // depende do KeyRef acima — mover o KeyRef para cima arrastaria com ele
+        // a nota longa sobre por que a selecao guarda endereco e nao ponteiro.
+        int    m_DragHandleSide = 0;
+        KeyRef m_DragHandleKey{};
 
         // Frame original de cada key selecionada no instante em que o drag
         // comecou. Sem isto o grupo se comprime: cada key seria recalculada a

@@ -28,28 +28,84 @@ namespace axe {
         m_Mode = SequencerPlaybackMode::Paused;
         m_LastSamples.clear();
         m_LastClipSamples.clear();
+        m_FiredEvents.clear();
+        m_ActiveCamera.clear();
+
+        // Ver a nota do campo: um tiquinho antes do inicio, para que uma key no
+        // primeiro frame da sequence dispare.
+        m_EventFrame = m_StartFrame - 0.001f;
     }
 
     void SequencerPlayer::OnUpdate(float deltaTime) {
+        m_FiredEvents.clear();
+
         if (m_Mode == SequencerPlaybackMode::Playing) {
             m_CurrentFrame += deltaTime * static_cast<float>(m_Fps);
 
             // Loop ou clamp.
             if (m_CurrentFrame > m_EndFrame) {
                 if (m_Loop) {
+                    // A VOLTA E DOIS TRECHOS, NAO UM.
+                    //
+                    // O playhead saltou do meio da sequence de volta para o
+                    // comeco. Um unico intervalo (from, to] com from > to nao
+                    // contem key nenhuma — e todo evento entre o ponto de saida
+                    // e o fim seria pulado silenciosamente a cada volta, o que
+                    // e exatamente o fim da sequence: onde a maioria dos
+                    // eventos interessantes mora.
+                    CollectEvents(m_EventFrame, m_EndFrame);
+
                     m_CurrentFrame = m_StartFrame +
                         std::fmod(m_CurrentFrame - m_StartFrame,
                             m_EndFrame - m_StartFrame);
+
+                    m_EventFrame = m_StartFrame - 0.001f;
                 }
                 else {
                     m_CurrentFrame = m_EndFrame;
                     m_Mode = SequencerPlaybackMode::Paused;
                 }
             }
+
+            CollectEvents(m_EventFrame, m_CurrentFrame);
+            m_EventFrame = m_CurrentFrame;
         }
-        // Scrubbing mode: m_CurrentFrame ja foi setado por Scrub(). Nada a fazer aqui.
+        // Scrubbing mode: m_CurrentFrame ja foi setado por Scrub(). Nada a fazer
+        // aqui — e, de proposito, nenhum evento.
 
         Resample();
+    }
+
+    void SequencerPlayer::CollectEvents(float from, float to) {
+        if (to <= from) return;
+
+        for (int bi = 0; bi < static_cast<int>(m_Bindings.size()); ++bi) {
+            const auto& b = m_Bindings[bi];
+
+            for (const auto& tr : b.Tracks) {
+                if (tr.Type != SequencerTrackType::Event) continue;
+                if (tr.Muted) continue;
+
+                // Sem exigir section ATIVA: um evento e um instante, e nao um
+                // valor que precise de uma janela de tempo valida ao redor. Uma
+                // key de evento fora de qualquer section ainda e uma key que o
+                // playhead cruzou.
+                for (const auto& sec : tr.Sections) {
+                    for (const auto& ch : sec.Channels) {
+                        for (const auto& k : ch.Keys) {
+                            if (k.Frame <= from || k.Frame > to) continue;
+
+                            SequencerEventSample ev;
+                            ev.BindingIndex = bi;
+                            ev.EventName = tr.TargetName;
+                            ev.Value = k.Value;
+                            ev.Frame = k.Frame;
+                            m_FiredEvents.push_back(ev);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void SequencerPlayer::SyncFrom(const SequencerAsset& asset) {
@@ -65,6 +121,10 @@ namespace axe {
 
         // O range pode ter encolhido debaixo do playhead.
         m_CurrentFrame = std::clamp(m_CurrentFrame, m_StartFrame, m_EndFrame);
+
+        // O mesmo vale para o cursor de eventos: se o range encolheu, um cursor
+        // alem do novo fim deixaria a sequence inteira "ja disparada".
+        m_EventFrame = std::clamp(m_EventFrame, m_StartFrame - 0.001f, m_EndFrame);
 
         // Ordena as keys da COPIA, defensivamente.
         //
@@ -89,7 +149,10 @@ namespace axe {
         m_Bindings.clear();
         m_LastSamples.clear();
         m_LastClipSamples.clear();
+        m_FiredEvents.clear();
+        m_ActiveCamera.clear();
         m_CurrentFrame = 0.0f;
+        m_EventFrame = -1.0f;
         m_Mode = SequencerPlaybackMode::Paused;
     }
 
@@ -124,13 +187,49 @@ namespace axe {
             return left.Value + (right.Value - left.Value) * (1.0f - (1.0f - t) * (1.0f - t));
 
         case SequencerInterp::Bezier: {
-            // Cubic bezier com tangents.
-            float v0 = left.Value;
-            float v1 = left.Value + left.TangentOut;
-            float v2 = right.Value - right.TangentIn;
-            float v3 = right.Value;
-            float u = 1.0f - t;
-            return u * u * u * v0 + 3 * u * u * t * v1 + 3 * u * t * t * v2 + t * t * t * v3;
+            // ── BEZIER 2D, RESOLVIDO POR x ───────────────────────────────────
+            //
+            // As alcas tem componente de TEMPO (os pesos) e de VALOR (as
+            // tangentes). `t` aqui e a posicao no trecho — o x que queremos —,
+            // e nao o parametro da curva: com alcas fora de 1/3 os dois deixam
+            // de coincidir.
+            //
+            // Com peso 1/3 dos dois lados x(u) = u exatamente (ver a nota em
+            // SequencerKey), a busca converge no primeiro palpite e o resultado
+            // e termo a termo o da formula antiga. Nenhuma key gravada muda.
+            const float wOut = std::clamp(left.TangentOutWeight, 0.01f, 0.99f);
+            const float wIn = std::clamp(right.TangentInWeight, 0.01f, 0.99f);
+
+            // Pontos de controle em x, dentro do trecho normalizado [0,1].
+            const float x1 = wOut;
+            const float x2 = 1.0f - wIn;
+
+            auto bezX = [&](float u) {
+                const float m = 1.0f - u;
+                return 3.0f * m * m * u * x1 + 3.0f * m * u * u * x2 + u * u * u;
+                };
+
+            // Bisseccao, e nao Newton: x e monotonico com x1 e x2 em [0,1] (a
+            // mesma restricao da cubic-bezier do CSS), entao a bisseccao SEMPRE
+            // converge e nunca diverge. Newton seria mais rapido e precisaria de
+            // salvaguarda para derivada perto de zero nas pontas — mais codigo
+            // para economizar microssegundos num laco que roda por canal.
+            float lo = 0.0f, hi = 1.0f, u = t;
+
+            for (int i = 0; i < 24; ++i) {
+                const float x = bezX(u);
+                if (std::abs(x - t) < 1e-5f) break;
+                if (x < t) lo = u; else hi = u;
+                u = 0.5f * (lo + hi);
+            }
+
+            const float v0 = left.Value;
+            const float v1 = left.Value + left.TangentOut;
+            const float v2 = right.Value - right.TangentIn;
+            const float v3 = right.Value;
+
+            const float m = 1.0f - u;
+            return m * m * m * v0 + 3 * m * m * u * v1 + 3 * m * u * u * v2 + u * u * u * v3;
         }
 
                                     // ── AS CURVAS DE IMPACTO ─────────────────────────────────────────────
@@ -218,12 +317,52 @@ namespace axe {
         // ja estava pronto e correto: o unico elo faltando era o produtor.
         m_LastClipSamples.clear();
 
+        // Corte de camera: estado, nao evento. Recomecar do zero todo Resample
+        // e o que garante que voltar o playhead para antes do primeiro corte
+        // devolve a camera padrao, em vez de deixar o ultimo corte grudado.
+        m_ActiveCamera.clear();
+        float bestCutFrame = -1e9f;
+
         const float fps = (m_Fps > 0) ? static_cast<float>(m_Fps) : 30.0f;
 
         for (int bi = 0; bi < static_cast<int>(m_Bindings.size()); ++bi) {
             auto& b = m_Bindings[bi];
             for (auto& tr : b.Tracks) {
                 if (tr.Muted) continue;
+
+                // Track de Event nao produz VALOR. Ver CollectEvents: ela e
+                // lida por instante cruzado, em OnUpdate. Sem este `continue`
+                // cada key de evento viraria um SequencerSample com TargetName
+                // igual ao nome do evento — e o aplicador iria procurar um osso
+                // chamado "Tiro".
+                if (tr.Type == SequencerTrackType::Event) continue;
+
+                // ── CORTE DE CAMERA ──────────────────────────────────────────
+                //
+                // Tambem nao produz valor: a key nao diz "quanto", diz "a
+                // partir daqui". Vence a key de MAIOR frame <= playhead, entre
+                // todas as tracks de corte — e por isso a comparacao e feita
+                // aqui, no meio da varredura, e nao track a track.
+                //
+                // Empate no mesmo frame: fica a PRIMEIRA track na ordem do
+                // arquivo. E arbitrario, mas e estavel; o que nao se pode ter e
+                // o resultado mudando conforme a ordem de iteracao.
+                if (tr.Type == SequencerTrackType::CameraCut) {
+                    if (tr.TargetName.empty()) continue;
+
+                    for (const auto& sec : tr.Sections) {
+                        for (const auto& ch : sec.Channels) {
+                            for (const auto& k : ch.Keys) {
+                                if (k.Frame > m_CurrentFrame) continue;
+                                if (k.Frame <= bestCutFrame) continue;
+
+                                bestCutFrame = k.Frame;
+                                m_ActiveCamera = tr.TargetName;
+                            }
+                        }
+                    }
+                    continue;
+                }
 
                 // ── CAMADA BASE: track de clipe ──────────────────────────────
                 //

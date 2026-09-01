@@ -11,13 +11,19 @@
 
 namespace axe
 {
-    static glm::vec3 CalcForward(float yaw, float pitch)
+    glm::vec3 GameCamera::ForwardFromYawPitch(float yaw, float pitch)
     {
         glm::vec3 forward;
         forward.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
         forward.y = sin(glm::radians(pitch));
         forward.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
         return glm::normalize(forward);
+    }
+
+    // Nome curto para o uso interno, que e o mais frequente neste arquivo.
+    static glm::vec3 CalcForward(float yaw, float pitch)
+    {
+        return GameCamera::ForwardFromYawPitch(yaw, pitch);
     }
 
     void GameCamera::StartShake(float intensity, float duration)

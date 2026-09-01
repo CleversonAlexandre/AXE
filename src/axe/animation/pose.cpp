@@ -93,6 +93,76 @@ namespace axe
 		}
 	}
 
+	void Pose::BlendMaskedMeshSpace(const Pose& base, const Pose& layer,
+		const BoneMask& mask, float alpha, const Skeleton& skeleton,
+		MeshSpaceScratch& scratch, Pose& out)
+	{
+		const auto& bones = skeleton.GetBones();
+
+		std::size_t count = glm::min(base.Size(), layer.Size());
+		count = glm::min(count, bones.size());
+
+		out.Resize(count);
+
+		scratch.Base.resize(count);
+		scratch.Layer.resize(count);
+		scratch.Out.resize(count);
+
+		// UMA passada. O Skeleton garante ordem topologica (ParentIndex < i —
+		// ver a INVARIANTE no header dele), entao quando chegamos no osso i o
+		// pai dele ja esta resolvido nos tres arrays.
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const int p = bones[i].ParentIndex;
+
+			// Lidos ANTES de escrever em out[i]. E o que torna seguro chamar
+			// esta funcao com out == base ou out == layer: nunca lemos indice
+			// que ja foi sobrescrito, porque so o proprio i e lido, e os pais
+			// vieram do scratch.
+			const glm::quat localBase = base[i].Rotation;
+			const glm::quat localLayer = layer[i].Rotation;
+
+			const glm::vec3 tBase = base[i].Translation;
+			const glm::vec3 tLayer = layer[i].Translation;
+			const glm::vec3 sBase = base[i].Scale;
+			const glm::vec3 sLayer = layer[i].Scale;
+
+			const bool hasParent = (p >= 0 && static_cast<std::size_t>(p) < i);
+
+			scratch.Base[i] = hasParent ? scratch.Base[p] * localBase : localBase;
+			scratch.Layer[i] = hasParent ? scratch.Layer[p] * localLayer : localLayer;
+
+			const float w = glm::clamp(mask.GetWeight(i) * alpha, 0.0f, 1.0f);
+
+			// A interpolacao acontece AQUI, no espaco da malha — e e isso que
+			// faz a direcao da mira sobreviver ao que a base fez com o quadril.
+			const glm::quat meshOut =
+				(w <= 0.0f) ? scratch.Base[i]
+				: (w >= 1.0f) ? scratch.Layer[i]
+				: glm::normalize(glm::slerp(scratch.Base[i], scratch.Layer[i], w));
+
+			scratch.Out[i] = meshOut;
+
+			// De volta para local, contra o pai JA BLENDADO — nao contra o pai
+			// da base. Usar o pai da base devolveria o mesmo defeito por outro
+			// caminho: a cadeia acumularia a diferenca de novo.
+			out[i].Rotation = hasParent
+				? glm::normalize(glm::inverse(scratch.Out[p]) * meshOut)
+				: meshOut;
+
+			// Translacao e escala continuam LOCAIS. Ver a nota no header: em
+			// espaco de malha elas brigariam com a posicao que a base acabou de
+			// dar ao quadril, e o personagem se desmontaria.
+			out[i].Translation = (w <= 0.0f) ? tBase
+				: (w >= 1.0f) ? tLayer
+				: glm::mix(tBase, tLayer, w);
+
+			out[i].Scale = (w <= 0.0f) ? sBase
+				: (w >= 1.0f) ? sLayer
+				: glm::mix(sBase, sLayer, w);
+		}
+	}
+
 	void Pose::MakeAdditive(const Pose& source, const Pose& reference, Pose& outAdditive)
 	{
 		const std::size_t count = glm::min(source.Size(), reference.Size());

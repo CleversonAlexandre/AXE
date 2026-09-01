@@ -30,6 +30,7 @@
 // Auditoria estatica do grafo do rig: precisa enxergar RigNode_ItemArray para
 // ler os itens de uma lista sem executar o grafo.
 #include "axe/animation/rig/rig_nodes.hpp"
+#include "axe/animation/sequencer/sequence_apply.hpp"
 #include "axe/log/log.hpp"
 
 #include <algorithm>
@@ -857,7 +858,22 @@ namespace axe {
         // PoseOverride e ligado dentro de EvaluateAndApply) e reescreve a pose
         // todo frame. Custo: uma Pose + BuildSkinningMatrices por binding — o
         // mesmo que a preview do Control Rig ja paga.
-        if (m_PlayerStarted) {
+        // ── EM PLAY, A CENA NAO E MAIS NOSSA ─────────────────────────────────
+        //
+        // Ver SetScenePlaying: quem toca a sequence no Play e o SequenceWorld.
+        // Soltar a pose UMA vez na transicao (e nao a cada frame) porque
+        // ReleasePoseOverride varre todas as entidades com esqueleto.
+        if (m_ScenePlaying) {
+            if (!m_ReleasedForPlay) {
+                ReleasePoseOverride();
+                m_ReleasedForPlay = true;
+            }
+        }
+        else if (m_ReleasedForPlay) {
+            m_ReleasedForPlay = false;
+        }
+
+        if (m_PlayerStarted && !m_ScenePlaying) {
             // O ASSET e a fonte da verdade no editor; a copia viva do player
             // segue. Sincronizar aqui, uma vez por frame, elimina a classe
             // inteira de bugs "editei e o sample nao viu" — em vez de lembrar de
@@ -866,6 +882,11 @@ namespace axe {
             // O custo e copiar alguns vetores pequenos por frame.
             m_Player.SyncFrom(m_Asset);
             EvaluateAndApply();
+
+            // Depois da avaliacao: o transform da camera deste frame ja foi
+            // escrito, entao trocar o alvo do pilot agora mostra o plano novo
+            // no MESMO frame — e nao um quadro atrasado.
+            SyncPilotToCameraCut();
         }
 
         // O pedido de gizmo e reposto TODO FRAME, e depois da avaliacao: a
@@ -1054,6 +1075,10 @@ namespace axe {
                 DrawAddSocketPopup(m_AddSocketForBinding);
             if (m_AddControlForBinding >= 0)
                 DrawAddControlPopup(m_AddControlForBinding);
+            if (m_AddEventForBinding >= 0)
+                DrawAddEventPopup(m_AddEventForBinding);
+            if (m_AddCameraCutForBinding >= 0)
+                DrawAddCameraCutPopup(m_AddCameraCutForBinding);
         }
         ImGui::End();
 
@@ -1083,7 +1108,20 @@ namespace axe {
 
         if (!ImGui::BeginPopup("Adicionar entidade##seqbind")) return;
 
-        ImGui::TextDisabled("Entidades com SkeletalMeshComponent");
+        // ── QUEM PODE ENTRAR NUMA SEQUENCE ───────────────────────────────────
+        //
+        // Antes: so entidades com SkeletalMeshComponent. Isso deixava de fora
+        // exatamente o que motivou o transform de entidade — a CAMERA.
+        //
+        // Listar TODAS por padrao seria pior: uma cena tem dezenas de entidades
+        // e o picker viraria um despejo. Esqueleto e camera sao os dois que se
+        // procura noventa por cento das vezes; o resto fica atras de um
+        // interruptor.
+        ImGui::Checkbox("Todas as entidades", &m_PickerShowAllEntities);
+
+        ImGui::TextDisabled(m_PickerShowAllEntities
+            ? "Qualquer entidade com transform"
+            : "Personagens e cameras");
         ImGui::Separator();
 
         ImGui::SetNextItemWidth(240.0f);
@@ -1102,44 +1140,77 @@ namespace axe {
         // usuario sentiu: dava para colocar um esqueleto na timeline clicando
         // nele no viewport, mas nao procurando por ele aqui.
         int shown = 0;
-        auto view = reg.view<SkeletalMeshComponent>();
 
-        for (auto entity : view) {
+        // Transform e o requisito minimo: sem ele nao ha o que animar nem onde
+        // pendurar um esqueleto.
+        for (auto entity : reg.view<TransformComponent>()) {
             auto* nm = reg.try_get<NameComponent>(entity);
-            const std::string name = nm ? nm->Name : std::string("(sem nome)");
+
+            // Sem nome nao ha como religar depois do load — o binding guarda o
+            // NOME, nao o handle. Melhor nem oferecer.
+            if (!nm || nm->Name.empty()) continue;
+
+            const std::string& name = nm->Name;
 
             if (m_PickerFilter[0] != '\0' &&
                 name.find(m_PickerFilter) == std::string::npos)
                 continue;
 
-            auto& smc = view.get<SkeletalMeshComponent>(entity);
-            const Skeleton* sk = smc.GetSkeleton();
+            auto* smc = reg.try_get<SkeletalMeshComponent>(entity);
+            const bool isCamera = reg.all_of<CameraComponent>(entity);
+
+            if (!m_PickerShowAllEntities && !smc && !isCamera)
+                continue;
+
+            const Skeleton* sk = smc ? smc->GetSkeleton() : nullptr;
 
             ImGui::PushID((int)entity);
 
-            char label[192];
-            std::snprintf(label, sizeof(label), ICON_PERSON " %s%s",
-                name.c_str(),
-                sk ? "" : "  (sem esqueleto carregado)");
+            const char* icon = smc ? ICON_PERSON : (isCamera ? ICON_CAMERA : ICON_CUBE);
 
-            if (ImGui::Selectable(label, false, sk ? 0 : ImGuiSelectableFlags_Disabled)) {
+            char label[224];
+            std::snprintf(label, sizeof(label), "%s %s%s",
+                icon, name.c_str(),
+                (smc && !sk) ? "  (sem esqueleto carregado)" : "");
+
+            // ── SO O ESQUELETO PELA METADE FICA DESABILITADO ─────────────────
+            //
+            // Uma entidade sem esqueleto e um alvo LEGITIMO agora (a camera).
+            // Um SkeletalMeshComponent que existe mas nao resolveu, nao: ali o
+            // usuario esperaria tracks de osso, e elas nao teriam onde casar.
+            const bool broken = (smc && !sk);
+
+            if (ImGui::Selectable(label, false,
+                broken ? ImGuiSelectableFlags_Disabled : 0)) {
                 int idx = CreateBindingForEntity(entity);
                 if (idx >= 0) {
                     m_SelectedBinding = idx;
                     m_SelectedTrack = m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+
+                    // Camera (ou qualquer coisa sem esqueleto) so tem um alvo
+                    // possivel: o proprio transform. Criar a track no ato poupa
+                    // uma cacada por um botao que so faz uma coisa.
+                    if (!sk) {
+                        const int ti = CreateEntityTransformTrack(idx);
+                        if (ti >= 0) m_SelectedTrack = ti;
+                    }
                 }
                 ImGui::CloseCurrentPopup();
             }
 
-            if (sk && ImGui::IsItemHovered())
-                ImGui::SetTooltip("%d ossos", (int)sk->GetBoneCount());
+            if (ImGui::IsItemHovered()) {
+                if (sk)           ImGui::SetTooltip("%d ossos", (int)sk->GetBoneCount());
+                else if (isCamera) ImGui::SetTooltip("Camera — a track de transform e criada junto");
+            }
 
             ImGui::PopID();
             ++shown;
         }
 
         if (shown == 0)
-            ImGui::TextDisabled("Nenhuma entidade com esqueleto na cena.");
+            ImGui::TextDisabled(m_PickerShowAllEntities
+                ? "Nenhuma entidade com nome na cena."
+                : "Nenhum personagem ou camera. Marque 'Todas as entidades'.");
 
         ImGui::EndPopup();
     }
@@ -1679,6 +1750,44 @@ namespace axe {
         // "por que a timeline esta assim" sem precisar experimentar.
         ui::ToolbarSeparator();
 
+        // ── DOPE / CURVAS ────────────────────────────────────────────────────
+        //
+        // Duas perguntas sobre a mesma coisa: "quando acontece" e "como
+        // acontece". O dope sheet responde a primeira, o grafico a segunda.
+        ui::ToolbarSeparator();
+
+        if (ui::ToggleButton(m_CurveMode ? ICON_FUNCTION " Curvas" : ICON_TABLE_CELLS " Dope",
+            m_CurveMode,
+            "Alterna entre o dope sheet (quando cada key acontece) e o\n"
+            "grafico de curvas (como o valor caminha entre elas).\n\n"
+            "No grafico: roda = zoom vertical, arrastar key move em tempo E\n"
+            "valor, e as keys em Bezier ganham alcas 2D.")) {
+            m_CurveMode = !m_CurveMode;
+            m_CurveFitPending = true;
+        }
+
+        if (m_CurveMode) {
+            // Filtros por grupo. Tres alvos selecionados dao 27 curvas
+            // sobrepostas, e quase sempre so uma delas interessa.
+            ImGui::SameLine();
+            if (ui::ToggleButton("T", m_CurveShowT, "Curvas de translacao"))
+                m_CurveShowT = !m_CurveShowT;
+
+            ImGui::SameLine();
+            if (ui::ToggleButton("R", m_CurveShowR, "Curvas de rotacao"))
+                m_CurveShowR = !m_CurveShowR;
+
+            ImGui::SameLine();
+            if (ui::ToggleButton("S", m_CurveShowS, "Curvas de escala"))
+                m_CurveShowS = !m_CurveShowS;
+
+            ImGui::SameLine();
+            if (ui::IconButton(ICON_EXPAND, "Enquadrar as curvas visiveis"))
+                m_CurveFitPending = true;
+        }
+
+        ui::ToolbarSeparator();
+
         if (ui::IconButton(ICON_MINUS, "Zoom out (Ctrl + roda)")) {
             m_Zoom = std::clamp(m_Zoom / 1.4f, 1.0f, 80.0f);
         }
@@ -1958,7 +2067,12 @@ namespace axe {
         if (track.TargetType == SequencerTargetType::Control)
             return TrackGroup::Control;
 
+        if (track.TargetType == SequencerTargetType::Entity)
+            return TrackGroup::Entity;
+
         switch (track.Type) {
+        case SequencerTrackType::Event:            return TrackGroup::Event;
+        case SequencerTrackType::CameraCut:        return TrackGroup::Cut;
         case SequencerTrackType::AnimationClip:    return TrackGroup::Clip;
         case SequencerTrackType::TransformSocket:  return TrackGroup::Socket;
         case SequencerTrackType::TransformControl: return TrackGroup::Control;
@@ -1969,20 +2083,26 @@ namespace axe {
 
     const char* SequencerWindow::GroupLabel(TrackGroup g) {
         switch (g) {
+        case TrackGroup::Entity:  return "Transform";
         case TrackGroup::Clip:    return "Animacoes";
         case TrackGroup::Socket:  return "Sockets";
         case TrackGroup::Control: return "Controles";
         case TrackGroup::Bone:    return "Ossos";
+        case TrackGroup::Event:   return "Eventos";
+        case TrackGroup::Cut:     return "Cortes";
         default:                  return "Outras";
         }
     }
 
     const char* SequencerWindow::GroupIcon(TrackGroup g) {
         switch (g) {
+        case TrackGroup::Entity:  return ICON_ARROWS;
         case TrackGroup::Clip:    return ICON_FILM;
         case TrackGroup::Socket:  return ICON_LINK;
         case TrackGroup::Control: return ICON_CIRCLE_NODES;
         case TrackGroup::Bone:    return ICON_BONE;
+        case TrackGroup::Event:   return ICON_BOLT;
+        case TrackGroup::Cut:     return ICON_CAMERA;
         default:                  return ICON_LIST;
         }
     }
@@ -2580,6 +2700,33 @@ namespace axe {
             }
 
             // + Track — abre o picker de osso DESTE binding.
+            // ── O TRANSFORM DA PROPRIA ENTIDADE ──────────────────────────
+            //
+            // Primeiro da fila e desabilitado depois de criado: e um por
+            // binding (o binding E a entidade), e um botao que nao faz nada na
+            // segunda vez e pior que um botao cinza.
+            {
+                const bool has = BindingHasEntityTrack(bindingIndex);
+
+                ImGui::BeginDisabled(has);
+                if (ui::IconButton(ICON_ARROWS,
+                    has ? "A entidade ja tem track de transform"
+                    : "Animar o transform da PROPRIA entidade\n"
+                    "(camera de cutscene, porta, elevador, prop)",
+                    ui::Accent::Add)) {
+                    const int ti = CreateEntityTransformTrack(bindingIndex);
+                    if (ti >= 0) {
+                        m_SelectedBinding = bindingIndex;
+                        m_SelectedTrack = ti;
+                        m_SelectedSection = m_SelectedChannel = m_SelectedKey = -1;
+                        SetGroupOpen(bindingIndex, TrackGroup::Entity, true);
+                    }
+                }
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+            }
+
             if (ui::IconButton(ICON_BONE, "Adicionar track de osso", ui::Accent::Add)) {
                 m_AddTrackForBinding = bindingIndex;
                 m_OpenAddTrackPopup = true;
@@ -2592,6 +2739,25 @@ namespace axe {
                 m_AddClipForBinding = bindingIndex;
                 m_OpenAddClipPopup = true;
                 m_PickerFilter[0] = '\0';
+            }
+            ImGui::SameLine();
+
+            // + Corte — de qual camera a cena e vista a partir de cada key.
+            if (ui::IconButton(ICON_CAMERA, "Cortar para outra camera\n"
+                "(uma key por plano)", ui::Accent::Add)) {
+                m_AddCameraCutForBinding = bindingIndex;
+                m_OpenAddCameraCutPopup = true;
+            }
+            ImGui::SameLine();
+
+            // + Evento — a track que nao anima nada: avisa o script no frame em
+            // que o playhead passa por ela. E o que liga a cutscene ao
+            // gameplay ("aqui ele atira", "aqui a porta abre").
+            if (ui::IconButton(ICON_BOLT, "Adicionar track de evento\n"
+                "(avisa o script num frame durante o Play)", ui::Accent::Add)) {
+                m_AddEventForBinding = bindingIndex;
+                m_OpenAddEventPopup = true;
+                m_NewEventName[0] = '\0';
             }
             ImGui::SameLine();
 
@@ -3155,10 +3321,28 @@ namespace axe {
 
         ImGui::PushID(channelIndex | (sectionIndex << 8) | (trackIndex << 16) | (bindingIndex << 24));
 
+        // ── O ROTULO DEPENDE DO QUE A TRACK FAZ ──────────────────────────────
+        //
+        // Em track de transform, o canal E um eixo, e "X" e a palavra certa.
+        // Em evento e corte o canal nao significa eixo nenhum — e so onde as
+        // keys moram. Chamar aquilo de "X" convidaria o animador a procurar um
+        // "Y" que nao existe, e a perguntar por que a camera nao anda no eixo X.
+        const SequencerTrackType trType = b->Tracks[trackIndex].Type;
+        const bool instantTrack = (trType == SequencerTrackType::Event ||
+            trType == SequencerTrackType::CameraCut);
+
         char label[64];
-        std::snprintf(label, sizeof(label), "%s (%d keys)",
-            SequencerChannelComponentToString(ch.Component),
-            static_cast<int>(ch.Keys.size()));
+
+        if (instantTrack) {
+            std::snprintf(label, sizeof(label), "%s (%d)",
+                trType == SequencerTrackType::CameraCut ? "cortes" : "disparos",
+                static_cast<int>(ch.Keys.size()));
+        }
+        else {
+            std::snprintf(label, sizeof(label), "%s (%d keys)",
+                SequencerChannelComponentToString(ch.Component),
+                static_cast<int>(ch.Keys.size()));
+        }
 
         bool selected = (m_SelectedBinding == bindingIndex &&
             m_SelectedTrack == trackIndex &&
@@ -3177,9 +3361,15 @@ namespace axe {
         }
         if (open) ImGui::TreePop();
 
-        // Inline: Capture from Viewport (icone camera).
+        // Inline: crava uma key no frame atual. Em track de transform o valor
+        // vem do viewport; em evento e corte a key E a informacao toda.
         ImGui::SameLine();
-        if (ui::IconButton(ICON_CAMERA, "Capturar valor do bone no viewport")) {
+        if (ui::IconButton(instantTrack ? ICON_BOLT : ICON_CAMERA,
+            instantTrack
+            ? (trType == SequencerTrackType::CameraCut
+                ? "Cortar para esta camera NESTE frame"
+                : "Disparar este evento NESTE frame")
+            : "Capturar valor do bone no viewport")) {
             AddKeyAtPlayhead(bindingIndex, trackIndex, sectionIndex, channelIndex);
         }
 
@@ -3570,7 +3760,11 @@ namespace axe {
         //
         // Ctrl e Shift ficam de fora: a roda ja foi consumida la em cima pelo
         // zoom e pelo pan. Sem esta guarda, dar zoom rolaria as lanes junto.
-        if (maxScroll > 0.0f && timelineHovered &&
+        // `!m_CurveMode`: no grafico a roda sem modificador e o zoom VERTICAL
+        // (ver DrawCurveArea). Sem esta guarda os dois consumiriam o mesmo
+        // gesto, e o scroll de lanes ficaria escorregando por baixo do modo
+        // curva sem nada na tela explicando por que.
+        if (!m_CurveMode && maxScroll > 0.0f && timelineHovered &&
             !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
             const float wheel = ImGui::GetIO().MouseWheel;
             if (wheel != 0.0f) m_TimelineScrollY -= wheel * lanePitch * 2.0f;
@@ -3618,8 +3812,19 @@ namespace axe {
         dl->PushClipRect(ImVec2(origin.x, lanesTop),
             ImVec2(origin.x + size.x, lanesBottom), true);
 
+        // ── DOIS MODOS, UM EIXO DO TEMPO ─────────────────────────────────────
+        //
+        // Tudo acima (regua, zoom, pan, playhead, caixa de selecao) e
+        // compartilhado por construcao: o grafico usa o MESMO frameToX que o
+        // dope sheet. E isso que garante que os dois nunca discordem sobre onde
+        // esta o frame 20.
+        if (m_CurveMode) {
+            DrawCurveArea(dl, origin, size, lanesTop, lanesBottom,
+                startFrame, frameWidth, timelineHovered, boxRect, boxActive);
+        }
+
         float laneY = lanesTop - m_TimelineScrollY;
-        for (int bi = 0; bi < bindingCount; ++bi) {
+        for (int bi = 0; bi < bindingCount && !m_CurveMode; ++bi) {
             SequencerBinding* b = m_Asset.GetBinding(bi);
             if (!b) continue;
             if (bi >= static_cast<int>(m_Layout.size())) break;
@@ -4046,9 +4251,30 @@ namespace axe {
                 const std::size_t n = std::min(m_SelectedKeys.size(),
                     m_DragOriginalFrames.size());
 
+                // ── O EIXO VERTICAL, SO NO GRAFICO ───────────────────────────
+                //
+                // No dope sheet a altura de uma key nao quer dizer nada (e a
+                // lane dela), entao arrastar para cima nao pode mudar valor. No
+                // grafico quer dizer tudo.
+                //
+                // SEM snap: snap e do tempo. Um valor "redondo" nao existe —
+                // 15 graus e tao arbitrario quanto 14,7 —, e arredondar
+                // silenciosamente destruiria a pose que o animador acabou de
+                // capturar do viewport.
+                float deltaValue = 0.0f;
+
+                if (m_CurveMode && m_CurvePixelsPerUnit > 0.0001f) {
+                    deltaValue = -(ImGui::GetMousePos().y - m_DragStartMouseY)
+                        / m_CurvePixelsPerUnit;
+                }
+
                 for (std::size_t i = 0; i < n; ++i) {
-                    if (SequencerKey* kk = ResolveKeyRef(m_SelectedKeys[i]))
+                    if (SequencerKey* kk = ResolveKeyRef(m_SelectedKeys[i])) {
                         kk->Frame = m_DragOriginalFrames[i] + deltaFrames;
+
+                        if (m_CurveMode && i < m_DragOriginalValues.size())
+                            kk->Value = m_DragOriginalValues[i] + deltaValue;
+                    }
                 }
             }
             else {
@@ -4081,7 +4307,7 @@ namespace axe {
         // Indicador de scroll: uma barra fina na direita. Nao e arrastavel de
         // proposito — serve para dizer "tem mais coisa aqui embaixo", que era
         // exatamente a informacao que faltava.
-        if (maxScroll > 0.0f && viewHeight > 0.0f) {
+        if (!m_CurveMode && maxScroll > 0.0f && viewHeight > 0.0f) {
             const float trackX = origin.x + size.x - 6.0f;
             dl->AddRectFilled(ImVec2(trackX, lanesTop),
                 ImVec2(trackX + 4.0f, lanesBottom),
@@ -4361,58 +4587,20 @@ namespace axe {
 
     namespace {
 
-        // Escreve um componente escalar num BoneTransform LOCAL.
+        // ── A MATEMATICA MUDOU DE ENDERECO ───────────────────────────────────
         //
-        // Rotacao entra e sai em GRAUS de Euler: e o que o animador digita no painel
-        // de key. A conversao para quaternion acontece so aqui, no ultimo momento —
-        // guardar quaternion nas curvas tornaria as keys ilegiveis e a interpolacao
-        // componente-a-componente sem sentido.
-        void WriteComponent(BoneTransform& t, SequencerChannelComponent c, float v) {
-            glm::vec3 euler = glm::degrees(glm::eulerAngles(t.Rotation));
-
-            switch (c) {
-            case SequencerChannelComponent::X:      t.Translation.x = v; return;
-            case SequencerChannelComponent::Y:      t.Translation.y = v; return;
-            case SequencerChannelComponent::Z:      t.Translation.z = v; return;
-            case SequencerChannelComponent::ScaleX: t.Scale.x = v;       return;
-            case SequencerChannelComponent::ScaleY: t.Scale.y = v;       return;
-            case SequencerChannelComponent::ScaleZ: t.Scale.z = v;       return;
-            case SequencerChannelComponent::RotX:   euler.x = v;         break;
-            case SequencerChannelComponent::RotY:   euler.y = v;         break;
-            case SequencerChannelComponent::RotZ:   euler.z = v;         break;
-            }
-            t.Rotation = glm::quat(glm::radians(euler));
-        }
-
-        // Rotacao dos TRES eixos de um osso, acumulada antes de virar quaternion.
+        // `WriteComponent`, `RotationAxisOf` e `BoneEulerEdit` moravam aqui,
+        // dentro de um namespace anonimo de um arquivo do EDITOR. Isso queria
+        // dizer que o runtime nao tinha como alcancar nenhum deles — e a
+        // cutscene, para tocar no jogo, precisa exatamente destas contas.
         //
-        // POR QUE ISTO NAO PODE SER FEITO CANAL A CANAL:
-        //   `WriteComponent(RotX)` decompoe o quaternion, troca X e RECOMPOE.
-        //   `WriteComponent(RotZ)` logo em seguida decompoe DE NOVO — e
-        //   `glm::eulerAngles` nao devolve necessariamente o mesmo triplo que
-        //   acabou de entrar: a mesma rotacao tem infinitas representacoes em Euler
-        //   e a funcao escolhe a faixa canonica (Y em [-90,90], X e Z em
-        //   [-180,180]). Quando a escolha muda de ramo, o segundo canal escreve por
-        //   cima de um triplo diferente do que o primeiro montou, e a edicao do
-        //   primeiro eixo some.
-        //
-        //   Juntando os tres canais do mesmo osso e recompondo UMA vez, a
-        //   decomposicao acontece exatamente uma vez por osso por frame — e sempre
-        //   sobre a pose de repouso, que e estavel.
-        struct BoneEulerEdit {
-            int       BoneIdx = -1;
-            glm::vec3 Euler{ 0.0f };
-        };
-
-        // Devolve o eixo (0/1/2) se o componente for de rotacao.
-        bool RotationAxisOf(SequencerChannelComponent c, int& outAxis) {
-            switch (c) {
-            case SequencerChannelComponent::RotX: outAxis = 0; return true;
-            case SequencerChannelComponent::RotY: outAxis = 1; return true;
-            case SequencerChannelComponent::RotZ: outAxis = 2; return true;
-            default: return false;
-            }
-        }
+        // Agora vivem em `axe/animation/sequencer/sequence_apply.hpp`, e os dois
+        // lados chamam as mesmas funcoes. Ver a nota de topo daquele arquivo
+        // sobre por que uma segunda implementacao seria o pior desfecho
+        // possivel para uma ferramenta de cutscene.
+        using sequence::BoneEulerEdit;
+        using sequence::RotationAxisOf;
+        using sequence::WriteComponent;
 
         // Assinatura numerica de uma palette de skinning.
         //
@@ -4571,6 +4759,45 @@ namespace axe {
             return true;
         }
 
+        // ── ENTIDADE ─────────────────────────────────────────────────────────
+        //
+        // Le o transform que esta na cena AGORA. Como o ApplyEntityTransforms
+        // parte do original guardado e sobrepoe so os canais animados, o que se
+        // captura aqui e exatamente o que se ve — inclusive nos eixos que a
+        // sequence ainda nao anima.
+        if (track.TargetType == SequencerTargetType::Entity) {
+            outValue = (component == SequencerChannelComponent::ScaleX ||
+                component == SequencerChannelComponent::ScaleY ||
+                component == SequencerChannelComponent::ScaleZ) ? 1.0f : 0.0f;
+
+            if (!m_Context || !m_Context->ActiveScene) return true;
+
+            const auto* b = m_Asset.GetBinding(bindingIndex);
+            if (!b) return true;
+
+            const entt::entity e = ResolveBindingEntity(*b);
+            if (e == entt::null) return true;
+
+            auto& reg = m_Context->ActiveScene->GetRegistry();
+            const auto* tc = reg.try_get<TransformComponent>(e);
+            if (!tc) return true;
+
+            switch (component) {
+            case SequencerChannelComponent::X:      outValue = tc->Data.Position.x; break;
+            case SequencerChannelComponent::Y:      outValue = tc->Data.Position.y; break;
+            case SequencerChannelComponent::Z:      outValue = tc->Data.Position.z; break;
+                // RADIANOS no Transform, GRAUS na curva — a mesma fronteira do
+                // socket, e o mesmo motivo.
+            case SequencerChannelComponent::RotX:   outValue = glm::degrees(tc->Data.Rotation.x); break;
+            case SequencerChannelComponent::RotY:   outValue = glm::degrees(tc->Data.Rotation.y); break;
+            case SequencerChannelComponent::RotZ:   outValue = glm::degrees(tc->Data.Rotation.z); break;
+            case SequencerChannelComponent::ScaleX: outValue = tc->Data.Scale.x; break;
+            case SequencerChannelComponent::ScaleY: outValue = tc->Data.Scale.y; break;
+            case SequencerChannelComponent::ScaleZ: outValue = tc->Data.Scale.z; break;
+            }
+            return true;
+        }
+
         if (track.Type != SequencerTrackType::TransformSocket)
             return CaptureBoneValue(bindingIndex, track.TargetName, component, outValue);
 
@@ -4623,6 +4850,12 @@ namespace axe {
         // preview de socket) leem desta lista.
         RebuildEffectiveSamples();
         const auto& samples = m_EffectiveSamples;
+
+        // ── ANTES DO LACO DE POSE ────────────────────────────────────────────
+        //
+        // Independe de esqueleto, entao nao pode viver dentro de um laco que
+        // desiste do binding quando nao ha um. Ver ApplyEntityTransforms.
+        ApplyEntityTransforms();
         const auto& clipSamples = m_Player.GetLastClipSamples();
 
         const int bindingCount = static_cast<int>(m_Asset.GetBindingCount());
@@ -4643,7 +4876,17 @@ namespace axe {
 
             SkeletalMeshComponent* smc = nullptr;
             const Skeleton* skel = GetBindingSkeleton(bi, &smc);
-            if (!skel || !smc) continue;
+
+            // ── ESQUELETO E OPCIONAL ─────────────────────────────────────────
+            //
+            // Este `continue` descartava o binding INTEIRO quando nao havia
+            // esqueleto — e uma camera nao tem nenhum. O transform da entidade
+            // ja foi aplicado antes deste laco (ApplyEntityTransforms); daqui
+            // para baixo e so o caminho de pose, que so faz sentido com ossos.
+            if (!skel || !smc) {
+                if (BindingHasEntityTrack(bi)) ++m_AppliedBindings;
+                continue;
+            }
 
             // 0. A palette ainda e a que deixamos no frame anterior?
             //
@@ -4697,44 +4940,10 @@ namespace axe {
             //    Translacao e escala vao direto. Rotacao vai para o acumulador:
             //    ver a nota em BoneEulerEdit sobre por que escrever RotX e RotZ
             //    um depois do outro perdia a primeira edicao.
-            rotEdits.clear();
-
-            for (const auto& s : samples) {
-                if (s.BindingIndex != bi) continue;
-
-                // TransformControl e TransformSocket entram na Fase 3, quando o
-                // caminho passar pelo RigHierarchy. Ignorar em silencio aqui e
-                // melhor que aplicar como se fosse osso e mover a coisa errada.
-                if (s.TargetType != SequencerTargetType::Bone) continue;
-
-                const int boneIdx = skel->FindBone(s.TargetName);
-                if (boneIdx < 0 || boneIdx >= (int)pose.Size()) continue;
-
-                int axis = 0;
-                if (RotationAxisOf(s.Component, axis)) {
-                    BoneEulerEdit* ed = nullptr;
-                    for (auto& e : rotEdits)
-                        if (e.BoneIdx == boneIdx) { ed = &e; break; }
-
-                    if (!ed) {
-                        BoneEulerEdit fresh;
-                        fresh.BoneIdx = boneIdx;
-                        // Eixos NAO keyados mantem o valor de repouso do osso.
-                        fresh.Euler = glm::degrees(glm::eulerAngles(pose[boneIdx].Rotation));
-                        rotEdits.push_back(fresh);
-                        ed = &rotEdits.back();
-                    }
-
-                    ed->Euler[axis] = s.Value;
-                    continue;
-                }
-
-                WriteComponent(pose[boneIdx], s.Component, s.Value);
-            }
-
-            // 2b. Uma unica recomposicao de quaternion por osso rotacionado.
-            for (const auto& e : rotEdits)
-                pose[e.BoneIdx].Rotation = glm::quat(glm::radians(e.Euler));
+            //
+            //    A conta e a MESMA que o SequenceWorld chama no Play. Ver
+            //    sequence_apply.hpp.
+            sequence::ApplyBoneSamples(pose, *skel, samples, bi, rotEdits);
 
             // 2c. CONTROL RIG, por ultimo entre as camadas de pose.
             //
@@ -4818,6 +5027,10 @@ namespace axe {
         // seguindo a animacao do AnimationWorld, sem ninguem que as reconhecesse.
         ClearSocketPreviews();
 
+        // E os transforms das entidades que a sequence estava dirigindo. Ver a
+        // nota em m_EntityRestore: isto e o PoseOverride das entidades.
+        RestoreEntityTransforms();
+
         // E o gizmo. Um pedido esquecido no viewport continuaria manipulando o
         // osso de uma sequence que nem esta mais aberta — com o agravante de
         // que o gizmo externo SUPRIME o de entidade, entao o usuario perderia o
@@ -4874,8 +5087,13 @@ namespace axe {
         auto& reg = m_Context->ActiveScene->GetRegistry();
         if (!reg.valid(entity)) return -1;
 
-        auto* smc = reg.try_get<SkeletalMeshComponent>(entity);
-        if (!smc) return -1;
+        // ── NAO EXIGE ESQUELETO ──────────────────────────────────────────────
+        //
+        // Exigia, e isso impedia o caso que motivou tudo isto: uma CAMERA de
+        // cutscene nao tem esqueleto nenhum. O que um binding realmente precisa
+        // e de um transform (para animar a entidade) e de um NOME (para religar
+        // depois do load) — esqueleto so quando ha track de osso.
+        if (!reg.try_get<TransformComponent>(entity)) return -1;
 
         auto* nm = reg.try_get<NameComponent>(entity);
         if (!nm || nm->Name.empty()) return -1;   // sem nome nao ha como religar
@@ -5739,58 +5957,11 @@ namespace axe {
         // So os controles que TEM track neste binding sao zerados. Controle sem
         // track nao e dirigido por esta janela, e mexer nele aqui apagaria o que
         // o proprio grafo tiver posto la.
-        for (const auto& tr : b->Tracks) {
-            if (tr.TargetType != SequencerTargetType::Control) continue;
-
-            const int idx = rt->Hierarchy.Find(tr.TargetName, RigElementType::Control);
-            if (idx < 0) continue;
-
-            RigElement& el = rt->Hierarchy[idx];
-            if (el.ValueType != RigControlValue::Transform) continue;
-
-            el.Value = BoneTransform{};   // identidade = neutro
-        }
-
-        for (const auto& s : m_EffectiveSamples) {
-            if (s.BindingIndex != bindingIndex) continue;
-            if (s.TargetType != SequencerTargetType::Control) continue;
-
-            const int idx = rt->Hierarchy.Find(s.TargetName, RigElementType::Control);
-            if (idx < 0) continue;
-
-            RigElement& el = rt->Hierarchy[idx];
-
-            // ── CONTROLE DE CANAL (interruptor / slider) ─────────────────────
-            //
-            // BoolValue/FloatValue vivem FORA de Initial/Current e o
-            // ResetToInitial nao os toca — de proposito, senao um interruptor
-            // voltaria ao padrao a cada quadro. Entao escrever aqui basta.
-            if (el.ValueType != RigControlValue::Transform) {
-                el.FloatValue = s.Value;
-                el.BoolValue = (s.Value >= 0.5f);
-                continue;
-            }
-
-            // Euler em GRAUS na curva (e o que o painel de key mostra), quat no
-            // BoneTransform. Mesma fronteira do socket.
-            glm::vec3 euler = glm::degrees(glm::eulerAngles(el.Value.Rotation));
-
-            switch (s.Component) {
-            case SequencerChannelComponent::X:      el.Value.Translation.x = s.Value; break;
-            case SequencerChannelComponent::Y:      el.Value.Translation.y = s.Value; break;
-            case SequencerChannelComponent::Z:      el.Value.Translation.z = s.Value; break;
-            case SequencerChannelComponent::ScaleX: el.Value.Scale.x = s.Value; break;
-            case SequencerChannelComponent::ScaleY: el.Value.Scale.y = s.Value; break;
-            case SequencerChannelComponent::ScaleZ: el.Value.Scale.z = s.Value; break;
-
-            case SequencerChannelComponent::RotX:   euler.x = s.Value;
-                el.Value.Rotation = glm::quat(glm::radians(euler)); break;
-            case SequencerChannelComponent::RotY:   euler.y = s.Value;
-                el.Value.Rotation = glm::quat(glm::radians(euler)); break;
-            case SequencerChannelComponent::RotZ:   euler.z = s.Value;
-                el.Value.Rotation = glm::quat(glm::radians(euler)); break;
-            }
-        }
+        //
+        // Zerar + escrever e uma coisa so, e mora em sequence_apply: o Play
+        // executa exatamente a mesma sequencia de passos.
+        sequence::ApplyControlSamples(rt->Hierarchy, *b, m_EffectiveSamples,
+            bindingIndex);
 
         // ── 2. REPOUSO + VALUE, E ENTAO A ANIMACAO NOS OSSOS ─────────────────
         //
@@ -6102,6 +6273,127 @@ namespace axe {
     }
 
     // Picker de CONTROLE do rig ligado ao binding.
+    void SequencerWindow::DrawAddCameraCutPopup(int bindingIndex) {
+        if (m_OpenAddCameraCutPopup) {
+            ImGui::OpenPopup("Cortar para##seqcut");
+            m_OpenAddCameraCutPopup = false;
+        }
+
+        if (!ImGui::BeginPopup("Cortar para##seqcut")) {
+            m_AddCameraCutForBinding = -1;
+            return;
+        }
+
+        if (!m_Context || !m_Context->ActiveScene) {
+            ImGui::TextDisabled("Sem cena.");
+            ImGui::EndPopup();
+            m_AddCameraCutForBinding = -1;
+            return;
+        }
+
+        ImGui::TextDisabled("Cameras da cena");
+        ImGui::Separator();
+
+        auto& reg = m_Context->ActiveScene->GetRegistry();
+        auto view = reg.view<CameraComponent>();
+
+        int shown = 0;
+
+        for (auto e : view) {
+            const auto* nc = reg.try_get<NameComponent>(e);
+            if (!nc || nc->Name.empty()) continue;
+
+            ++shown;
+            // (int)entity e o mesmo cast que o resto do editor usa (ver
+            // hierarchy_window / inspector_window) — entt::entity e enum class,
+            // entao o cast direto nao depende de qual versao do EnTT esta em uso.
+            ImGui::PushID((int)e);
+
+            char label[192];
+            std::snprintf(label, sizeof(label), ICON_CAMERA " %s", nc->Name.c_str());
+
+            if (ImGui::Selectable(label)) {
+                const int ti = CreateCameraCutTrack(bindingIndex, nc->Name);
+                if (ti >= 0) {
+                    m_SelectedBinding = bindingIndex;
+                    m_SelectedTrack = ti;
+                    m_SelectedSection = 0;
+                    m_SelectedChannel = m_SelectedKey = -1;
+                    SetGroupOpen(bindingIndex, TrackGroup::Cut, true);
+                }
+                m_AddCameraCutForBinding = -1;
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::PopID();
+        }
+
+        if (shown == 0) {
+            // O caminho e Criar > Camera no outliner da cena. Dizer isso aqui
+            // poupa a viagem de descobrir que a entidade de camera existe.
+            ImGui::TextWrapped("Nenhuma entidade de camera nesta cena.\n"
+                "Crie uma pelo menu Criar > Camera.");
+        }
+        else {
+            ImGui::Separator();
+            ImGui::TextDisabled(
+                "Uma key por corte: dali em diante a cena e vista por\n"
+                "esta camera, ate a proxima key de corte.");
+        }
+
+        ImGui::EndPopup();
+    }
+
+    void SequencerWindow::DrawAddEventPopup(int bindingIndex) {
+        if (m_OpenAddEventPopup) {
+            ImGui::OpenPopup("Adicionar evento##seqevt");
+            m_OpenAddEventPopup = false;
+        }
+
+        if (!ImGui::BeginPopup("Adicionar evento##seqevt")) {
+            m_AddEventForBinding = -1;
+            return;
+        }
+
+        ImGui::TextDisabled("Nome do evento");
+        ImGui::Separator();
+
+        ImGui::SetNextItemWidth(240.0f);
+
+        // EnterReturnsTrue: digitar o nome e apertar Enter e o gesto inteiro.
+        const bool submitted = ImGui::InputText("##evtname", m_NewEventName,
+            sizeof(m_NewEventName), ImGuiInputTextFlags_EnterReturnsTrue);
+
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere(-1);
+
+        ImGui::TextDisabled(
+            "Chega no script da entidade deste binding como OnEvent(nome, valor).\n"
+            "O valor e o campo Value de cada key.");
+
+        const bool empty = (m_NewEventName[0] == '\0');
+
+        ImGui::BeginDisabled(empty);
+        const bool clicked = ui::AccentButton(ICON_BOLT " Criar", ui::Accent::Primary,
+            "Cria a track. As keys voce poe na timeline, no frame que quiser.");
+        ImGui::EndDisabled();
+
+        if (!empty && (clicked || submitted)) {
+            const int ti = CreateEventTrack(bindingIndex, m_NewEventName);
+            if (ti >= 0) {
+                m_SelectedBinding = bindingIndex;
+                m_SelectedTrack = ti;
+                m_SelectedSection = 0;
+                m_SelectedChannel = m_SelectedKey = -1;
+            }
+            m_NewEventName[0] = '\0';
+            m_AddEventForBinding = -1;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
     void SequencerWindow::DrawAddControlPopup(int bindingIndex) {
         if (m_OpenAddControlPopup) {
             ImGui::OpenPopup("Adicionar controle##seqctrl");
@@ -6649,6 +6941,14 @@ namespace axe {
 
         SkeletalMeshComponent* smc = nullptr;
         const Skeleton* skel = GetBindingSkeleton(bindingIndex, &smc);
+
+        // A track de ENTIDADE nao precisa de esqueleto — e o caso da camera.
+        // Testado antes do resto para nao esbarrar no guard abaixo.
+        if (track.Type == SequencerTrackType::TransformEntity) {
+            outWorld = entityWorld;
+            return true;
+        }
+
         if (!skel || !smc) return false;
 
         switch (track.Type) {
@@ -6693,6 +6993,13 @@ namespace axe {
                 * smc->Asset->GetSocketLocalTransform(*sock);
             return true;
         }
+
+        case SequencerTrackType::TransformEntity:
+            // A propria entidade: o mundo dela E o alvo, sem composicao
+            // nenhuma. Um osso precisa de `entityWorld * BoneGlobals[i]`
+            // justamente porque nao e uma entidade.
+            outWorld = entityWorld;
+            return true;
 
         case SequencerTrackType::TransformControl: {
             auto it = m_Rigs.find(bindingIndex);
@@ -7068,6 +7375,333 @@ namespace axe {
     }
 
 
+
+    // ============================================================
+    // Transform da propria entidade (props, portas, CAMERA)
+    // ============================================================
+
+    int SequencerWindow::CreateEntityTransformTrack(int bindingIndex) {
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return -1;
+        if (b->EntityName.empty()) return -1;
+
+        // Uma so por binding: o binding E a entidade, e duas tracks escrevendo
+        // no mesmo TransformComponent produziriam a disputa muda de sempre —
+        // a ultima avaliada ganha.
+        for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i)
+            if (b->Tracks[i].TargetType == SequencerTargetType::Entity)
+                return i;
+
+        SequencerTrack tr;
+        tr.Type = SequencerTrackType::TransformEntity;
+        tr.TargetType = SequencerTargetType::Entity;
+
+        // O NOME da entidade, e nao vazio: e o que faz o KeyClip, a pose
+        // pendente e a multi-selecao casarem por nome como todos os outros
+        // alvos. Um alvo sem nome seria o unico caso especial da lista.
+        tr.TargetName = b->EntityName;
+
+        // Section cobrindo o range, e canais VAZIOS — a mesma regra da track de
+        // osso. Um canal com key de valor 0 no frame 0 teleportaria a entidade
+        // para a origem no instante em que a track nasce.
+        SequencerSection sec;
+        sec.StartFrame = m_Asset.GetFrameRange().Start;
+        sec.EndFrame = m_Asset.GetFrameRange().End;
+        tr.Sections.push_back(sec);
+
+        const int ti = m_Asset.AddTrack(bindingIndex, tr);
+        EnsurePlayerStarted();
+
+        AXE_EDITOR_INFO("Sequencer: track de transform da entidade '{}' criada.",
+            b->EntityName);
+        return ti;
+    }
+
+    // ── TRACK DE EVENTO ──────────────────────────────────────────────────────
+    //
+    // Uma track de evento nao anima nada: ela AVISA. Cada key e um instante em
+    // que o playhead, tocando, entrega uma mensagem ao script da entidade do
+    // binding — "atirou", "porta abriu", "corta para a proxima camera".
+    //
+    // ── POR QUE O NOME VAI NA TRACK, E NAO NA KEY ────────────────────────────
+    //
+    // Na key seria mais flexivel e pior de usar: a timeline mostraria uma
+    // fileira de losangos identicos, e descobrir qual e "tiro" e qual e "passo"
+    // exigiria clicar em cada um. Com o nome na track, a fileira JA e a
+    // resposta — e repetir o mesmo evento em cinco frames vira cinco keys numa
+    // linha so, que e o gesto normal (passos, rajada, piscar).
+    //
+    // Quem quiser dois eventos diferentes cria duas tracks, e a timeline passa
+    // a mostrar as duas linhas. E a mesma escolha do AnimNotify do clipe.
+    int SequencerWindow::CreateEventTrack(int bindingIndex, const std::string& eventName) {
+        if (eventName.empty()) return -1;
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return -1;
+
+        // Ja existe uma com este nome? Devolve a existente em vez de duplicar —
+        // duas tracks com o mesmo nome disparariam o evento duas vezes, e a
+        // causa seria invisivel no outliner.
+        for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+            if (b->Tracks[i].Type == SequencerTrackType::Event &&
+                b->Tracks[i].TargetName == eventName)
+                return i;
+        }
+
+        SequencerTrack tr;
+        tr.Type = SequencerTrackType::Event;
+
+        // Null: a track nao endereca osso, controle nem entidade. Marcar
+        // qualquer outra coisa faria o aplicador procurar um osso com o nome do
+        // evento — exatamente o erro que o `continue` no Resample evita.
+        tr.TargetType = SequencerTargetType::Null;
+        tr.TargetName = eventName;
+
+        SequencerSection sec;
+        sec.StartFrame = m_Asset.GetFrameRange().Start;
+        sec.EndFrame = m_Asset.GetFrameRange().End;
+
+        // UM canal, vazio. Diferente das tracks de transform, aqui o canal nao
+        // significa eixo nenhum — e so onde as keys moram. O `Value` de cada
+        // key vira o parametro float que chega no script.
+        SequencerChannel ch;
+        ch.Component = SequencerChannelComponent::X;
+        sec.Channels.push_back(ch);
+
+        tr.Sections.push_back(sec);
+
+        const int ti = m_Asset.AddTrack(bindingIndex, tr);
+        EnsurePlayerStarted();
+
+        AXE_EDITOR_INFO("Sequencer: track de evento '{}' criada.", eventName);
+        return ti;
+    }
+
+    // ── TRACK DE CORTE DE CAMERA ─────────────────────────────────────────────
+    //
+    // `TargetName` e o nome da entidade de camera. Cada key diz "deste frame em
+    // diante, esta camera" — e o corte vale ate a proxima key, de QUALQUER track
+    // de corte da sequence.
+    //
+    // ── EM QUAL BINDING ELA MORA ─────────────────────────────────────────────
+    //
+    // No binding em que voce clicou, e isso e so onde ela fica estacionada: o
+    // avaliador varre as tracks de corte de todos os bindings e compara os
+    // frames entre si. Um corte e uma afirmacao sobre a SEQUENCE, nao sobre um
+    // personagem.
+    //
+    // Ancorar no binding da propria camera seria mais bonito no outliner e
+    // exigiria que toda camera cortavel fosse um binding — e cortar para uma
+    // camera parada, que a sequence nao anima, e um caso perfeitamente normal.
+    int SequencerWindow::CreateCameraCutTrack(int bindingIndex,
+        const std::string& cameraName) {
+        if (cameraName.empty()) return -1;
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return -1;
+
+        for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+            if (b->Tracks[i].Type == SequencerTrackType::CameraCut &&
+                b->Tracks[i].TargetName == cameraName)
+                return i;
+        }
+
+        SequencerTrack tr;
+        tr.Type = SequencerTrackType::CameraCut;
+
+        // Null pelo mesmo motivo da track de evento: o alvo nao e osso,
+        // controle nem a entidade DESTE binding.
+        tr.TargetType = SequencerTargetType::Null;
+        tr.TargetName = cameraName;
+
+        SequencerSection sec;
+        sec.StartFrame = m_Asset.GetFrameRange().Start;
+        sec.EndFrame = m_Asset.GetFrameRange().End;
+
+        SequencerChannel ch;
+        ch.Component = SequencerChannelComponent::X;
+        sec.Channels.push_back(ch);
+
+        tr.Sections.push_back(sec);
+
+        const int ti = m_Asset.AddTrack(bindingIndex, tr);
+        EnsurePlayerStarted();
+
+        AXE_EDITOR_INFO("Sequencer: track de corte para a camera '{}' criada.",
+            cameraName);
+        return ti;
+    }
+
+    // ── O VIEWPORT SEGUE O CORTE ─────────────────────────────────────────────
+    //
+    // O pulo do gato do "Ver": com uma track de corte, arrastar o playhead nao
+    // so mexe a camera — TROCA de camera no frame do corte.
+    //
+    // So mexe se o usuario JA estiver pilotando. Ligar o modo sozinho porque a
+    // sequence tem corte sequestraria o viewport de quem esta editando ossos.
+    void SequencerWindow::SyncPilotToCameraCut() {
+        if (!m_Context || !m_Context->ActiveScene || !m_Context->Viewport) return;
+        if (m_Context->Viewport->PilotCamera == entt::null) return;
+
+        const std::string& cut = m_Player.GetActiveCameraName();
+        if (cut.empty()) return;
+
+        const entt::entity e = m_Context->ActiveScene->FindByName(cut);
+        if (e == entt::null) return;
+
+        auto& reg = m_Context->ActiveScene->GetRegistry();
+        if (!reg.valid(e) || !reg.try_get<CameraComponent>(e)) return;
+
+        m_Context->Viewport->PilotCamera = e;
+    }
+
+    bool SequencerWindow::BindingHasEntityTrack(int bindingIndex) const {
+        const auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b) return false;
+
+        for (const auto& tr : b->Tracks)
+            if (tr.TargetType == SequencerTargetType::Entity) return true;
+
+        return false;
+    }
+
+    // ── APLICA O TRANSFORM AMOSTRADO NA ENTIDADE ─────────────────────────────
+    //
+    // ── POR QUE GUARDA O ORIGINAL ────────────────────────────────────────────
+    //
+    // Osso e socket voltam sozinhos: a pose e recomposta da bind pose todo
+    // frame, e o preview do socket e uma entidade transiente que morre junto
+    // com a janela. O TransformComponent de uma entidade da CENA nao — o que a
+    // sequence escreve nele FICA.
+    //
+    // Sem guardar o original, fechar o Sequencer deixaria a camera (ou a porta,
+    // ou o elevador) parada no frame em que o playhead estava. Pior: um Ctrl+S
+    // na cena gravaria essa pose como se fosse a posicao autorada.
+    //
+    // E o equivalente do `PoseOverride` para entidades, e e devolvido no mesmo
+    // lugar: ReleasePoseOverride.
+    void SequencerWindow::ApplyEntityTransforms() {
+        if (!m_Context || !m_Context->ActiveScene) return;
+
+        auto& reg = m_Context->ActiveScene->GetRegistry();
+
+        for (int bi = 0; bi < static_cast<int>(m_Asset.GetBindingCount()); ++bi) {
+            const auto* b = m_Asset.GetBinding(bi);
+            if (!b) continue;
+
+            const entt::entity e = ResolveBindingEntity(*b);
+            if (e == entt::null) continue;
+
+            auto* tc = reg.try_get<TransformComponent>(e);
+            if (!tc) continue;
+
+            // Ha track de entidade NAO MUTADA neste binding?
+            const SequencerTrack* track = nullptr;
+            for (const auto& tr : b->Tracks) {
+                if (tr.TargetType != SequencerTargetType::Entity) continue;
+                if (tr.Muted) continue;
+                track = &tr;
+                break;
+            }
+
+            if (!track) continue;
+
+            // Primeira vez que dirigimos esta entidade: guarda o que estava la.
+            if (m_EntityRestore.find(e) == m_EntityRestore.end())
+                m_EntityRestore[e] = tc->Data;
+
+            // ── O ORIGINAL E A BASE, NAO O ZERO ──────────────────────────────
+            //
+            // Comeca do transform guardado e sobrepoe SO os canais que a
+            // sequence anima. Assim animar apenas a altura da camera nao joga
+            // a posicao horizontal dela na origem — o mesmo motivo pelo qual a
+            // track de osso nasce sem canais.
+            //
+            // A conta (inclusive a fronteira graus/radianos e o UseWorldMatrix
+            // desligado) mora em sequence_apply, e e a mesma que o Play usa.
+            tc->Data = sequence::ApplyEntitySamples(
+                m_EntityRestore[e], m_EffectiveSamples, bi);
+        }
+    }
+
+    void SequencerWindow::RestoreEntityTransforms() {
+        if (!m_Context || !m_Context->ActiveScene) {
+            m_EntityRestore.clear();
+            return;
+        }
+
+        auto& reg = m_Context->ActiveScene->GetRegistry();
+
+        for (const auto& [e, saved] : m_EntityRestore) {
+            if (!reg.valid(e)) continue;
+            if (auto* tc = reg.try_get<TransformComponent>(e))
+                tc->Data = saved;
+        }
+
+        m_EntityRestore.clear();
+    }
+
+    void SequencerWindow::ApplyGizmoToEntity(int bindingIndex, int trackIndex,
+        const glm::mat4& world) {
+        if (!m_Context || !m_Context->ActiveScene) return;
+
+        auto* b = m_Asset.GetBinding(bindingIndex);
+        if (!b || trackIndex < 0 || trackIndex >= static_cast<int>(b->Tracks.size())) return;
+
+        const entt::entity e = ResolveBindingEntity(*b);
+        if (e == entt::null) return;
+
+        auto& reg = m_Context->ActiveScene->GetRegistry();
+
+        // ── MUNDO -> LOCAL AO PAI ────────────────────────────────────────────
+        //
+        // A mesma conversao que o gizmo de entidade do viewport faz (ver
+        // ViewportRenderer::DrawGuizmo): uma entidade filha tem de gravar o
+        // transform LOCAL, senao mover o pai deixaria a filha para tras.
+        glm::mat4 local = world;
+
+        if (const auto* rel = reg.try_get<RelationshipComponent>(e)) {
+            if (rel->Parent != entt::null && reg.valid(rel->Parent)) {
+                const glm::mat4 parentWorld =
+                    m_Context->ActiveScene->GetWorldTransform(rel->Parent);
+                local = glm::inverse(parentWorld) * world;
+            }
+        }
+
+        glm::vec3 t, s, skew;
+        glm::vec4 persp;
+        glm::quat q;
+        if (!glm::decompose(local, s, q, t, skew, persp)) return;
+
+        if (!m_GroupDragActive && m_SelectedTargets.size() > 1) BeginGroupDrag();
+
+        const int si = m_Recording ? SectionAtPlayhead(bindingIndex, trackIndex) : -1;
+        if (m_Recording && si < 0) return;
+
+        const ImGuizmo::OPERATION op = m_Context->Viewport
+            ? m_Context->Viewport->GetGizmoOperation() : ImGuizmo::TRANSLATE;
+
+        TargetLocal now;
+        now.T = t; now.R = q; now.S = s;
+
+        if (op == ImGuizmo::TRANSLATE) {
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::X, t.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Y, t.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::Z, t.z);
+            ApplyGroupDelta(now, GizmoChannel::Translate);
+        }
+        else if (op == ImGuizmo::ROTATE) {
+            WriteRotation(bindingIndex, trackIndex, si, q);
+            ApplyGroupDelta(now, GizmoChannel::Rotate);
+        }
+        else if (op == ImGuizmo::SCALE) {
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleX, s.x);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleY, s.y);
+            WriteChannelValue(bindingIndex, trackIndex, si, SequencerChannelComponent::ScaleZ, s.z);
+            ApplyGroupDelta(now, GizmoChannel::Scale);
+        }
+    }
+
     // ============================================================
     // Selecao multipla de alvos + pivo individual
     // ============================================================
@@ -7096,6 +7730,10 @@ namespace axe {
         // tamanhos diferentes, e o alvo i passaria a seguir o instantaneo de
         // outro. Fechar o gesto e mais honesto que tentar remendar.
         EndGroupDrag();
+
+        // A selecao mudou: o grafico precisa reenquadrar, senao as curvas novas
+        // podem cair inteiras fora da tela.
+        m_CurveFitPending = true;
 
         if (!additive) {
             m_SelectedTargets.clear();
@@ -7176,6 +7814,7 @@ namespace axe {
         switch (t.Type) {
         case SequencerTargetType::Control: tmp.Type = SequencerTrackType::TransformControl; break;
         case SequencerTargetType::Socket:  tmp.Type = SequencerTrackType::TransformSocket;  break;
+        case SequencerTargetType::Entity:  tmp.Type = SequencerTrackType::TransformEntity;  break;
         default:                           tmp.Type = SequencerTrackType::TransformBone;    break;
         }
 
@@ -7215,9 +7854,9 @@ namespace axe {
 
         if (ti < 0) {
             // Mesma regra do alvo unico: a track nasce na MANIPULACAO. So vale
-            // para controle — osso e socket nao tem como estar no grupo sem
-            // track, porque a unica forma de seleciona-los e pelo outliner, que
-            // lista tracks.
+            // para controle — osso, socket e entidade nao tem como estar no
+            // grupo sem track, porque a unica forma de seleciona-los e pelo
+            // outliner, que lista tracks.
             if (t.Type != SequencerTargetType::Control) return;
 
             ti = CreateControlTrack(t.Binding, t.Name);
@@ -7625,6 +8264,7 @@ namespace axe {
             case SequencerTrackType::TransformBone:    ApplyGizmoToBone(bi, ti, m);    break;
             case SequencerTrackType::TransformSocket:  ApplyGizmoToSocket(bi, ti, m);  break;
             case SequencerTrackType::TransformControl: ApplyGizmoToControl(bi, ti, m); break;
+            case SequencerTrackType::TransformEntity:  ApplyGizmoToEntity(bi, ti, m);  break;
             default: break;
             }
             };
@@ -7884,6 +8524,432 @@ namespace axe {
     }
 
 
+
+    // ============================================================
+    // Editor de curvas
+    // ============================================================
+
+    namespace {
+
+        // Cor por EIXO, brilho por grupo. O olho separa os tres eixos por cor
+        // (a convencao X/Y/Z = vermelho/verde/azul que o gizmo ja usa) e os tres
+        // grupos por intensidade — assim RotX e X sao parentes visiveis sem
+        // precisar de nove cores que ninguem decora.
+        ImU32 CurveColor(SequencerChannelComponent c) {
+            int axis = 0;
+            float mul = 1.0f;
+
+            switch (c) {
+            case SequencerChannelComponent::X:      axis = 0; mul = 1.00f; break;
+            case SequencerChannelComponent::Y:      axis = 1; mul = 1.00f; break;
+            case SequencerChannelComponent::Z:      axis = 2; mul = 1.00f; break;
+            case SequencerChannelComponent::RotX:   axis = 0; mul = 0.78f; break;
+            case SequencerChannelComponent::RotY:   axis = 1; mul = 0.78f; break;
+            case SequencerChannelComponent::RotZ:   axis = 2; mul = 0.78f; break;
+            case SequencerChannelComponent::ScaleX: axis = 0; mul = 0.55f; break;
+            case SequencerChannelComponent::ScaleY: axis = 1; mul = 0.55f; break;
+            case SequencerChannelComponent::ScaleZ: axis = 2; mul = 0.55f; break;
+            }
+
+            const float base[3][3] = {
+                { 1.00f, 0.35f, 0.35f },   // X
+                { 0.40f, 0.95f, 0.40f },   // Y
+                { 0.40f, 0.60f, 1.00f },   // Z
+            };
+
+            return ImGui::ColorConvertFloat4ToU32(ImVec4(
+                base[axis][0] * mul, base[axis][1] * mul, base[axis][2] * mul, 1.0f));
+        }
+
+        // Passo "redondo" mais proximo de `target` unidades. Uma grade em
+        // 0.37 em 0.37 nao ajuda ninguem a ler um valor.
+        float NiceStep(float target) {
+            if (target <= 0.0f) return 1.0f;
+
+            const float mag = std::pow(10.0f, std::floor(std::log10(target)));
+            const float norm = target / mag;
+
+            if (norm < 1.5f) return 1.0f * mag;
+            if (norm < 3.5f) return 2.0f * mag;
+            if (norm < 7.5f) return 5.0f * mag;
+            return 10.0f * mag;
+        }
+
+    } // namespace
+
+    std::vector<SequencerWindow::CurveRef> SequencerWindow::CollectCurveChannels() const {
+        std::vector<CurveRef> out;
+
+        // ── QUAIS CURVAS APARECEM ────────────────────────────────────────────
+        //
+        // As dos alvos SELECIONADOS. Mostrar tudo transformaria o grafico numa
+        // meada — um clipe explodido tem centenas de canais —, e mostrar so o
+        // canal selecionado impediria de comparar X com Y, que e metade do
+        // motivo de existir um grafico.
+        //
+        // A multi-selecao de alvos ja resolve a escolha: o animador seleciona a
+        // cadeia que esta ajustando e ve as curvas dela.
+        auto addTrack = [&](int bi, int ti) {
+            const auto* b = m_Asset.GetBinding(bi);
+            if (!b || ti < 0 || ti >= static_cast<int>(b->Tracks.size())) return;
+
+            const auto& tr = b->Tracks[ti];
+
+            for (int si = 0; si < static_cast<int>(tr.Sections.size()); ++si) {
+                for (int ci = 0; ci < static_cast<int>(tr.Sections[si].Channels.size()); ++ci) {
+                    const auto comp = tr.Sections[si].Channels[ci].Component;
+
+                    const bool isT = (comp == SequencerChannelComponent::X ||
+                        comp == SequencerChannelComponent::Y ||
+                        comp == SequencerChannelComponent::Z);
+                    const bool isR = (comp == SequencerChannelComponent::RotX ||
+                        comp == SequencerChannelComponent::RotY ||
+                        comp == SequencerChannelComponent::RotZ);
+
+                    if (isT && !m_CurveShowT) continue;
+                    if (isR && !m_CurveShowR) continue;
+                    if (!isT && !isR && !m_CurveShowS) continue;
+
+                    out.push_back(CurveRef{ bi, ti, si, ci });
+                }
+            }
+            };
+
+        if (!m_SelectedTargets.empty()) {
+            for (const auto& t : m_SelectedTargets) {
+                const auto* b = m_Asset.GetBinding(t.Binding);
+                if (!b) continue;
+
+                for (int i = 0; i < static_cast<int>(b->Tracks.size()); ++i) {
+                    if (b->Tracks[i].TargetType != t.Type) continue;
+                    if (b->Tracks[i].TargetName != t.Name) continue;
+                    addTrack(t.Binding, i);
+                    break;
+                }
+            }
+        }
+        else if (m_SelectedBinding >= 0 && m_SelectedTrack >= 0) {
+            addTrack(m_SelectedBinding, m_SelectedTrack);
+        }
+
+        return out;
+    }
+
+    void SequencerWindow::DrawCurveArea(ImDrawList* dl,
+        const ImVec2& origin, const ImVec2& size,
+        float areaTop, float areaBottom,
+        float startFrame, float frameWidth,
+        bool timelineHovered,
+        const ImRect& boxRect, bool boxActive) {
+
+        const std::vector<CurveRef> curves = CollectCurveChannels();
+
+        const float midY = (areaTop + areaBottom) * 0.5f;
+
+        auto frameToX = [&](float f) { return origin.x + (f - startFrame) * frameWidth; };
+        auto xToFrame = [&](float x) { return startFrame + (x - origin.x) / frameWidth; };
+
+        // ── ENQUADRAMENTO ────────────────────────────────────────────────────
+        //
+        // Cair num grafico com a curva fora da tela e a primeira impressao de
+        // "isto nao funciona". Enquadra ao entrar no modo e ao trocar a
+        // selecao, e nunca mais depois — dai em diante o zoom e do usuario.
+        if (m_CurveFitPending) {
+            float lo = std::numeric_limits<float>::max();
+            float hi = std::numeric_limits<float>::lowest();
+
+            for (const auto& c : curves) {
+                const auto* b = m_Asset.GetBinding(c.Binding);
+                if (!b) continue;
+                const auto& ch = b->Tracks[c.Track].Sections[c.Section].Channels[c.Channel];
+
+                for (const auto& k : ch.Keys) {
+                    lo = std::min(lo, k.Value);
+                    hi = std::max(hi, k.Value);
+                }
+            }
+
+            if (lo <= hi) {
+                const float pad = std::max(0.5f, (hi - lo) * 0.15f);
+                lo -= pad; hi += pad;
+
+                m_CurveCenter = (lo + hi) * 0.5f;
+                m_CurvePixelsPerUnit = std::clamp(
+                    (areaBottom - areaTop) / std::max(0.0001f, hi - lo),
+                    0.01f, 10000.0f);
+            }
+            else {
+                // Sem key nenhuma: uma escala neutra e melhor que herdar a
+                // anterior, que pode estar em graus quando isto e metros.
+                m_CurveCenter = 0.0f;
+                m_CurvePixelsPerUnit = 8.0f;
+            }
+
+            m_CurveFitPending = false;
+        }
+
+        auto valueToY = [&](float v) {
+            return midY - (v - m_CurveCenter) * m_CurvePixelsPerUnit;
+            };
+        auto yToValue = [&](float y) {
+            return m_CurveCenter - (y - midY) / m_CurvePixelsPerUnit;
+            };
+
+        // ── ZOOM VERTICAL ────────────────────────────────────────────────────
+        //
+        // Roda sem modificador. No dope sheet ela rola as lanes; aqui nao ha
+        // lanes, e o eixo do valor e justamente o que precisa de escala propria
+        // — rotacao vive nas dezenas de graus, translacao nos decimos de metro.
+        //
+        // Ancorada no cursor, pelo mesmo motivo do zoom horizontal: o valor sob
+        // o mouse continua sob o mouse.
+        {
+            const ImGuiIO& io = ImGui::GetIO();
+
+            if (timelineHovered && io.MouseWheel != 0.0f && !io.KeyCtrl && !io.KeyShift) {
+                const float valueUnderMouse = yToValue(io.MousePos.y);
+
+                m_CurvePixelsPerUnit = std::clamp(
+                    m_CurvePixelsPerUnit * std::pow(1.15f, io.MouseWheel), 0.01f, 10000.0f);
+
+                // Reposiciona o centro para o valor sob o cursor nao sair do
+                // lugar com a escala nova.
+                m_CurveCenter = valueUnderMouse + (midY - io.MousePos.y) / m_CurvePixelsPerUnit;
+            }
+        }
+
+        dl->PushClipRect(ImVec2(origin.x, areaTop),
+            ImVec2(origin.x + size.x, areaBottom), true);
+
+        // ── GRADE DE VALOR ───────────────────────────────────────────────────
+        const float step = NiceStep(60.0f / m_CurvePixelsPerUnit);
+        const float vTop = yToValue(areaTop);
+        const float vBottom = yToValue(areaBottom);
+
+        for (float v = std::floor(vBottom / step) * step; v <= vTop; v += step) {
+            const float y = valueToY(v);
+            if (y < areaTop - 1.0f || y > areaBottom + 1.0f) continue;
+
+            const bool zero = (std::abs(v) < step * 0.01f);
+
+            dl->AddLine(ImVec2(origin.x, y), ImVec2(origin.x + size.x, y),
+                zero ? IM_COL32(120, 120, 130, 180) : IM_COL32(60, 60, 66, 160),
+                zero ? 1.6f : 1.0f);
+
+            char lbl[32];
+            std::snprintf(lbl, sizeof(lbl), "%.3g", v);
+            dl->AddText(ImVec2(origin.x + 4.0f, y - ImGui::GetTextLineHeight() - 1.0f),
+                IM_COL32(150, 150, 160, 200), lbl);
+        }
+
+        if (curves.empty()) {
+            dl->AddText(ImVec2(origin.x + 16.0f, midY - 8.0f),
+                IM_COL32(160, 160, 170, 255),
+                "Selecione um osso ou controle para ver as curvas dele.");
+            dl->PopClipRect();
+            return;
+        }
+
+        // ── AS CURVAS ────────────────────────────────────────────────────────
+        //
+        // Amostradas a cada 3px com o MESMO `SequencerPlayer::Interpolate` que
+        // o player usa. E por isso que o grafico nao pode divergir do que toca:
+        // nao ha uma segunda implementacao da curva para ficar desatualizada.
+        const int   sampleStepPx = 3;
+        const float x0 = origin.x;
+        const float x1 = origin.x + size.x;
+
+        for (const auto& c : curves) {
+            const auto* b = m_Asset.GetBinding(c.Binding);
+            if (!b) continue;
+
+            const auto& tr = b->Tracks[c.Track];
+            const auto& ch = tr.Sections[c.Section].Channels[c.Channel];
+            if (ch.Keys.empty()) continue;
+
+            const ImU32 col = CurveColor(ch.Component);
+            const float thick = tr.Muted ? 1.0f : 2.0f;
+
+            const ImU32 lineCol = tr.Muted
+                ? (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(70) << IM_COL32_A_SHIFT)
+                : col;
+
+            std::vector<ImVec2> pts;
+            pts.reserve(static_cast<std::size_t>((x1 - x0) / sampleStepPx) + 4);
+
+            for (float x = x0; x <= x1; x += sampleStepPx) {
+                const float f = xToFrame(x);
+
+                const SequencerKey* l = nullptr;
+                const SequencerKey* r = nullptr;
+                if (!ch.FindBracketingKeys(f, l, r)) continue;
+
+                pts.push_back(ImVec2(x, valueToY(SequencerPlayer::Interpolate(*l, *r, f))));
+            }
+
+            if (pts.size() >= 2)
+                dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), lineCol, 0, thick);
+
+            // ── AS KEYS ──────────────────────────────────────────────────────
+            for (int ki = 0; ki < static_cast<int>(ch.Keys.size()); ++ki) {
+                const auto& k = ch.Keys[ki];
+
+                const float kx = frameToX(k.Frame);
+                const float ky = valueToY(k.Value);
+
+                if (kx < x0 - 20.0f || kx > x1 + 20.0f) continue;
+
+                const KeyRef ref{ c.Binding, c.Track, c.Section, c.Channel, ki };
+
+                if (boxActive && !tr.Locked &&
+                    kx >= boxRect.Min.x && kx <= boxRect.Max.x &&
+                    ky >= boxRect.Min.y && ky <= boxRect.Max.y) {
+                    m_BoxHits.push_back(ref);
+                }
+
+                const bool isPrimary = (m_SelectedBinding == c.Binding &&
+                    m_SelectedTrack == c.Track &&
+                    m_SelectedSection == c.Section &&
+                    m_SelectedChannel == c.Channel &&
+                    m_SelectedKey == ki);
+                const bool inSel = IsKeySelected(ref);
+
+                const float r2 = 5.0f;
+
+                ImGui::SetCursorScreenPos(ImVec2(kx - r2, ky - r2));
+                char kid[80];
+                std::snprintf(kid, sizeof(kid), "ck_%d_%d_%d_%d_%d",
+                    c.Binding, c.Track, c.Section, c.Channel, ki);
+                ImGui::InvisibleButton(kid, ImVec2(r2 * 2, r2 * 2));
+
+                if (ImGui::IsItemActivated()) {
+                    const ImGuiIO& io = ImGui::GetIO();
+
+                    if (io.KeyCtrl || io.KeyShift) ToggleKeySelection(ref);
+                    else if (!inSel)               SetSingleKeySelection(ref);
+
+                    m_SelectedBinding = c.Binding;
+                    m_SelectedTrack = c.Track;
+                    m_SelectedSection = c.Section;
+                    m_SelectedChannel = c.Channel;
+                    m_SelectedKey = ki;
+
+                    if (IsKeySelected(ref) && !tr.Locked) {
+                        m_DraggingKey = true;
+                        m_DragStartMouseX = ImGui::GetMousePos().x;
+                        m_DragStartMouseY = ImGui::GetMousePos().y;
+                        BeginKeyDrag();
+                    }
+                }
+
+                const ImU32 fill = isPrimary ? IM_COL32(255, 200, 80, 255)
+                    : inSel ? IM_COL32(120, 190, 255, 255)
+                    : col;
+
+                dl->AddRectFilled(ImVec2(kx - r2, ky - r2), ImVec2(kx + r2, ky + r2), fill, 1.5f);
+                dl->AddRect(ImVec2(kx - r2, ky - r2), ImVec2(kx + r2, ky + r2),
+                    IM_COL32(0, 0, 0, 220), 1.5f);
+
+                // ── ALCAS DE TANGENTE ────────────────────────────────────────
+                //
+                // So nas keys SELECIONADAS e so no modo Bezier. Desenhar alca em
+                // toda key transformaria a curva num arbusto — e e o padrao de
+                // qualquer editor de curvas pelo mesmo motivo.
+                if (!inSel || k.Interp != SequencerInterp::Bezier) continue;
+                if (tr.Locked) continue;
+
+                const bool hasPrev = (ki > 0);
+                const bool hasNext = (ki + 1 < static_cast<int>(ch.Keys.size()));
+
+                auto handle = [&](int side) {
+                    // side 1 = sai desta key (usa o trecho ate a proxima)
+                    // side 2 = chega nesta key (usa o trecho desde a anterior)
+                    const float span = (side == 1)
+                        ? (hasNext ? ch.Keys[ki + 1].Frame - k.Frame : 0.0f)
+                        : (hasPrev ? k.Frame - ch.Keys[ki - 1].Frame : 0.0f);
+
+                    if (span <= 0.0f) return;
+
+                    const float w = (side == 1) ? k.TangentOutWeight : k.TangentInWeight;
+                    const float tv = (side == 1) ? k.TangentOut : -k.TangentIn;
+
+                    const float hf = (side == 1) ? k.Frame + w * span : k.Frame - w * span;
+                    const float hx = frameToX(hf);
+                    const float hy = valueToY(k.Value + tv);
+
+                    dl->AddLine(ImVec2(kx, ky), ImVec2(hx, hy),
+                        IM_COL32(230, 200, 120, 200), 1.4f);
+                    dl->AddCircleFilled(ImVec2(hx, hy), 4.0f, IM_COL32(255, 210, 120, 255));
+                    dl->AddCircle(ImVec2(hx, hy), 4.0f, IM_COL32(0, 0, 0, 200));
+
+                    ImGui::SetCursorScreenPos(ImVec2(hx - 6.0f, hy - 6.0f));
+                    char hid[90];
+                    std::snprintf(hid, sizeof(hid), "ch_%d_%d_%d_%d_%d_%d",
+                        c.Binding, c.Track, c.Section, c.Channel, ki, side);
+                    ImGui::InvisibleButton(hid, ImVec2(12.0f, 12.0f));
+
+                    if (ImGui::IsItemActivated()) {
+                        m_DragHandleSide = side;
+                        m_DragHandleKey = ref;
+                    }
+                    };
+
+                handle(1);
+                handle(2);
+            }
+        }
+
+        // ── ARRASTO DA ALCA ──────────────────────────────────────────────────
+        //
+        // Fora do laco: a key da alca pode ter saido da vista no meio do gesto
+        // (o usuario arrasta para fora da janela de zoom), e o arrasto tem de
+        // continuar valendo.
+        if (m_DragHandleSide != 0) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (SequencerKey* k = ResolveKeyRef(m_DragHandleKey)) {
+                    const auto* b = m_Asset.GetBinding(m_DragHandleKey.Binding);
+                    const auto& ch = b->Tracks[m_DragHandleKey.Track]
+                        .Sections[m_DragHandleKey.Section]
+                        .Channels[m_DragHandleKey.Channel];
+
+                    const int ki = m_DragHandleKey.Key;
+                    const bool hasPrev = (ki > 0);
+                    const bool hasNext = (ki + 1 < static_cast<int>(ch.Keys.size()));
+
+                    const float span = (m_DragHandleSide == 1)
+                        ? (hasNext ? ch.Keys[ki + 1].Frame - k->Frame : 0.0f)
+                        : (hasPrev ? k->Frame - ch.Keys[ki - 1].Frame : 0.0f);
+
+                    if (span > 0.0f) {
+                        const ImVec2 mp = ImGui::GetMousePos();
+
+                        const float df = std::abs(xToFrame(mp.x) - k->Frame);
+                        const float dv = yToValue(mp.y) - k->Value;
+
+                        // Peso clampado em [0.01, 0.99]: sao os limites que
+                        // mantem x(u) monotonico. Fora deles a curva dobraria
+                        // no tempo — dois valores para o mesmo frame.
+                        const float w = std::clamp(df / span, 0.01f, 0.99f);
+
+                        if (m_DragHandleSide == 1) {
+                            k->TangentOutWeight = w;
+                            k->TangentOut = dv;
+                        }
+                        else {
+                            k->TangentInWeight = w;
+                            k->TangentIn = -dv;
+                        }
+                    }
+                }
+            }
+            else {
+                m_DragHandleSide = 0;
+            }
+        }
+
+        dl->PopClipRect();
+    }
+
     // ============================================================
     // Selecao em caixa
     // ============================================================
@@ -8017,9 +9083,17 @@ namespace axe {
         // valor de quando o gesto comecou. Somando o delta ao frame ATUAL, o
         // grupo se comprimiria: a cada quadro cada key partiria de um lugar
         // diferente, e as distancias entre elas encolheriam ate virarem uma so.
+        m_DragOriginalValues.clear();
+        m_DragOriginalValues.reserve(m_SelectedKeys.size());
+
         for (const auto& r : m_SelectedKeys) {
             const SequencerKey* k = ResolveKeyRef(r);
             m_DragOriginalFrames.push_back(k ? k->Frame : 0.0f);
+
+            // O mesmo raciocinio do frame, no eixo do valor — usado so no modo
+            // curva, mas guardado sempre: e uma copia de floats, e um `if` aqui
+            // seria mais estado para manter em sincronia do que economia.
+            m_DragOriginalValues.push_back(k ? k->Value : 0.0f);
         }
     }
 

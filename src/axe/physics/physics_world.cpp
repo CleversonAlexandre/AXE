@@ -439,12 +439,43 @@ namespace axe
                 }
             });
 
+        // ── CORPOS DIRIGIDOS POR FORA: A SETA INVERTE ────────────────────────
+        //
+        // ANTES do Step, e nao depois: o MoveKinematic nao teleporta, ele da ao
+        // corpo a velocidade necessaria para chegar la NESTE passo — e para
+        // isso o passo ainda tem de acontecer. Depois do Step, a velocidade so
+        // seria consumida no frame seguinte, e o corpo ficaria um quadro atras
+        // da malha o tempo todo.
+        //
+        // E o que faz uma porta de cutscene continuar empurrando o jogador em
+        // vez de atravessa-lo. Ver PhysicsWorld::SetTransformDriven.
+        registry.view<RigidbodyComponent, TransformComponent>().each(
+            [&](entt::entity, RigidbodyComponent& rb, TransformComponent& tc)
+            {
+                if (!rb._TransformDriven || !rb.IsCreated) return;
+                if (rb.Type == BodyType::Static) return;
+
+                JPH::BodyID id = ToBodyID(rb.BodyID);
+                if (id.IsInvalid() || !bi.IsAdded(id)) return;
+
+                bi.MoveKinematic(id,
+                    ToJolt(tc.Data.Position),
+                    ToJoltQuat(tc.Data.Rotation),
+                    deltaTime);
+            });
+
         PhysicsSystem::Get().Step(deltaTime);
 
         registry.view<RigidbodyComponent, TransformComponent>().each(
             [&](entt::entity entity, RigidbodyComponent& rb, TransformComponent& tc)
             {
                 if (!rb.IsCreated || rb.Type != BodyType::Dynamic) return;
+
+                // Dirigido por fora: NAO le de volta. Ler aqui devolveria a
+                // posicao que o Jolt acabou de calcular e desfaria, no mesmo
+                // frame, o que a cutscene escreveu — que e exatamente o bug que
+                // este caminho existe para eliminar.
+                if (rb._TransformDriven) return;
 
                 JPH::BodyID id = ToBodyID(rb.BodyID);
                 if (id.IsInvalid() || !bi.IsAdded(id)) return;
@@ -469,6 +500,26 @@ namespace axe
                 JPH::PhysicsSystem* ps = GetPS();
                 JPH::TempAllocatorImpl* ta = GetTA();
                 if (!ps || !ta) return;
+
+                // ── DIRIGIDO POR FORA ────────────────────────────────────────
+                //
+                // O personagem nao anda: ele e LEVADO. Sem este desvio, o
+                // ExtendedUpdate aplica gravidade e reescreve tc.Data.Position
+                // no fim desta mesma lambda — a cutscene poe o jogador no lugar
+                // e a fisica o traz de volta, todo frame.
+                //
+                // A velocidade fica zerada para que, ao soltar, ele nao herde
+                // um vetor acumulado durante o plano.
+                if (cc._TransformDriven)
+                {
+                    ch.SetPosition(JPH::RVec3(
+                        tc.Data.Position.x, tc.Data.Position.y, tc.Data.Position.z));
+                    ch.SetLinearVelocity(JPH::Vec3::sZero());
+
+                    cc.Velocity = glm::vec3(0.0f);
+                    cc.IsGrounded = true;   // parado onde mandaram: nao esta caindo
+                    return;
+                }
 
                 // Monta velocidade: XZ vem do script, Y da gravidade
                 JPH::Vec3 curVel = ch.GetLinearVelocity();
@@ -642,6 +693,72 @@ namespace axe
                 cc.Velocity.x = 0;
                 cc.Velocity.z = 0;
             });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    void PhysicsWorld::SetTransformDriven(Scene& scene, entt::entity entity, bool driven)
+    {
+        if (!PhysicsSystem::Get().IsInitialized()) return;
+
+        auto& registry = scene.GetRegistry();
+        if (!registry.valid(entity)) return;
+
+        if (auto* rb = registry.try_get<RigidbodyComponent>(entity))
+        {
+            if (rb->_TransformDriven != driven)
+            {
+                rb->_TransformDriven = driven;
+
+                if (rb->IsCreated)
+                {
+                    auto& bi = GetBI();
+                    JPH::BodyID id = ToBodyID(rb->BodyID);
+
+                    if (!id.IsInvalid() && bi.IsAdded(id))
+                    {
+                        // Corpo Static nao muda de tipo: ele ja nao simula, e
+                        // promove-lo a Kinematic e devolve-lo a Static custaria
+                        // duas reinsercoes no broadphase por cutscene sem mudar
+                        // nada no resultado.
+                        if (rb->Type != BodyType::Static)
+                        {
+                            bi.SetMotionType(id,
+                                driven ? JPH::EMotionType::Kinematic
+                                : (rb->Type == BodyType::Kinematic
+                                    ? JPH::EMotionType::Kinematic
+                                    : JPH::EMotionType::Dynamic),
+                                JPH::EActivation::Activate);
+                        }
+
+                        // Zerar nos DOIS sentidos, e nao so ao soltar.
+                        //
+                        // Ao entrar: um corpo que estava caindo entraria na
+                        // cutscene com velocidade guardada.
+                        // Ao sair: o MoveKinematic dos ultimos frames deixou
+                        // velocidade no corpo, e sem zerar o objeto sai
+                        // ARREMESSADO na direcao do ultimo movimento da
+                        // timeline — que num corte rapido e violento.
+                        bi.SetLinearVelocity(id, JPH::Vec3::sZero());
+                        bi.SetAngularVelocity(id, JPH::Vec3::sZero());
+                    }
+                }
+            }
+        }
+
+        if (auto* cc = registry.try_get<CharacterControllerComponent>(entity))
+        {
+            if (cc->_TransformDriven != driven)
+            {
+                cc->_TransformDriven = driven;
+
+                auto it = s_Characters.find(entity);
+                if (it != s_Characters.end() && it->second)
+                    it->second->SetLinearVelocity(JPH::Vec3::sZero());
+
+                cc->Velocity = glm::vec3(0.0f);
+                cc->WantsJump = false;
+            }
+        }
     }
 
     void PhysicsWorld::AddForce(entt::entity entity, Scene& scene, const glm::vec3& force)

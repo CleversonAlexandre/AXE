@@ -60,6 +60,8 @@ namespace axe
         void DrawFolder(FolderComponent& folder);
         void DrawSpringArm(SpringArmComponent& sa);
         void DrawCamera(CameraComponent& cam);
+        void DrawSequencePlayer(SequencePlayerComponent& sp);
+        void DrawSpline(SplineComponent& sp);
         void DrawRigidbody(entt::entity entity, entt::registry& registry);
         void DrawCollider(entt::entity entity, entt::registry& registry);
         void DrawCharacterController(entt::entity entity, entt::registry& registry);

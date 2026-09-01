@@ -1,6 +1,7 @@
 #pragma once
 #include "axe/utils/glm_config.hpp"
 #include "axe/scene/transform.hpp"
+#include "axe/scene/spline.hpp"
 #include "axe/mesh/mesh.hpp"
 #include "axe/animation/skinned_mesh.hpp"
 #include "axe/animation/skeleton.hpp"
@@ -409,6 +410,109 @@ namespace axe
 		float MoveSpeed = 5.0f;
 		float Sensitivity = 0.1f;
 		bool  IsPrimary = true;
+	};
+
+	// ── CAMINHO NO MUNDO ─────────────────────────────────────────────────────
+	//
+	// Uma curva por onde algo se desloca: o trilho de uma camera de cutscene, a
+	// rota de um elevador, a patrulha de um inimigo.
+	//
+	// ── POR QUE E UMA ENTIDADE DA CENA, E NAO PARTE DA SEQUENCE ──────────────
+	//
+	// Guardar os pontos dentro do `.axeseq` seria auto-contido e pior em tres
+	// frentes: a curva ficaria invisivel no outliner, nao daria para reusar o
+	// mesmo trilho em duas cutscenes, e nada fora do Sequencer poderia
+	// aproveita-la — quando a IA precisasse de uma rota de patrulha, o motor
+	// ganharia um SEGUNDO conceito de caminho.
+	//
+	// ── OS PONTOS SAO LOCAIS ─────────────────────────────────────────────────
+	//
+	// Relativos ao transform da entidade. Assim mover, girar ou escalar a
+	// entidade leva o caminho INTEIRO junto — reposicionar um trilho e arrastar
+	// um objeto, e nao reeditar oito pontos.
+	struct SplineComponent
+	{
+		std::vector<glm::vec3> Points;
+
+		// Fecha o ultimo ponto no primeiro. Sem emenda visivel: numa curva
+		// fechada o vizinho de cada ponta e o outro lado.
+		bool Closed = false;
+
+		// Desenhar no viewport mesmo sem estar selecionada.
+		bool AlwaysVisible = false;
+
+		// ── CACHE (nao serializa) ────────────────────────────────────────────
+		//
+		// A tabela de comprimento — sem ela, percorrer a curva a passo constante
+		// NAO da velocidade constante. Ver a nota em SplinePath.
+		//
+		// `_Dirty` em vez de reconstruir por frame: um caminho de 8 pontos vira
+		// 128 amostras, e refazer isso a 60 Hz por curva da cena seria pagar
+		// todo frame por uma coisa que muda quando o usuario arrasta um ponto.
+		bool       _Dirty = true;
+		SplinePath _Path;
+	};
+
+	// ── A SEQUENCE DENTRO DA CENA ────────────────────────────────────────────
+	//
+	// Ate aqui o `SequencerPlayer` so era instanciado pela janela do Sequencer.
+	// Isso quer dizer que uma cutscene existia enquanto o EDITOR a mostrava, e
+	// deixava de existir no Play — a metade de runtime nunca tinha sido ligada.
+	//
+	// E o mesmo desenho do bug do Control Rig (`SnapControlsToCurrentBones` com
+	// um unico chamador, e esse chamador uma janela): uma feature que so vive no
+	// editor parece pronta e nao esta.
+	//
+	// ── POR QUE UM COMPONENTE, E NAO UM CAMPO DA CENA ────────────────────────
+	//
+	// Uma cena pode ter varias cutscenes: a de abertura, a do elevador, a do
+	// chefe. Cada uma tem o proprio tempo, o proprio loop e o proprio estado de
+	// "ja tocou". Um campo unico na cena forcaria uma cutscene por nivel, e a
+	// segunda exigiria um sistema paralelo — que e como se acumulam dois
+	// caminhos para a mesma coisa.
+	//
+	// A entidade que carrega o componente NAO precisa ser nenhuma das entidades
+	// animadas: o binding resolve os alvos por nome. Na pratica ela e um objeto
+	// vazio, e isso e bom — a cutscene fica visivel e selecionavel no outliner
+	// em vez de escondida numa aba de configuracao da cena.
+	struct SequencePlayerComponent
+	{
+		// UUID do `.axeseq` no AssetDatabase. Nunca um caminho: um path
+		// absoluto quebra quando o projeto muda de maquina, e um relativo
+		// quebra quando o arquivo e movido dentro do projeto.
+		std::string SequenceUUID;
+
+		// Toca sozinha quando a cena comeca.
+		bool PlayOnStart = false;
+
+		bool Loop = false;
+
+		// ── QUEM MANDA NA CAMERA ENQUANTO A CUTSCENE TOCA ────────────────────
+		//
+		// Ligado, e se a sequence animar uma entidade que tenha
+		// CameraComponent, a camera do jogo passa a enxergar por ela enquanto
+		// a sequence toca, e volta ao normal quando termina.
+		//
+		// A entidade nao e escolhida aqui de proposito: quem sabe qual camera
+		// a cutscene usa e a PROPRIA sequence — e ela ja diz isso ao ter uma
+		// track de transform apontando para a camera. Um campo separado seria
+		// uma segunda fonte de verdade, que se descola da primeira no dia em
+		// que alguem trocar a camera na timeline e esquecer do campo.
+		//
+		// Se a sequence animar mais de uma camera, vence a primeira do
+		// outliner. Corte entre cameras e trabalho de uma track de Event,
+		// quando existir.
+		bool CameraCut = true;
+
+		// ── ESTADO VIVO (nao serializa) ──────────────────────────────────────
+		//
+		// O SequenceWorld e o dono do SequencerPlayer; aqui fica so o handle
+		// que liga a entidade a ele. Guardar o player DENTRO do componente
+		// pareceria mais direto e seria pior: um componente de EnTT e copiado e
+		// realocado quando o pool cresce, e o player carrega a copia profunda
+		// inteira das bindings.
+		bool _Playing = false;
+		bool _Started = false;   // ja passou pelo PlayOnStart desta sessao
 	};
 
 	// Environment

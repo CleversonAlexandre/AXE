@@ -87,6 +87,93 @@ namespace axe
 		// entidade pausada e um uso legitimo.
 		bool  SuppressEditorGizmos = false;
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  A CAMERA PRECISA SER VISTA
+		//
+		//  Uma entidade-camera nao tem malha: no viewport ela era um NADA. Sem
+		//  seleciona-la na Hierarchy, nao havia como saber que existia, onde
+		//  estava, nem para onde apontava — e "animar o enquadramento" sem ver
+		//  o enquadramento nao e autoria, e adivinhacao.
+		//
+		//  ── POR QUE ImDrawList E NAO WIREFRAME NO GPU ──────────────────────
+		//
+		//  As luzes usam o ColliderDebugRenderer, que desenha no GPU com teste
+		//  de profundidade. Para uma camera isso seria pior: o frustum ficaria
+		//  escondido atras da propria cena que ela filma, e some justamente
+		//  quando ha algo enquadrado.
+		//
+		//  E a mesma razao — e a mesma escolha — das formas dos Controls do
+		//  rig: gizmo de autoria fica POR CIMA, porque tem de ser sempre
+		//  clicavel e sempre visivel.
+		// ═══════════════════════════════════════════════════════════════════
+		bool  ShowCameras = true;
+
+		// ── VER PELA CAMERA ─────────────────────────────────────────────────
+		//
+		// Enquanto valido, a EditorCamera e reposicionada TODO FRAME a partir
+		// desta entidade (posicao, direcao e FOV). Com o Sequencer animando o
+		// transform dela, arrastar o playhead vira assistir a cutscene — sem
+		// dar Play, e usando o mesmo caminho de render do editor.
+		//
+		// `entt::null` = desligado.
+		entt::entity PilotCamera = entt::null;
+
+		// A vista do usuario ANTES de entrar no modo. Sem guardar, sair
+		// devolveria a camera para onde a cutscene a largou e o enquadramento
+		// de trabalho se perderia.
+		bool      m_PilotSaved = false;
+		glm::vec3 m_PilotSavedFocal{ 0.0f };
+		float     m_PilotSavedDistance = 1.5f;
+		float     m_PilotSavedYaw = 0.0f;
+		float     m_PilotSavedPitch = 0.0f;
+		float     m_PilotSavedFov = 45.0f;
+
+		// Chamado por frame pelo editor_layer. Devolve true se esta pilotando —
+		// e ai a navegacao do viewport fica bloqueada, senao os dois disputam a
+		// mesma camera.
+		bool UpdatePilotCamera();
+
+		void StopPilot();
+
+		// Qual camera o botao "Ver" vai pilotar: a SELECIONADA se ela for uma,
+		// senao a marcada como Principal, senao a primeira que existir.
+		//
+		// Aqui, e nao na janela: e o renderer que tem a cena E a selecao em
+		// maos. A janela so desenha o botao.
+		//
+		// A selecao vem primeiro de proposito — conferir uma camera secundaria
+		// nao pode exigir marca-la como principal so para olhar.
+		entt::entity PickPilotTarget() const;
+
+		// Desenha o frustum de cada entidade-camera. Chamado de dentro do
+		// DrawGuizmo, que e o unico ponto do viewport com o retangulo da imagem
+		// e o drawlist certo em maos.
+		void DrawCameraGizmos(const glm::vec2& boundsMin, const glm::vec2& boundsMax);
+
+		// ── EDITOR DE CAMINHO ────────────────────────────────────────────────
+		//
+		// Desenha as curvas (a selecionada, e as marcadas como sempre visiveis)
+		// e, quando ha um ponto escolhido, entrega o gizmo A ELE em vez de a
+		// entidade.
+		//
+		// Devolve true se assumiu o gizmo — e ai o caminho normal de entidade
+		// nao roda. Dois gizmos na tela disputariam o mesmo clique, e qual
+		// vence dependeria da ordem de desenho.
+		//
+		// ── POR QUE OS PONTOS NAO SAO ENTIDADES FILHAS ───────────────────────
+		//
+		// Seria de graca: cada ponto ganharia gizmo, outliner e snap sem uma
+		// linha de codigo novo. E um caminho de oito pontos encheria o outliner
+		// de oito entidades, reordenar viraria arrastar na hierarquia, e
+		// duplicar a curva duplicaria nove objetos. O custo do array e este
+		// arquivo; o custo das entidades filhas seria pago pelo usuario, todo
+		// dia.
+		bool DrawSplineEditor(const glm::vec2& boundsMin, const glm::vec2& boundsMax);
+
+		// Ponto de controle sob o gizmo, ou -1. Publico porque o Inspector
+		// mostra qual esta selecionado e precisa poder trocar.
+		int  SelectedSplinePoint = -1;
+
 		bool  SnapEnabled = false;
 		float SnapValue = 0.5f;   // unidades para translate
 		float SnapAngle = 15.0f;  // graus para rotate
@@ -255,6 +342,10 @@ namespace axe
 		bool            m_OverlayConsumedClick = false;
 		std::unique_ptr<SceneRenderer> m_SceneRenderer;
 		PickingRenderer                m_PickingRenderer;
+
+		// Dona do ponto selecionado. Trocar de entidade solta o ponto — ver
+		// DrawSplineEditor.
+		entt::entity m_SplineOwner{ entt::null };
 
 		Scene* m_Scene = nullptr;
 		entt::entity* m_SelectedEntity = nullptr;

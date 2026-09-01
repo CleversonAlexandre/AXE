@@ -19,6 +19,7 @@ namespace axe
         void CreatePostProcess();
         void CreatePointLight();
         void CreateCamera();
+        void CreateSpline();
 
         // Criação
         void CreateObject(const std::string& name, const std::string& primitiveUUID);

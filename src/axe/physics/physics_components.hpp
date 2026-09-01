@@ -45,6 +45,28 @@ namespace axe
         // ::Velocity. Existe pra ScriptRigidbodyProxy::GetVelocity() poder ler
         // sem precisar de acesso direto ao Jolt (que o proxy não tem).
         glm::vec3 CurrentVelocity = {};
+
+        // ── QUEM MANDA NO TRANSFORM: O CORPO OU QUEM ESCREVE NELE ────────────
+        //
+        // Falso (o normal): o Jolt simula e o resultado E o TransformComponent.
+        //
+        // Verdadeiro: inverte a seta. O corpo vira Kinematic e SEGUE o
+        // transform que alguem de fora escreveu — hoje, uma cutscene.
+        //
+        // ── POR QUE ISTO PRECISA EXISTIR ─────────────────────────────────────
+        //
+        // Sem a inversao, os dois escrevem no mesmo transform todo frame: a
+        // sequence escreve depois e vence NAQUELE frame, e o Step seguinte
+        // desfaz — a porta da cutscene treme no lugar e nunca chega onde a
+        // timeline diz. E o pior tipo de bug de ordem, porque cada metade,
+        // olhada sozinha, esta certa.
+        //
+        // Kinematic e nao "desligado" de proposito: uma porta de cutscene
+        // ainda tem de empurrar quem estiver na frente dela.
+        //
+        // NAO serializa: e estado de uma cutscene em curso, e uma cena salva
+        // com isto ligado carregaria com o corpo inerte sem nada explicando.
+        bool      _TransformDriven = false;
     };
 
     // ==================== Collider ====================
@@ -133,6 +155,16 @@ namespace axe
         // Rastreamento de contatos — evita disparar Enter/Exit todo frame
         std::unordered_set<uint32_t> ActiveTriggers;
         std::unordered_set<uint32_t> ActiveCollisions;
+
+        // Mesmo significado do campo homonimo em RigidbodyComponent: enquanto
+        // ligado, o personagem NAO anda por conta propria — ele e teleportado
+        // para onde o transform diz.
+        //
+        // Este e o caso mais comum dos dois, e o menos obvio: uma cutscene que
+        // move o JOGADOR. Sem isto, o CharacterVirtual aplica gravidade e o
+        // ExtendedUpdate sobrescreve a posicao no frame seguinte — o
+        // personagem "escorrega" de volta durante o plano inteiro.
+        bool      _TransformDriven = false;
     };
 
     // ==================== Trigger Volume ====================

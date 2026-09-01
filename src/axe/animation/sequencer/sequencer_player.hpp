@@ -90,8 +90,40 @@ namespace axe {
             return m_LastClipSamples;
         }
 
+        // ── DE QUAL CAMERA SE VE O FRAME ATUAL ──────────────────────────────
+        //
+        // Nome da entidade de camera do ultimo corte em vigor, ou vazio se a
+        // sequence nao tem track de corte (ou o playhead ainda esta antes do
+        // primeiro).
+        //
+        // Calculado no Resample, e nao no OnUpdate: e um ESTADO do frame, nao
+        // um instante cruzado. E o que faz o corte valer igual no Play e no
+        // scrub do editor — ver a nota em SequencerTrackType::CameraCut.
+        const std::string& GetActiveCameraName() const { return m_ActiveCamera; }
+
+        // Eventos cruzados NESTE OnUpdate. Ver SequencerEventSample: a lista e
+        // vazia na esmagadora maioria dos frames, e e reescrita a cada OnUpdate
+        // — quem consome tem de consumir no mesmo frame.
+        //
+        // Scrub NAO produz eventos, de proposito.
+        const std::vector<SequencerEventSample>& GetFiredEvents() const {
+            return m_FiredEvents;
+        }
+
         // Forca resample no frame atual (chamado pelo editor apos Scrub).
         void Resample();
+
+        // ── PUBLICA PARA O EDITOR DE CURVAS ──────────────────────────────────
+        //
+        // Era privada, e o editor grafico precisa dela para DESENHAR a curva.
+        //
+        // Reimplementar a avaliacao do lado do editor seria a receita conhecida:
+        // duas versoes da mesma matematica que divergem no dia em que alguem
+        // acrescenta um modo de interpolacao — e o sintoma seria o pior
+        // possivel, uma curva desenhada diferente da curva tocada. Expondo, o
+        // grafico e por construcao o que o player toca.
+        static float Interpolate(const SequencerKey& left, const SequencerKey& right,
+            float frame);
 
     private:
         float                 m_CurrentFrame = 0.0f;
@@ -109,8 +141,26 @@ namespace axe {
         std::vector<SequencerSample>     m_LastSamples;
         std::vector<SequencerClipSample> m_LastClipSamples;
 
-        // Interpola entre dois keys conforme Interp. t e [0,1].
-        static float Interpolate(const SequencerKey& left, const SequencerKey& right, float frame);
+        // ── EVENTOS ──────────────────────────────────────────────────────────
+        //
+        // `m_EventFrame` e ate onde os eventos JA foram despachados, e nao o
+        // frame anterior. A distincao importa: `m_CurrentFrame` tambem se mexe
+        // por scrub, e usar o frame anterior faria um scrub para tras "armar"
+        // de novo tudo que ja disparou.
+        //
+        // Comeca um tiquinho ANTES do inicio para que uma key no primeiro frame
+        // da sequence dispare. Com `>= m_StartFrame`, a key do frame 0 cairia
+        // exatamente na borda e nunca seria cruzada.
+        float                             m_EventFrame = -1.0f;
+        std::vector<SequencerEventSample> m_FiredEvents;
+
+        // Ver GetActiveCameraName. Reescrito a cada Resample.
+        std::string                       m_ActiveCamera;
+
+        // Coleta as keys de track de Event em (from, to]. `to` inclusivo para
+        // que a ultima key da sequence dispare quando o playhead assenta no
+        // frame final em vez de passar dele.
+        void CollectEvents(float from, float to);
     };
 
 } // namespace axe

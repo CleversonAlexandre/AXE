@@ -24,6 +24,8 @@ namespace axe {
         case SequencerTrackType::AnimationClip:    return "AnimationClip";
         case SequencerTrackType::Property:         return "Property";
         case SequencerTrackType::Event:            return "Event";
+        case SequencerTrackType::TransformEntity:  return "TransformEntity";
+        case SequencerTrackType::CameraCut:        return "CameraCut";
         }
         return "Unknown";
     }
@@ -35,6 +37,8 @@ namespace axe {
         if (s == "AnimationClip")    return SequencerTrackType::AnimationClip;
         if (s == "Property")         return SequencerTrackType::Property;
         if (s == "Event")            return SequencerTrackType::Event;
+        if (s == "TransformEntity")  return SequencerTrackType::TransformEntity;
+        if (s == "CameraCut")        return SequencerTrackType::CameraCut;
         return SequencerTrackType::TransformBone;  // default seguro
     }
 
@@ -44,6 +48,7 @@ namespace axe {
         case SequencerTargetType::Control: return "Control";
         case SequencerTargetType::Null:    return "Null";
         case SequencerTargetType::Socket:  return "Socket";
+        case SequencerTargetType::Entity:  return "Entity";
         }
         return "Bone";
     }
@@ -53,6 +58,7 @@ namespace axe {
         if (s == "Control") return SequencerTargetType::Control;
         if (s == "Null")    return SequencerTargetType::Null;
         if (s == "Socket")  return SequencerTargetType::Socket;
+        if (s == "Entity")  return SequencerTargetType::Entity;
         return SequencerTargetType::Bone;
     }
 
@@ -131,6 +137,8 @@ namespace axe {
             if (k.Interp == SequencerInterp::Bezier) {
                 j["tangent_in"] = k.TangentIn;
                 j["tangent_out"] = k.TangentOut;
+                j["tangent_in_w"] = k.TangentInWeight;
+                j["tangent_out_w"] = k.TangentOutWeight;
             }
             // Gravado so quando significa alguma coisa. Um campo "overshoot: 0"
             // em cada key de um bake denso engordaria o arquivo em megabytes
@@ -149,6 +157,12 @@ namespace axe {
             if (k.Interp == SequencerInterp::Bezier) {
                 k.TangentIn = j.value("tangent_in", 0.0f);
                 k.TangentOut = j.value("tangent_out", 0.0f);
+
+                // Default 1/3: e o peso que reproduz EXATAMENTE a formula
+                // antiga (ver a nota em SequencerKey). Um `.axeseq` gravado
+                // antes destes campos abre com a curva identica.
+                k.TangentInWeight = j.value("tangent_in_w", 1.0f / 3.0f);
+                k.TangentOutWeight = j.value("tangent_out_w", 1.0f / 3.0f);
             }
             k.Overshoot = j.value("overshoot", 0.0f);
             return k;

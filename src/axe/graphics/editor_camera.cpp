@@ -1,6 +1,8 @@
 #include "axe/graphics/editor_camera.hpp"
+
+#include <cmath>
 #include "axe/log/log.hpp"
-	
+
 
 namespace axe
 {
@@ -35,22 +37,59 @@ namespace axe
 		return m_ViewMatrix;
 
 	}
-	
+
 
 	glm::mat4 EditorCamera::GetViewProjectionMatrix() const
 	{
-		
+
 		return GetProjectionMatrix() * GetViewMatrix();
 
 
 	}
 
 
+	void EditorCamera::SetOrbit(const glm::vec3& focalPoint, float distance,
+		float yaw, float pitch)
+	{
+		m_FocalPoint = focalPoint;
+		m_Distance = distance;
+		m_Yaw = yaw;
+		m_Pitch = pitch;
+		UpdateView();
+	}
+
+	void EditorCamera::PointAt(const glm::vec3& position, const glm::vec3& forward)
+	{
+		const glm::vec3 f = glm::normalize(forward);
+
+		// ── A INVERSA DE GetForwardDirection ─────────────────────────────────
+		//
+		// Aqui a orientacao e `quat(vec3(-pitch, -yaw, 0))` e a frente e o
+		// (0,0,-1) girado por ela, o que da:
+		//
+		//     F = ( cosP*sinY , -sinP , -cosP*cosY )
+		//
+		// Invertendo: sinP = -F.y, e o par (sinY, cosY) sai de (F.x, -F.z).
+		// O atan2 cuida dos quadrantes; o clamp protege o asin de um
+		// arredondamento que passe de 1 e devolva NaN — que apareceria como a
+		// camera sumindo do mundo, sem nenhuma pista da causa.
+		m_Pitch = std::asin(glm::clamp(-f.y, -1.0f, 1.0f));
+		m_Yaw = std::atan2(f.x, -f.z);
+
+		// A posicao e DERIVADA (foco - frente * distancia). Entao para a camera
+		// cair no ponto pedido, o foco tem de ir para adiante dele, na mesma
+		// distancia. A distancia atual e mantida: ela e a escala do pan e do
+		// zoom, e zerar faria a navegacao ficar travada ao sair do modo.
+		m_FocalPoint = position + f * m_Distance;
+
+		UpdateView();
+	}
+
 	void EditorCamera::UpdateView()
 	{
 		m_Position = CalculatePosition();
 		m_ViewMatrix = glm::lookAt(m_Position, m_FocalPoint, GetUpDirection());
-		
+
 	}
 
 	glm::vec3 EditorCamera::CalculatePosition() const

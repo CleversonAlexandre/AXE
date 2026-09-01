@@ -26,6 +26,8 @@
 #include "axe/audio/audio_source_component.hpp"
 #include "axe/audio/audio_engine.hpp"
 #include "axe/graphics/game_camera.hpp"
+#include "axe/animation/sequencer/sequence_world.hpp"
+#include <set>
 #include <vector>
 #include <algorithm>
 #include <cstring>   // S3: strcmp na comparacao de classe
@@ -239,6 +241,86 @@ namespace axe
     ScriptCameraProxy ScriptBase::GetCamera()
     {
         return ScriptCameraProxy{ m_Context.CameraPtr, m_Context.ScenePtr };
+    }
+
+    ScriptSequenceProxy ScriptBase::GetSequence()
+    {
+        return ScriptSequenceProxy{ m_Context.SequencePtr, m_Context.ScenePtr };
+    }
+
+    // ── ScriptSequenceProxy ───────────────────────────────────────────────────
+
+    namespace {
+
+        // Resolve o nome e RECLAMA quando nao acha.
+        //
+        // Um nome errado que nao faz nada em silencio e o mesmo modo de falha
+        // que ja custou caro aqui: tudo reporta sucesso e a cutscene nao roda.
+        // Uma vez por nome, para nao virar spam num Tick.
+        entt::entity ResolveSequenceOwner(Scene* scene, const std::string& name,
+            const char* verb)
+        {
+            if (!scene || name.empty()) return entt::null;
+
+            const entt::entity e = scene->FindByName(name);
+
+            if (e == entt::null || !scene->GetRegistry().valid(e))
+            {
+                static std::set<std::string> warned;
+                if (warned.insert(name).second)
+                {
+                    //AXE_CORE_WARN("Script: {} de cutscene — nao ha entidade '{}' nesta cena.", verb, name);
+                }
+                return entt::null;
+            }
+
+            if (!scene->GetRegistry().try_get<SequencePlayerComponent>(e))
+            {
+                static std::set<std::string> warnedNoComp;
+                if (warnedNoComp.insert(name).second)
+                {
+                    //AXE_CORE_WARN("Script: a entidade '{}' existe mas nao tem "
+                    //    "Sequence Player. A cutscene nao {}.", name, verb);
+                }
+                return entt::null;
+            }
+
+            return e;
+        }
+
+    } // namespace
+
+    void ScriptSequenceProxy::Play(const std::string& entityName)
+    {
+        if (!WorldPtr || !ScenePtr) return;
+
+        const entt::entity e = ResolveSequenceOwner(ScenePtr, entityName, "toca");
+        if (e == entt::null) return;
+
+        WorldPtr->Play(*ScenePtr, e);
+    }
+
+    void ScriptSequenceProxy::Stop(const std::string& entityName)
+    {
+        if (!WorldPtr || !ScenePtr) return;
+
+        const entt::entity e = ResolveSequenceOwner(ScenePtr, entityName, "para");
+        if (e == entt::null) return;
+
+        WorldPtr->Stop(*ScenePtr, e);
+    }
+
+    bool ScriptSequenceProxy::IsPlaying(const std::string& entityName) const
+    {
+        if (!WorldPtr || !ScenePtr) return false;
+
+        // Sem reclamar: esta e uma PERGUNTA, e perguntar por algo que nao existe
+        // tem uma resposta boa ("nao esta tocando"). Reclamar aqui encheria o
+        // console a partir de um Tick.
+        const entt::entity e = ScenePtr->FindByName(entityName);
+        if (e == entt::null) return false;
+
+        return WorldPtr->IsPlaying(*ScenePtr, e);
     }
 
     // ── ScriptCameraProxy ─────────────────────────────────────────────────────

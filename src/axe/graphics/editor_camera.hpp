@@ -46,6 +46,28 @@ namespace axe
 			UpdateView();
 		}
 
+		// ── PILOTAR A CAMERA A PARTIR DE UM PONTO E UMA DIRECAO ──────────────
+		//
+		// A EditorCamera e ORBITAL: ela guarda foco + distancia + yaw/pitch, e
+		// a posicao e derivada disso (`m_FocalPoint - forward * m_Distance`).
+		// Nao havia como dizer "fique AQUI olhando para ALI" — so `SetView`,
+		// que move o foco mas nao gira.
+		//
+		// `PointAt` resolve o inverso: escolhe yaw/pitch a partir da direcao e
+		// poe o foco adiante, de modo que a posicao calculada caia exatamente
+		// no ponto pedido. E o que permite ver pela camera da cena sem trocar o
+		// caminho de render.
+		//
+		// `forward` no espaco do MUNDO, normalizado por quem chama ou nao — a
+		// funcao normaliza.
+		void PointAt(const glm::vec3& position, const glm::vec3& forward);
+
+		// Estado orbital cru. Existe para SALVAR e RESTAURAR a vista quando o
+		// usuario entra e sai do modo "ver pela camera": sem isto, sair
+		// devolveria a camera para onde a cutscene a deixou, e o enquadramento
+		// que a pessoa tinha antes se perderia.
+		void SetOrbit(const glm::vec3& focalPoint, float distance, float yaw, float pitch);
+
 		void UpdateView();
 
 

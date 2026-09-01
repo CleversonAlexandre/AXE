@@ -284,6 +284,29 @@ namespace axe
 				components["Camera"]["is_primary"] = c->IsPrimary;
 			}
 
+			// Caminho. Os pontos sao LOCAIS a entidade — ver SplineComponent.
+			if (auto* sp = registry.try_get<SplineComponent>(entity))
+			{
+				auto pts = nlohmann::json::array();
+				for (const auto& p : sp->Points)
+					pts.push_back({ p.x, p.y, p.z });
+
+				components["Spline"]["points"] = pts;
+				components["Spline"]["closed"] = sp->Closed;
+				components["Spline"]["always_visible"] = sp->AlwaysVisible;
+			}
+
+			// Cutscene. Ver SequencePlayerComponent: os campos que comecam com
+			// `_` sao estado vivo e NAO entram aqui de proposito — gravar
+			// "_Playing" faria a cena carregar com uma cutscene ja rodando.
+			if (auto* sp = registry.try_get<SequencePlayerComponent>(entity))
+			{
+				components["SequencePlayer"]["sequence_uuid"] = sp->SequenceUUID;
+				components["SequencePlayer"]["play_on_start"] = sp->PlayOnStart;
+				components["SequencePlayer"]["loop"] = sp->Loop;
+				components["SequencePlayer"]["camera_cut"] = sp->CameraCut;
+			}
+
 			if (auto* sa = registry.try_get<SpringArmComponent>(entity))
 			{
 				components["SpringArm"]["length"] = sa->Length;
@@ -934,6 +957,40 @@ namespace axe
 				cam.Sensitivity = t.value("sensitivity", 0.1f);
 				cam.IsPrimary = t.value("is_primary", true);
 				registry.emplace<CameraComponent>(entity, cam);
+			}
+
+			if (components.contains("Spline"))
+			{
+				auto& t = components["Spline"];
+				SplineComponent sp;
+
+				if (t.contains("points") && t["points"].is_array())
+				{
+					for (const auto& p : t["points"])
+					{
+						if (p.is_array() && p.size() >= 3)
+							sp.Points.push_back({ p[0].get<float>(),
+												  p[1].get<float>(),
+												  p[2].get<float>() });
+					}
+				}
+
+				sp.Closed = t.value("closed", false);
+				sp.AlwaysVisible = t.value("always_visible", false);
+
+				// _Dirty ja nasce true: a tabela e reconstruida no primeiro uso.
+				registry.emplace<SplineComponent>(entity, std::move(sp));
+			}
+
+			if (components.contains("SequencePlayer"))
+			{
+				auto& t = components["SequencePlayer"];
+				SequencePlayerComponent sp;
+				sp.SequenceUUID = t.value("sequence_uuid", std::string{});
+				sp.PlayOnStart = t.value("play_on_start", false);
+				sp.Loop = t.value("loop", false);
+				sp.CameraCut = t.value("camera_cut", true);
+				registry.emplace<SequencePlayerComponent>(entity, sp);
 			}
 
 			if (components.contains("SpringArm"))

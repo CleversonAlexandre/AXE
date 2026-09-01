@@ -264,7 +264,37 @@ namespace axe
             if (ImGui::MenuItem("Post Process Volume"))
                 CreatePostProcess();
 
+            ImGui::Separator();
 
+            // ── A CAMERA ESTAVA PRONTA E NAO TINHA PORTA ─────────────────────
+            //
+            // `CreateCamera()` existe neste arquivo desde sempre, completa,
+            // com registro de undo — e NUNCA foi chamada. O item de menu nao
+            // foi escrito, e o resultado pratico era que uma camera so podia
+            // nascer dentro de um blueprint (o CameraComponent do pawn).
+            //
+            // Sem entidade-camera nao ha camera de cutscene: o Sequencer anima
+            // o transform de uma ENTIDADE, e nao havia nenhuma para escolher.
+            if (ImGui::MenuItem("Camera"))
+                CreateCamera();
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Entidade com CameraComponent.\n\n"
+                    "Marcada como 'Primary' no Inspector, ela vira a camera do\n"
+                    "Play — e o Sequencer pode animar o transform dela para\n"
+                    "fazer uma cutscene.");
+
+            if (ImGui::MenuItem("Curva (caminho)"))
+                CreateSpline();
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Um caminho no mundo: trilho de camera, rota de elevador,\n"
+                    "patrulha.\n\n"
+                    "Nasce com quatro pontos em linha. Selecione a curva e\n"
+                    "arraste os pontos no viewport; o Inspector adiciona e\n"
+                    "remove.");
 
             ImGui::EndMenu();
         }
@@ -496,6 +526,36 @@ namespace axe
         registry.emplace<CameraComponent>(entity);
         m_Context->Select(entity);
         RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Câmera");
+    }
+
+    void HierarchyWindow::CreateSpline()
+    {
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateEntity("Curva");
+        auto& registry = scene->GetRegistry();
+
+        auto& sp = registry.emplace<SplineComponent>(entity);
+
+        // Nasce com QUATRO pontos, e nao vazia nem com dois.
+        //
+        // Vazia, a entidade seria invisivel no viewport e o usuario nao teria
+        // onde clicar para comecar. Com dois, a curva e uma reta — e uma reta
+        // nao mostra que aquilo e uma CURVA, nem da para conferir se o
+        // movimento suaviza. Quatro pontos ja fazem uma forma, e sao os
+        // mesmos quatro que o Catmull-Rom precisa para ter vizinho dos dois
+        // lados em todo trecho.
+        //
+        // Espacados em X porque a curva nasce alinhada com a frente da camera
+        // zerada — ver GameCamera::ForwardFromYawPitch.
+        sp.Points = {
+            { 0.0f, 0.0f, 0.0f },
+            { 2.0f, 0.0f, 1.0f },
+            { 4.0f, 0.0f, -1.0f },
+            { 6.0f, 0.0f, 0.0f },
+        };
+
+        m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Curva");
     }
 
     void HierarchyWindow::CreatePostProcess()

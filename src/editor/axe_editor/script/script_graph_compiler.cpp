@@ -335,6 +335,15 @@ namespace axe
             return "ScriptAudioProxy{" + target + ", m_Context.ScenePtr}.IsPlaying()";
         }
 
+        if (nodeName == "Is Sequence Playing" && srcPin->Name == "Playing")
+        {
+            std::string target = "std::string()";
+            for (const auto& inp : srcNode->Inputs)
+                if (inp.Name == "Entity Name") target = ResolvePin(ctx, inp);
+
+            return "GetSequence().IsPlaying(" + target + ")";
+        }
+
         if (nodeName == "Array Get")
         {
             // node->IntValue == -1 = pin Array nunca conectado a um array real
@@ -1843,6 +1852,22 @@ namespace axe
             ctx.Line("    if (_tc) _tc->Data." + field + " = " + value + ";");
             ctx.Line("  }");
             ctx.Line("}");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        // ── Cutscene ──────────────────────────────────────────────────────────
+
+        else if (name == "Play Sequence" || name == "Stop Sequence")
+        {
+            std::string target = "std::string()";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Entity Name") target = ResolvePin(ctx, inp);
+
+            const char* verb = (name == "Play Sequence") ? "Play" : "Stop";
+            ctx.Line(std::string("GetSequence().") + verb + "(" + target + ");");
+
             auto* next = FindNextFlowNode(ctx, node);
             GenerateNode(ctx, next, deltaTimeVar, depth + 1);
             return;

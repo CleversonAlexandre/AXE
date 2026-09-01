@@ -7,6 +7,7 @@
 #include "axe/particles/particle_world.hpp"
 #include "axe/audio/audio_world.hpp"
 #include "axe/animation/animation_world.hpp"
+#include "axe/animation/sequencer/sequence_world.hpp"
 #include "axe/graphics/game_camera.hpp"
 
 #include <entt/entt.hpp>
@@ -217,6 +218,11 @@ namespace axe
         // eliminar.
         ScriptWorld& GetScriptWorld() { return m_ScriptWorld; }
 
+        // Exposto pela mesma razao que o ScriptWorld: comecar ou parar uma
+        // cutscene de fora do tick e necessidade legitima (um gatilho de
+        // gameplay, um botao de ferramenta). Ver SequenceWorld::Play.
+        SequenceWorld& GetSequenceWorld() { return m_SequenceWorld; }
+
         // Deriva pose de listener de uma view matrix.
         //
         // A view matrix ja e a inversa da pose, entao transpor a parte
@@ -232,9 +238,19 @@ namespace axe
         ParticleWorld  m_ParticleWorld;
         AudioWorld     m_AudioWorld;
         AnimationWorld m_AnimationWorld;
+        SequenceWorld  m_SequenceWorld;
 
         GameCamera     m_GameCamera;
         entt::entity   m_PlayerEntity{ entt::null };
+
+        // ── FOV DE ANTES DA CUTSCENE ─────────────────────────────────────
+        //
+        // Posicao e direcao voltam sozinhas: a GameCamera as recalcula do
+        // pawn no primeiro frame em que a cutscene solta o controle. O FOV
+        // nao — ele e um valor guardado, e uma cutscene com FOV 30 deixaria o
+        // jogo inteiro em teleobjetiva depois de terminar.
+        float m_CameraCutSavedFov = 0.0f;
+        bool  m_CameraCutActive = false;
 
         // Instala/desinstala os callbacks do Jolt, com dono explicito.
         //

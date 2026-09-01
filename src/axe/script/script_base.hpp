@@ -35,6 +35,12 @@ namespace axe
         Scene* ScenePtr = nullptr;
         ScriptInputSnapshot Input;
         class GameCamera* CameraPtr = nullptr; // set pelo EditorLayer em Play
+
+        // Injetado pelo ScriptWorld ANTES do OnStart, e por isso ja vale
+        // dentro dele — ao contrario do CameraPtr, que so aparece no primeiro
+        // OnUpdate. Uma cutscene de abertura disparada no OnStart e um caso
+        // normal demais para exigir esperar um frame.
+        class SequenceWorld* SequencePtr = nullptr;
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -63,6 +69,33 @@ namespace axe
         // Multiply sao Float — multiplicar Vec3 por Float exigiria nos de
         // conversao a mais. Aqui a Unreal precisa de seis nos; o AXE, de um.
         glm::vec3 RelativeDirection(float fwdAxis, float rightAxis) const;
+    };
+
+    // ── Proxy de Cutscene ─────────────────────────────────────────────────────
+    //
+    // Comeca e para uma sequence do Sequencer. O alvo e a entidade que carrega
+    // o Sequence Player — normalmente um objeto vazio chamado "CutsceneElevador"
+    // ou parecido.
+    //
+    // ── POR QUE POR NOME, E NAO POR ENTIDADE ─────────────────────────────────
+    //
+    // Todo o resto do script enderecra por `entt::entity`, entao o nome parece
+    // fora de padrao. Mas quem dispara uma cutscene quase nunca TEM a entidade
+    // em maos: o gatilho e um volume, uma tecla, o fim de uma fase — nenhum
+    // deles conhece o objeto da cutscene. Obrigar a acha-lo antes trocaria uma
+    // chamada por tres.
+    //
+    // E o mesmo enderecamento que o proprio binding do Sequencer usa (ver
+    // SequencerBinding::EntityName), com a mesma consequencia honesta: renomear
+    // a entidade quebra a chamada.
+    struct AXE_API ScriptSequenceProxy
+    {
+        class SequenceWorld* WorldPtr;
+        Scene* ScenePtr;
+
+        void Play(const std::string& entityName);
+        void Stop(const std::string& entityName);
+        bool IsPlaying(const std::string& entityName) const;
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -320,6 +353,7 @@ namespace axe
         ScriptParticleProxy   GetParticleSystem();
         ScriptAudioProxy      GetAudio();
         ScriptCameraProxy     GetCamera();
+        ScriptSequenceProxy   GetSequence();
 
         // Chamado pelo ScriptWorld antes de cada OnUpdate pra manter
         // o CameraPtr atualizado sem recriar o contexto inteiro.

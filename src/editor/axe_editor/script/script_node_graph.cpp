@@ -74,6 +74,12 @@ namespace axe
         {"Get Camera Direction","GetCameraDirection"},
         {"Camera Shake","CameraShake"},{"Camera Follow","CameraFollow"},
         {"Camera Stop Follow","CameraStopFollow"},{"Set Camera FOV","SetCameraFOV"} };
+    // Cutscene — comeca/para uma sequence do Sequencer pelo NOME da entidade
+    // que carrega o Sequence Player.
+    static const NE sSeq[] = {
+        {"Play Sequence","PlaySequence"},
+        {"Stop Sequence","StopSequence"},
+        {"Is Sequence Playing","IsSequencePlaying"} };
     static const NE sLo[] = { {"Branch","Branch"},{"Compare","Compare"},
         {"Get Variable","GetVariable"},{"Set Variable","SetVariable"},
         {"AND","And"},{"OR","Or"},{"NOT","Not"},{"XOR","Xor"} };
@@ -121,6 +127,7 @@ namespace axe
         {"Actions",       sAc,   NECount(sAc),   {0.2f, 0.7f,0.45f, 1}},
         {"Transform",     sTr,   NECount(sTr),   {0.9f, 0.65f,0.2f, 1}},
         {"Camera",        sCam,  NECount(sCam),  {0.3f, 0.7f,0.95f, 1}},
+        {"Cutscene",      sSeq,  NECount(sSeq),  {0.95f,0.45f,0.55f,1}},
         {"Audio",         sAud,  NECount(sAud),  {0.85f,0.5f,0.85f, 1}},
         {"Logic",         sLo,   NECount(sLo),   {0.8f, 0.6f,0.1f,  1}},
         {"Math",          sMa,   NECount(sMa),   {0.3f, 0.5f,0.9f,  1}},
@@ -139,11 +146,14 @@ namespace axe
     // ser criados pela interface.
     static const ImVec4 s_CtxCols[] = {
         {1.f,0.45f,0.35f,1},{0.3f,0.85f,0.55f,1},
-        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},{0.85f,0.5f,0.85f,1},{0.85f,0.3f,0.75f,1},
-        {0.7f,0.6f,0.95f,1},{0.55f,0.75f,0.95f,1},
-        {0.6f,0.5f,0.9f,1},    // Array
-        {0.5f,0.68f,0.85f,1},  // Flow Control
-        {0.5f,0.9f,0.9f,1}     // Cast
+        {1.f,0.78f,0.2f,1},{0.4f,0.65f,1.f,1},
+        {0.98f,0.55f,0.62f,1},  // Cutscene — inserida DEPOIS de Camera, e a
+        // cor tem de entrar na MESMA posicao aqui
+{0.85f,0.5f,0.85f,1},{0.85f,0.3f,0.75f,1},
+{0.7f,0.6f,0.95f,1},{0.55f,0.75f,0.95f,1},
+{0.6f,0.5f,0.9f,1},    // Array
+{0.5f,0.68f,0.85f,1},  // Flow Control
+{0.5f,0.9f,0.9f,1}     // Cast
     };
     static_assert(sizeof(s_CtxCols) / sizeof(s_CtxCols[0]) ==
         sizeof(s_Cats) / sizeof(s_Cats[0]),

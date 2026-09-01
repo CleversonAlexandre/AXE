@@ -332,6 +332,41 @@ namespace axe
 		if (registry.any_of<MaterialComponent>(entity))
 			DrawMaterial(entity);
 
+		// ── Sequence Player: FORA da cadeia else-if, pelo mesmo motivo ───
+		//
+		// Ver a nota logo acima. Uma cutscene costuma morar numa entidade
+		// vazia, mas nada impede que ela esteja na propria camera — que tem
+		// CameraComponent e portanto ja ganhou o ramo da cadeia. Dentro do
+		// else-if, o painel simplesmente nao apareceria, e o componente
+		// existiria sem jeito de edita-lo.
+		if (auto* spl = registry.try_get<SplineComponent>(entity))
+		{
+			bool removeSpl = false;
+			bool openSpl = DrawComponentHeader("Curva", entity, 4, &removeSpl);
+
+			if (removeSpl)
+			{
+				registry.remove<SplineComponent>(entity);
+				return;
+			}
+
+			if (openSpl) DrawSpline(*spl);
+		}
+
+		if (auto* sp = registry.try_get<SequencePlayerComponent>(entity))
+		{
+			bool removeSeq = false;
+			bool openSeq = DrawComponentHeader("Sequence Player", entity, 4, &removeSeq);
+
+			if (removeSeq)
+			{
+				registry.remove<SequencePlayerComponent>(entity);
+				return;
+			}
+
+			if (openSeq) DrawSequencePlayer(*sp);
+		}
+
 		if (auto* plc = registry.try_get<PointLightComponent>(entity))
 			if (plc->Data)
 			{
@@ -831,6 +866,35 @@ namespace axe
 			}
 
 			ImGui::Spacing();
+			ImGui::TextDisabled("Cutscene");
+			ImGui::Separator();
+
+			if (registry.any_of<SplineComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Curva (ja adicionada)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Curva (caminho)"))
+			{
+				auto& spl = registry.emplace<SplineComponent>(entity);
+				spl.Points = { {0,0,0}, {2,0,1}, {4,0,-1}, {6,0,0} };
+				ImGui::CloseCurrentPopup();
+			}
+
+			if (registry.any_of<SequencePlayerComponent>(entity))
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+				ImGui::TextUnformatted("  Sequence Player (ja adicionado)");
+				ImGui::PopStyleColor();
+			}
+			else if (ImGui::MenuItem("  Sequence Player"))
+			{
+				registry.emplace<SequencePlayerComponent>(entity);
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::Spacing();
 			ImGui::TextDisabled("Audio");
 			ImGui::Separator();
 
@@ -873,6 +937,147 @@ namespace axe
 		ImGui::DragFloat("Suavização", &sa.LagSpeed, 0.1f, 0.5f, 30.0f, "%.1f");
 		ImGui::Checkbox("Lag de câmera", &sa.EnableCameraLag);
 		ImGui::Checkbox("Mouse rotaciona", &sa.MouseRotates);
+	}
+
+	void InspectorWindow::DrawSpline(SplineComponent& sp)
+	{
+		if (ImGui::Checkbox("Fechada", &sp.Closed))
+			sp._Dirty = true;
+
+		ImGui::SameLine();
+		ImGui::Checkbox("Sempre visivel", &sp.AlwaysVisible);
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Desenha a curva no viewport mesmo sem estar selecionada.");
+
+		ImGui::Separator();
+
+		// Comprimento REAL, e nao a soma das retas entre os pontos: e por ele
+		// que a animacao anda, entao e o numero que o animador precisa para
+		// pensar em velocidade.
+		if (sp._Dirty)
+		{
+			sp._Path.Build(sp.Points, sp.Closed);
+			sp._Dirty = false;
+		}
+
+		ImGui::Text("%d pontos  |  %.2f m", (int)sp.Points.size(), sp._Path.Length());
+
+		ImGui::Spacing();
+
+		int removeAt = -1;
+		int duplicateAt = -1;
+
+		for (int i = 0; i < (int)sp.Points.size(); ++i)
+		{
+			ImGui::PushID(i);
+
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 60.0f);
+
+			char label[32];
+			std::snprintf(label, sizeof(label), "##p%d", i);
+
+			if (ImGui::DragFloat3(label, &sp.Points[i].x, 0.05f))
+				sp._Dirty = true;
+
+			ImGui::SameLine();
+
+			// Duplicar INSERE depois do ponto, e nao no fim: um caminho e uma
+			// sequencia, e "mais um ponto aqui no meio" e o gesto normal de
+			// quem esta ajustando uma curva que corta demais.
+			if (ImGui::SmallButton("+")) duplicateAt = i;
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Insere um ponto DEPOIS deste");
+
+			ImGui::SameLine();
+			if (ImGui::SmallButton("x")) removeAt = i;
+
+			ImGui::PopID();
+		}
+
+		if (duplicateAt >= 0)
+		{
+			// No meio do caminho entre este e o proximo. Duplicar EM CIMA do
+			// ponto deixaria dois no mesmo lugar, e ai a curva ganha um trecho
+			// de comprimento zero — que a tangente tem de tratar como caso
+			// especial (ver SplinePath::TangentAt). Nascer no meio evita o
+			// problema em vez de remedia-lo.
+			const int next = (duplicateAt + 1 < (int)sp.Points.size())
+				? duplicateAt + 1
+				: (sp.Closed ? 0 : duplicateAt);
+
+			const glm::vec3 mid = (next == duplicateAt)
+				? sp.Points[duplicateAt] + glm::vec3(1.0f, 0.0f, 0.0f)
+				: (sp.Points[duplicateAt] + sp.Points[next]) * 0.5f;
+
+			sp.Points.insert(sp.Points.begin() + duplicateAt + 1, mid);
+			sp._Dirty = true;
+		}
+
+		if (removeAt >= 0 && sp.Points.size() > 2)
+		{
+			sp.Points.erase(sp.Points.begin() + removeAt);
+			sp._Dirty = true;
+		}
+		else if (removeAt >= 0)
+		{
+			// Dois e o minimo para existir curva. Deixar chegar a um ponto
+			// daria uma entidade com um marcador solto e nenhuma linha, sem
+			// nada dizendo por que sumiu.
+			ImGui::TextDisabled("Uma curva precisa de pelo menos dois pontos.");
+		}
+
+		ImGui::Spacing();
+		if (ImGui::Button("Adicionar ponto no fim"))
+		{
+			glm::vec3 p(0.0f);
+			if (sp.Points.size() >= 2)
+			{
+				// Continua na direcao do ultimo trecho: o ponto novo nasce
+				// onde a curva estava indo, e nao na origem da entidade.
+				const glm::vec3& a = sp.Points[sp.Points.size() - 2];
+				const glm::vec3& b = sp.Points.back();
+				p = b + (b - a);
+			}
+			else if (!sp.Points.empty())
+			{
+				p = sp.Points.back() + glm::vec3(2.0f, 0.0f, 0.0f);
+			}
+
+			sp.Points.push_back(p);
+			sp._Dirty = true;
+		}
+
+		ImGui::TextDisabled("Selecione a curva e arraste os pontos no viewport.");
+	}
+
+	void InspectorWindow::DrawSequencePlayer(SequencePlayerComponent& sp)
+	{
+		AssetPicker::Draw("Sequence", sp.SequenceUUID,
+			{ AssetType::Sequence },
+			[&sp](const AssetRecord& rec) { sp.SequenceUUID = rec.UUID; });
+
+		ImGui::Checkbox("Tocar ao iniciar", &sp.PlayOnStart);
+		ImGui::Checkbox("Loop", &sp.Loop);
+		ImGui::Checkbox("Assumir a camera", &sp.CameraCut);
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip(
+				"Se a sequence animar uma entidade com Camera, o jogo passa a\n"
+				"enxergar por ela enquanto a cutscene toca.");
+		}
+
+		if (sp.SequenceUUID.empty())
+		{
+			ImGui::TextDisabled("Sem sequence: nada toca.");
+			return;
+		}
+
+		// Estado vivo, so leitura. Util no Play para saber se a cutscene
+		// realmente comecou — sem isto, "nao acontece nada" nao distingue
+		// "nao disparou" de "disparou e nao move nada".
+		ImGui::TextDisabled(sp._Playing ? "Tocando." : "Parada.");
 	}
 
 	void InspectorWindow::DrawCamera(CameraComponent& cam)

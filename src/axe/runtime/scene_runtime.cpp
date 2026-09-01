@@ -131,17 +131,40 @@ namespace axe
         // sejam cobertos.
         InstallPhysicsCallbacks(scene);
 
-        // ── 2/3. Fisica e scripts ────────────────────────────────────────
+        // ── 2. Fisica ────────────────────────────────────────────────────
         m_PhysicsWorld.OnSceneStart(scene);
+
+        // ── 3. Cutscenes, ANTES dos scripts ──────────────────────────────
+        //
+        // A ordem entre estes dois nao e indiferente, e o motivo e afiado:
+        // SequenceWorld::OnSceneStart LIMPA as instancias. Um script cujo
+        // OnStart dispara a cutscene de abertura criaria a instancia, e a
+        // limpeza logo em seguida a jogaria fora — a cutscene sumiria antes
+        // do primeiro frame, sem erro nenhum.
+        //
+        // Carrega os `.axeseq` e dispara os que tem PlayOnStart. As tracks de
+        // Event so entregam durante o OnUpdate, entao nada aqui precisa que as
+        // DLLs de script ja estejam carregadas.
+        m_CameraCutActive = false;
+        m_CameraCutSavedFov = m_GameCamera.Fov;
+        m_SequenceWorld.OnSceneStart(scene, &m_PhysicsWorld);
+
+        // ── 4. Scripts ───────────────────────────────────────────────────
         m_ScriptWorld.SetActiveCamera(&m_GameCamera);
+
+        // ANTES do OnSceneStart: e ele que monta o ScriptContext de cada
+        // script, e um OnStart que dispara a cutscene de abertura precisa do
+        // ponteiro ja la.
+        m_ScriptWorld.SetSequenceWorld(&m_SequenceWorld);
+
         m_ScriptWorld.OnSceneStart(scene);
 
-        // ── 4. Audio ─────────────────────────────────────────────────────
+        // ── 5. Audio ─────────────────────────────────────────────────────
         //
         // DEPOIS do Capture do editor, sempre. Ver a nota no header.
         m_AudioWorld.OnScenePlay(scene);
 
-        // ── 5. GameMode -> DefaultPawn -> GameCamera ─────────────────────
+        // ── 6. GameMode -> DefaultPawn -> GameCamera ─────────────────────
         m_PlayerEntity = entt::null;
         auto& registry = scene.GetRegistry();
 
@@ -213,7 +236,28 @@ namespace axe
                 m_GameCamera.MoveSpeed = cam.MoveSpeed;
                 m_GameCamera.Sensitivity = cam.Sensitivity;
                 if (auto* tc = registry.try_get<TransformComponent>(entity))
-                    m_GameCamera.Reset(tc->Data.Position, tc->Data.Rotation.y, tc->Data.Rotation.x);
+                {
+                    // ── RADIANOS NO TRANSFORM, GRAUS NA GameCamera ───────────
+                    //
+                    // `Transform::Rotation` e radianos: `GetMatrix` faz
+                    // `glm::quat(Rotation)`, que interpreta assim. Ja o
+                    // `GameCamera::Reset` recebe GRAUS — o `CalcForward` dele
+                    // chama `glm::radians(yaw)` internamente.
+                    //
+                    // Sem a conversao, uma camera girada 90 graus (1.5708 rad)
+                    // entrava como 1.57 GRAUS: ela apontava quase exatamente
+                    // para +X, independente de como o autor a tinha posicionado.
+                    // Como o angulo pequeno e proximo de zero, o defeito passava
+                    // por "a camera nasce olhando para o lado errado" em vez de
+                    // parecer um erro de unidade.
+                    //
+                    // O editor_layer ja convertia no caminho irmao (o fallback
+                    // pela camera do viewport, com `glm::degrees` nos dois
+                    // argumentos). Era so este que estava fora.
+                    m_GameCamera.Reset(tc->Data.Position,
+                        glm::degrees(tc->Data.Rotation.y),
+                        glm::degrees(tc->Data.Rotation.x));
+                }
                 break;
             }
         }
@@ -266,6 +310,56 @@ namespace axe
             m_ScriptWorld.OnSceneUpdate(scene, deltaTime);
             m_PhysicsWorld.OnUpdate(scene, deltaTime);
             ScriptBase::TickScreenMessages(deltaTime);
+
+            // ── Cutscenes, POR ULTIMO ────────────────────────────────────
+            //
+            // Uma cutscene existe para SOBREPOR o comportamento normal. Se ela
+            // rodasse antes, o AnimGraph voltaria a andar com o personagem no
+            // meio da cena, a fisica empurraria a porta que ela abriu, e o
+            // mouse mexeria a camera durante o plano. Quem escreve por ultimo
+            // vence — e aqui isso e a regra, nao um acidente de ordem.
+            m_SequenceWorld.OnUpdate(scene, deltaTime, &m_ScriptWorld);
+
+            // ── A CAMERA DA CUTSCENE ─────────────────────────────────────
+            //
+            // Depois do m_GameCamera.OnUpdate pelo mesmo motivo: durante o
+            // plano, quem enquadra e a sequence, nao o jogador.
+            const entt::entity camE = m_SequenceWorld.GetActiveCameraEntity();
+
+            if (camE != entt::null && scene.GetRegistry().valid(camE))
+            {
+                auto& reg = scene.GetRegistry();
+
+                if (!m_CameraCutActive)
+                {
+                    m_CameraCutSavedFov = m_GameCamera.Fov;
+                    m_CameraCutActive = true;
+                }
+
+                if (const auto* tc = reg.try_get<TransformComponent>(camE))
+                {
+                    // RADIANOS no Transform, GRAUS na GameCamera. Mesma
+                    // fronteira do OnStart, e o mesmo motivo pelo qual ela e
+                    // atravessada em um lugar so.
+                    m_GameCamera.Reset(tc->Data.Position,
+                        glm::degrees(tc->Data.Rotation.y),
+                        glm::degrees(tc->Data.Rotation.x));
+                }
+
+                // O FOV vai junto: enquadramento visto com FOV errado nao e o
+                // enquadramento.
+                if (const auto* cc = reg.try_get<CameraComponent>(camE))
+                {
+                    m_GameCamera.Fov = cc->Fov;
+                    m_GameCamera.NearClip = cc->NearClip;
+                    m_GameCamera.FarClip = cc->FarClip;
+                }
+            }
+            else if (m_CameraCutActive)
+            {
+                m_GameCamera.Fov = m_CameraCutSavedFov;
+                m_CameraCutActive = false;
+            }
         }
 
         // ── Audio ────────────────────────────────────────────────────────
@@ -291,6 +385,18 @@ namespace axe
     // ─────────────────────────────────────────────────────────────────────────
     void SceneRuntime::OnStop(Scene& scene)
     {
+        // ANTES dos scripts: o SequenceWorld devolve os TransformComponent que
+        // a cutscene moveu, e no editor o Stop e seguido de um Ctrl+S possivel.
+        // Uma porta que ficou aberta no ultimo frame da cutscene seria gravada
+        // como a posicao autorada dela.
+        m_SequenceWorld.OnSceneStop(scene);
+
+        if (m_CameraCutActive)
+        {
+            m_GameCamera.Fov = m_CameraCutSavedFov;
+            m_CameraCutActive = false;
+        }
+
         m_ScriptWorld.OnSceneStop(scene);
         m_ParticleWorld.OnSceneStop(scene);
 

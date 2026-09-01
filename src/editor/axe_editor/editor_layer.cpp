@@ -1271,6 +1271,11 @@ namespace axe
             m_EditorUI->m_AnimGraphWindow.Draw();
             m_EditorUI->m_ControlRigWindow.Draw();
             m_EditorUI->m_AnimClipWindow.Draw();
+            // Em Play e Pause quem dirige a cena e o SceneRuntime (o
+            // SequenceWorld dentro dele). Ver SequencerWindow::SetScenePlaying.
+            m_EditorUI->m_SequencerWindow.SetScenePlaying(
+                m_EditorState != EditorState::Edit);
+
             m_EditorUI->m_SequencerWindow.Draw();
 
             // ── On-screen messages (Print String) ────────────────────────────
@@ -1443,6 +1448,19 @@ namespace axe
         if (!viewport || !viewport->IsHovered()) return;
 
         ImGuiIO& io = ImGui::GetIO();
+
+        // ── PILOTANDO: A VISTA NAO E DO USUARIO ──────────────────────────────
+        //
+        // Reposiciona a EditorCamera a partir da entidade-camera, TODO FRAME.
+        // Com o Sequencer animando o transform dela, arrastar o playhead vira
+        // assistir a cutscene.
+        //
+        // E devolve `true` para a navegacao ser pulada: orbitar enquanto outra
+        // coisa escreve na mesma camera daria um cabo de guerra em que o
+        // arrasto do usuario e desfeito no frame seguinte — o editor pareceria
+        // travado sem dizer por que. A faixa no viewport explica.
+        if (m_ViewportRenderer->UpdatePilotCamera())
+            return;
 
         if (ImGui::IsKeyPressed(ImGuiKey_P))
         {
