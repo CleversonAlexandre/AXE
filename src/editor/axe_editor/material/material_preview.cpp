@@ -20,6 +20,8 @@ namespace axe
             FramebufferTextureFormat::RGBA16F,
             FramebufferTextureFormat::DEPTH32F,
         };
+        // VIEWPORT_RESIZE_V1 — este alvo e APRESENTADO como imagem no ImGui.
+        spec.LinearFilter = true;
         m_PreviewFramebuffer = Framebuffer::Create(spec);
 
         // Renderer dedicado ao preview — desacoplado do renderer do editor
@@ -100,6 +102,25 @@ namespace axe
         if (m_PreviewEnvironment && m_PreviewRenderer->GetSceneRenderer())
             m_PreviewRenderer->GetSceneRenderer()->SetEnvironment(m_PreviewEnvironment.get());
 
+        // VIEWPORT_RESIZE_V1 — o tamanho anotado no Draw do frame anterior
+        // entra em vigor AQUI, antes do render. Ver a nota em
+        // MaterialEditorWindow::m_PendingPreviewSize.
+        if (m_PendingPreviewSize.x > 0.0f && m_PendingPreviewSize.y > 0.0f)
+        {
+            const uint32_t pw = (uint32_t)m_PendingPreviewSize.x;
+            const uint32_t ph = (uint32_t)m_PendingPreviewSize.y;
+            m_PendingPreviewSize = ImVec2(0, 0);
+
+            if (pw != (uint32_t)m_PreviewSize.x || ph != (uint32_t)m_PreviewSize.y)
+            {
+                m_PreviewSize = ImVec2((float)pw, (float)ph);
+                m_PreviewFramebuffer->Resize(pw, ph);
+
+                if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+                    m_PreviewRenderer->m_Camera->SetAspectRatio((float)pw / (float)ph);
+            }
+        }
+
         uint32_t width = (uint32_t)m_PreviewSize.x;
         uint32_t height = (uint32_t)m_PreviewSize.y;
         if (width == 0 || height == 0) { width = 512; height = 512; }
@@ -126,16 +147,13 @@ namespace axe
             uint32_t width = static_cast<uint32_t>(viewportSize.x);
             uint32_t height = static_cast<uint32_t>(viewportSize.y);
 
-            // Redimensiona framebuffer se o tamanho mudou
+            // VIEWPORT_RESIZE_V1 — so ANOTA. Quem aplica e o RenderPreview,
+            // que roda antes do ImGui no EditorLayer::OnRender.
             if (width > 0 && height > 0 &&
                 (std::abs((float)width - m_PreviewSize.x) > 1.0f ||
                     std::abs((float)height - m_PreviewSize.y) > 1.0f))
             {
-                m_PreviewSize = ImVec2((float)width, (float)height);
-                m_PreviewFramebuffer->Resize(width, height);
-
-                if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
-                    m_PreviewRenderer->m_Camera->SetAspectRatio((float)width / (float)height);
+                m_PendingPreviewSize = ImVec2((float)width, (float)height);
             }
 
             m_PreviewBoundsMin = ImGui::GetCursorScreenPos();

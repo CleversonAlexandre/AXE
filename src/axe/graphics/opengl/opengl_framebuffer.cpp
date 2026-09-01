@@ -93,13 +93,16 @@ namespace axe
         m_ColorAttachments.resize(colorSpecs.size());
         glCreateTextures(GL_TEXTURE_2D, (GLsizei)colorSpecs.size(), m_ColorAttachments.data());
 
+        // VIEWPORT_RESIZE_V1 — ver a nota em FramebufferSpecification::LinearFilter.
+        const GLint filter = m_Specification.LinearFilter ? GL_LINEAR : GL_NEAREST;
+
         for (uint32_t i = 0; i < colorSpecs.size(); i++)
         {
             GLenum internalFmt = ToGLInternalFormat(colorSpecs[i].Format);
             glTextureStorage2D(m_ColorAttachments[i], 1, internalFmt,
                 m_Specification.Width, m_Specification.Height);
-            glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_MIN_FILTER, filter);
+            glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_MAG_FILTER, filter);
             glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTextureParameteri(m_ColorAttachments[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             glNamedFramebufferTexture(m_RendererID, GL_COLOR_ATTACHMENT0 + i,
@@ -148,6 +151,39 @@ namespace axe
         GLenum status = glCheckNamedFramebufferStatus(m_RendererID, GL_FRAMEBUFFER);
         //AXE_CORE_INFO("Framebuffer FBO={} status={}", m_RendererID,
         //    status == GL_FRAMEBUFFER_COMPLETE ? "COMPLETE" : "INCOMPLETE");
+
+        // ── VIEWPORT_RESIZE_V1 — TEXTURA RECEM-CRIADA NAO E PRETA ────────────
+        //
+        // glTextureStorage2D ALOCA e nao INICIALIZA: ate o primeiro draw, a
+        // textura contem a memoria de video que estava ali antes. Era isso, e
+        // so isso, o "chuvisco colorido" ao redimensionar o Viewport e o
+        // Material Preview — ninguem estava desenhando errado, estava-se
+        // EXIBINDO memoria nao inicializada.
+        //
+        // Limpar aqui e a rede de seguranca: qualquer FBO da engine, no frame
+        // em que nasce ou muda de tamanho, comeca preto em vez de lixo. Custa
+        // um clear por resize — nada, perto de um frame de ruido.
+        if (status == GL_FRAMEBUFFER_COMPLETE)
+        {
+            const GLfloat black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            for (uint32_t i = 0; i < (uint32_t)m_ColorAttachments.size(); i++)
+                glClearNamedFramebufferfv(m_RendererID, GL_COLOR, (GLint)i, black);
+
+            if (m_DepthAttachment)
+            {
+                const GLfloat one = 1.0f;
+                if (m_DepthIsTexture)
+                    glClearNamedFramebufferfv(m_RendererID, GL_DEPTH, 0, &one);
+                else
+                    glClearNamedFramebufferfi(m_RendererID, GL_DEPTH_STENCIL, 0, one, 0);
+            }
+        }
+        else
+        {
+            AXE_CORE_ERROR("Framebuffer FBO={} INCOMPLETO ({}x{}) status=0x{:X}",
+                m_RendererID, m_Specification.Width, m_Specification.Height,
+                (uint32_t)status);
+        }
     }
 
     void OpenGLFramebuffer::Bind()

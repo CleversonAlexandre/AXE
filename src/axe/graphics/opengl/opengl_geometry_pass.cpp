@@ -99,9 +99,16 @@ namespace axe
         }
         g_Normal = N;
 
+        // SRGB_TEXTURES_V1 — decodifica sRGB -> linear, igual ao caminho
+        // forward do MeshRenderer: ver a linha do albedo em mesh_renderer.cpp,
+        // que ja aplicava este mesmo pow.
+        // A ausencia deste pow AQUI era a razao de o MESMO material aparecer
+        // mais claro/lavado no viewport (deferred) do que no preview do
+        // Material Editor (forward). Nao e preferencia de cor: um dos dois
+        // estava errado, e era este.
         vec3 albedo = u_Color.rgb;
         if (u_HasAlbedoMap == 1)
-            albedo = texture(u_AlbedoMap, v_TexCoord).rgb;
+            albedo = pow(texture(u_AlbedoMap, v_TexCoord).rgb, vec3(2.2));
 
         float roughness = u_Roughness;
         if (u_HasRoughnessMap == 1)
@@ -113,6 +120,10 @@ namespace axe
 )";
     void OpenGLGeometryPass::Initialize()
     {
+        // Carimbo de versao — conferir NO LOG que o binario e o desta rodada
+        // antes de investigar qualquer diferenca de cor.
+        AXE_CORE_INFO("SRGB_TEXTURES_V1: mipmap + anisotropia + decodificacao sRGB no albedo");
+
         m_Shader = Shader::Create(s_GeomVert, s_GeomFrag);
 
         // Estado fixed-function do G-Buffer empacotado num Pipeline (PSO).

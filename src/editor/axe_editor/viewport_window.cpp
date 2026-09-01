@@ -68,8 +68,15 @@ namespace axe
 		spec.Width = 1280;
 		spec.Height = 720;
 		spec.HDR = true;
+		// VIEWPORT_RESIZE_V1 — este framebuffer e APRESENTADO como imagem.
+		// Ver a nota em FramebufferSpecification::LinearFilter.
+		spec.LinearFilter = true;
 
 		m_Framebuffer = Framebuffer::Create(spec);
+
+		// O tamanho real vem do ImGui no primeiro Draw; ate la, 1280x720.
+		m_Width = spec.Width;
+		m_Height = spec.Height;
 
 		if (!m_Framebuffer)
 		{
@@ -78,6 +85,10 @@ namespace axe
 		}
 
 		m_Initialized = true;
+
+		// Carimbo de versao — serve para conferir NO LOG que o binario rodando
+		// e o desta rodada, antes de investigar qualquer coisa.
+		AXE_CORE_INFO("VIEWPORT_RESIZE_V1: resize adiado + framebuffer limpo na criacao");
 
 		//AXE_CORE_INFO("ViewportWindow initialized successfully");
 	}
@@ -99,9 +110,12 @@ namespace axe
 		uint32_t width = static_cast<uint32_t>(viewportSize.x);
 		uint32_t height = static_cast<uint32_t>(viewportSize.y);
 
+		// VIEWPORT_RESIZE_V1 — so ANOTA. Quem aplica e o EditorLayer::OnRender,
+		// antes de desenhar o proximo frame. Ver ViewportWindow::ApplyPendingResize.
 		if (width > 0 && height > 0 && (width != m_Width || height != m_Height))
 		{
-			OnResize(width, height);
+			m_PendingWidth = width;
+			m_PendingHeight = height;
 		}
 
 
@@ -207,6 +221,20 @@ namespace axe
 			m_Framebuffer->Resize(width, height);
 		if (m_ViewportRenderer)
 			m_ViewportRenderer->Resize(width, height);
+	}
+
+	// VIEWPORT_RESIZE_V1 — ver a nota na declaracao, em viewport_window.hpp.
+	void ViewportWindow::ApplyPendingResize()
+	{
+		if (m_PendingWidth == 0 || m_PendingHeight == 0) return;
+
+		const uint32_t w = m_PendingWidth;
+		const uint32_t h = m_PendingHeight;
+		m_PendingWidth = 0;
+		m_PendingHeight = 0;
+
+		if (w == m_Width && h == m_Height) return;
+		OnResize(w, h);
 	}
 
 	ImTextureID ViewportWindow::GetTextureID() const

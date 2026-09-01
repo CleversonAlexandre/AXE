@@ -128,9 +128,12 @@ namespace axe
 				return;
 			}
 
+			// SRGB_TEXTURES_V1 — mesma decodificacao do geometry pass. O bake
+			// de GI integra a luz que RESSALTA da superficie: com o albedo em
+			// sRGB o bounce saia claro demais e sem a cor certa da parede.
 			vec3 albedo = u_AlbedoColor;
 			if (u_HasAlbedoMap == 1)
-				albedo *= texture(u_AlbedoMap, v_TexCoord).rgb;
+				albedo *= pow(texture(u_AlbedoMap, v_TexCoord).rgb, vec3(2.2));
 
 			vec3 N = normalize(v_Normal);
 			vec3 lit = vec3(0.0);

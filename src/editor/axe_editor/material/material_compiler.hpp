@@ -189,6 +189,22 @@ namespace axe
         std::unordered_set<int>     m_VisitedNodes;  // nodes já processados
         std::unordered_map<int, PinValue> m_PinVariables; // pin ID → {nome, tipo}
         std::unordered_map<int, std::string> m_NodeSamplers; // node ID → sampler name
+
+        // ── SRGB_TEXTURES_V1 ─────────────────────────────────────────────────
+        //
+        // IDs dos nodes Texture Sample cuja textura carrega COR (e nao dado).
+        // Preenchido no passo 2 do Compile a partir do INDICE DO PIN do
+        // Material Output pelo qual o node foi alcancado: 0 (Base Color) e 4
+        // (Emissive) sao cor; Metallic, Roughness, Normal, Opacity, AO e
+        // Specular sao dado.
+        //
+        // Isto NAO e heuristica de nome de arquivo — e a ligacao real do
+        // grafo. Uma normal map alcancada pelo pin Normal nunca vai ser
+        // decodificada como cor, que e o erro que estraga mais do que conserta.
+        //
+        // Consumido no GenerateNodeCode do Texture Sample. Ver a nota la.
+        std::unordered_set<int> m_SRGBSamplers;
+
         std::string                 m_FragmentCode;  // código acumulado
         int                         m_VariableCounter = 0; // contador para nomes únicos
     };

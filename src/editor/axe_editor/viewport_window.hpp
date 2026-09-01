@@ -24,6 +24,22 @@ namespace axe
 		void OnResize(uint32_t width, uint32_t height);
 		void DrawToolbar();
 
+		// ── VIEWPORT_RESIZE_V1 ───────────────────────────────────────────────
+		//
+		// O Draw() nao redimensiona mais nada: ele so ANOTA o tamanho novo.
+		// Quem aplica e o EditorLayer::OnRender, ANTES de renderizar o frame.
+		//
+		// A ordem do frame era: OnRender desenha na textura -> Draw() detecta o
+		// tamanho novo -> recria a textura -> ImGui::Image exibe a textura que
+		// acabou de nascer e onde ninguem desenhou ainda. Enquanto se arrasta a
+		// borda isso acontece TODO frame, e o resultado e o chuvisco.
+		//
+		// Adiando um passo, o frame vira: aplica o tamanho novo -> renderiza
+		// nele -> exibe. No frame do arrasto o ImGui estica a imagem BOA do
+		// frame anterior (por isso o LinearFilter), e no seguinte ela ja e
+		// nativa. Nunca ha um frame exibindo textura nao desenhada.
+		void ApplyPendingResize();
+
 
 		bool IsInitialized() const { return m_Initialized; }
 		bool IsHovered()     const { return m_IsHovered; }
@@ -74,6 +90,11 @@ namespace axe
 
 		std::uint32_t m_Width = 0;
 		std::uint32_t m_Height = 0;
+
+		// VIEWPORT_RESIZE_V1 — tamanho pedido pelo ImGui neste frame, ainda
+		// nao aplicado no framebuffer. 0 = nada pendente.
+		std::uint32_t m_PendingWidth = 0;
+		std::uint32_t m_PendingHeight = 0;
 
 		glm::vec2 m_MousePosition{ 0.0f, 0.0f };
 		glm::vec2 m_LastMousePosition{ 0.0f, 0.0f };

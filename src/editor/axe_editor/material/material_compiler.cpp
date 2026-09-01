@@ -102,8 +102,19 @@ namespace axe
                 };
 
             // Percorre pins do output em ordem
+            //
+            // SRGB_TEXTURES_V1 — o INDICE do pin classifica a textura em COR
+            // ou DADO. A ordem dos pins do Material Output e fixa e esta
+            // documentada em MaterialGraph::AddMaterialOutputNode (novos pins
+            // sempre entram no FIM, justamente para nao deslocar estes
+            // indices): 0=Base Color, 1=Metallic, 2=Roughness, 3=Normal,
+            // 4=Emissive, 5=Opacity, 6=AO, 7=Specular.
+            int pinIndex = 0;
             for (auto& inputPin : outputNode->Inputs)
             {
+                const bool pinIsColor = (pinIndex == 0 || pinIndex == 4);
+                ++pinIndex;
+
                 for (auto& link : graph->GetLinks())
                 {
                     if (link.EndPin != inputPin.ID) continue;
@@ -115,6 +126,9 @@ namespace axe
                         compiler.m_NodeSamplers[texNode->ID.Get()] = name;
                         processed.insert(texNode->ID.Get());
                         ++slot;
+
+                        if (pinIsColor)
+                            compiler.m_SRGBSamplers.insert(texNode->ID.Get());
                     }
                 }
             }
@@ -1165,6 +1179,33 @@ void main()
             RegisterPin(node->Outputs[2].ID, var + ".r", PinType::Float);
             RegisterPin(node->Outputs[3].ID, var + ".a", PinType::Float);
             code << "vec4 " << var << " = texture(" << sampler << ", " << uv << ");";
+
+            // ── SRGB_TEXTURES_V1 — sRGB -> LINEAR ────────────────────────────
+            //
+            // Um PNG/JPG de cor esta codificado em sRGB. Ate aqui a engine
+            // sampleava esse valor CODIFICADO e o usava como se fosse linear;
+            // no fim do frame o post-process aplica pow(1/2.2) e CODIFICA DE
+            // NOVO. O resultado e a imagem lavada: meio-tom alto demais,
+            // sombra sem profundidade, e cor que nunca bate com o que foi
+            // pintado no Substance/Photoshop.
+            //
+            // A conversao acontece AQUI, no GLSL, e nao no formato da textura
+            // (GL_SRGB8), de proposito:
+            //
+            //   - a mesma textura pode ser cor num material e dado em outro; o
+            //     formato e por OBJETO de textura (e o cache e por caminho),
+            //     o GLSL e por MATERIAL. So o segundo consegue estar certo nos
+            //     dois casos ao mesmo tempo.
+            //   - o GLSL ja e cozido no `.axeshader`: o jogo herda a correcao
+            //     sem uma linha de mudanca no formato nem no runtime.
+            //
+            // Custo: um pow por sample de cor. O alpha NAO entra — alpha e
+            // sempre dado (opacidade, mascara), nunca cor.
+            if (m_SRGBSamplers.count(node->ID.Get()))
+            {
+                code << "\n    " << var << ".rgb = pow(max(" << var
+                    << ".rgb, vec3(0.0)), vec3(2.2));";
+            }
         }
 
         // -----------------------------------------------------------------

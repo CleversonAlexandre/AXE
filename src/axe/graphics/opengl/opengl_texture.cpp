@@ -82,11 +82,61 @@ namespace axe
         glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, m_Width, m_Height,
             0, dataFormat, GL_UNSIGNED_BYTE, data);
 
-        // Parâmetros
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        // ── SRGB_TEXTURES_V1 — MIPMAP ────────────────────────────────────────
+        //
+        // Ate aqui so existia o nivel 0, com MIN_FILTER = GL_LINEAR. Toda
+        // textura vista de longe ou de raspao era reamostrada a partir da
+        // resolucao cheia: uma superficie que ocupa 200 pixels na tela lendo
+        // uma textura de 2048 pega texels espalhados e sem relacao entre si —
+        // e isso CINTILA a cada frame em que a camera se move.
+        //
+        // Pior: o TAA entao tenta estabilizar esse ruido borrando, o que
+        // troca cintilancia por imagem pastosa. Os dois somados sao boa parte
+        // do "grafico basico".
+        //
+        // Com a cadeia de mips e LINEAR_MIPMAP_LINEAR (trilinear), o hardware
+        // escolhe o nivel certo e a superficie fica ESTAVEL. Custa 33% de
+        // memoria de textura — o negocio mais barato que existe em render.
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // ── ANISOTROPIA ──────────────────────────────────────────────────────
+        //
+        // O mipmap sozinho resolve a cintilancia mas erra em superficie vista
+        // DE RASPAO — chao, parede, mesa: ali a compressao e diferente em cada
+        // eixo, o mip e escolhido pelo eixo pior, e o resultado e um chao que
+        // vira papinha a tres metros de distancia. A anisotropia amostra ao
+        // longo do eixo comprimido e devolve o detalhe.
+        //
+        // E core desde o OpenGL 4.6 e extensao universal antes disso (a RX 580
+        // suporta 16x). Consultado, e nao fixo em 16: pedir mais do que o
+        // driver oferece e erro GL.
+        {
+            GLfloat maxAniso = 1.0f;
+            glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY */, &maxAniso);
+            if (maxAniso > 1.0f)
+            {
+                const GLfloat aniso = maxAniso < 8.0f ? maxAniso : 8.0f;
+                glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, aniso);
+            }
+        }
+
+        // ── WRAP: REPEAT, e nao CLAMP_TO_EDGE ────────────────────────────────
+        //
+        // Isto era uma DIVERGENCIA entre os dois construtores desta mesma
+        // classe: o construtor vazio (linha ~16) sempre usou GL_REPEAT, o de
+        // arquivo usava GL_CLAMP_TO_EDGE. Consequencia: qualquer material com
+        // tiling de UV maior que 1 (node Multiply na UV — o jeito normal de
+        // repetir um piso ou uma parede) nao repetia, ESTICAVA a ultima
+        // fileira de texels ate a borda.
+        //
+        // ATENCAO ao testar: se algum sprite de particula ou cookie de luz
+        // mostrar halo na borda, e este parametro — sprite quer CLAMP. A troca
+        // e de uma linha, mas tiling quebrado e problema muito mais comum.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
         glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -107,7 +157,7 @@ namespace axe
         stbi_image_free(data);
         m_Loaded = true;
 
-       // AXE_CORE_INFO("Texture2D: '{}' carregada com SUCESSO!", filepath);
+        // AXE_CORE_INFO("Texture2D: '{}' carregada com SUCESSO!", filepath);
     }
 
     OpenGLTexture2D::~OpenGLTexture2D()

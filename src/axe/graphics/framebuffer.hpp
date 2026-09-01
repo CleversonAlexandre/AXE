@@ -33,6 +33,23 @@ namespace axe
         bool          HDR = false; // ← mantido para compatibilidade
 
         std::vector<FramebufferTextureSpec> Attachments; // ← novo
+
+        // ── VIEWPORT_RESIZE_V1 ───────────────────────────────────────────────
+        //
+        // Filtro dos COLOR attachments. O padrao continua NEAREST, que e o que
+        // todo passe interno precisa: G-Buffer, SSAO, SSR, TAA e picking leem
+        // texel a texel, e interpolar ali produz dado errado (uma normal
+        // interpolada entre dois objetos nao e a normal de ninguem).
+        //
+        // LINEAR so faz sentido no alvo que e APRESENTADO como imagem — o
+        // framebuffer do Viewport e o do Material Preview. Enquanto se arrasta
+        // a borda da janela, o ImGui desenha a textura do frame anterior no
+        // tamanho NOVO: com NEAREST isso aparece como escadinha grossa; com
+        // LINEAR, como um leve borrao que some no frame seguinte.
+        //
+        // Default false de proposito: nenhum framebuffer existente muda de
+        // comportamento por causa deste campo.
+        bool LinearFilter = false;
     };
 
     class AXE_API Framebuffer

@@ -118,8 +118,14 @@ namespace axe
         //void DrawPreview();
         void InitializePreview();
 
-        // Preview window state        
+        // Preview window state
         ImVec2 m_PreviewSize = ImVec2(512, 512);
+
+        // VIEWPORT_RESIZE_V1 — mesmo adiamento do Viewport: DrawPreviewWindow
+        // so anota o tamanho novo, RenderPreview aplica ANTES de desenhar.
+        // Resize no meio do Draw fazia o ImGui exibir a textura recem-alocada
+        // (chuvisco). 0 = nada pendente.
+        ImVec2 m_PendingPreviewSize = ImVec2(0, 0);
         ImVec2 m_PreviewBoundsMin;
         ImVec2 m_PreviewBoundsMax;
         ImVec2 m_PreviewMouseDelta;

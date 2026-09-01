@@ -1227,6 +1227,13 @@ namespace axe
             ViewportWindow* viewport = m_EditorUI->GetViewport();
             if (viewport && viewport->IsInitialized())
             {
+                // VIEWPORT_RESIZE_V1 — o tamanho que o ImGui pediu no frame
+                // ANTERIOR entra em vigor AQUI, antes do render. Aplicar isso
+                // dentro do Draw() era o que fazia o ImGui exibir uma textura
+                // recem-alocada onde ninguem tinha desenhado ainda — o
+                // "chuvisco" ao arrastar a borda do viewport.
+                viewport->ApplyPendingResize();
+
                 auto framebuffer = viewport->GetFramebuffer();
                 if (framebuffer && viewport->GetWidth() > 0 && viewport->GetHeight() > 0)
                 {
