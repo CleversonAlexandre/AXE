@@ -353,6 +353,53 @@ namespace axe
                 if (fs::exists(d, ec))
                     res.Files.push_back(d);
             }
+
+            // ═══════════════════════════════════════════════════════════════
+            //  PKG_PROBES_V1 — O BAKE DE GI TAMBEM E UM DERIVADO
+            //
+            //  O grid de light probes e salvo ao lado do `.axescene` e NAO
+            //  cabe na lista acima, por um detalhe de nome: com multiplos
+            //  volumes cada um grava `Cena.<8 hex do FileID>.axeprobes`, e um
+            //  `replace_extension` produziria `Cena.axeprobes` — que e o nome
+            //  do formato ANTIGO, de volume unico. Trocar a extensao acharia o
+            //  arquivo errado ou nenhum.
+            //
+            //  E ninguem mais conhece esses arquivos: eles nao aparecem no
+            //  AssetDatabase, nao sao referenciados por UUID dentro da cena, e
+            //  o grafo de dependencias so enxerga o que e referenciado. Mesma
+            //  situacao do InputConfig.json, que ja precisou de uma lista
+            //  explicita no empacotador.
+            //
+            //  SEM ISTO o jogo empacotado sai sem GI: no melhor caso ele
+            //  rebakeia no load (108 probes x 6 renders x 2 bounces = ~1300
+            //  renders travando a abertura, TODA vez), no pior fica sem luz
+            //  indireta nenhuma e ninguem entende por que o build nao se
+            //  parece com o editor.
+            //
+            //  Por isso a busca e por PADRAO no diretorio, e nao por nome
+            //  montado: o empacotador nao precisa saber quantos volumes a cena
+            //  tem nem qual FileID cada um sorteou.
+            // ═══════════════════════════════════════════════════════════════
+            if (rec->FilePath.extension() == ".axescene")
+            {
+                const fs::path dir = rec->FilePath.parent_path();
+                const std::string stem = rec->FilePath.stem().string();
+
+                std::error_code dirEc;
+                for (const auto& e : fs::directory_iterator(dir, dirEc))
+                {
+                    if (dirEc) break;
+                    if (!e.is_regular_file(dirEc)) continue;
+                    if (e.path().extension() != ".axeprobes") continue;
+
+                    // Aceita os dois formatos: "Cena.axeprobes" (legado, volume
+                    // unico) e "Cena.<fileid>.axeprobes" (atual, multi-volume).
+                    const std::string name = e.path().filename().string();
+                    if (name.rfind(stem + ".", 0) != 0) continue;   // outra cena
+
+                    res.Files.push_back(e.path());
+                }
+            }
         }
 
         // Os cozidos avulsos entram DEPOIS, e deduplicados: um `.axeclipbin`

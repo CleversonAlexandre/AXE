@@ -221,6 +221,15 @@ namespace axe
 		std::shared_ptr<DirectionalLight> Data;
 	};
 
+	// ── SKY_LIGHT_V1 ────────────────────────────────────────────────────
+	// A luz de ambiente (o ceu iluminando de todos os lados). Irmao do
+	// LightComponent, mesmo padrao de shared_ptr. Ver axe/lighting/
+	// directional_light.hpp para o porque da separacao.
+	struct SkyLightComponent
+	{
+		std::shared_ptr<SkyLight> Data;
+	};
+
 	// Point Light
 	struct PointLightComponent
 	{
@@ -347,7 +356,18 @@ namespace axe
 	{
 		PostProcessSettings Settings;
 		SSAOSettings        SSAO;
+
 		bool IsGlobal = true;
+
+		// POSTPROCESS_DOMAIN_V1 — o material de efeito vive dentro de
+		// `Settings` (UserMaterialUUID / UserBlendPoint / UserIntensity), e nao
+		// num campo novo aqui.
+		//
+		// Nao e detalhe de organizacao: `Settings` e a struct que o
+		// viewport_renderer (editor) e o world_renderer (jogo) ja copiam
+		// INTEIRA para o renderer. Um campo solto neste componente exigiria
+		// encanamento novo nos dois caminhos — e o do jogo e justamente o que
+		// ninguem exercita todo dia.
 	};
 
 	// Interior Volume — caixa que bloqueia sol + ambient/IBL em ambientes
@@ -520,6 +540,18 @@ namespace axe
 	{
 		std::string HDRIPath;
 		float       SkyboxRotation = 0.0f;
+
+		// ── SKY_OFF_V1 ───────────────────────────────────────────────────
+		//
+		// Desliga o HDRI SEM apagar o caminho: o arquivo continua no
+		// componente, e religar traz tudo de volta.
+		//
+		// Existe porque nao havia como tirar o HDRI da cena — e ele nao e so
+		// fundo, e IBL: enquanto estivesse carregado, era impossivel testar
+		// "sem fonte de luz nenhuma". Com isto desligado o cubemap e SOLTO,
+		// entao HasSkybox() vira false e o HDRI para de desenhar E de
+		// iluminar, que sao as duas coisas ao mesmo tempo.
+		bool        UseHDRI = true;
 	};
 
 } // namespace axe

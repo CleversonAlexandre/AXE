@@ -1,8 +1,12 @@
+#include "axe_editor/asset/asset_viewer_window.hpp"   // ASSET_VIEWER_V1
+#include <functional>   // FRAME_SELECTED_V1
+#include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
 #include "editor_layer.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
 #include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe/material/material_shader_cache.hpp"   // BATCH_SHADING_MODEL_V1
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
 #include "axe/scene/components.hpp"
@@ -23,6 +27,135 @@
 
 namespace axe
 {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  EDITOR_CAM_PERSIST_V1 — a camera do editor viaja com a cena
+    //
+    //  Ele pedia: "guardar a ultima posicao da camera do editor para que nao
+    //  precise, a todo load, ajustar novamente".
+    //
+    //  A camera do editor nao e entidade — vive no ViewportRenderer —, entao
+    //  o serializer nao a alcanca. A ponte sao as duas caixas de correio
+    //  estaticas do SceneSerializer, e estas duas funcoes sao os UNICOS
+    //  lugares que as tocam: ha 3 chamadas de Serialize e 4 de Deserialize
+    //  neste arquivo, e escrever o mesmo bloco 7 vezes e exatamente como o
+    //  EnvironmentComponent ficou anos sem ser salvo.
+    //
+    //  Guarda a ORBITA (foco/distancia/pitch/yaw), nao a posicao: e o estado
+    //  completo desta camera, e a posicao e derivada dele.
+    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
+    //  FRAME_SELECTED_V1 — a tecla F, como na Unreal e no Blender
+    //
+    //  Enquadra a entidade selecionada: poe o FOCO da camera no centro dela e
+    //  a distancia proporcional ao tamanho. Como a EditorCamera e orbital, isso
+    //  tambem conserta o pivo — a partir dai orbitar gira em volta do objeto, e
+    //  nao de um ponto qualquer que ficou para tras. Numa cena com muitos itens
+    //  e a diferenca entre navegar e procurar.
+    //
+    //  A conta e a MESMA do FramePreviewCamera do Script Editor, de proposito:
+    //  dois enquadramentos diferentes no mesmo editor parecem defeito. A altura
+    //  manda porque personagem e alto e estreito; usar a maior das tres
+    //  dimensoes afastaria demais num objeto largo e baixo.
+    //
+    //  Percorre os FILHOS tambem: um "BP_Player" costuma ser uma entidade vazia
+    //  com a malha pendurada abaixo. Enquadrar so o pai daria uma caixa de
+    //  tamanho zero e a camera iria para cima do nada.
+    // ═══════════════════════════════════════════════════════════════════════
+    void EditorLayer::FrameSelectedEntity()
+    {
+        if (!m_Scene || !m_Context.HasSelection()) return;
+        if (!m_ViewportRenderer || !m_ViewportRenderer->m_Camera) return;
+
+        auto& reg = m_Scene->GetRegistry();
+
+        bool haveBounds = false;
+        glm::vec3 worldMin(0.0f), worldMax(0.0f);
+
+        // Acumula a caixa da entidade e de toda a subarvore dela.
+        std::function<void(entt::entity)> accumulate =
+            [&](entt::entity e)
+            {
+                if (!reg.valid(e)) return;
+
+                glm::mat4 world(1.0f);
+                if (auto* tc = reg.try_get<TransformComponent>(e))
+                    world = tc->Data.GetMatrix();
+
+                auto measure = [&](const auto& meshPtr)
+                    {
+                        if (!meshPtr) return;
+                        const auto& verts = meshPtr->GetVertices();
+                        if (verts.empty()) return;
+
+                        for (const auto& v : verts)
+                        {
+                            const glm::vec3 p = glm::vec3(world * glm::vec4(v.Position, 1.0f));
+                            if (!haveBounds) { worldMin = worldMax = p; haveBounds = true; }
+                            else { worldMin = glm::min(worldMin, p); worldMax = glm::max(worldMax, p); }
+                        }
+                    };
+
+                if (auto* sk = reg.try_get<SkeletalMeshComponent>(e)) measure(sk->Data);
+                if (auto* mc = reg.try_get<MeshComponent>(e))         measure(mc->Data);
+
+                if (auto* rel = reg.try_get<RelationshipComponent>(e))
+                    for (auto child : rel->Children) accumulate(child);
+            };
+
+        accumulate(m_Context.SelectedEntity);
+
+        // Sem malha nenhuma (luz, volume, entidade vazia): ainda vale enquadrar
+        // a POSICAO dela, com uma distancia padrao. Nao fazer nada seria pior —
+        // o usuario apertou F e nada aconteceu, sem saber por que.
+        if (!haveBounds)
+        {
+            glm::vec3 p(0.0f);
+            if (auto* tc = reg.try_get<TransformComponent>(m_Context.SelectedEntity))
+                p = glm::vec3(tc->Data.GetMatrix()[3]);
+            m_ViewportRenderer->m_Camera->SetView(p, 5.0f);
+            return;
+        }
+
+        const glm::vec3 size = worldMax - worldMin;
+        const float height = std::max(size.y, 0.0001f);
+        const float width = std::max(size.x, size.z);
+        const float extent = std::max(height, width);
+
+        const glm::vec3 focal = (worldMin + worldMax) * 0.5f;
+
+        // 1.9x e o fator ja calibrado nos previews com FOV 45.
+        m_ViewportRenderer->m_Camera->SetView(focal, extent * 1.9f);
+    }
+
+    namespace
+    {
+        void CaptureEditorCamera(ViewportRenderer* vr)
+        {
+            SceneSerializer::PendingEditorCamera = {};
+            if (!vr || !vr->m_Camera) return;
+
+            const auto& c = *vr->m_Camera;
+            SceneSerializer::PendingEditorCamera.FocalPoint = c.GetFocalPoint();
+            SceneSerializer::PendingEditorCamera.Distance = c.GetDistance();
+            SceneSerializer::PendingEditorCamera.Pitch = c.GetPitch();
+            SceneSerializer::PendingEditorCamera.Yaw = c.GetYaw();
+            SceneSerializer::PendingEditorCamera.Valid = true;
+        }
+
+        void RestoreEditorCamera(ViewportRenderer* vr)
+        {
+            const auto& st = SceneSerializer::LoadedEditorCamera;
+            // Valid=false = cena salva antes desta versao. Nao mexer na camera
+            // e melhor que joga-la para uma orbita zerada.
+            if (!st.Valid || !vr || !vr->m_Camera) return;
+            // ATENCAO A ORDEM: a assinatura existente e (foco, distancia,
+            // YAW, PITCH) — inverter aqui deitaria a camera de lado sem
+            // erro nenhum de compilacao, porque os dois sao float.
+            vr->m_Camera->SetOrbit(st.FocalPoint, st.Distance, st.Yaw, st.Pitch);
+        }
+    }
+
     namespace
     {
         // ── B2.1: carrega e cozinha se preciso ───────────────────────────────
@@ -138,6 +271,7 @@ namespace axe
                 m_ViewportRenderer->SetScene(m_Scene.get());
                 m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
                 SceneSerializer::Deserialize(path, *m_Scene, &m_Environment);
+                RestoreEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
                 m_CurrentScenePath = path;
                 EnsureEnvironmentComponent();
 
@@ -172,11 +306,13 @@ namespace axe
                         AXE_EDITOR_INFO("Salvar cena cancelado.");
                         return;
                     }
+                    CaptureEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
                     SceneSerializer::Serialize(*m_Scene, chosen.string(), &m_Environment);
                     m_CurrentScenePath = chosen.string();
                     AXE_EDITOR_INFO("Cena salva em: {}", m_CurrentScenePath);
                     return;
                 }
+                CaptureEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
                 SceneSerializer::Serialize(*m_Scene, savePath, &m_Environment);
                 m_CurrentScenePath = savePath;
 
@@ -275,6 +411,24 @@ namespace axe
 
         m_EditorUI->GetAssetBrowser()->SetAssetOpenCallback([this](const AssetRecord& record)
             {
+                // ── ASSET_VIEWER_V1 ─────────────────────────────────────
+                //
+                // Textura e malha nao tinham editor: duplo clique nelas nao
+                // fazia nada. Entram AQUI, no mesmo despacho dos outros, e
+                // nao num caminho novo — caminho de abertura duplicado e
+                // como o Post Process Volume divergiu.
+                //
+                // O teste e Handles(), e nao um `if` de tipo escrito de novo:
+                // a lista de tipos que a janela sabe mostrar vive DENTRO dela,
+                // e quem adiciona um painel novo la nao precisa lembrar de
+                // vir mexer aqui.
+                if (AssetViewerWindow::Handles(record.Type))
+                {
+                    m_EditorUI->m_AssetViewerWindow.Open(
+                        record.FilePath, record.Type, record.Name);
+                    return;
+                }
+
                 if (record.Type == AssetType::Material)
                 {
                     auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
@@ -758,6 +912,20 @@ namespace axe
                     m_ViewportRenderer->SuppressEditorGizmos =
                         (m_EditorState == EditorState::Play);
 
+                    // VIEW_GIZMO_V1 — o widget de navegacao do canto. Desenhado
+                    // aqui porque este callback ja roda logo apos o ImGui::Image
+                    // e ja recebe os cantos REAIS da imagem (e nao os da
+                    // janela, que diferem quando ha barra de ferramentas).
+                    //
+                    // Fora do Play: em Play o viewport e o jogo, e um widget de
+                    // camera de editor por cima nao faz sentido.
+                    if (m_EditorState != EditorState::Play &&
+                        m_ViewportRenderer && m_ViewportRenderer->m_Camera)
+                    {
+                        ui::DrawViewGizmo(*m_ViewportRenderer->m_Camera,
+                            ImVec2(min.x, min.y), ImVec2(max.x, max.y));
+                    }
+
                     m_ViewportRenderer->DrawGuizmo(min, max);
                 });
 
@@ -955,6 +1123,21 @@ namespace axe
                     record->FilePath, outShader, outSamplers);
             });
 
+        // POSTPROCESS_DOMAIN_V1 — sem este registro, o MaterialShaderCache nao
+        // tinha callback para o dominio e caia no cozido. Funcionava, mas so
+        // ate o grafo mudar: no editor a fonte da verdade e o GRAFO, e o cozido
+        // e a foto da ultima compilacao.
+        SceneSerializer::SetPostProcessMaterialRecompileCallback(
+            [](const std::string& assetUUID,
+                std::shared_ptr<Shader>& outShader,
+                std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers) -> bool
+            {
+                const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+                if (!record) return false;
+                return MaterialCompiler::CompilePostProcessFromFile(
+                    record->FilePath, outShader, outSamplers);
+            });
+
         m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         EditorIconLibrary::Get().Load("resources");
 
@@ -981,6 +1164,109 @@ namespace axe
             {
                 m_EditorUI->m_ScriptGraphWindow.HandleAssetRenamed(oldPath, newPath, newName);
             });
+
+        // ── BATCH_SHADING_MODEL_V1 ───────────────────────────────────────────
+        //
+        // Troca o Shading Model de varios materiais e recompila cada um.
+        // Implementado AQUI porque precisa do MaterialCompiler e do
+        // MaterialShaderCache; o Asset Browser so junta os alvos e confirma.
+        //
+        // ── A ARMADILHA QUE DITOU O DESENHO ──────────────────────────────────
+        //
+        // O caminho obvio seria Deserialize -> mexer no campo -> Serialize.
+        // Isso DESTRUIRIA o layout de todos os grafos: MaterialGraph::Serialize
+        // le as posicoes de `m_NodePositions`, que so e preenchido pelo Draw da
+        // janela do editor; o Deserialize escreve em `m_PendingPositions`. Fora
+        // do editor aberto, `m_NodePositions` esta VAZIO — e todo node voltaria
+        // para (0,0), em silencio, em cada material tocado.
+        //
+        // Entao a edicao e feita NO JSON, num campo so. O resto do arquivo
+        // atravessa intacto, byte por byte. O MaterialGraph so e construido
+        // depois, em memoria, para COMPILAR — e ali posicao nao importa.
+        m_EditorUI->GetAssetBrowser()->SetBatchShadingModelCallback(
+            [](const std::vector<std::string>& uuids, int shadingModel) -> int
+            {
+                int changed = 0;
+
+                for (const auto& uuid : uuids)
+                {
+                    const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
+                    if (!record) continue;
+
+                    auto graphPath = record->FilePath;
+                    graphPath.replace_extension(".axegraph");
+                    if (!std::filesystem::exists(graphPath)) continue;
+
+                    try
+                    {
+                        nlohmann::json j;
+                        {
+                            std::ifstream in(graphPath);
+                            if (!in.is_open()) continue;
+                            j = nlohmann::json::parse(in);
+                        }
+
+                        // Shading Model so existe no dominio Surface. Um
+                        // material de Particle ou Post Process com o campo
+                        // gravado nao quebraria nada — mas contaria como
+                        // "alterado" e mentiria no resultado.
+                        const int domain = j.value("domain", 0);
+                        if (domain != (int)MaterialDomain::Surface) continue;
+
+                        if (j.value("shading_model", 0) == shadingModel) continue;
+
+                        j["shading_model"] = shadingModel;
+
+                        // Toon precisa das bandas. Se o material nunca foi Toon,
+                        // o campo nao existe — e o default do grafo (3) so
+                        // valeria ao reabrir no editor, nao nesta compilacao.
+                        if (shadingModel == (int)MaterialShadingModel::Toon
+                            && !j.contains("toon_steps"))
+                            j["toon_steps"] = 3;
+
+                        {
+                            std::ofstream out(graphPath);
+                            if (!out.is_open()) continue;
+                            out << j.dump(4);
+                        }
+
+                        // Recompila e recozinha. Sem isto o `.axegraph` estaria
+                        // certo e a CENA continuaria com o shader antigo ate
+                        // alguem abrir cada material e clicar Compile — que e
+                        // exatamente o trabalho que esta acao existe para evitar.
+                        MaterialGraph graph;
+                        graph.Deserialize(j);
+
+                        auto result = MaterialCompiler::Compile(&graph);
+                        if (result.Success)
+                            MaterialCompiler::BakeToDisk(result, record->FilePath,
+                                MaterialCompiler::ComputeBakedEmissive(&graph));
+
+                        MaterialShaderCache::Invalidate(uuid);
+                        ++changed;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        AXE_EDITOR_WARN("Shading Model em lote: '{}' falhou: {}",
+                            record->Name, e.what());
+                    }
+                }
+
+                if (changed > 0)
+                {
+                    // O material aberto no Material Editor ficou velho em
+                    // disco. Sem isto, salvar por la depois regravaria o
+                    // shading model ANTIGO por cima do que o lote acabou de
+                    // aplicar.
+                    MaterialEditorWindow::MarkNeedsReload();
+
+                    AXE_EDITOR_INFO("BATCH_SHADING_MODEL_V1: {} material(is) atualizado(s).",
+                        changed);
+                }
+
+                return changed;
+            });
+
 
         m_EditorUI->GetAssetBrowser()->SetScriptOpenCallback([this](const std::string& uuid)
             {
@@ -1094,19 +1380,27 @@ namespace axe
                 // e so por esse caminho, o que tornava o bug confuso.
                 SceneSerializer::Deserialize(
                     ProjectManager::Get().GetStartScenePath().string(), *m_Scene, &m_Environment);
+                RestoreEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
 
                 m_CurrentScenePath = ProjectManager::Get().GetStartScenePath().string();
             }
             else
             {
                 std::string defaultScene = "resources/default_scene/main.axescene";
+                // EDITOR_CAM_PERSIST_V1 — as chaves entraram junto: este `if`
+                // nao tinha nenhuma, entao a segunda linha caia FORA dele e
+                // quebrava o `else` logo abaixo.
                 if (std::filesystem::exists(defaultScene))
+                {
                     SceneSerializer::Deserialize(defaultScene, *m_Scene, &m_Environment);
+                    RestoreEditorCamera(m_ViewportRenderer.get());
+                }
                 else
                 {
                     m_Scene->CreateLight("Directional Light");
-                    auto ppEntity = m_Scene->CreateEntity("Post Process Volume");
-                    m_Scene->GetRegistry().emplace<PostProcessComponent>(ppEntity);
+                    // PPVOLUME_ONE_PATH_V1 — era so o PostProcessComponent
+                    // aqui, enquanto o menu da Hierarchy criava mais tres.
+                    m_Scene->CreatePostProcessVolume();
                     m_Scene->CreateEntity("Enviroment");
                 }
                 EnsureEnvironmentComponent();
@@ -1490,8 +1784,13 @@ namespace axe
         // clicar num controle tambem trocaria a entidade selecionada — e o
         // personagem sairia da selecao no instante em que o animador tentasse
         // pegar um controle DELE.
+        // VIEW_GIZMO_V1 — o gizmo de navegacao entra na MESMA guarda do
+        // ImGuizmo e das formas do rig, e pelo mesmo motivo: sem ela, clicar
+        // num eixo do gizmo tambem trocaria a selecao para o objeto que
+        // estiver atras dele.
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt &&
-            !ImGuizmo::IsOver() && !m_ViewportRenderer->OverlayConsumedClick())
+            !ImGuizmo::IsOver() && !ui::ViewGizmoCapturesMouse() &&
+            !m_ViewportRenderer->OverlayConsumedClick())
         {
             ImVec2 boundsMin = { viewport->GetBoundsMin().x, viewport->GetBoundsMin().y };
             ImVec2 mousePos = ImGui::GetMousePos();
@@ -1513,6 +1812,17 @@ namespace axe
                         m_Context.ClearSelection();
                 }
             }
+        }
+
+        // FRAME_SELECTED_V1 — F enquadra a selecao.
+        //
+        // Antes do return do Alt de proposito: F e navegacao SEM Alt, e ficaria
+        // inalcancavel se viesse depois. E o WantTextInput impede que digitar
+        // "f" num campo de nome jogue a camera para o outro lado da cena.
+        if (!io.WantTextInput && !io.KeyCtrl && !io.KeyAlt &&
+            ImGui::IsKeyPressed(ImGuiKey_F, false))
+        {
+            FrameSelectedEntity();
         }
 
         const bool alt = io.KeyAlt;
@@ -1712,6 +2022,7 @@ namespace axe
         if (!ProjectManager::Get().HasProject()) return;
 
         auto scenePath = ProjectManager::Get().GetCurrent().AssetsPath / "Scenes" / "main.axescene";
+        CaptureEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
         SceneSerializer::Serialize(*m_Scene, scenePath, &m_Environment);
 
         auto& project = ProjectManager::Get().GetCurrent();
@@ -1741,6 +2052,7 @@ namespace axe
         m_ViewportRenderer->SetScene(m_Scene.get());
         m_ViewportRenderer->SetSelectedEntity(&m_Context.SelectedEntity);
         SceneSerializer::Deserialize(scenePath, *m_Scene, &m_Environment);
+        RestoreEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
     }
 
     // ─────────────────────────────────────────────────────────────────────────

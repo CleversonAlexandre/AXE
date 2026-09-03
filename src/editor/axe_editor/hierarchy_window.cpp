@@ -258,6 +258,12 @@ namespace axe
             if (ImGui::MenuItem("Luz Direcional"))
                 CreateLight();
 
+            // SKY_LIGHT_V1 — logo abaixo da Luz Direcional de proposito: sao
+            // as duas metades da iluminacao de exterior, e ver as duas juntas
+            // no menu e o que ensina que sao coisas separadas.
+            if (ImGui::MenuItem("Sky Light"))
+                CreateSkyLight();
+
             if (ImGui::MenuItem("Point Light"))
                 CreatePointLight();
 
@@ -435,6 +441,15 @@ namespace axe
         RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Luz Direcional");
     }
 
+    // SKY_LIGHT_V1 — chama o caminho unico do Scene, igual ao CreateLight.
+    void HierarchyWindow::CreateSkyLight()
+    {
+        auto* scene = m_Context->ActiveScene;
+        auto  entity = scene->CreateSkyLight();
+        m_Context->Select(entity);
+        RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Sky Light");
+    }
+
     void HierarchyWindow::CreatePointLight()
     {
         auto* scene = m_Context->ActiveScene;
@@ -566,21 +581,11 @@ namespace axe
         // DESATIVADOS (checkbox "Ativo") pra criação de um post process
         // global não escurecer nada por acidente; ative o que for usar.
         // A ESCALA do Transform é a caixa compartilhada dos volumes.
+        // PPVOLUME_ONE_PATH_V1 — a criacao inteira mora no Scene agora, para
+        // que este menu e o bootstrap do EditorLayer nao possam divergir de
+        // novo. Ver a nota em scene.hpp.
         auto* scene = m_Context->ActiveScene;
-        auto  entity = scene->CreateEntity("Post Process Volume");
-        auto& registry = scene->GetRegistry();
-
-        registry.emplace<PostProcessComponent>(entity);
-
-        auto& iv = registry.emplace<InteriorVolumeComponent>(entity);
-        iv.Data.Enabled = false;
-        auto& pv = registry.emplace<ProbeVolumeComponent>(entity);
-        pv.Settings.Enabled = false;
-        auto& rp = registry.emplace<ReflectionProbeComponent>(entity);
-        rp.Settings.Enabled = false;
-
-        if (auto* tc = registry.try_get<TransformComponent>(entity))
-            tc->Data.Scale = { 10.0f, 4.0f, 10.0f };
+        auto  entity = scene->CreatePostProcessVolume();
 
         m_Context->Select(entity);
         RegisterCreateUndo(m_History, m_Context, scene, entity, "Criar Post Process Volume");

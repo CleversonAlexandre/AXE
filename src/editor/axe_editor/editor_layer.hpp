@@ -66,9 +66,13 @@ namespace axe
         void OnAttach() override;
         void OnDetach() override;
         void OnUpdate(float deltaTime) override;
+
+        // FRAME_SELECTED_V1 — enquadra a camera do viewport na entidade
+        // selecionada (tecla F, como na Unreal e no Blender).
+        void FrameSelectedEntity();
         void OnRender() override;
         void OnEvent(Event& e) override;
-        
+
 
     private:
         // ── Estados do editor ──────────────────────────────────────────────────
@@ -171,8 +175,8 @@ namespace axe
         void EnterEdit();
         void InstantiateScriptAsset(const std::filesystem::path& scriptPath,
             const std::string& assetUUID);
-      
-        
+
+
 
 
     };

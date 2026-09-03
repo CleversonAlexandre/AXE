@@ -184,66 +184,53 @@ namespace axe
 				if (m_Environment)
 				{
 					m_Environment->SkyboxRotation = ec.SkyboxRotation;
-					if (!ec.HDRIPath.empty() && ec.HDRIPath != m_Environment->SkyboxPath)
+
+					// SKY_OFF_V1 — soltar o cubemap faz HasSkybox() virar
+					// false, e com isso o HDRI some do desenho E da
+					// iluminacao. SkyboxPath e limpo junto para o religar
+					// disparar o LoadHDRI de novo.
+					if (!ec.UseHDRI)
+					{
+						m_Environment->Skybox.reset();
+						m_Environment->SkyboxPath.clear();
+					}
+					else if (!ec.HDRIPath.empty() && ec.HDRIPath != m_Environment->SkyboxPath)
 						m_Environment->LoadHDRI(ec.HDRIPath);
 				}
 				break;
 			}
 
-			// ── Céu Procedural + Time of Day — lê do Directional Light ────────
-			// O sol É a luz direcional, então faz sentido controlar aqui.
+			// ── SKY_OWNS_SKY_V1 — céu e ciclo dia/noite ──────────────────────
+			//
+			// Antes este bloco tinha ~50 linhas copiadas quase idênticas aqui e
+			// no world_renderer, e liam a configuração do céu de DENTRO da luz
+			// direcional. Agora a regra vive uma vez só em
+			// SceneRenderer::ApplySkyFrame, e o dono do céu é o Sky Light.
+			//
+			// Os dois ponteiros podem ser nulos e isso é normal: sem Sky Light
+			// o céu procedural fica desligado; sem Luz Direcional o céu fica
+			// SEM SOL — noite — em vez de cair no HDRI sem ninguém pedir.
+			SkyLight* skyData = nullptr;
+			for (auto se : registry.view<SkyLightComponent>())
+			{
+				auto& sc = registry.get<SkyLightComponent>(se);
+				if (sc.Data) { skyData = sc.Data.get(); break; }
+			}
+
+			DirectionalLight* sunData = nullptr;
 			for (auto le : registry.view<LightComponent>())
 			{
 				auto& lc = registry.get<LightComponent>(le);
-				if (!lc.Data) continue;
-				auto& dl = *lc.Data;
-
-				if (!dl.ProceduralSky)
-				{
-					if (m_SceneRenderer)
-						m_SceneRenderer->SetProceduralSky(false, { 0,1,0 },
-							2.5f, 0.5f, 0.02f, { 1,1,1 }, { 0.01f,0.01f,0.03f });
-					break;
-				}
-
-				// Calcula direção do sol (a partir do Time of Day ou da direção manual)
-				glm::vec3 sunDir = glm::normalize(-dl.Direction);
-
-				if (dl.TimeOfDayEnabled)
-				{
-					float dt = timeSeconds - m_LastTimeSeconds;
-					if (dt < 0.0f || dt > 0.5f) dt = 0.016f;
-
-					dl.Hour = std::fmod(dl.Hour + dt * (dl.DaySpeed / 3600.0f), 24.0f);
-
-					// Ângulo horário: 0 ao meio-dia (12h), π/2 ao pôr do sol (18h)
-					float hourAngle = (dl.Hour - 12.0f) * (3.14159f / 12.0f);
-					float latRad = dl.SunLatitude * (3.14159f / 180.0f);
-					float elevation = std::asin(std::cos(latRad) * std::cos(hourAngle));
-					float azimuth = std::atan2(std::sin(hourAngle),
-						std::cos(hourAngle) * std::sin(latRad));
-
-					sunDir = glm::normalize(glm::vec3(
-						std::cos(elevation) * std::sin(azimuth),
-						std::sin(elevation),
-						std::cos(elevation) * std::cos(azimuth)));
-
-					// Atualiza direção, cor e intensidade da luz pelo ciclo solar
-					dl.Direction = -sunDir;
-					float elev = std::max(0.0f, sunDir.y);
-					float sunsetF = smoothstep(0.0f, 0.3f, elev);
-					dl.Color = glm::mix(
-						glm::vec3(1.0f, 0.42f, 0.08f),
-						glm::vec3(1.0f, 0.93f, 0.88f), sunsetF);
-					dl.Intensity = elev * 8.0f;
-				}
-
-				if (m_SceneRenderer)
-					m_SceneRenderer->SetProceduralSky(true, sunDir,
-						dl.Turbidity, dl.CloudCoverage, dl.CloudSpeed,
-						dl.CloudColor, dl.NightColor);
-				break;
+				if (lc.Data) { sunData = lc.Data.get(); break; }
 			}
+
+			// SKY_DEADLOCK_FIX_V1 — configura o skybox que ESTE renderer
+			// possui, sem depender do SceneRenderer ja ter recebido o
+			// ponteiro (que so acontece mais abaixo, e sob um teste que
+			// depende justamente do estado escrito aqui).
+			SceneRenderer::ApplySkyFrame(m_SkyboxRenderer, skyData, sunData,
+				timeSeconds - m_LastTimeSeconds);
+
 			m_LastTimeSeconds = timeSeconds;
 		}
 
@@ -298,9 +285,17 @@ namespace axe
 			if (m_SceneRenderer && m_Environment)
 				m_SceneRenderer->SetEnvironment(m_Environment);
 
-			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox())
+			// SKYGATE_FIX_V1 — HasSkybox() testa SO o cubemap HDRI de arquivo.
+			// Cena que usa apenas o ceu PROCEDURAL caia no else e recebia
+			// SetSkyboxRenderer(nullptr, ...): nenhum ceu desenhado, fundo
+			// preto. O ceu procedural nao mora no SceneEnvironment (ele e
+			// estado do SkyboxRenderer), entao quem sabe se ele esta ligado e
+			// o proprio renderer — por isso o IsProceduralSky() aqui.
+			if (m_SceneRenderer && m_Environment &&
+				(m_Environment->HasSkybox() || m_SkyboxRenderer.IsProceduralSky()))
 			{
-				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
+				if (m_Environment->HasSkybox())
+					m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
 				// Mesmo tratamento do caminho do Editor: remove a translação
 				// da view (o céu fica "infinitamente distante", não anda
 				// junto com a câmera) e aplica a rotação configurada do
@@ -368,9 +363,12 @@ namespace axe
 			}
 
 			// Skybox
-			if (m_SceneRenderer && m_Environment && m_Environment->HasSkybox() && m_Camera)
+			// SKYGATE_FIX_V1 — ver o comentario no caminho do Play, acima.
+			if (m_SceneRenderer && m_Environment && m_Camera &&
+				(m_Environment->HasSkybox() || m_SkyboxRenderer.IsProceduralSky()))
 			{
-				m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
+				if (m_Environment->HasSkybox())
+					m_SkyboxRenderer.SetCubemap(m_Environment->Skybox);
 				m_SceneRenderer->SetSkyboxRenderer(
 					&m_SkyboxRenderer,
 					m_Environment->GetSkyboxView(m_Camera->GetViewMatrix()),
@@ -489,6 +487,11 @@ namespace axe
 		// 5. Post process
 		framebuffer.Bind();
 		RenderCommand::SetViewport(0, 0, width, height);
+
+		// POSTPROCESS_GBUFFER_V1 / _SKY_V1 — entrega ao passe, ANTES do Execute,
+		// o G-Buffer (normal, posicao, shading model) e os dados de camera e
+		// sol. Sem isto o material de efeito so enxerga a cor.
+		if (m_SceneRenderer) m_SceneRenderer->PublishSceneBuffersTo(*m_PostProcess);
 
 		m_PostProcess->Execute(finalColorID, m_PostProcessSettings);
 

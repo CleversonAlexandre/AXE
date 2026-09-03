@@ -46,6 +46,24 @@ namespace axe
         void SetScriptOpenCallback(ScriptOpenCallback cb) { m_OnOpenScript = cb; }
         void SetMaterialDropCallback(MaterialDropCallback cb) { m_MaterialDropCallback = cb; }
         void SetAssetRenamedCallback(AssetRenamedCallback cb) { m_AssetRenamedCallback = cb; }
+
+        // ── BATCH_SHADING_MODEL_V1 ───────────────────────────────────────────
+        //
+        // Troca o Shading Model de VARIOS materiais de uma vez, recompilando e
+        // recozinhando cada um. Devolve quantos mudaram de fato.
+        //
+        // CALLBACK, e nao chamada direta: o trabalho precisa do MaterialCompiler
+        // e do MaterialShaderCache, e o Asset Browser e painel de UI — ele lista
+        // e seleciona arquivos, nao compila shader. Mesmo desenho de
+        // SetAssetOpenCallback e dos outros acima; quem liga os dois e o
+        // EditorLayer.
+        using BatchShadingModelCallback =
+            std::function<int(const std::vector<std::string>& materialUUIDs,
+                int shadingModel)>;
+        void SetBatchShadingModelCallback(BatchShadingModelCallback cb)
+        {
+            m_BatchShadingModelCallback = cb;
+        }
         void SetThumbnailRenderer(MaterialThumbnailRenderer* r) { m_ThumbnailRenderer = r; }
         void SetMeshThumbnailRenderer(MeshThumbnailRenderer* r) { m_MeshThumbnails = r; }
 
@@ -140,6 +158,7 @@ namespace axe
         ScriptOpenCallback  m_OnOpenScript;
         MaterialDropCallback m_MaterialDropCallback;
         AssetRenamedCallback m_AssetRenamedCallback;
+        BatchShadingModelCallback m_BatchShadingModelCallback;   // BATCH_SHADING_MODEL_V1
 
         std::string m_SelectedFolder = "";   // path completo da pasta selecionada
         float       m_IconSize = 64.0f;
@@ -221,6 +240,25 @@ namespace axe
         std::string m_DeleteConfirmUUID = "";
         std::string m_DeleteConfirmFolder = "";
         std::string m_DeleteConfirmFolderDiskPath = "";
+
+        // ── BATCH_SHADING_MODEL_V1 — confirmacao antes de recompilar ─────────
+        //
+        // Modal, e nao aplicacao direta do menu, porque a acao RECOMPILA cada
+        // material — dezenas de compilacoes de GLSL numa tacada. E lenta o
+        // bastante para travar a janela por um instante, e destrutiva o
+        // bastante (regrava o .axegraph e o .axeshader) para merecer um passo
+        // a mais. Mesmo fluxo do Relocate Assets logo abaixo.
+        std::vector<std::string> m_PendingShadingUUIDs;
+        int  m_PendingShadingModel = 0;
+        bool m_ShadingConfirmOpen = false;
+        int  m_ShadingResultCount = -1;   // -1 = sem resultado a mostrar
+
+        // Coleta os materiais alvo: a selecao (multipla, se houver) ou a
+        // subarvore de uma pasta.
+        std::vector<std::string> CollectMaterialsInSelection() const;
+        std::vector<std::string> CollectMaterialsInFolder(const std::string& folderPath) const;
+        void DrawShadingModelMenu(const std::vector<std::string>& targets);
+        void DrawShadingModelModals();
 
         // Relocate Assets — fluxo de confirmação/resultado
         bool                     m_RelocateConfirmOpen = false;

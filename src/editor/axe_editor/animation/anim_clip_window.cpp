@@ -14,6 +14,7 @@
 //    runtime (proxima etapa) varre "cruzou o intervalo [prev, agora]?" e isso
 //    so e barato com a lista ordenada.
 
+#include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
 #include "anim_clip_window.hpp"
 
 #include "axe/scene/components.hpp"
@@ -958,6 +959,15 @@ namespace axe
 
 			if (tid) ImGui::Image(tid, pavail, ImVec2(0, 1), ImVec2(1, 0));
 			else     ImGui::Dummy(pavail);
+
+			// VIEW_GIZMO_V1 — mesmo widget do viewport. Os cantos vem do
+			// GetItemRect logo apos a Image: e o retangulo REAL dela, e nao o
+			// da janela, que difere quando ha barra de ferramentas ou aba.
+			// showTools=false: preview e pequeno, e os botoes de dolly/pan
+			// comeriam area util — o arrasto e o clique nos eixos bastam.
+			if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+				ui::DrawViewGizmo(*m_PreviewRenderer->m_Camera,
+					ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false);
 		}
 		else
 		{

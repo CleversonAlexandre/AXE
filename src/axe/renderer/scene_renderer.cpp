@@ -152,6 +152,23 @@ namespace axe
             if (m_SkyboxRenderer) m_SkyboxRenderer->Tick(dt);
         }
 
+        // ── SKY_IBL_V1 — o ceu procedural vira luz de ambiente ───────────────
+        //
+        // AQUI, e nao mais para baixo, por uma razao dura: a captura troca o
+        // framebuffer e o viewport (renderiza 6 faces num FBO proprio). Rodar
+        // isso depois de qualquer bind do frame deixaria o resto do frame
+        // desenhando no alvo errado — e a mesma razao pela qual o LoadHDRI ja
+        // e chamado antes de tudo, la no ViewportRenderer.
+        //
+        // Nao custa por frame: o UpdateSkyIBL so trabalha quando o sol, ou um
+        // parametro do ceu, mudou o bastante. Ver SkyboxRenderer::
+        // SkyIBLNeedsRebake.
+        if (m_SkyboxRenderer && m_Environment)
+        {
+            m_SkyboxRenderer->UpdateSkyIBL();
+            m_Environment->SkyIBL = m_SkyboxRenderer->GetSkyIBL();
+        }
+
         RenderShadowPass(queue, cameraPosition, view, projection);
 
         if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
@@ -267,6 +284,33 @@ namespace axe
         const glm::vec3& cameraPosition,
         uint32_t width, uint32_t height)
     {
+        // ── POSTPROCESS_SKY_V1 — o que o efeito de tela pode saber do frame ──
+        //
+        // Capturado AQUI porque este e o unico ponto onde view, projection,
+        // posicao da camera e luz direcional estao juntas. A inversa da
+        // view-projection e o que permite a um material de post process
+        // converter pixel em RAIO DO MUNDO — sem isso nao ha como estilizar o
+        // ceu no grafo, so tratar a tela como imagem 2D.
+        {
+            m_PostProcessCamera.InvViewProjection = glm::inverse(projection * view);
+            m_PostProcessCamera.CameraPosition = cameraPosition;
+
+            // Time::Elapsed e a fonte de tempo UNICA da engine (ver
+            // core/time.hpp). Usar outro relogio aqui faria um efeito de tela
+            // animado e uma particula animada correrem em tempos diferentes.
+            m_PostProcessCamera.TimeSeconds = Time::Elapsed();
+
+            if (queue.Light)
+            {
+                // Direcao apontando PARA onde a luz vai (mesma convencao do
+                // u_LightDirection do lighting pass), para nao haver dois
+                // sentidos de "direcao do sol" na engine.
+                m_PostProcessCamera.SunDirection = glm::normalize(queue.Light->Direction);
+                m_PostProcessCamera.SunColor = queue.Light->Color;
+                m_PostProcessCamera.SunIntensity = queue.Light->Intensity;
+            }
+        }
+
         // --- Probe bake on demand ---
         // Pedido enfileirado pelo SceneCollector (botão "Bake" ou load de
         // cena). Executa AQUI porque o SceneRenderer é quem tem o contexto
@@ -427,6 +471,16 @@ namespace axe
         glm::mat4 lsm = m_ShadowPass ? m_ShadowPass->GetLightSpaceMatrix() : glm::mat4(1.0f);
         const CascadedShadowPass* csm = (m_UseCSM && m_CSMPass && m_CSMPass->IsInitialized())
             ? m_CSMPass.get() : nullptr;
+
+        // SKY_LIGHT_V1 — por setter, nao por parametro do Execute (que ja tem
+        // 14 e e chamado de mais de um lugar). Enviado TODO frame porque o
+        // usuario pode ligar/desligar o Sky Light no Inspector a qualquer hora.
+        if (queue.Sky) m_LightingPass->SetSkyLight(*queue.Sky, true);
+        else           m_LightingPass->SetSkyLight(SkyLight{}, false);
+
+        // CONTACT_SHADOW_V1 — a projecao deste frame, para o raio em espaco
+        // de tela saber onde cada passo cai.
+        m_LightingPass->SetProjection(projection);
 
         m_LightingPass->Execute(m_GBuffer, ssaoID, shadowID, lsm, csm,
             view, cameraPosition, queue.Light, m_Environment, lightsSel,
@@ -656,13 +710,50 @@ namespace axe
         m_ShadowPass->End();
     }
 
+    // SKY_CUBE_FIX_V1 — a UNICA lista de "entidade que nao e geometria".
+    //
+    // Sao componentes cuja entidade existe para configurar o mundo, nao para
+    // aparecer nele: luz, sky light, volumes. Sem esta funcao a lista vivia
+    // duplicada no RenderEntity e no GeometryPassEntity, e bastava esquecer
+    // de um lado para o objeto virar um cubo solido no meio da cena.
+    static bool IsNonVisualEntity(entt::registry& registry, entt::entity entity)
+    {
+        return registry.any_of<
+            LightComponent,
+            SkyLightComponent,      // <- faltava, e era a causa do cubo
+            PostProcessComponent,
+            InteriorVolumeComponent,
+            ProbeVolumeComponent>(entity);
+    }
+
     void SceneRenderer::RenderEntity(const Scene& scene, entt::entity entity,
         const glm::mat4& parentTransform, entt::entity selectedEntity,
         const DirectionalLight* light)
     {
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
         if (!registry.valid(entity)) return;
-        if (registry.any_of<PostProcessComponent, InteriorVolumeComponent, ProbeVolumeComponent, LightComponent>(entity)) return;
+        // ═════════════════════════════════════════════════════════════════
+        //  SKY_CUBE_FIX_V1 — O CUBO MISTERIOSO
+        //
+        //  Logo abaixo, entidade SEM MeshComponent cai no `else` e vira um
+        //  CUBO SOLIDO desenhado no mundo (placeholder para objeto vazio).
+        //  Isto aqui e a lista do que NAO deve receber esse tratamento — e
+        //  ela nao tinha o SkyLightComponent.
+        //
+        //  Resultado: a propria entidade Sky Light era desenhada como um cubo
+        //  opaco no meio da cena. E o "cubo com o ceu" que aparecia ao dar
+        //  zoom out: nao era o skybox (esse tem a translacao removida e nao
+        //  da para sair de dentro dele) — era este placeholder, refletindo o
+        //  ambiente. Com Cor de Nuvem vermelha ele apareceu vermelho, que foi
+        //  a prova.
+        //
+        //  MESMA FAMILIA de bug de outras duas listas que ja morderam nesta
+        //  frente: a do any_of do Inspector e a do AllComponents do
+        //  SceneSnapshot. Lista de tipos escrita a mao, em mais de um lugar,
+        //  que o compilador nao confere. Por isso agora e UMA funcao,
+        //  chamada pelos dois passes.
+        // ═════════════════════════════════════════════════════════════════
+        if (IsNonVisualEntity(registry, entity)) return;
         if (registry.any_of<FolderComponent>(entity))
         {
             auto* rel = registry.try_get<RelationshipComponent>(entity);
@@ -691,7 +782,8 @@ namespace axe
     {
         auto& registry = const_cast<Scene&>(scene).GetRegistry();
         if (!registry.valid(entity)) return;
-        if (registry.any_of<PostProcessComponent, InteriorVolumeComponent, ProbeVolumeComponent, LightComponent, FolderComponent>(entity)) return;
+        // SKY_CUBE_FIX_V1 — mesma lista do RenderEntity, agora numa funcao so.
+        if (IsNonVisualEntity(registry, entity) || registry.any_of<FolderComponent>(entity)) return;
 
         auto* tc = registry.try_get<TransformComponent>(entity);
         auto* mc = registry.try_get<MeshComponent>(entity);

@@ -58,6 +58,22 @@ namespace axe
         MaterialCompiler compiler(graph);
         CompiledMaterial result;
 
+        // ── SHADING_MODEL_V1 — traducao UI -> contrato de runtime ────────────
+        //
+        // O UNICO ponto onde os dois enums se encontram. Se um shading model
+        // novo for implementado, e aqui que ele entra — e o compilador falhando
+        // em traduzir cai em DefaultLit, que e o comportamento seguro (um
+        // placeholder da Unreal escolhido por engano renderiza como PBR normal,
+        // e nao como lixo).
+        const ShadingModelID shadingID =
+            (graph->ShadingModel == MaterialShadingModel::Unlit) ? ShadingModelID::Unlit :
+            (graph->ShadingModel == MaterialShadingModel::Toon) ? ShadingModelID::Toon :
+            ShadingModelID::DefaultLit;
+
+        int toonSteps = graph->ToonSteps;
+        if (toonSteps < 2) toonSteps = 2;
+        if (toonSteps > (int)kToonStepsMax) toonSteps = (int)kToonStepsMax;
+
         // 1. Localiza o Material Output node
         Node* outputNode = nullptr;
         for (auto& node : graph->GetNodes())
@@ -236,6 +252,10 @@ namespace axe
         fs << "\n";
 
         // 5. Função main
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
+        // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
+        // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         fs << "    // Normal da superfície\n";
         fs << "    vec3 N = normalize(v_Normal);\n\n";
@@ -405,8 +425,52 @@ namespace axe
         fs << "        ambient = matBaseColor * u_AmbientStrength * u_LightColor;\n";
         fs << "    }\n\n";
 
-        fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n";
-        fs << "    finalColor = max(finalColor, matBaseColor * 0.02);\n\n";
+        // ── SHADING_MODEL_V1 — o mesmo modelo, no caminho FORWARD ────────────
+        //
+        // Sem isto o preview do Material Editor (que roda forward) continuaria
+        // mostrando PBR enquanto o viewport (deferred) mostra Toon. Um editor
+        // cujo preview nao e o resultado nao serve para escolher aparencia —
+        // que e a unica coisa que se faz num editor de material.
+        //
+        // A diferenca de FORMA entre os dois caminhos e proposital: aqui o
+        // modelo e resolvido em TEMPO DE COMPILACAO (este shader pertence a UM
+        // material, entao so o ramo escolhido e emitido — sem branch em runtime
+        // e sem codigo morto); no deferred e um switch em runtime, porque um
+        // shader so atende todos os materiais da tela.
+        if (shadingID == ShadingModelID::Unlit)
+        {
+            fs << "    // Unlit — nenhuma luz, nenhuma sombra, nenhum ambient.\n";
+            fs << "    vec3 finalColor = matBaseColor + matEmissive;\n\n";
+        }
+        else if (shadingID == ShadingModelID::Toon)
+        {
+            fs << "    // ── Toon ──────────────────────────────────────────\n";
+            fs << "    const float toonSteps = " << toonSteps << ".0;\n";
+            // Difusa em degraus. Sem /PI e sem kD: a celula quer a cor CHAPADA
+            // do albedo em cada banda, e nao a resposta energeticamente
+            // correta — a graca do estilo e justamente a superficie plana.
+            fs << "    float toonBand = floor(clamp(NdotL, 0.0, 1.0) * toonSteps + 0.5) / toonSteps;\n";
+            fs << "    vec3  toonDiffuse = matBaseColor * toonBand * u_LightColor * u_LightIntensity;\n";
+            // Especular de corte duro. O limiar vem do ROUGHNESS: liso = brilho
+            // pequeno e concentrado, aspero = maior e mais espalhado. Reusar um
+            // parametro que o artista ja mexe evita inventar um slider novo
+            // (e evita gastar o unico canal que ainda sobrava no G-Buffer).
+            fs << "    float toonSpecCut = mix(0.995, 0.75, matRoughness);\n";
+            fs << "    float toonSpec = step(toonSpecCut, pow(NdotH, 64.0)) * (1.0 - matRoughness);\n";
+            // O ambient entra CHAPADO, sem quantizar: e ele que da cor a
+            // banda de sombra. Quantizado tambem, a sombra ficaria preta e o
+            // material perderia a leitura de volume por completo.
+            fs << "    vec3 finalColor = ambient + toonDiffuse + vec3(toonSpec) + matEmissive;\n\n";
+        }
+        else
+        {
+            fs << "    vec3 finalColor = ambient + Lo + matEmissive;\n";
+        }
+
+        if (shadingID != ShadingModelID::Unlit)
+            fs << "    finalColor = max(finalColor, matBaseColor * 0.02);\n\n";
+        else
+            fs << "\n";
         //fs << "    finalColor = finalColor / (finalColor + vec3(1.0));\n";
         //fs << "    finalColor = pow(finalColor, vec3(1.0 / 2.2));\n\n";
         if (isMasked)
@@ -426,7 +490,10 @@ namespace axe
         gs << "layout(location = 0) out vec3 g_Position;\n";
         gs << "layout(location = 1) out vec3 g_Normal;\n";
         gs << "layout(location = 2) out vec4 g_Albedo;\n";
-        gs << "layout(location = 3) out vec2 g_PBR;\n";
+        // SHADING_MODEL_V1 — era `out vec2`, e por isso .b/.a chegavam
+        // INDEFINIDOS no attachment RGBA8. Virou vec4 para que o .b (id do
+        // shading model) e o .a (bandas do toon) tenham valor de verdade.
+        gs << "layout(location = 3) out vec4 g_PBR;\n";
         gs << "layout(location = 4) out vec3 g_Emissive;\n\n";
         gs << "in vec3 v_Normal;\n";
         gs << "in vec3 v_FragPos;\n";
@@ -458,6 +525,10 @@ namespace axe
         gs << "float v_Age01 = 0.0;\n";
         gs << "vec4  v_Color  = vec4(1.0);\n\n";
 
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
+        // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
+        // este e o unico ponto do shader gerado onde isso e verdade.
+        gs << compiler.m_CustomFunctions;
         gs << "void main()\n{\n";
         gs << "    vec3 N = normalize(v_Normal);\n\n";
 
@@ -488,7 +559,12 @@ namespace axe
         gs << "    g_Position = v_FragPos;\n";
         gs << "    g_Normal   = N;\n";
         gs << "    g_Albedo   = vec4(matBaseColor, matMetallic);\n";
-        gs << "    g_PBR      = vec2(matRoughness, matAO);\n";
+        // SHADING_MODEL_V1 — .b = id do shading model, .a = bandas do toon.
+        // Os dois codificados como UNORM (valor/255 e valor/16); o lighting
+        // pass decodifica com o mesmo fator. Ver material_cooked.hpp.
+        gs << "    g_PBR      = vec4(matRoughness, matAO, "
+            << (int)shadingID << ".0 / 255.0, "
+            << toonSteps << ".0 / " << (int)kToonStepsMax << ".0);\n";
         gs << "    g_Emissive = matEmissive;\n";
         gs << "}\n";
 
@@ -618,6 +694,10 @@ namespace axe
         for (auto& [samplerName, tex] : samplerTextures)
             fs << "uniform sampler2D " << samplerName << ";\n";
         fs << "\n";
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
+        // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
+        // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         fs << "    // Valores neutros — não há uma superfície real sendo avaliada,\n";
         fs << "    // existem só pra nodes que dependem deles não falharem ao compilar.\n";
@@ -637,6 +717,165 @@ namespace axe
         result.FragmentShader = fs.str();
         result.SamplerTextures = samplerTextures;
         CollectSamplerUUIDs(compiler, graph, samplerTextures, result);   // PKG9
+        result.Success = true;
+        return result;
+    }
+
+    // =========================================================================
+    //  POSTPROCESS_DOMAIN_V1 — dominio Post Process
+    //
+    //  Efeito de tela inteira. O shader roda UMA VEZ POR PIXEL DA TELA, num
+    //  quad que cobre o framebuffer — nao ha malha, nao ha superficie, nao ha
+    //  luz. O grafo resolve o pin EMISSIVE, que aqui significa "a cor final
+    //  deste pixel".
+    //
+    //  ── POR QUE O PIN EMISSIVE, E NAO UM PIN NOVO "SCENE COLOR OUT" ─────────
+    //
+    //  Emissive ja e, nos outros dominios, o pin que quer dizer "cor que sai
+    //  daqui sem passar por iluminacao". E exatamente a semantica de um efeito
+    //  de tela. Light Function e Particle ja usam o mesmo pin pela mesma razao;
+    //  um pin novo so para este dominio faria o Material Output crescer e
+    //  deslocaria os indices que o compilador referencia por posicao.
+    //
+    //  ── O QUE O AUTOR TEM EM MAOS ──────────────────────────────────────────
+    //
+    //  `v_TexCoord` e a UV DA TELA (0..1), porque o quad e a tela — entao o
+    //  node "UV Coordinate", que ja existe, vira coordenada de tela de graca,
+    //  sem node novo. Alem disso: u_SceneColor (a imagem), u_ScreenSize,
+    //  u_Intensity, u_IsHDR e u_Time.
+    //
+    //  Os nodes Scene Color e Scene Depth (ver GenerateNodeCode) leem a imagem.
+    // =========================================================================
+    CompiledMaterial MaterialCompiler::CompilePostProcess(MaterialGraph* graph)
+    {
+        MaterialCompiler compiler(graph);
+        CompiledMaterial result;
+
+        // POSTPROCESS_DOMAIN_V1b — a partir daqui, os nodes de tela podem
+        // emitir u_SceneColor/u_ScreenSize: e ESTE shader que os declara.
+        compiler.m_PostProcessTarget = true;
+
+        Node* outputNode = nullptr;
+        for (auto& node : graph->GetNodes())
+            if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+        if (!outputNode || outputNode->Inputs.size() <= 4)
+        {
+            result.ErrorMessage = "Material Output sem pin Emissive";
+            return result;
+        }
+
+        compiler.VisitPin(&outputNode->Inputs[4]);
+        Pin* emissiveSrc = compiler.GetSourcePin(&outputNode->Inputs[4]);
+
+        // Sem nada ligado no Emissive, o efeito e a IDENTIDADE: devolve a cena
+        // intacta. Nao e detalhe — um material recem-criado neste dominio nao
+        // pode apagar a tela do usuario enquanto ele monta o grafo.
+        std::string emissive = emissiveSrc
+            ? compiler.GetPinVariable(emissiveSrc->ID)
+            : "texture(u_SceneColor, v_TexCoord).rgb";
+
+        if (emissiveSrc && compiler.GetPinType(emissiveSrc->ID) == PinType::Float)
+            emissive = "vec3(" + emissive + ")";
+
+        // Samplers do grafo. Comecam em u_PPTex_0; a unidade 0 do passe e
+        // sempre a cena, e as texturas do material entram a partir da 1 —
+        // ver OpenGLPostProcessPass::DrawUserEffect.
+        std::map<std::string, std::shared_ptr<Texture2D>> samplerTextures;
+        {
+            int slot = 0;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!compiler.m_VisitedNodes.count(node->ID.Get())) continue;
+                if (!node->Value.TextureVal) continue;
+                std::string samplerName = "u_PPTex_" + std::to_string(slot++);
+                compiler.m_NodeSamplers[node->ID.Get()] = samplerName;
+                samplerTextures[samplerName] = node->Value.TextureVal;
+            }
+        }
+
+        // Vertex shader do quad. Mesmo layout do s_QuadVert do
+        // OpenGLPostProcessPass (posicao + uv), porque e o VAO dele que
+        // desenha — se este layout divergir daquele, a imagem sai torta.
+        result.VertexShader = R"(
+        #version 460 core
+        layout(location = 0) in vec2 a_Position;
+        layout(location = 1) in vec2 a_TexCoord;
+        out vec2 v_TexCoord;
+        void main()
+        {
+            v_TexCoord  = a_TexCoord;
+            gl_Position = vec4(a_Position, 0.0, 1.0);
+        }
+    )";
+
+        std::ostringstream fs;
+        fs << "#version 460 core\n";
+        fs << "out vec4 FragColor;\n";
+        fs << "in  vec2 v_TexCoord;\n\n";
+        fs << "uniform sampler2D u_SceneColor;\n";
+
+        // POSTPROCESS_GBUFFER_V1 — o G-Buffer, para o efeito poder ler a
+        // GEOMETRIA e nao so a cor. Declarados SEMPRE, mesmo que o material
+        // nao os use: GLSL descarta uniform nao referenciada, e declarar
+        // condicionalmente faria o numero de unidades de textura variar por
+        // material — que e exatamente o que quebraria o bind de unidade fixa
+        // do OpenGLPostProcessPass::DrawUserEffect.
+        fs << "uniform sampler2D u_ScenePosition;   // xyz = posicao no mundo\n";
+        fs << "uniform sampler2D u_SceneNormal;     // xyz = normal do mundo\n";
+        fs << "uniform sampler2D u_ScenePBR;        // r=rough g=ao b=shadingModel a=toonSteps\n";
+        fs << "uniform int       u_HasSceneBuffers;\n";
+
+        // POSTPROCESS_SKY_V1 — camera e sol. Sao o que falta para o efeito
+        // desenhar o CEU: o ceu nao esta no G-Buffer (e desenhado depois do
+        // lighting pass), entao aqueles pixels nao tem normal nem posicao.
+        // Detecta-los e facil; saber PARA ONDE cada um olha exige a inversa da
+        // view-projection.
+        fs << "uniform mat4      u_InvViewProjection;\n";
+        fs << "uniform vec3      u_SunDirection;   // aponta PARA onde a luz vai\n";
+        fs << "uniform vec3      u_SunColor;\n";
+        fs << "uniform float     u_SunIntensity;\n";
+
+        fs << "uniform vec2      u_ScreenSize;\n";
+        fs << "uniform float     u_Intensity;\n";
+        fs << "uniform int       u_IsHDR;\n";
+        fs << "uniform float     u_Time;\n";
+        fs << "uniform vec3      u_CameraPosition;\n\n";
+        for (auto& kv : samplerTextures)
+            fs << "uniform sampler2D " << kv.first << ";\n";
+        fs << "\n";
+
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom, antes do main().
+        fs << compiler.m_CustomFunctions;
+
+        fs << "void main()\n{\n";
+
+        // Valores neutros para nodes que referenciam varyings de superficie.
+        // v_TexCoord NAO entra aqui: nele mora a UV de tela, que e real.
+        fs << "    vec3 v_FragPos   = vec3(0.0);\n";
+        fs << "    vec3 v_Normal    = vec3(0.0, 1.0, 0.0);\n";
+        fs << "    vec3 N           = v_Normal;\n";
+        fs << "    vec3 v_Tangent   = vec3(1.0, 0.0, 0.0);\n";
+        fs << "    vec3 v_Bitangent = vec3(0.0, 0.0, 1.0);\n";
+        fs << "    float v_Age01    = 0.0;\n";
+        fs << "    vec4  v_Color    = vec4(1.0);\n\n";
+
+        fs << compiler.m_FragmentCode;
+
+        fs << "\n    vec3 sceneColor = texture(u_SceneColor, v_TexCoord).rgb;\n";
+        fs << "    vec3 effectColor = " << emissive << ";\n";
+
+        // u_Intensity misturando com a CENA ORIGINAL, e nao um multiplicador da
+        // saida: e o que faz "50% do efeito" querer dizer meio caminho entre a
+        // imagem e o efeito, em vez de metade do brilho dele.
+        fs << "    vec3 finalColor = mix(sceneColor, effectColor, clamp(u_Intensity, 0.0, 1.0));\n";
+        fs << "    FragColor = vec4(finalColor, 1.0);\n";
+        fs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.SamplerTextures = samplerTextures;
+        CollectSamplerUUIDs(compiler, graph, samplerTextures, result);
         result.Success = true;
         return result;
     }
@@ -708,6 +947,10 @@ namespace axe
         for (auto& [samplerName, tex] : samplerTextures)
             fs << "uniform sampler2D " << samplerName << ";\n";
         fs << "\n";
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
+        // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
+        // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         fs << "    vec3 v_FragPos = vec3(0.0);\n";
         fs << "    vec3 v_Normal = vec3(0.0, 1.0, 0.0);\n";
@@ -813,6 +1056,67 @@ namespace axe
         }
     }
 
+
+    // POSTPROCESS_DOMAIN_V1 — irmao do CompileLightFunctionFromFile, para o
+    // callback que o EditorLayer registra. No editor o grafo e a fonte da
+    // verdade; no jogo, o `.axeshader` cozido.
+    bool MaterialCompiler::CompilePostProcessFromFile(const std::filesystem::path& materialFilePath,
+        std::shared_ptr<Shader>& outShader,
+        std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers)
+    {
+        auto graphPath = materialFilePath;
+        graphPath.replace_extension(".axegraph");
+        if (!std::filesystem::exists(graphPath)) return false;
+
+        std::ifstream file(graphPath);
+        if (!file.is_open()) return false;
+
+        try
+        {
+            nlohmann::json j = nlohmann::json::parse(file);
+            MaterialGraph graph;
+            graph.Deserialize(j);
+
+            // ── A GUARDA QUE FALTAVA ─────────────────────────────────────────
+            //
+            // Sai ANTES de compilar se o material nao for deste dominio. O
+            // AssetPicker do Inspector filtra por TIPO de asset (`.axemat`), e
+            // nao por dominio — entao qualquer material pode ser arrastado para
+            // o slot de efeito.
+            //
+            // Sem esta linha, um material de SUPERFICIE apontado ali seria
+            // compilado como post process e desenhado sobre a tela inteira.
+            // Devolver false deixa a imagem intacta, que e a resposta correta
+            // para "voce escolheu o material errado".
+            if (graph.Domain != MaterialDomain::PostProcess)
+            {
+                AXE_CORE_WARN("CompilePostProcessFromFile: '{}' nao tem Domain = Post Process "
+                    "- efeito ignorado.", materialFilePath.string());
+                return false;
+            }
+
+            auto result = CompilePostProcess(&graph);
+            if (!result.Success)
+            {
+                AXE_CORE_WARN("CompilePostProcessFromFile: {}", result.ErrorMessage);
+                return false;
+            }
+
+            auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+            if (!shader) return false;
+
+            BakeShaderToDisk(result, materialFilePath, CookedMaterialDomain::PostProcess);
+
+            outShader = shader;
+            outSamplers = result.SamplerTextures;
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            AXE_CORE_ERROR("CompilePostProcessFromFile: erro ao compilar: {}", e.what());
+            return false;
+        }
+    }
 
     // =========================================================================
     // CompileParticleFunction — domínio "Particle"
@@ -979,6 +1283,10 @@ void main()
         fs << "layout(location = 0) out vec4 FragColor;\n\n";
         for (auto& [name, tex] : samplerTextures)
             fs << "uniform sampler2D " << name << ";\n";
+        // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
+        // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
+        // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << compiler.m_CustomFunctions;
         fs << "\nvoid main()\n{\n";
         fs << "    vec3 v_FragPos    = vec3(0.0);\n";
         fs << "    vec3 v_Normal     = vec3(0.0, 0.0, 1.0);\n";
@@ -1206,6 +1514,372 @@ void main()
                 code << "\n    " << var << ".rgb = pow(max(" << var
                     << ".rgb, vec3(0.0)), vec3(2.2));";
             }
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_DOMAIN_V1 — Screen UV
+        //
+        // Devolve a UV de tela (que num quad fullscreen E o v_TexCoord) e o
+        // tamanho de UM PIXEL em UV. O segundo e o que torna possivel escrever
+        // qualquer efeito que precise do vizinho — blur, sharpen, outline,
+        // scanline — sem o autor ter que saber a resolucao.
+        //
+        // Fora do dominio Post Process, u_ScreenSize nao existe; por isso o
+        // fallback constante em vez de referenciar a uniform.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Screen UV")
+        {
+            std::string uvVar = MakeVar("suv");
+            std::string pxVar = MakeVar("spx");
+
+            RegisterPin(node->Outputs[0].ID, uvVar, PinType::Vec2);
+            RegisterPin(node->Outputs[1].ID, pxVar, PinType::Vec2);
+
+            code << "vec2 " << uvVar << " = v_TexCoord;";
+            code << "\n    vec2 " << pxVar << " = "
+                << (m_PostProcessTarget ? "1.0 / max(u_ScreenSize, vec2(1.0))" : "vec2(0.0)") << ";";
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_SKY_V1 — Scene Is Background
+        //
+        // 1.0 onde NAO ha geometria (ceu, ou o vazio da cena), 0.0 onde ha.
+        //
+        // Da para chegar nisso a mao pelo comprimento do Scene Normal — mas
+        // "o normal tem comprimento zero" e conhecimento de dentro do
+        // G-Buffer, e o autor de um material nao deveria precisar saber que o
+        // fundo e representado assim. Um node explicito e a diferenca entre a
+        // capacidade existir e ela ser descoberta.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Scene Is Background")
+        {
+            std::string var = MakeVar("sbg");
+
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+
+            if (m_PostProcessTarget)
+                code << "float " << var << " = step(length(texture(u_SceneNormal, "
+                << uv << ").rgb), 0.1);";
+            else
+                code << "float " << var << " = 0.0;  // so existe em Post Process";
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_SKY_V1 — Screen Ray Direction
+        //
+        // Para onde ESTE pixel esta olhando, em direcao de mundo normalizada.
+        //
+        // E o que torna o ceu autoravel no grafo. Com o raio em maos, `.y` e a
+        // elevacao (gradiente horizonte-zenite, banda por altura), o produto
+        // escalar com u_SunDirection e o brilho em torno do sol, e `.xz` da a
+        // coordenada para nuvens procedurais.
+        //
+        // Reconstruido do UV pela inversa da view-projection: leva o pixel ao
+        // plano FAR em espaco de recorte e o traz de volta ao mundo. A divisao
+        // por w e obrigatoria — sem ela a direcao fica errada fora do centro
+        // da tela, que e justamente onde o ceu ocupa mais espaco.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Screen Ray Direction")
+        {
+            std::string var = MakeVar("sray");
+
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+
+            if (m_PostProcessTarget)
+            {
+                std::string tmp = MakeVar("sray_h");
+                code << "vec4 " << tmp << " = u_InvViewProjection * vec4("
+                    << uv << " * 2.0 - 1.0, 1.0, 1.0);";
+                code << "\n    vec3 " << var << " = normalize("
+                    << tmp << ".xyz / " << tmp << ".w - u_CameraPosition);";
+            }
+            else
+            {
+                code << "vec3 " << var << " = vec3(0.0, 1.0, 0.0);  // so existe em Post Process";
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_SKY_V1 — Sun
+        //
+        // A luz direcional da cena.
+        //
+        // "Direction" aponta PARA ONDE A LUZ VAI — a mesma convencao do
+        // u_LightDirection do lighting pass, para nao existirem dois sentidos
+        // de "direcao do sol" na engine.
+        //
+        // "To Sun" e o mesmo vetor NEGADO, e existe como saida propria porque
+        // errar esse sinal e o engano mais comum de quem escreve ceu: o brilho
+        // em volta do sol vira um brilho no lado oposto, e o bug parece de
+        // matematica quando e so de convencao.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Sun")
+        {
+            std::string dirVar = MakeVar("sundir");
+            std::string toVar = MakeVar("tosun");
+            std::string colVar = MakeVar("suncol");
+
+            RegisterPin(node->Outputs[0].ID, dirVar, PinType::Vec3);
+            RegisterPin(node->Outputs[1].ID, toVar, PinType::Vec3);
+            RegisterPin(node->Outputs[2].ID, colVar, PinType::Vec3);
+            // A intensidade tambem vira VARIAVEL, e nao a uniform direto: fora
+            // do dominio Post Process a u_SunIntensity nao e declarada, e um
+            // grafo que usasse esta saida num material de superficie quebraria
+            // a compilacao com "undeclared identifier" — exatamente o bug do
+            // u_SceneColor de duas rodadas atras.
+            std::string intVar = MakeVar("sunint");
+            RegisterPin(node->Outputs[3].ID, intVar, PinType::Float);
+
+            if (m_PostProcessTarget)
+            {
+                code << "vec3 " << dirVar << " = normalize(u_SunDirection);";
+                code << "\n    vec3 " << toVar << " = -" << dirVar << ";";
+                code << "\n    vec3 " << colVar << " = u_SunColor;";
+                code << "\n    float " << intVar << " = u_SunIntensity;";
+            }
+            else
+            {
+                code << "vec3 " << dirVar << " = vec3(0.0, -1.0, 0.0);";
+                code << "\n    vec3 " << toVar << " = vec3(0.0, 1.0, 0.0);";
+                code << "\n    vec3 " << colVar << " = vec3(1.0);";
+                code << "\n    float " << intVar << " = 1.0;";
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_GBUFFER_V1 — Scene Depth
+        //
+        // Distancia LINEAR da camera ate a superficie, em unidades de mundo.
+        //
+        // Nao e o depth buffer cru, de proposito. O valor do depth buffer e
+        // nao-linear e so significa alguma coisa junto com o near/far da
+        // camera — comparar dois vizinhos ali daria um numero que muda de
+        // sentido conforme a profundidade. Distancia em metros e comparavel,
+        // e e o que uma deteccao de borda ou um fog por distancia querem.
+        //
+        // Sai do attachment de POSICAO, que ja existe no G-Buffer: nenhuma
+        // uniform de near/far, nenhuma matriz inversa.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Scene Depth")
+        {
+            std::string var = MakeVar("sdepth");
+
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+
+            if (m_PostProcessTarget)
+                code << "float " << var << " = length(texture(u_ScenePosition, "
+                << uv << ").rgb - u_CameraPosition);";
+            else
+                code << "float " << var << " = 0.0;  // Scene Depth so existe em Post Process";
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_GBUFFER_V1 — Scene Normal
+        //
+        // Normal do mundo. Pixel de FUNDO devolve (0,0,0) — comprimento zero,
+        // e nao um vetor valido. Isso e util e proposital: comparar o
+        // comprimento e como um material distingue "nao ha geometria aqui" de
+        // "ha geometria virada para outro lado" — que e a diferenca entre
+        // desenhar a silhueta e desenhar uma quina.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Scene Normal")
+        {
+            std::string var = MakeVar("snormal");
+
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+
+            if (m_PostProcessTarget)
+                code << "vec3 " << var << " = texture(u_SceneNormal, " << uv << ").rgb;";
+            else
+                code << "vec3 " << var << " = vec3(0.0);  // so existe em Post Process";
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_GBUFFER_V1 — Scene Shading Model
+        //
+        // 0 = DefaultLit, 1 = Unlit, 2 = Toon. E o que permite um efeito de
+        // tela cheia agir SO sobre um tipo de material — desenhar contorno
+        // apenas nos personagens toon e deixar o cenario PBR intacto, sem
+        // mascara, sem stencil e sem um segundo passe.
+        //
+        // Decodifica o mesmo canal e com o mesmo fator do lighting pass (ver
+        // ShadingModelID em axe/material/material_cooked.hpp). O +0.5 e o
+        // mesmo de la, e pela mesma razao: sem ele um 2 que voltou como
+        // 1.9999 viraria 1.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Scene Shading Model")
+        {
+            std::string var = MakeVar("sshading");
+
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+
+            if (m_PostProcessTarget)
+                code << "float " << var << " = floor(texture(u_ScenePBR, "
+                << uv << ").b * 255.0 + 0.5);";
+            else
+                code << "float " << var << " = 0.0;  // so existe em Post Process";
+        }
+
+        // -----------------------------------------------------------------
+        // POSTPROCESS_DOMAIN_V1 — Scene Color
+        //
+        // A imagem da cena no pixel dado. UV desconectada = o proprio pixel.
+        //
+        // Fora do dominio Post Process compila para PRETO, e nao some do menu:
+        // um node que desaparece esconde do usuario que ele existe; um node que
+        // compila para um valor definido apenas nao faz nada — e isso da para
+        // ver na tela e entender.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Scene Color")
+        {
+            std::string var = MakeVar("scene");
+            std::string uv = "v_TexCoord";
+            if (!node->Inputs.empty())
+            {
+                Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
+                if (uvSrc)
+                    uv = AdaptToType(GetPinVariable(uvSrc->ID),
+                        GetPinType(uvSrc->ID), PinType::Vec2);
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+
+            // A condicao e a FLAG DO COMPILADOR, nao o dominio do grafo: o
+            // mesmo grafo de post process tambem passa pelo compilador de
+            // Surface (preview e material da cena), e la u_SceneColor nao
+            // existe. Ver a nota em m_PostProcessTarget.
+            if (m_PostProcessTarget)
+                code << "vec3 " << var << " = texture(u_SceneColor, " << uv << ").rgb;";
+            else
+                code << "vec3 " << var << " = vec3(0.0);  // Scene Color so existe em Post Process";
+        }
+
+        // -----------------------------------------------------------------
+        // CUSTOM_NODE_V1 — Custom (GLSL escrito a mao)
+        //
+        // Gera DUAS coisas: uma funcao, que vai para m_CustomFunctions e sera
+        // inserida antes do main(), e a chamada dela, que e a linha deste node
+        // no corpo do shader.
+        //
+        // O nome da funcao leva o ID do node justamente para que dois Custom no
+        // mesmo grafo (ou o mesmo Custom em fs e gs) nunca colidam.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Custom")
+        {
+            const std::string fnName = "axeCustom_" + std::to_string(node->ID.Get());
+            const std::string var = MakeVar("custom");
+            const std::string retType = GetGLSLType(node->CustomOutputType);
+
+            // ── Assinatura ───────────────────────────────────────────────
+            //
+            // Os parametros levam o NOME QUE O USUARIO DEU ao pin. E o ponto
+            // do node: se ele batizou a entrada de "Tint", o codigo dele fala
+            // de `Tint`, e nao de `in0`.
+            std::string signature = retType + " " + fnName + "(";
+            std::string callArgs;
+
+            for (size_t i = 0; i < node->Inputs.size(); i++)
+            {
+                Pin& pin = node->Inputs[i];
+                const std::string pType = GetGLSLType(pin.Type);
+
+                // Nome do parametro saneado: o campo do painel aceita qualquer
+                // texto, e "Base Color" nao e identificador GLSL valido. Sem
+                // isto, um espaco no nome do pin quebraria a funcao inteira com
+                // um erro que nao aponta para o campo que o causou.
+                std::string safe;
+                for (char c : pin.Name)
+                {
+                    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '_') safe += c;
+                    else safe += '_';
+                }
+                if (safe.empty() || (safe[0] >= '0' && safe[0] <= '9'))
+                    safe = "in_" + safe;
+
+                if (i > 0) { signature += ", "; callArgs += ", "; }
+                signature += pType + " " + safe;
+
+                // Argumento da chamada: valor do pin ligado, adaptado ao tipo
+                // declarado; ou o valor digitado no proprio pin, quando solto.
+                Pin* src = GetSourcePin(&pin);
+                if (src)
+                {
+                    callArgs += AdaptToType(GetPinVariable(src->ID),
+                        GetPinType(src->ID), pin.Type);
+                }
+                else
+                {
+                    // Pin desconectado — mesma semantica dos outros nodes:
+                    // o valor digitado nele. Para vetores, o escalar preenche
+                    // todos os componentes (vec3(0.5) e o que se espera de um
+                    // "meio" num pin de cor).
+                    std::string lit = std::to_string(pin.DefaultFloat);
+                    callArgs += (pin.Type == PinType::Float)
+                        ? lit
+                        : (pType + "(" + lit + ")");
+                }
+            }
+            signature += ")";
+
+            // ── Corpo ────────────────────────────────────────────────────
+            //
+            // Vai como o usuario escreveu, sem transformacao nenhuma. Se ele
+            // esqueceu o `return`, o erro aparece no log de shader do proprio
+            // Material Editor — que ja existe (material_shader_log.cpp) e e
+            // exatamente o lugar certo para ele aparecer.
+            m_CustomFunctions += "// Custom node " + std::to_string(node->ID.Get()) + "\n";
+            m_CustomFunctions += signature + "\n{\n";
+            m_CustomFunctions += node->CustomCode;
+            m_CustomFunctions += "\n}\n\n";
+
+            RegisterPin(node->Outputs[0].ID, var, node->CustomOutputType);
+            code << retType << " " << var << " = " << fnName << "(" << callArgs << ");";
         }
 
         // -----------------------------------------------------------------
@@ -2053,6 +2727,62 @@ void main()
         case PinType::Texture2D: return "sampler2D";
         default:                 return "float";
         }
+    }
+
+    // ── CUSTOM_NODE_V1 — adaptacao de tipo ───────────────────────────────────
+    //
+    // Ver a nota na declaracao (material_compiler.hpp). Regras escolhidas para
+    // ser o que o autor QUIS dizer, e nao o que o GLSL exigiria:
+    //
+    //   escalar -> vetor : replica em todos os componentes  (0.5 -> vec3(0.5))
+    //   vetor  -> escalar: pega .x
+    //   vec4   -> vec3   : .rgb  (descarta alpha)
+    //   vec3   -> vec4   : alpha 1.0 (opaco), que e o default util
+    //
+    // Tipo igual devolve a expressao intacta — o caso comum nao paga nada.
+    std::string MaterialCompiler::AdaptToType(const std::string& expr,
+        PinType from, PinType to)
+    {
+        if (from == to) return expr;
+
+        auto comps = [](PinType t) -> int
+            {
+                switch (t)
+                {
+                case PinType::Float: return 1;
+                case PinType::Vec2:  return 2;
+                case PinType::Vec3:  return 3;
+                case PinType::Vec4:  return 4;
+                default:             return 1;
+                }
+            };
+
+        const int f = comps(from);
+        const int t = comps(to);
+
+        if (f == t) return expr;
+
+        if (f == 1)
+        {
+            // Escalar para vetor: vec3(x) preenche os tres.
+            return GetGLSLType(to) + "(" + expr + ")";
+        }
+
+        if (t == 1) return "(" + expr + ").x";
+        if (t < f)
+        {
+            // Encolhe por swizzle.
+            static const char* kSwz[5] = { "", ".x", ".xy", ".xyz", "" };
+            return "(" + expr + ")" + kSwz[t];
+        }
+
+        // Cresce: completa com 0 e fecha em 1.0 no alpha, que e o unico
+        // preenchimento que nao muda o significado de uma cor.
+        if (f == 2 && t == 3) return "vec3(" + expr + ", 0.0)";
+        if (f == 2 && t == 4) return "vec4(" + expr + ", 0.0, 1.0)";
+        if (f == 3 && t == 4) return "vec4(" + expr + ", 1.0)";
+
+        return expr;
     }
 
     // ── B4 — cozimento do shader (.axeshader) ────────────────────────────────

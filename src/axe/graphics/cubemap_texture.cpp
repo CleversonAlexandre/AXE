@@ -12,4 +12,14 @@ namespace axe
 		return cubemap;
 	}
 
+	// SKY_IBL_V1 — ver a nota em CubemapTexture::FaceDrawFn.
+	std::shared_ptr<CubemapTexture> CubemapTexture::CreateFromFaces(uint32_t faceSize,
+		const FaceDrawFn& drawFace)
+	{
+		auto cubemap = std::make_shared<OpenGLCubemap>();
+		if (!cubemap->CaptureFaces(faceSize, drawFace, /*generateBRDF*/ true))
+			return nullptr;
+		return cubemap;
+	}
+
 } // namespace axe

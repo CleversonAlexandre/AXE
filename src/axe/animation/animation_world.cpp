@@ -1,3 +1,4 @@
+#include <glm/gtc/quaternion.hpp>   // NOTIFY_FX_SPACE_V1
 #include "animation_world.hpp"
 
 #include "axe/animation/animation_sampler.hpp"
@@ -435,18 +436,44 @@ namespace axe
 				auto& tc = registry.get<TransformComponent>(e);
 
 				glm::vec3 basePos{ 0.0f };
-				glm::vec3 baseScale{ 1.0f };
+				glm::vec3 baseRot{ 0.0f };
 
 				if (auto* charTc = registry.try_get<TransformComponent>(character))
 				{
 					basePos = charTc->Data.Position;
-					baseScale = charTc->Data.Scale;
+					baseRot = charTc->Data.Rotation;   // radianos
 				}
 
-				// Offset autorado no espaco do PERSONAGEM: escala junto com
-				// ele (personagem 0.015 nao pode jogar o FX a metros).
-				// Ancoragem no OSSO (Socket/Attached) e a proxima etapa.
-				tc.Data.Position = basePos + n.LocationOffset * baseScale;
+				// ═══════════════════════════════════════════════════════════
+				//  NOTIFY_FX_SPACE_V1 — O EDITOR E O JOGO DISCORDAVAM
+				//
+				//  Aqui havia `basePos + n.LocationOffset * baseScale`, e o
+				//  Animation Editor, que e onde o offset e AUTORADO, usa o
+				//  valor CRU (anim_clip_window.cpp: `tc.Data.Position =
+				//  n.LocationOffset`).
+				//
+				//  As duas convencoes diferiam por exatamente o fator de
+				//  escala do personagem — e esse fator nao e pequeno: o
+				//  preview normaliza o personagem para 1.8 m, o que para uma
+				//  malha Mixamo de ~120 unidades da escala ~0.015. Um offset
+				//  autorado como (0, 1.5, 0.65) — o cano da arma de alguem de
+				//  1.8 m — virava (0, 0.022, 0.010) no jogo. Ou seja: NOS PES.
+				//  Era exatamente o relato.
+				//
+				//  A convencao certa e a do AUTOR, porque e a unica que ele ve
+				//  e ajusta: METROS a partir da origem do personagem. Entao o
+				//  offset e ROTACIONADO pela rotacao do personagem (para o FX
+				//  sair na frente da arma para onde ele estiver virado) e NAO e
+				//  multiplicado pela escala de normalizacao da malha.
+				//
+				//  LIMITACAO CONHECIDA, e a proxima etapa: o campo
+				//  AnimNotify::Socket existe e continua sem efeito. Com ele o
+				//  FX sairia da matriz do OSSO — certo em qualquer pose,
+				//  escala ou rotacao, sem depender de offset autorado. E o que
+				//  a Unreal faz, e ele ja tem um GunSocket criado.
+				// ═══════════════════════════════════════════════════════════
+				const glm::quat charRot = glm::quat(baseRot);
+				tc.Data.Position = basePos + charRot * n.LocationOffset;
 				tc.Data.Rotation = glm::radians(n.RotationOffset);
 				tc.Data.Scale = n.Scale;
 

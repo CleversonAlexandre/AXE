@@ -3,6 +3,11 @@
 // error), com auto-scroll.
 
 #include "material_editor_window.hpp"
+
+// MATERIAL_EDITOR_STYLE_V1 — mesmos widgets/icones do Script, Rig e Anim.
+#include "editor/axe_editor/ui/editor_widgets.hpp"
+#include "editor/axe_editor/ui/editor_icons.hpp"
+
 #include <imgui.h>
 #include <sstream>
 
@@ -37,51 +42,92 @@ namespace axe
         m_ShaderLog.clear();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MATERIAL_EDITOR_STYLE_V1 — o Shader Log
+    //
+    //  Duas mudancas, e as duas sao de LEITURA, nao de enfeite:
+    //
+    //  1. O prefixo era "[INFO]"/"[ERR]" grudado na mensagem, com a cor como
+    //     unica pista. Virou ICONE + cor, que e o que o resto do editor faz —
+    //     e o que permite achar o erro correndo o olho pela coluna, sem ler.
+    //
+    //  2. Um CONTADOR DE ERROS ao lado do total. Uma compilacao que falha
+    //     costuma cuspir cinco linhas de INFO e duas de ERR; sem o contador, a
+    //     unica forma de saber se deu certo e ler tudo ate o fim.
+    // ═════════════════════════════════════════════════════════════════════════
     void MaterialEditorWindow::DrawShaderLog()
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
 
         if (ImGui::Begin("Shader Log", nullptr, ImGuiWindowFlags_NoScrollbar))
         {
-            // Botão limpar
-            if (ImGui::SmallButton("Limpar"))
+            if (ui::IconButton(ICON_TRASH, "Limpar o log", ui::Accent::Danger))
                 ClearLog();
 
             ImGui::SameLine();
-            ImGui::TextDisabled("%d messagens", (int)m_ShaderLog.size());
+
+            int errors = 0, warnings = 0;
+            for (auto& e : m_ShaderLog)
+            {
+                if (e.level == ShaderLogEntry::Level::Error)    ++errors;
+                if (e.level == ShaderLogEntry::Level::Warnning) ++warnings;
+            }
+
+            ImGui::TextDisabled("%d mensagens", (int)m_ShaderLog.size());
+
+            if (warnings > 0)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ui::AccentColor(ui::Accent::Warning),
+                    ICON_TRIANGLE_EXCLAMATION "  %d", warnings);
+            }
+            if (errors > 0)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ui::AccentColor(ui::Accent::Danger),
+                    ICON_XMARK "  %d", errors);
+            }
+            else if (!m_ShaderLog.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ui::AccentColor(ui::Accent::Add), ICON_CHECK);
+            }
 
             ImGui::Separator();
-            //Lista de mensagens com scroll
+
             ImGui::BeginChild("##log_scroll", ImVec2(0, 0), false,
                 ImGuiWindowFlags_HorizontalScrollbar);
 
             for (auto& entry : m_ShaderLog)
             {
                 ImVec4 color;
-                const char* prefix;
+                const char* icon;
 
                 switch (entry.level)
                 {
-                case ShaderLogEntry::Level::Info:
-                    color = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-                    prefix = "[INFO]";
-                    break;
                 case ShaderLogEntry::Level::Warnning:
-                    color = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
-                    prefix = "[WARN]";
+                    color = ui::AccentColor(ui::Accent::Warning);
+                    icon = ICON_TRIANGLE_EXCLAMATION;
                     break;
                 case ShaderLogEntry::Level::Error:
-                    color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-                    prefix = "[ERR]";
+                    color = ui::AccentColor(ui::Accent::Danger);
+                    icon = ICON_XMARK;
+                    break;
+                case ShaderLogEntry::Level::Info:
+                default:
+                    color = ImVec4(0.62f, 0.66f, 0.72f, 1.0f);
+                    icon = ICON_CIRCLE_INFO;
                     break;
                 }
 
-                ImGui::PushStyleColor(ImGuiCol_Text, color);
-                ImGui::TextUnformatted((prefix + entry.message).c_str());
-                ImGui::PopStyleColor();
+                // O icone leva a cor de intencao; a MENSAGEM fica em cinza
+                // claro. Linha inteira colorida de vermelho cansa a vista e,
+                // pior, esconde onde o erro comeca quando ha varias seguidas.
+                ImGui::TextColored(color, "%s", icon);
+                ImGui::SameLine();
+                ImGui::TextUnformatted(entry.message.c_str());
             }
 
-            //Auto-Scroll para o final
             if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
                 ImGui::SetScrollHereY(1.0f);
 
@@ -89,7 +135,6 @@ namespace axe
         }
         ImGui::End();
         ImGui::PopStyleVar();
-
     }
 
 

@@ -276,6 +276,16 @@ namespace axe
         AXE_EDITOR_INFO("RemoveLink: total depois: {}", m_Links.size());
     }
 
+    // CUSTOM_NODE_V1 — ver a nota na declaracao.
+    void MaterialGraph::RemoveLinksForPin(ed::PinId pin)
+    {
+        m_Links.erase(
+            std::remove_if(m_Links.begin(), m_Links.end(),
+                [pin](const Link& l) { return l.StartPin == pin || l.EndPin == pin; }),
+            m_Links.end()
+        );
+    }
+
     Node* MaterialGraph::AddClampNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "Clamp");
@@ -690,6 +700,138 @@ namespace axe
         return ptr;
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  POSTPROCESS_DOMAIN_V1 — leitura da imagem da cena
+    //
+    //  So fazem sentido no dominio Post Process. Fora dele compilam para preto
+    //  (ver GenerateNodeCode): um node que some do menu conforme o dominio
+    //  esconde do usuario que ele existe; um node que compila para um valor
+    //  definido apenas nao faz nada, e isso e inspecionavel.
+    //
+    //  A UV NAO e um pin obrigatorio: desconectada, le o proprio pixel. Ligada,
+    //  le OUTRO pixel — e e assim que se escreve blur, aberracao cromatica,
+    //  distorcao e pixelizacao. Sem essa entrada, o dominio inteiro se
+    //  limitaria a ajustes de cor por pixel.
+    // ═════════════════════════════════════════════════════════════════════════
+    Node* MaterialGraph::AddSceneColorNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Color");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "RGB", PinType::Vec3, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // POSTPROCESS_GBUFFER_V1 — os tres leem o G-Buffer. Todos com pin de UV
+    // opcional pelo mesmo motivo do Scene Color: sem poder amostrar OUTRO
+    // pixel nao existe deteccao de borda, blur, nem distorcao.
+    Node* MaterialGraph::AddSceneDepthNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Depth");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Dist", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSceneNormalNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Normal");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Normal", PinType::Vec3, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSceneShadingModelNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Shading Model");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "ID", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // POSTPROCESS_SKY_V1 — o que faltava para o CEU ser autoravel no grafo.
+    Node* MaterialGraph::AddSceneIsBackgroundNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Is Background");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Is Sky", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddScreenRayDirectionNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Screen Ray Direction");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Dir", PinType::Vec3, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSunNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Sun");
+        node->Color = ImVec4(0.9f, 0.7f, 0.2f, 1.0f);
+        // Sem entradas: e um dado do frame, nao uma operacao.
+        node->Outputs.emplace_back(GetNextID(), "Direction", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "To Sun", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Color", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Intensity", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSceneUVNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Screen UV");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+        node->Outputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Pixel Size", PinType::Vec2, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CUSTOM_NODE_V1
+    //
+    //  Nasce com UMA entrada e saida Float — o menor node que ja faz alguma
+    //  coisa. O codigo inicial nao e placeholder vazio de proposito: um node
+    //  recem-criado ja compila e ja produz imagem, entao o primeiro contato do
+    //  usuario com ele nao e um erro de shader.
+    // ═════════════════════════════════════════════════════════════════════════
+    Node* MaterialGraph::AddCustomNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Custom");
+        node->Color = ImVec4(0.75f, 0.45f, 0.15f, 1.0f);   // ambar — "aqui tem codigo"
+
+        node->Inputs.emplace_back(GetNextID(), "In", PinType::Float, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Out", PinType::Float, ed::PinKind::Output);
+
+        node->CustomOutputType = PinType::Float;
+        node->CustomCode = "return In;";
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Pin* MaterialGraph::FindPin(ed::PinId id)
     {
         for (auto& node : m_Nodes)
@@ -793,6 +935,29 @@ namespace axe
             if (!node->Value.TextureUUID.empty())
                 nodeJson["texture_uuid"] = node->Value.TextureUUID;
 
+            // CUSTOM_NODE_V1 — codigo, tipo de saida e a LISTA de entradas.
+            //
+            // Este e o unico node cujos pins nao sao deduziveis do nome: a
+            // fabrica cria um "In" Float, e o usuario pode ter cinco entradas
+            // com outros nomes e tipos. Sem gravar a lista, reabrir o material
+            // devolveria um node de uma entrada — e os links das outras, que
+            // sao remapeados POR POSICAO, cairiam no pin errado ou sumiriam.
+            if (node->Name == "Custom")
+            {
+                nodeJson["custom_code"] = node->CustomCode;
+                nodeJson["custom_output_type"] = (int)node->CustomOutputType;
+
+                nlohmann::json customInputs = nlohmann::json::array();
+                for (auto& pin : node->Inputs)
+                {
+                    nlohmann::json in;
+                    in["name"] = pin.Name;
+                    in["type"] = (int)pin.Type;
+                    customInputs.push_back(in);
+                }
+                nodeJson["custom_inputs"] = customInputs;
+            }
+
             // IDs dos pins — necessários para reconstruir os links
             nlohmann::json inputIds = nlohmann::json::array();
             nlohmann::json outputIds = nlohmann::json::array();
@@ -827,6 +992,7 @@ namespace axe
         j["domain"] = (int)Domain;
         j["blend_mode"] = (int)BlendMode;
         j["shading_model"] = (int)ShadingModel;
+        j["toon_steps"] = ToonSteps;   // SHADING_MODEL_V1
 
         return j;
     }
@@ -878,6 +1044,15 @@ namespace axe
         if (name == "Vec2")            return AddVec2Node();
         if (name == "Vec3")            return AddVec3Node();
         if (name == "Texture Coordinate") return AddTextureCoordinateNode();
+        if (name == "Custom")          return AddCustomNode();   // CUSTOM_NODE_V1
+        if (name == "Scene Color")     return AddSceneColorNode();  // POSTPROCESS_DOMAIN_V1
+        if (name == "Screen UV")       return AddSceneUVNode();     // POSTPROCESS_DOMAIN_V1
+        if (name == "Scene Depth")     return AddSceneDepthNode();        // POSTPROCESS_GBUFFER_V1
+        if (name == "Scene Normal")    return AddSceneNormalNode();       // POSTPROCESS_GBUFFER_V1
+        if (name == "Scene Shading Model") return AddSceneShadingModelNode(); // POSTPROCESS_GBUFFER_V1
+        if (name == "Scene Is Background")  return AddSceneIsBackgroundNode();  // POSTPROCESS_SKY_V1
+        if (name == "Screen Ray Direction") return AddScreenRayDirectionNode(); // POSTPROCESS_SKY_V1
+        if (name == "Sun")                  return AddSunNode();                // POSTPROCESS_SKY_V1
         return nullptr;
     }
 
@@ -894,6 +1069,7 @@ namespace axe
         Domain = (MaterialDomain)j.value("domain", (int)MaterialDomain::Surface);
         BlendMode = (MaterialBlendMode)j.value("blend_mode", (int)MaterialBlendMode::Opaque);
         ShadingModel = (MaterialShadingModel)j.value("shading_model", (int)MaterialShadingModel::DefaultLit);
+        ToonSteps = j.value("toon_steps", 3);   // SHADING_MODEL_V1
 
         // Reconstrói cada node pelo nome — dispatch centralizado em
         // AddNodeByName() (mesma função usada pelo menu de criação e pelo
@@ -959,6 +1135,38 @@ namespace axe
                 const AssetRecord* record = AssetDatabase::Get().GetByUUID(node->Value.TextureUUID);
                 if (record && std::filesystem::exists(record->FilePath))
                     node->Value.TextureVal = Texture2D::Create(record->FilePath.string());
+            }
+
+            // ── CUSTOM_NODE_V1 — RECONSTROI OS PINS ──────────────────────────
+            //
+            // Tem de acontecer AQUI, antes do bloco de remapeamento logo
+            // abaixo: o remap casa os IDs salvos com os pins atuais POR
+            // POSICAO, e o `AddNodeByName` acima devolveu o node com a lista
+            // padrao de uma entrada so. Se este bloco viesse depois, os links
+            // do segundo pin em diante seriam descartados silenciosamente
+            // (o remap ja teria rodado com `i < node->Inputs.size()` == 1).
+            if (node->Name == "Custom")
+            {
+                node->CustomCode = nodeJson.value("custom_code", std::string("return In;"));
+                node->CustomOutputType =
+                    (PinType)nodeJson.value("custom_output_type", (int)PinType::Float);
+
+                if (nodeJson.contains("custom_inputs"))
+                {
+                    node->Inputs.clear();
+                    for (const auto& in : nodeJson["custom_inputs"])
+                    {
+                        node->Inputs.emplace_back(
+                            GetNextID(),
+                            in.value("name", std::string("In")).c_str(),
+                            (PinType)in.value("type", (int)PinType::Float),
+                            ed::PinKind::Input);
+                    }
+                }
+
+                // A saida existe sempre (uma so), mas o TIPO dela e do usuario.
+                if (!node->Outputs.empty())
+                    node->Outputs[0].Type = node->CustomOutputType;
             }
 
             // Remapeia IDs dos pins: salvo → atual (por posição)

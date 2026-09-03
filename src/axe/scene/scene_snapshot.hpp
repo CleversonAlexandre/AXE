@@ -45,6 +45,14 @@ namespace axe
 		MaterialComponent,
 
 		LightComponent,
+
+		// SKY_SUN_GATE_V1 — faltava aqui, e por isso o Sky Light perdia as
+		// propriedades no Stop: o clone nao copiava o componente, e o Restore
+		// devolvia a entidade sem ele. A rede de seguranca do VerifyCoverage
+		// TINHA avisado no console ("SkyLightComponent sera PERDIDO"); o aviso
+		// so nao foi visto.
+		SkyLightComponent,
+
 		PointLightComponent,
 		PostProcessComponent,
 		InteriorVolumeComponent,

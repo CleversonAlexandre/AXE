@@ -32,6 +32,7 @@ namespace axe
 
         void CreateFolder();
         void CreateLight();
+        void CreateSkyLight();   // SKY_LIGHT_V1
 
         void DeleteSelected();
         void DuplicateSelected();

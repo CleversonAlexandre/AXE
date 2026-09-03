@@ -48,6 +48,15 @@ namespace axe
         }
 
         // --- Point lights — posição sincronizada com TransformComponent ---
+        // SKY_LIGHT_V1 — a primeira Sky Light da cena, mesmo criterio da
+        // luz direcional (a primeira encontrada manda). Duas Sky Lights nao
+        // fariam sentido fisico: e o ceu, e so ha um.
+        for (auto entity : registry.view<SkyLightComponent>())
+        {
+            auto& sc = registry.get<SkyLightComponent>(entity);
+            if (sc.Data) { queue.Sky = sc.Data.get(); break; }
+        }
+
         for (auto entity : registry.view<PointLightComponent>())
         {
             auto& plc = registry.get<PointLightComponent>(entity);

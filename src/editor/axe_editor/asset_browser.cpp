@@ -14,6 +14,12 @@
 #include "axe/material/material_asset.hpp"
 #include "axe/particles/particle_system_asset.hpp"
 #include "editor/axe_editor/script/script_asset.hpp"
+
+// BATCH_SHADING_MODEL_V1 — para o menu usar o ENUM em vez de indices
+// digitados. Um "12" solto aqui e a mesma familia de bug das contagens
+// hardcoded: no dia em que alguem reordenar MaterialShadingModel, o menu passa
+// a gravar outro modelo em lote, em dezenas de materiais, sem erro nenhum.
+#include "editor/axe_editor/node_graph/node_types.hpp"
 #include "axe/scene/game_mode_asset.hpp"
 #include <imgui.h>
 #include <algorithm>
@@ -1096,6 +1102,12 @@ namespace axe
 
         DrawRelocateAssetsModals();
 
+        // BATCH_SHADING_MODEL_V1 — no MESMO nivel dos outros modais, e nao
+        // dentro do popup de contexto: um BeginPopupModal aberto de dentro de
+        // outro popup fecha junto com ele no frame seguinte, e o modal nunca
+        // chega a aparecer.
+        DrawShadingModelModals();
+
         ImGui::End();
     }
 
@@ -1352,6 +1364,15 @@ namespace axe
 
     void AssetBrowser::DrawFolderContextMenu(const std::string& folderPath)
     {
+        // BATCH_SHADING_MODEL_V1 — a pasta inteira (e subpastas). E este o
+        // caminho que resolve "o cenario todo em Toon".
+        if (ImGui::BeginMenu("Shading Model dos materiais"))
+        {
+            DrawShadingModelMenu(CollectMaterialsInFolder(folderPath));
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+
         if (ImGui::MenuItem("New Subfolder"))
         {
             CreateFolder("New Folder", folderPath);
@@ -1398,6 +1419,164 @@ namespace axe
         ImGui::PopStyleColor();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  BATCH_SHADING_MODEL_V1 — trocar o Shading Model de muitos materiais
+    //
+    //  Existe porque um jogo inteiro num estilo (toon, por exemplo) nao e o
+    //  personagem: e o CENARIO. Marcar Toon abrindo cada `.axemat`, trocando o
+    //  combo e clicando Compile e uma tarde de trabalho num projeto pequeno —
+    //  e cada Compile e uma recompilacao de shader.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    std::vector<std::string> AssetBrowser::CollectMaterialsInSelection() const
+    {
+        std::vector<std::string> out;
+
+        auto add = [&](const std::string& uuid)
+            {
+                if (uuid.empty()) return;
+                const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+                if (!rec) return;
+
+                // Pela EXTENSAO, e nao pelo record.Type. Type e estado derivado e
+                // persistido: assets registrados antes de um tipo existir ficam com
+                // o valor velho no indice. E a armadilha do ASSETTYPE_FIX_V1, e o
+                // disco e a unica fonte que nao envelhece.
+                if (rec->FilePath.extension() != ".axemat") return;
+
+                if (std::find(out.begin(), out.end(), uuid) == out.end())
+                    out.push_back(uuid);
+            };
+
+        add(m_SelectedUUID);
+        for (const auto& u : m_SelectedUUIDs) add(u);
+        return out;
+    }
+
+    std::vector<std::string> AssetBrowser::CollectMaterialsInFolder(const std::string& folderPath) const
+    {
+        std::vector<std::string> out;
+
+        for (const auto& [uuid, rec] : AssetDatabase::Get().GetAll())
+        {
+            if (rec.FilePath.extension() != ".axemat") continue;
+
+            // Subarvore, e nao so a pasta exata: quem organiza o cenario em
+            // Assets/Cenario/Predios e Assets/Cenario/Rua espera que "aplicar
+            // em Cenario" alcance os dois. O prefixo com "/" evita que
+            // "Cenario" pegue tambem "CenarioAntigo".
+            const bool inSubtree =
+                rec.VirtualFolder == folderPath ||
+                (rec.VirtualFolder.rfind(folderPath + "/", 0) == 0);
+
+            if (inSubtree) out.push_back(uuid);
+        }
+        return out;
+    }
+
+    void AssetBrowser::DrawShadingModelMenu(const std::vector<std::string>& targets)
+    {
+        // So os REAIS. O enum da UI tem doze entradas, dez delas placeholders
+        // da Unreal que o motor nao implementa — oferece-las aqui, em lote,
+        // seria oferecer estragar dezenas de materiais de uma vez.
+        struct Opt { const char* label; int value; };
+        static const Opt kOpts[] = {
+            { "Default Lit", (int)MaterialShadingModel::DefaultLit },
+            { "Unlit",       (int)MaterialShadingModel::Unlit },
+            { "Toon",        (int)MaterialShadingModel::Toon },
+        };
+
+        ImGui::BeginDisabled(targets.empty());
+
+        for (const auto& opt : kOpts)
+        {
+            std::string label = std::string(opt.label);
+            if (!targets.empty())
+                label += "  (" + std::to_string((int)targets.size()) + ")";
+
+            if (ImGui::MenuItem(label.c_str()))
+            {
+                m_PendingShadingUUIDs = targets;
+                m_PendingShadingModel = opt.value;
+                m_ShadingConfirmOpen = true;
+            }
+        }
+
+        ImGui::EndDisabled();
+
+        if (targets.empty())
+            ImGui::TextDisabled("nenhum material aqui");
+    }
+
+    void AssetBrowser::DrawShadingModelModals()
+    {
+        if (m_ShadingConfirmOpen)
+        {
+            ImGui::OpenPopup("##shading_confirm");
+            if (ImGui::BeginPopupModal("##shading_confirm", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                const char* modelName =
+                    m_PendingShadingModel == (int)MaterialShadingModel::Unlit ? "Unlit" :
+                    m_PendingShadingModel == (int)MaterialShadingModel::Toon ? "Toon" :
+                    "Default Lit";
+
+                ImGui::Text("Definir Shading Model = %s em %d material(is).",
+                    modelName, (int)m_PendingShadingUUIDs.size());
+                ImGui::Spacing();
+                ImGui::TextDisabled("Cada material sera RECOMPILADO e o .axeshader");
+                ImGui::TextDisabled("recozido. Com muitos materiais a janela trava");
+                ImGui::TextDisabled("por um instante — e esperado.");
+                ImGui::Spacing();
+                ImGui::TextDisabled("Materiais que nao sao de dominio Surface sao");
+                ImGui::TextDisabled("ignorados: Shading Model so existe la.");
+
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (ui::AccentButton("Aplicar", ui::Accent::Primary, nullptr, ImVec2(120, 0)))
+                {
+                    m_ShadingResultCount = m_BatchShadingModelCallback
+                        ? m_BatchShadingModelCallback(m_PendingShadingUUIDs, m_PendingShadingModel)
+                        : -1;
+
+                    m_PendingShadingUUIDs.clear();
+                    m_ShadingConfirmOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                {
+                    m_PendingShadingUUIDs.clear();
+                    m_ShadingConfirmOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
+
+        if (m_ShadingResultCount >= 0)
+        {
+            ImGui::OpenPopup("##shading_result");
+            if (ImGui::BeginPopupModal("##shading_result", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text(ICON_CHECK "  %d material(is) atualizado(s).", m_ShadingResultCount);
+                ImGui::Spacing();
+                ImGui::TextDisabled("Materiais ja no modelo pedido, ou de outro");
+                ImGui::TextDisabled("dominio, nao entram na conta.");
+
+                ImGui::Separator();
+                if (ImGui::Button("OK", ImVec2(100, 0)))
+                {
+                    m_ShadingResultCount = -1;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
+    }
+
     void AssetBrowser::DrawAssetContextMenu(const AssetRecord& record)
     {
         if (ImGui::MenuItem("Open"))
@@ -1424,6 +1603,18 @@ namespace axe
 
         if (ImGui::MenuItem("Open in Explorer"))
             OpenInExplorer(record.FilePath);
+
+        // BATCH_SHADING_MODEL_V1 — opera sobre a SELECAO, nao so sobre o item
+        // clicado: com varios materiais selecionados o menu ja mostra a
+        // contagem, e e esse o caso que a acao existe para resolver.
+        if (record.FilePath.extension() == ".axemat")
+        {
+            if (ImGui::BeginMenu("Shading Model"))
+            {
+                DrawShadingModelMenu(CollectMaterialsInSelection());
+                ImGui::EndMenu();
+            }
+        }
 
         // ── Importar personagem animado ──────────────────────────────────
         //

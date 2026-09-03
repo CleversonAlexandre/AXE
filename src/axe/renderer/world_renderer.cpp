@@ -78,64 +78,38 @@ namespace axe
             if (env)
             {
                 env->SkyboxRotation = ec.SkyboxRotation;
-                if (!ec.HDRIPath.empty() && ec.HDRIPath != env->SkyboxPath)
+
+                // SKY_OFF_V1 — ver o comentario no viewport_renderer.
+                if (!ec.UseHDRI)
+                {
+                    env->Skybox.reset();
+                    env->SkyboxPath.clear();
+                }
+                else if (!ec.HDRIPath.empty() && ec.HDRIPath != env->SkyboxPath)
                     env->LoadHDRI(ec.HDRIPath);
             }
             break;
         }
 
-        // ── Ceu Procedural + Time of Day — le do Directional Light ────────
-        // O sol E a luz direcional, entao faz sentido controlar aqui.
+        // ── Ceu Procedural + Time of Day — o dono e o SKY LIGHT ───────────
+        // SKY_OWNS_SKY_V1 — ver o comentário equivalente no viewport_renderer.
+        SkyLight* skyData = nullptr;
+        for (auto se : registry.view<SkyLightComponent>())
+        {
+            auto& sc = registry.get<SkyLightComponent>(se);
+            if (sc.Data) { skyData = sc.Data.get(); break; }
+        }
+
+        DirectionalLight* sunData = nullptr;
         for (auto le : registry.view<LightComponent>())
         {
             auto& lc = registry.get<LightComponent>(le);
-            if (!lc.Data) continue;
-            auto& dl = *lc.Data;
-
-            if (!dl.ProceduralSky)
-            {
-                if (m_SceneRenderer)
-                    m_SceneRenderer->SetProceduralSky(false, { 0,1,0 },
-                        2.5f, 0.5f, 0.02f, { 1,1,1 }, { 0.01f,0.01f,0.03f });
-                break;
-            }
-
-            glm::vec3 sunDir = glm::normalize(-dl.Direction);
-
-            if (dl.TimeOfDayEnabled)
-            {
-                float dt = timeSeconds - m_LastTimeSeconds;
-                if (dt < 0.0f || dt > 0.5f) dt = 0.016f;
-
-                dl.Hour = std::fmod(dl.Hour + dt * (dl.DaySpeed / 3600.0f), 24.0f);
-
-                // Angulo horario: 0 ao meio-dia (12h), pi/2 ao por do sol (18h)
-                float hourAngle = (dl.Hour - 12.0f) * (3.14159f / 12.0f);
-                float latRad = dl.SunLatitude * (3.14159f / 180.0f);
-                float elevation = std::asin(std::cos(latRad) * std::cos(hourAngle));
-                float azimuth = std::atan2(std::sin(hourAngle),
-                    std::cos(hourAngle) * std::sin(latRad));
-
-                sunDir = glm::normalize(glm::vec3(
-                    std::cos(elevation) * std::sin(azimuth),
-                    std::sin(elevation),
-                    std::cos(elevation) * std::cos(azimuth)));
-
-                dl.Direction = -sunDir;
-                float elev = std::max(0.0f, sunDir.y);
-                float sunsetF = WR_Smoothstep(0.0f, 0.3f, elev);
-                dl.Color = glm::mix(
-                    glm::vec3(1.0f, 0.42f, 0.08f),
-                    glm::vec3(1.0f, 0.93f, 0.88f), sunsetF);
-                dl.Intensity = elev * 8.0f;
-            }
-
-            if (m_SceneRenderer)
-                m_SceneRenderer->SetProceduralSky(true, sunDir,
-                    dl.Turbidity, dl.CloudCoverage, dl.CloudSpeed,
-                    dl.CloudColor, dl.NightColor);
-            break;
+            if (lc.Data) { sunData = lc.Data.get(); break; }
         }
+
+        // SKY_DEADLOCK_FIX_V1 — ver o comentario no viewport_renderer.
+        SceneRenderer::ApplySkyFrame(m_SkyboxRenderer, skyData, sunData,
+            timeSeconds - m_LastTimeSeconds);
 
         m_LastTimeSeconds = timeSeconds;
     }
@@ -220,9 +194,14 @@ namespace axe
         // GetSkyboxView remove a translacao da view (o ceu fica
         // "infinitamente distante", nao anda junto com a camera) e aplica a
         // rotacao configurada.
-        if (params.Environment && params.Environment->HasSkybox())
+        // SKYGATE_FIX_V1 — ver o comentario no viewport_renderer. Este e o
+        // caminho do JOGO EMPACOTADO: sem esta correcao, um jogo que usa so o
+        // ceu procedural rodava com o fundo preto.
+        if (params.Environment &&
+            (params.Environment->HasSkybox() || m_SkyboxRenderer.IsProceduralSky()))
         {
-            m_SkyboxRenderer.SetCubemap(params.Environment->Skybox);
+            if (params.Environment->HasSkybox())
+                m_SkyboxRenderer.SetCubemap(params.Environment->Skybox);
             m_SceneRenderer->SetSkyboxRenderer(
                 &m_SkyboxRenderer,
                 params.Environment->GetSkyboxView(params.View),
@@ -339,6 +318,11 @@ namespace axe
             m_HDRFramebuffer->Unbind();
 
         RenderCommand::SetViewport(0, 0, width, height);
+        // POSTPROCESS_GBUFFER_V1 / _SKY_V1 — entrega ao passe, ANTES do Execute,
+        // o G-Buffer (normal, posicao, shading model) e os dados de camera e
+        // sol. Sem isto o material de efeito so enxerga a cor.
+        if (m_SceneRenderer) m_SceneRenderer->PublishSceneBuffersTo(*m_PostProcess);
+
         m_PostProcess->Execute(finalColorID, m_PostProcessSettings);
 
         // ── 11. Visualizacao de som ──────────────────────────────────────

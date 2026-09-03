@@ -242,14 +242,36 @@ namespace axe
 		ImGui::Separator();
 
 		if (auto* transform = registry.try_get<TransformComponent>(entity))
-			DrawTransform(transform->Data);
+		{
+			// SKY_LIGHT_V1b — o ceu vem de TODAS as direcoes: posicao, rotacao
+			// e escala nao significam nada para um Sky Light. Campo editavel
+			// que nao faz nada e pior que campo ausente, porque o usuario mexe,
+			// nao ve efeito, e fica sem saber se e bug ou se nao entendeu.
+			// Mostrado em somente-leitura (e nao escondido) para a entidade nao
+			// parecer quebrada e para caber o porque ao lado.
+			const bool isSkyLight = registry.any_of<SkyLightComponent>(entity);
+			DrawTransform(transform->Data, isSkyLight);
+			if (isSkyLight)
+				ImGui::TextDisabled("  Somente leitura: a luz do ceu vem de todas as\n"
+					"  direcoes, entao transform nao tem efeito.");
+		}
 
 		if (auto* light = registry.try_get<LightComponent>(entity))
 		{
 			if (light->Data) DrawLight(*light->Data);
 		}
+		// SKY_LIGHT_V1b — BUG DA ENTREGA ANTERIOR: eu coloquei a secao do Sky
+		// Light DENTRO deste ramo mas esqueci de por o SkyLightComponent na
+		// lista do any_of. Uma entidade Sky Light nao tem nenhum dos outros
+		// quatro componentes, entao o ramo nunca era entrado e o painel nunca
+		// aparecia — a entidade nascia sem propriedade nenhuma.
+		//
+		// Lista de tipo em UM lugar e secao em OUTRO e a mesma familia de
+		// armadilha do `ci < 7` hardcoded ao lado do array: sao dois lugares
+		// que precisam concordar e o compilador nao checa nenhum dos dois.
 		else if (registry.any_of<PostProcessComponent, InteriorVolumeComponent,
-			ProbeVolumeComponent, ReflectionProbeComponent>(entity))
+			ProbeVolumeComponent, ReflectionProbeComponent,
+			SkyLightComponent>(entity))
 		{
 			// Entity de "volumes de ambiente" — pode carregar os 4
 			// componentes JUNTOS (via + Adicionar Componente), cada um na
@@ -269,6 +291,14 @@ namespace axe
 					// cada seção um namespace de IDs próprio.
 					ImGui::PushID("sec_pp");
 					DrawPostProcess(*pp);
+					ImGui::PopID();
+				}
+			// SKY_LIGHT_V1
+			if (auto* sl = registry.try_get<SkyLightComponent>(entity))
+				if (ImGui::CollapsingHeader("Sky Light", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					ImGui::PushID("sec_skylight");
+					DrawSkyLight(*sl);
 					ImGui::PopID();
 				}
 			if (auto* iv = registry.try_get<InteriorVolumeComponent>(entity))
@@ -1119,9 +1149,16 @@ namespace axe
 			if (!path.empty()) ec.HDRIPath = path.string();
 		}
 		ImGui::Separator();
+		// SKY_OFF_V1 — o interruptor que faltava para poder testar escuridao.
+		ImGui::Checkbox("Usar HDRI", &ec.UseHDRI);
+		ImGui::TextDisabled("  Desligado, o HDRI para de desenhar E de iluminar.");
+		ImGui::TextDisabled("  O caminho do arquivo fica guardado — religar volta.");
 		ImGui::DragFloat("Rotação Skybox", &ec.SkyboxRotation, 1.0f, -360.0f, 360.0f);
-		ImGui::TextDisabled("Céu Procedural e Time of Day estão");
-		ImGui::TextDisabled("no componente Directional Light.");
+		// SKY_OWNS_SKY_V1 — o dono mudou; texto que aponta para o lugar
+		// errado e pior que texto nenhum.
+		ImGui::TextDisabled("Céu Procedural e Ciclo Dia/Noite estão");
+		ImGui::TextDisabled("no Sky Light. O HDRI acima é a alternativa");
+		ImGui::TextDisabled("a ele — e ilumina mesmo sem Luz Direcional.");
 	}
 
 	void InspectorWindow::DrawPointLight(PointLight& light, const glm::vec3& rotationEuler)
@@ -1178,9 +1215,21 @@ namespace axe
 		ImGui::DragFloat("Intensidade", &light.Intensity, 0.01f, 0.0f, 10.0f);
 		ImGui::Separator();
 		ImGui::TextDisabled("Luz Indireta");
-		ImGui::DragFloat("IBL Intensity", &light.IBLIntensity, 0.01f, 0.0f, 5.0f);
-		ImGui::DragFloat("Ambient Flat", &light.AmbientStrength, 0.01f, 0.0f, 1.0f);
-		ImGui::SliderFloat("Ambient nas Sombras", &light.AmbientShadowFactor, 0.0f, 1.0f);
+		// SKY_LIGHT_V1 — IBL Intensity, Ambient Flat e Ambient nas Sombras
+		// SAIRAM daqui: descrevem a luz de AMBIENTE, e o dono dela agora e o
+		// Sky Light. Deixa-los aqui daria dois controles para a mesma coisa e
+		// manteria a confusao que esta rodada desfaz. Os campos continuam na
+		// struct e no arquivo so para a migracao e o fallback.
+		ImGui::TextDisabled("Ambiente/IBL: agora no Sky Light");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Criar Sky Light"))
+			if (m_Context && m_Context->ActiveScene)
+			{
+				bool exists = false;
+				auto& reg = m_Context->ActiveScene->GetRegistry();
+				for (auto e : reg.view<SkyLightComponent>()) { (void)e; exists = true; break; }
+				if (!exists) m_Context->ActiveScene->CreateSkyLight();
+			}
 		ImGui::TextDisabled("  0=interior escuro  1=ambient livre (exterior)");
 
 		ImGui::Separator();
@@ -1190,7 +1239,47 @@ namespace axe
 		{
 			ImGui::DragFloat("Shadow Distance", &light.ShadowDistance, 1.0f, 2.0f, 200.0f);
 			ImGui::TextDisabled("  Menor = mais preciso (indoor: 8-15, outdoor: 50-100)");
-			ImGui::DragFloat("Shadow Bias", &light.ShadowBias, 0.0001f, 0.0001f, 0.05f);
+			// SHADOW_BIAS_METERS_V1 — a unidade mudou: agora é METRO de mundo,
+			// e o grosso do bias é calculado sozinho por cascade. Este slider
+			// é só o piso constante, e significa a mesma coisa em qualquer
+			// Shadow Distance (antes não significava).
+			ImGui::DragFloat("Shadow Bias (m)", &light.ShadowBias,
+				0.001f, 0.0f, 0.30f, "%.3f m");
+			ImGui::TextDisabled("  Piso constante. 0 serve na maioria das cenas;");
+			ImGui::TextDisabled("  subir so se aparecer listra em superficie rasante.");
+
+			// ── PCSS_V1 — maciez da sombra ───────────────────────────────
+			ImGui::Spacing();
+			// ── CONTACT_SHADOW_V1 ────────────────────────────────────────
+			ImGui::Spacing();
+			ImGui::DragFloat("Contact Shadow (m)", &light.ContactShadowLength,
+				0.01f, 0.0f, 1.0f, "%.2f m");
+			ImGui::TextDisabled("  Sombra de contato em espaco de tela, para o que");
+			ImGui::TextDisabled("  e menor que um texel do shadow map: o pe no chao,");
+			ImGui::TextDisabled("  o vinco da caixa na parede. 0 desliga.");
+			ImGui::TextDisabled("  0.10-0.30 cobre contato humano; acima disso");
+			ImGui::TextDisabled("  inventa sombra que some ao sair do quadro.");
+
+			ImGui::Spacing();
+			ImGui::DragFloat("Tamanho do Sol (graus)", &light.SunAngularDegrees,
+				0.01f, 0.0f, 10.0f);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(
+					"O sol real tem 0.53 grau, e e esse numero que faz a sombra\n"
+					"ser NITIDA no pe do objeto e ir abrindo com a distancia.\n\n"
+					"Subir simula ceu nublado (fonte grande, sombra difusa).\n"
+					"0 desliga a penumbra variavel e volta ao borrao fixo,\n"
+					"que e mais barato.");
+
+			if (light.SunAngularDegrees > 0.0f)
+			{
+				ImGui::DragFloat("Penumbra Maxima (texeis)", &light.MaxPenumbraTexels,
+					0.5f, 1.0f, 48.0f);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip(
+						"Teto do borrao. Um objeto alto sobre um chao distante\n"
+						"pediria um raio enorme, e o custo cresce com ele.");
+			}
 		}
 
 		ImGui::Separator();
@@ -1201,44 +1290,31 @@ namespace axe
 
 		DrawLightMaterialSlot(light);
 
-		// ── Céu Procedural ────────────────────────────────────────────────────
+		// ── SKY_OWNS_SKY_V1 ───────────────────────────────────────────────────
+		//
+		// Céu Procedural e Ciclo Dia/Noite SAÍRAM daqui: descrevem o CÉU e o
+		// relógio do mundo, não a lâmpada. Viviam neste painel pelo mesmo
+		// acidente histórico dos campos de ambiente, e o efeito colateral era
+		// concreto — apagar esta luz desligava o céu procedural junto.
+		//
+		// O que esta luz ainda dá ao céu é o que é dela: direção, cor e
+		// intensidade do sol.
 		ImGui::Spacing();
 		ImGui::Separator();
-		ImGui::Text("Céu Procedural");
-		ImGui::Checkbox("Ativar Céu Procedural##procsky", &light.ProceduralSky);
-		if (light.ProceduralSky)
-		{
-			ImGui::TextDisabled("  O sol segue a direção desta luz.");
-			ImGui::DragFloat("Turbidez", &light.Turbidity, 0.1f, 1.0f, 10.0f);
-			ImGui::TextDisabled("  1=limpo  10=poluido/nublado");
-			ImGui::DragFloat("Cobertura Nuvens", &light.CloudCoverage, 0.02f, 0.0f, 1.0f);
-			ImGui::DragFloat("Velocidade Nuvens", &light.CloudSpeed, 0.001f, 0.0f, 0.2f);
-			ImGui::ColorEdit3("Cor Nuvens", &light.CloudColor.x);
-			ImGui::ColorEdit3("Cor Noite", &light.NightColor.x);
-
-			// ── Time of Day ─────────────────────────────────────────────────
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Text("Ciclo Dia/Noite");
-			ImGui::Checkbox("Ativar Time of Day##tod", &light.TimeOfDayEnabled);
-			if (light.TimeOfDayEnabled)
-			{
-				ImGui::SliderFloat("Hora##tod", &light.Hour, 0.0f, 24.0f);
-				ImGui::DragFloat("Velocidade##tod", &light.DaySpeed, 1.0f, 0.1f, 3600.0f);
-				ImGui::TextDisabled("  1=tempo real  60=1min/seg  3600=1h/seg");
-				ImGui::DragFloat("Latitude##tod", &light.SunLatitude, 1.0f, -90.f, 90.f);
-				int h = (int)light.Hour;
-				int m = (int)((light.Hour - h) * 60.0f);
-				ImGui::Text("  Hora atual: %02d:%02d", h, m);
-				ImGui::TextDisabled("  Direcao, Cor e Intensidade sao");
-				ImGui::TextDisabled("  automaticas com Time of Day ativo.");
-			}
-		}
+		ImGui::TextDisabled("Céu Procedural e Ciclo Dia/Noite: no Sky Light.");
+		ImGui::TextDisabled("Esta luz define onde o sol está, que cor tem");
+		ImGui::TextDisabled("e quão forte é — o céu obedece a ela.");
 	}
 
-	void InspectorWindow::DrawTransform(Transform& t)
+	void InspectorWindow::DrawTransform(Transform& t, bool readOnly)
 	{
 		ImGui::Text("Transform");
+
+		// SKY_LIGHT_V1b — BeginDisabled envolve os TRES DragFloat3 e e fechado
+		// no fim da funcao. Widget desabilitado nao retorna true, entao o
+		// `changed` continua false sozinho e nao precisa de if em cada campo.
+		if (readOnly) ImGui::BeginDisabled();
+
 		bool changed = false;
 		if (ImGui::DragFloat3("Position", &t.Position.x, 0.1f)) changed = true;
 		glm::vec3 rotDeg = glm::degrees(t.Rotation);
@@ -1255,6 +1331,8 @@ namespace axe
 			t.Scale.z = std::max(scaleCopy.z, 0.001f);
 			changed = true;
 		}
+		if (readOnly) ImGui::EndDisabled();   // SKY_LIGHT_V1b
+
 		if (changed) { t.UseWorldMatrix = false; t.WorldMatrix = t.GetMatrix(); }
 	}
 
@@ -1766,6 +1844,106 @@ namespace axe
 			ImGui::TextDisabled("Nunca capturado.");
 	}
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  SKY_LIGHT_V1 — painel da luz de ambiente
+	// ═══════════════════════════════════════════════════════════════════════
+	void InspectorWindow::DrawSkyLight(SkyLightComponent& sl)
+	{
+		if (!sl.Data) return;
+		auto& sky = *sl.Data;
+
+		ImGui::Checkbox("Ativo", &sky.Enabled);
+		ImGui::TextDisabled("  Desligar apaga o ambiente INTEIRO — e assim que");
+		ImGui::TextDisabled("  se ve quanto da imagem vem do sol.");
+
+		// SKY_SUN_GATE_V1 — o interruptor que responde "apaguei o sol e a cena
+		// continua clara". Fica logo depois do Ativo porque e a propriedade
+		// que MAIS muda o comportamento deste painel.
+		ImGui::Spacing();
+		ImGui::Checkbox("Depende do Sol", &sky.SunDependent);
+		ImGui::TextDisabled("  LIGADO (padrao): sem Luz Direcional, ou com ela");
+		ImGui::TextDisabled("  em 0, o ambiente vai a ZERO. Vale para o ceu");
+		ImGui::TextDisabled("  procedural E para HDRI — um HDRI de dia e uma");
+		ImGui::TextDisabled("  foto de luz do sol; sem sol, aquela luz nao existe.");
+		ImGui::TextDisabled("  DESLIGADO: o Sky Light vira autonomo. Para HDRI de");
+		ImGui::TextDisabled("  estudio, interior, ou cena de noite com luar.");
+
+		// SKY_LIGHT_V1b — de onde vem a luz deste Sky Light.
+		//
+		// Precisa estar escrito aqui porque a precedencia NAO e obvia e e a
+		// resposta para "apaguei o sol e a cena continua iluminada": um HDRI
+		// e uma FONTE DE LUZ por si so, exatamente como na Unreal, e nao
+		// depende de sol nenhum. Quem desliga essa luz e este painel.
+		ImGui::Spacing();
+		ImGui::SeparatorText("Fonte");
+		ImGui::TextDisabled("  1. Ceu procedural, se ligado abaixo — esse");
+		ImGui::TextDisabled("     obedece ao sol e apaga junto com ele.");
+		ImGui::TextDisabled("  2. Senao, o HDRI do Environment — que com");
+		ImGui::TextDisabled("     'Depende do Sol' ligado tambem apaga sem sol.");
+		ImGui::TextDisabled("  3. Sem nenhum dos dois, so o Ambiente Chapado.");
+
+		ImGui::Spacing();
+		ImGui::DragFloat("Intensidade", &sky.Intensity, 0.01f, 0.0f, 5.0f);
+		ImGui::ColorEdit3("Cor", &sky.Color.x);
+		ImGui::TextDisabled("  Multiplicam a luz capturada do ceu. O ceu obedece ao");
+		ImGui::TextDisabled("  sol, entao baixar o sol escurece o ambiente mesmo");
+		ImGui::TextDisabled("  com a Intensidade em 1.");
+
+		ImGui::Spacing();
+		ImGui::SliderFloat("Ambiente nas Sombras", &sky.ShadowFactor, 0.0f, 1.0f);
+		ImGui::TextDisabled("  0 = sombra bloqueia o ambiente (interior escuro)");
+		ImGui::TextDisabled("  1 = ambiente livre (ceu aberto)");
+
+		ImGui::Spacing();
+		ImGui::DragFloat("Ambiente Chapado", &sky.ConstantAmbient, 0.005f, 0.0f, 1.0f);
+		ImGui::TextDisabled("  Constante somada por cima, independente do ceu.");
+		ImGui::TextDisabled("  0 e o certo hoje: e essa constante que achata a");
+		ImGui::TextDisabled("  imagem. So subir para salvar cena escura demais.");
+
+		// ── SKY_OWNS_SKY_V1 — o ceu agora e propriedade DESTE painel ─────────
+		ImGui::Spacing();
+		ImGui::SeparatorText("Ceu Procedural");
+		ImGui::Checkbox("Ativar Ceu Procedural##procsky", &sky.ProceduralSky);
+		if (sky.ProceduralSky)
+		{
+			ImGui::TextDisabled("  A posicao do sol vem da Luz Direcional.");
+			ImGui::TextDisabled("  SEM Luz Direcional o ceu fica sem sol —");
+			ImGui::TextDisabled("  ou seja, noite. E o resultado correto.");
+
+			ImGui::DragFloat("Turbidez", &sky.Turbidity, 0.1f, 1.0f, 10.0f);
+			ImGui::TextDisabled("  1=limpo  10=poluido/nublado");
+			ImGui::DragFloat("Cobertura Nuvens", &sky.CloudCoverage, 0.02f, 0.0f, 1.0f);
+			ImGui::DragFloat("Velocidade Nuvens", &sky.CloudSpeed, 0.001f, 0.0f, 0.2f);
+			ImGui::ColorEdit3("Cor Nuvens", &sky.CloudColor.x);
+			// CLOUDS_SOFTEN_SUN_V1
+			ImGui::Checkbox("Nuvens afetam o Sol", &sky.CloudsSoftenSun);
+			ImGui::TextDisabled("  Cobertura alarga a fonte (sombra macia) e");
+			ImGui::TextDisabled("  tira luz direta. Dia limpo = sombra dura;");
+			ImGui::TextDisabled("  encoberto = sombra larga. E o mesmo PCSS,");
+			ImGui::TextDisabled("  so que agora sabendo das nuvens.");
+			ImGui::ColorEdit3("Cor Noite", &sky.NightColor.x);
+			ImGui::TextDisabled("  Cor Noite e o PISO do ceu: nao escala com o");
+			ImGui::TextDisabled("  sol. Preto puro = escuridao total sem sol.");
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Ciclo Dia/Noite");
+			ImGui::Checkbox("Ativar Time of Day##tod", &sky.TimeOfDayEnabled);
+			if (sky.TimeOfDayEnabled)
+			{
+				ImGui::SliderFloat("Hora##tod", &sky.Hour, 0.0f, 24.0f);
+				ImGui::DragFloat("Velocidade##tod", &sky.DaySpeed, 1.0f, 0.1f, 3600.0f);
+				ImGui::TextDisabled("  1=tempo real  60=1min/seg  3600=1h/seg");
+				ImGui::DragFloat("Latitude##tod", &sky.SunLatitude, 1.0f, -90.f, 90.f);
+				int h = (int)sky.Hour;
+				int m = (int)((sky.Hour - h) * 60.0f);
+				ImGui::Text("  Hora atual: %02d:%02d", h, m);
+				ImGui::TextDisabled("  O relogio e do ceu, mas quem ilumina e o sol:");
+				ImGui::TextDisabled("  Direcao, Cor e Intensidade da Luz Direcional");
+				ImGui::TextDisabled("  passam a ser escritas por este ciclo.");
+			}
+		}
+	}
+
 	void InspectorWindow::DrawProbeVolume(ProbeVolumeComponent& pv)
 	{
 		ImGui::TextDisabled("Grid de light probes bakeadas (SH L1).");
@@ -1857,6 +2035,47 @@ namespace axe
 	{
 		// (título vem do CollapsingHeader da seção)
 		ImGui::Checkbox("Global", &pp.IsGlobal);
+
+		// ── POSTPROCESS_DOMAIN_V1 — efeito de tela inteira do usuario ────────
+		//
+		// Primeiro na lista de proposito: e o unico controle desta janela que
+		// pode mudar a imagem inteira. Deixa-lo no fim, depois de SSAO/TAA/SSR,
+		// esconderia justamente o que tem mais efeito.
+		ImGui::Separator();
+		ImGui::Text("Material de Efeito");
+
+		AssetPicker::Draw("Post Process Material", pp.Settings.UserMaterialUUID,
+			{ AssetType::Material },
+			[&](const AssetRecord& record)
+			{
+				pp.Settings.UserMaterialUUID = record.UUID;
+			});
+
+		if (!pp.Settings.UserMaterialUUID.empty())
+		{
+			int blend = (int)pp.Settings.UserBlendPoint;
+			const char* blendNames[] = { "Antes do Tone Mapping (HDR)",
+										 "Depois do Tone Mapping (LDR)" };
+			if (ImGui::Combo("Ponto", &blend, blendNames, IM_ARRAYSIZE(blendNames)))
+				pp.Settings.UserBlendPoint = (PostProcessBlendPoint)blend;
+
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(
+					"Se o efeito imita OTICA (grading, sujeira de lente,\n"
+					"aberracao cromatica), e ANTES: a cor ainda tem faixa\n"
+					"alem de 1.0 e o tone mapping ainda vai respeita-la.\n\n"
+					"Se ele imita uma TELA (pixelizacao, scanline, posterizar,\n"
+					"vinheta), e DEPOIS: a cor ja e o pixel final, 0..1.");
+
+			ImGui::SliderFloat("Intensidade", &pp.Settings.UserIntensity, 0.0f, 1.0f);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Mistura entre a imagem original e a do efeito.");
+
+			ImGui::TextDisabled("O material precisa ter Domain = Post Process.");
+
+			if (ImGui::SmallButton("Remover efeito"))
+				pp.Settings.UserMaterialUUID.clear();
+		}
 
 		ImGui::Separator();
 		ImGui::Text("Tone Mapping");

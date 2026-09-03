@@ -126,6 +126,18 @@ namespace axe
         // v_Age01 (0..1 ao longo da vida) e u_Time.
         static CompiledMaterial CompileParticleFunction(MaterialGraph* graph);
 
+        // POSTPROCESS_DOMAIN_V1 — efeito de tela inteira. Resolve o pin
+        // Emissive num quad que cobre o framebuffer. Ver a nota longa na
+        // implementacao.
+        static CompiledMaterial CompilePostProcess(MaterialGraph* graph);
+
+        // POSTPROCESS_DOMAIN_V1 — usado pelo callback que o EditorLayer
+        // registra no SceneSerializer. Recusa (false) material que nao seja
+        // deste dominio, em vez de compila-lo como se fosse.
+        static bool CompilePostProcessFromFile(const std::filesystem::path& materialFilePath,
+            std::shared_ptr<Shader>& outShader,
+            std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
+
         static bool CompileParticleFunctionFromFile(const std::filesystem::path& materialFilePath,
             std::shared_ptr<Shader>& outShader,
             std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
@@ -180,6 +192,17 @@ namespace axe
         // Gera nome de variável único: "mul_0", "tex_1", "float_2", etc.
         std::string MakeVar(const std::string& prefix);
 
+        // CUSTOM_NODE_V1 — adapta a variavel de um pin de origem ao tipo que o
+        // parametro da funcao Custom declara (float -> vec3 vira vec3(x),
+        // vec4 -> vec3 vira .rgb, e assim por diante).
+        //
+        // Existe porque um node Custom e escrito A MAO: sem adaptacao, ligar um
+        // Vec3 num parametro Float nao daria erro de GRAFO, daria erro de
+        // compilacao de GLSL — dentro de uma funcao gerada, sem numero de linha
+        // que corresponda a nada que o usuario tenha escrito. Adaptar e a
+        // diferenca entre um aviso claro e uma caca ao tesouro.
+        std::string AdaptToType(const std::string& expr, PinType from, PinType to);
+
         // -- Navegação de links --
         Node* GetSourceNode(Pin* inputPin); // node conectado ao input
         Pin* GetSourcePin(Pin* inputPin);  // pin de output conectado ao input
@@ -204,6 +227,40 @@ namespace axe
         //
         // Consumido no GenerateNodeCode do Texture Sample. Ver a nota la.
         std::unordered_set<int> m_SRGBSamplers;
+
+        // ── POSTPROCESS_DOMAIN_V1b ───────────────────────────────────────────
+        //
+        // true SO durante o CompilePostProcess. Diz se o shader QUE ESTA SENDO
+        // GERADO AGORA declara u_SceneColor e u_ScreenSize.
+        //
+        // Na primeira versao isto era `m_Graph->Domain == PostProcess`, e o
+        // erro foi de ESPECIE: o dominio e propriedade do GRAFO, mas as
+        // uniforms sao propriedade do SHADER. O CompileAndApply compila o grafo
+        // DUAS vezes — uma no compilador do dominio e outra no de Surface (para
+        // o preview e para o material da cena) — e na segunda o node Scene
+        // Color emitia texture(u_SceneColor, ...) num shader que nao declara
+        // essa uniform. Dai o "'u_SceneColor' : undeclared identifier".
+        //
+        // Flag de INSTANCIA do compilador, e nao consulta ao grafo: cada
+        // compilacao sabe o que ela propria emitiu.
+        bool m_PostProcessTarget = false;
+
+        // ── CUSTOM_NODE_V1 ───────────────────────────────────────────────────
+        //
+        // Corpo das FUNCOES GLSL geradas pelos nodes Custom, para ser inserido
+        // ANTES do `void main()` de cada shader do dominio.
+        //
+        // Funcao de verdade, e nao expressao inline, por uma razao pratica: e o
+        // que permite ao usuario escrever `return`, variaveis temporarias,
+        // `if` e `for` — que e a diferenca entre "escrever um shader" e
+        // "escrever uma conta". E a mesma escolha que a Unreal faz no node
+        // Custom dela.
+        //
+        // So entram aqui os Custom REALMENTE ALCANCADOS pelo Material Output
+        // (o acumulo acontece dentro do GenerateNodeCode, que so roda para node
+        // visitado). Um Custom solto no canvas com codigo pela metade nao pode
+        // impedir o material inteiro de compilar.
+        std::string                 m_CustomFunctions;
 
         std::string                 m_FragmentCode;  // código acumulado
         int                         m_VariableCounter = 0; // contador para nomes únicos

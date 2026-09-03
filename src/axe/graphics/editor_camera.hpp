@@ -32,6 +32,13 @@ namespace axe
 		float GetDistance() const { return m_Distance; }
 		const glm::vec3& GetFocalPoint() const { return m_FocalPoint; }
 
+		// VIEW_GIZMO_V1 — publica porque o gizmo de navegacao fala em
+		// quaternion, e esta e a FONTE UNICA da convencao de orientacao
+		// (`quat(vec3(-pitch, -yaw, 0))`). Recalcular a mesma formula do lado
+		// de fora criaria dois lugares que precisam concordar — a armadilha
+		// que ja mordeu tres vezes nesta engine com listas de tipo.
+		glm::quat GetOrientation() const;
+
 		void Rotate(const glm::vec2& delta);
 		void Pan(const glm::vec2& delta);
 		void Zoom(float delta);
@@ -45,6 +52,7 @@ namespace axe
 			m_Distance = distance;
 			UpdateView();
 		}
+
 
 		// ── PILOTAR A CAMERA A PARTIR DE UM PONTO E UMA DIRECAO ──────────────
 		//
@@ -85,8 +93,8 @@ namespace axe
 		glm::vec3 GetUpDirection() const;
 		glm::vec3 GetRightDirection() const;
 
-
-		glm::quat GetOrientation() const;
+		// VIEW_GIZMO_V1 — a declaracao subiu para o bloco publico, junto dos
+		// outros getters de estado. Aqui ficaria duplicada.
 
 		void MousePan(const glm::vec2& delta);
 		void MouseRotate(const glm::vec2& delta);

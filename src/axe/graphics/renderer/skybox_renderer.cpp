@@ -10,18 +10,67 @@
 namespace axe
 {
 
-    // ── Shader HDRI (original) ────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SKY_FULLSCREEN_V1 — O CEU DEIXA DE SER GEOMETRIA
+    //
+    //  ── O QUE ESTAVA ERRADO ──────────────────────────────────────────────────
+    //
+    //  O ceu era um CUBO UNITARIO desenhado em volta da camera, com a
+    //  translacao da view removida e `pos.xyww` para forcar profundidade 1.
+    //  E a receita classica, e ela tem um problema classico junto: o cubo e
+    //  geometria FINITA. A face frontal dele cobre 45 graus de meio-angulo;
+    //  as laterais so cobrem o resto porque sao cortadas no plano da camera e
+    //  os vertices novos projetam para o infinito. Quando o campo de visao
+    //  abre (zoom out por FOV), ou quando o corte no plano da camera nao sai
+    //  exato, o cubo deixa de cobrir a tela — e o ceu aparece como um QUADRADO
+    //  no meio do preto, com a borda visivel. Foi exatamente o que ele viu.
+    //
+    //  ── POR QUE NAO E "CUBO OU ESFERA" ───────────────────────────────────────
+    //
+    //  A pergunta "cubo ou esfera?" e da epoca em que o ceu precisava ser
+    //  malha. Esfera nao resolve nada aqui: e a MESMA geometria finita, so que
+    //  com centenas de triangulos em vez de 12, e com o mesmo risco de nao
+    //  cobrir. A resposta e nao usar malha nenhuma.
+    //
+    //  ── COMO FICA ────────────────────────────────────────────────────────────
+    //
+    //  Um TRIANGULO que cobre a tela inteira, gerado por gl_VertexID (sem
+    //  buffer, sem atributo), e a direcao do raio reconstruida por pixel a
+    //  partir da INVERSA da view-projection. Consequencias:
+    //
+    //    - cobre a tela por construcao, em qualquer FOV, sempre;
+    //    - 3 vertices em vez de 36 indices;
+    //    - nao existe "sair de dentro do ceu", porque nao ha dentro;
+    //    - gl_Position.z = 1.0 e a MESMA profundidade que o xyww dava, entao
+    //      o LessEqual do passe deferred continua funcionando igual (o ceu
+    //      aparece onde nao ha geometria e e ocluido onde ha).
+    //
+    //  O `v_TexCoords` continua sendo a direcao de mundo no referencial do
+    //  ceu — a mesma coisa que o cubo entregava, pelo mesmo caminho: a view
+    //  usada aqui ja vem sem translacao e com a rotacao do skybox aplicada
+    //  (ver SceneEnvironment::GetSkyboxView), entao a inversa devolve a
+    //  direcao ja rotacionada. Os dois fragment shaders nao mudaram.
+    // ═════════════════════════════════════════════════════════════════════════
     static const char* s_SkyboxVertSrc = R"(
     #version 460 core
-    layout(location = 0) in vec3 a_Position;
     out vec3 v_TexCoords;
-    uniform mat4 u_Projection;
-    uniform mat4 u_View;
+    uniform mat4 u_InvViewProj;
     void main()
     {
-        v_TexCoords = a_Position;
-        vec4 pos    = u_Projection * mat4(mat3(u_View)) * vec4(a_Position, 1.0);
-        gl_Position = pos.xyww;
+        // Triangulo unico cobrindo [-1,1] em x e y:
+        //   id 0 = (-1,-1)   id 1 = (3,-1)   id 2 = (-1,3)
+        vec2 ndc = vec2((gl_VertexID == 1) ? 3.0 : -1.0,
+                        (gl_VertexID == 2) ? 3.0 : -1.0);
+
+        // Ponto no plano distante, levado de volta ao mundo. Como a view nao
+        // tem translacao, a camera esta na origem e a POSICAO recuperada ja e
+        // a DIRECAO. A divisao por w e obrigatoria: sem ela a direcao erra
+        // fora do centro da tela, justo onde o ceu ocupa mais area.
+        vec4 p = u_InvViewProj * vec4(ndc, 1.0, 1.0);
+        v_TexCoords = p.xyz / p.w;
+
+        // z = 1 => plano distante, igual ao que o pos.xyww fazia.
+        gl_Position = vec4(ndc, 1.0, 1.0);
     }
 )";
 
@@ -51,6 +100,22 @@ uniform float u_CloudSpeed;
 uniform vec3  u_CloudColor;
 uniform vec3  u_NightColor;
 uniform float u_Time;
+
+// ═════════════════════════════════════════════════════════════════════════
+//  SKYLIGHT_CHAIN_V1 — O SOL PASSA A ACENDER O CEU
+//
+//  u_SunRadiance ja vem SATURADO da CPU (ver DrawSky): 0 com o sol apagado,
+//  ~1 para qualquer sol razoavelmente forte. Multiplica SO o que e luz do
+//  sol — atmosfera, disco, nuvens, neblina diurna. Cor de noite, lua e
+//  estrelas ficam de fora de proposito: nao vem do sol, e se viessem o ceu
+//  noturno sumiria junto.
+//
+//  Consequencia: sol em 0 (ou luz direcional apagada) => ceu preto => o
+//  cubemap de IBL capturado desse ceu e preto => a cena escurece sozinha,
+//  sem nenhum caso especial no lighting pass.
+// ═════════════════════════════════════════════════════════════════════════
+uniform vec3  u_SunColor;
+uniform float u_SunRadiance;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -105,25 +170,28 @@ void main() {
     float dayFactor  = smoothstep(-0.1, 0.15, sunElev);
     float dawnFactor = smoothstep(-0.2, 0.0, sunElev) - smoothstep(0.0, 0.3, sunElev);
 
-    // Atmosfera
+    // Atmosfera — SKYLIGHT_CHAIN_V1: o espalhamento e luz DO SOL, entao
+    // escala com ele. Com o sol apagado sobra u_NightColor, e so.
     vec3 sky = u_NightColor;
     if (dir.y > -0.05) {
         vec3 vd = normalize(vec3(dir.x, max(dir.y, 0.01), dir.z));
-        sky = mix(u_NightColor, skyAtmosphere(vd, u_SunDir), dayFactor);
+        sky = mix(u_NightColor, skyAtmosphere(vd, u_SunDir) * u_SunRadiance, dayFactor);
     }
 
     // Tinte de amanhecer/entardecer no horizonte
     float horiz = smoothstep(0.25, 0.0, abs(dir.y));
-    sky += vec3(1.0, 0.35, 0.05) * dawnFactor * horiz * 0.4;
+    sky += vec3(1.0, 0.35, 0.05) * dawnFactor * horiz * 0.4 * u_SunRadiance;
 
-    // Disco solar + corona
+    // Disco solar + corona — aqui entra tambem a COR do sol, porque isto e
+    // literalmente o sol. Na atmosfera nao entra: o espalhamento ja tem o
+    // proprio matiz (sunsetTint), e multiplicar de novo tingiria duas vezes.
     if (sunElev > -0.15) {
         float cosA = dot(dir, u_SunDir);
         float disk  = smoothstep(0.9995, 0.9997, cosA);
         float corona = pow(max(cosA, 0.0), 128.0) * 0.6;
         float glow   = pow(max(cosA, 0.0), 6.0) * 0.12 * dayFactor;
         vec3 sc = mix(vec3(1.0, 0.55, 0.15), vec3(1.5, 1.4, 1.2), clamp(sunElev*3.0, 0.0, 1.0));
-        sky += sc * (disk * 3.0 + corona + glow);
+        sky += sc * u_SunColor * (disk * 3.0 + corona + glow) * u_SunRadiance;
     }
 
     // Lua (noite)
@@ -148,13 +216,19 @@ void main() {
         float sunsetC = smoothstep(0.15, 0.0, sunElev) * smoothstep(-0.2, 0.0, sunElev);
         vec3 cc = mix(u_CloudColor * lit, vec3(1.0, 0.45, 0.15) * lit, sunsetC * 0.65);
         cc *= (0.5 + 0.5 * dayFactor);
+        // SKYLIGHT_CHAIN_V1 — nuvem nao brilha sozinha: e o sol que a acende.
+        // Sem isto, apagar o sol deixaria nuvens brancas num ceu preto.
+        cc *= u_SunRadiance;
         float blend = cloud * dayFactor * smoothstep(0.04, 0.18, dir.y);
         sky = mix(sky, cc, blend);
     }
 
     // Horizonte suave (fade para horizonte/neblina)
     float hFade = smoothstep(0.0, -0.12, dir.y);
-    vec3 fogColor = vec3(0.55, 0.62, 0.7) * dayFactor + u_NightColor * (1.0 - dayFactor);
+    // SKYLIGHT_CHAIN_V1 — a parte DIURNA da neblina e ceu espalhado; a de
+    // noite e u_NightColor e continua independente do sol.
+    vec3 fogColor = vec3(0.55, 0.62, 0.7) * dayFactor * u_SunRadiance
+                  + u_NightColor * (1.0 - dayFactor);
     sky = mix(sky, fogColor, hFade * 0.5);
 
     FragColor = vec4(max(sky, vec3(0.0)), 1.0);
@@ -177,6 +251,9 @@ void main() {
 
     void SkyboxRenderer::Initialize()
     {
+        // Carimbo de versao — conferir NO LOG antes de investigar iluminacao.
+        AXE_CORE_INFO("SKY_IBL_V1: ceu procedural gera irradiance/prefiltered (rebake ao mover o sol)");
+
         m_Shader = Shader::Create(s_SkyboxVertSrc, s_SkyboxFragSrc);
         m_ProcShader = Shader::Create(s_SkyboxVertSrc, s_ProcSkyFragSrc);
 
@@ -196,14 +273,43 @@ void main() {
         {
             if (!m_ProcShader) return;
             m_ProcShader->Bind();
-            m_ProcShader->SetMat4("u_View", glm::value_ptr(view));
-            m_ProcShader->SetMat4("u_Projection", glm::value_ptr(proj));
+            // SKY_FULLSCREEN_V1 — uma matriz so no lugar de view+projection.
+            const glm::mat4 invVP = glm::inverse(proj * view);
+            m_ProcShader->SetMat4("u_InvViewProj", glm::value_ptr(invVP));
             m_ProcShader->SetFloat3("u_SunDir", m_SunDirection);
             m_ProcShader->SetFloat("u_Turbidity", m_Turbidity);
             m_ProcShader->SetFloat("u_CloudCoverage", m_CloudCoverage);
             m_ProcShader->SetFloat("u_CloudSpeed", m_CloudSpeed);
             m_ProcShader->SetFloat3("u_CloudColor", m_CloudColor);
             m_ProcShader->SetFloat3("u_NightColor", m_NightColor);
+
+            // ═══════════════════════════════════════════════════════════════
+            //  SKYLIGHT_CHAIN_V1 — POR QUE A CURVA E SATURANTE
+            //
+            //  A resposta ingenua seria escalar o ceu LINEARMENTE pela
+            //  intensidade do sol. Nao da: "Intensity" nesta engine nao e uma
+            //  unidade fisica. O default do DirectionalLight e 1.0, o ciclo de
+            //  Time of Day escreve elev*8, e cena ajustada a mao usa qualquer
+            //  numero no meio. Escala linear com uma referencia fixa deixaria
+            //  metade das cenas existentes no escuro e a outra metade
+            //  estourada — quebrando tudo o que ja esta ajustado.
+            //
+            //  A curva 1 - exp(-I/k) resolve os dois lados:
+            //     I = 0    -> 0.00   (apagado e apagado, que e o pedido)
+            //     I = 0.5  -> 0.63
+            //     I = 1.0  -> 0.86   (default)
+            //     I = 2.0  -> 0.98
+            //     I >= 3   -> ~1.00  (qualquer cena bem iluminada: intacta)
+            //
+            //  Ou seja: so morde onde o sol e de fato fraco ou nulo. E ela e
+            //  monotona e suave, entao no ciclo dia/noite o ceu apaga junto
+            //  com o sol em vez de cair de um degrau.
+            // ═══════════════════════════════════════════════════════════════
+            constexpr float kSunResponse = 0.5f;
+            const float sunRadiance = 1.0f - std::exp(-m_SunIntensity / kSunResponse);
+
+            m_ProcShader->SetFloat3("u_SunColor", m_SunColor);
+            m_ProcShader->SetFloat("u_SunRadiance", sunRadiance);
             m_ProcShader->SetFloat("u_Time", m_Time);
             m_ProcShader->Bind();
         }
@@ -211,14 +317,18 @@ void main() {
         {
             if (!HasCubemap()) return;
             m_Shader->Bind();
-            m_Shader->SetMat4("u_View", glm::value_ptr(view));
-            m_Shader->SetMat4("u_Projection", glm::value_ptr(proj));
+            const glm::mat4 invVP = glm::inverse(proj * view);   // SKY_FULLSCREEN_V1
+            m_Shader->SetMat4("u_InvViewProj", glm::value_ptr(invVP));
             m_Shader->SetInt("u_Skybox", 0);
             m_Cubemap->Bind(0);
         }
 
+        // SKY_FULLSCREEN_V1 — o VAO continua sendo bindado porque o perfil core
+        // exige UM vertex array bindado em qualquer draw; os atributos dele
+        // nao sao mais lidos (o vertice vem de gl_VertexID). Um strip de 3
+        // vertices e exatamente um triangulo.
         m_VertexArray->Bind();
-        RenderCommand::DrawIndexedCount(36);
+        RenderCommand::DrawArraysStrip(3);
     }
 
     void SkyboxRenderer::Render(const glm::mat4& view, const glm::mat4& projection)
@@ -240,6 +350,78 @@ void main() {
         DrawSky(view, projection);
         RenderCommand::SetCullFace(true);
         RenderCommand::SetDepthFunc(RendererAPI::DepthFunc::Less);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SKY_IBL_V1 — ver a nota longa em skybox_renderer.hpp
+    // ═════════════════════════════════════════════════════════════════════════
+
+    bool SkyboxRenderer::SkyIBLNeedsRebake() const
+    {
+        if (!m_SkyIBLValid || !m_SkyIBL) return true;
+
+        // ~1 grau de giro do sol. Abaixo disso a irradiancia — que e a media
+        // do hemisferio inteiro — nao muda o suficiente para ninguem ver, e
+        // rebakear seria pagar por nada enquanto o ciclo dia/noite roda.
+        constexpr float kSunCosThreshold = 0.99985f; // cos(1 grau)
+        if (glm::dot(m_SunDirection, m_BakedSunDir) < kSunCosThreshold) return true;
+
+        constexpr float kEps = 0.001f;
+        if (std::fabs(m_Turbidity - m_BakedTurbidity) > kEps) return true;
+        if (std::fabs(m_CloudCoverage - m_BakedCloudCoverage) > kEps) return true;
+        if (glm::length(m_CloudColor - m_BakedCloudColor) > kEps) return true;
+        if (glm::length(m_NightColor - m_BakedNightColor) > kEps) return true;
+
+        // SKYLIGHT_CHAIN_V1 — sem estes dois, baixar a intensidade do sol
+        // escureceria o ceu NA TELA e deixaria o cubemap de iluminacao com o
+        // ceu antigo e claro. A cena seguiria iluminada por um ceu que
+        // ninguem mais ve — bug plausivel demais para ser achado depois.
+        if (std::fabs(m_SunIntensity - m_BakedSunIntensity) > kEps) return true;
+        if (glm::length(m_SunColor - m_BakedSunColor) > kEps) return true;
+
+        return false;
+    }
+
+    void SkyboxRenderer::UpdateSkyIBL()
+    {
+        // Com o ceu procedural desligado quem ilumina e o HDRI. NAO destroi o
+        // m_SkyIBL aqui: se ele voltar a ser ligado, o cubemap ja existe e o
+        // rebake e so o conteudo. Quem esconde o cubemap do resto da engine e
+        // o GetSkyIBL, que devolve nullptr nesse estado.
+        if (!m_UseProceduralSky) return;
+        if (!m_ProcShader || !m_VertexArray) return;
+        if (!SkyIBLNeedsRebake()) return;
+
+        // O callback e o PROPRIO DrawSky. E o ponto todo: o cubemap de
+        // iluminacao e, por construcao, o mesmo ceu que aparece na tela — nao
+        // uma segunda implementacao dele que um dia divergiria.
+        auto drawFace = [this](const glm::mat4& v, const glm::mat4& p)
+            {
+                DrawSky(v, p);
+            };
+
+        if (!m_SkyIBL)
+            m_SkyIBL = CubemapTexture::CreateFromFaces(kSkyIBLFaceSize, drawFace);
+        else
+            m_SkyIBL->UpdateFromFaces(drawFace);
+
+        if (!m_SkyIBL)
+        {
+            // Falhou uma vez, nao insiste todo frame: sem isto, um erro de
+            // criacao viraria uma tentativa de captura por frame.
+            AXE_CORE_ERROR("SkyboxRenderer: falha ao gerar o cubemap de IBL do ceu procedural");
+            m_SkyIBLValid = true;
+            return;
+        }
+
+        m_BakedSunDir = m_SunDirection;
+        m_BakedTurbidity = m_Turbidity;
+        m_BakedCloudCoverage = m_CloudCoverage;
+        m_BakedCloudColor = m_CloudColor;
+        m_BakedNightColor = m_NightColor;
+        m_BakedSunColor = m_SunColor;          // SKYLIGHT_CHAIN_V1
+        m_BakedSunIntensity = m_SunIntensity;  // SKYLIGHT_CHAIN_V1
+        m_SkyIBLValid = true;
     }
 
 } // namespace axe

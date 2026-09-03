@@ -113,6 +113,13 @@ namespace axe
     {
         // Luzes
         const DirectionalLight* Light = nullptr;
+
+        // SKY_LIGHT_V1 — a luz de ambiente. nullptr = a cena nao tem Sky
+        // Light, e o lighting pass cai nos campos legados do DirectionalLight
+        // (ver o comentario neles). Nome `Sky` e nao `SkyLight` para nao
+        // colidir com o nome do tipo.
+        const SkyLight* Sky = nullptr;
+
         std::vector<PointLight> PointLights;
 
         // Interior Volumes — caixas que bloqueiam sol + ambient/IBL em

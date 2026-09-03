@@ -2,6 +2,7 @@
 // Cena/câmera/framebuffer de preview 3D do material (a esfera renderizada à
 // direita do node graph) e o input orbital (Alt + mouse) da câmera de preview.
 
+#include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
 #include "material_editor_window.hpp"
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/mesh/primitive_uuid.hpp"
@@ -166,6 +167,18 @@ namespace axe
                 m_PreviewFramebuffer->GetColorAttachmentRendererID();
             if (textureID != (ImTextureID)0)
                 ImGui::Image(textureID, viewportSize, ImVec2(0, 1), ImVec2(1, 0));
+
+            // VIEW_GIZMO_V1 — o mesmo widget do viewport, no preview.
+            //
+            // showTools = false: o preview e pequeno, e os botoes de dolly e
+            // pan comeriam area util da esfera. O arrasto no proprio gizmo e o
+            // clique nos eixos continuam funcionando, que e o que se quer aqui
+            // (ver o material por cima, por baixo, de tras).
+            if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+            {
+                ui::DrawViewGizmo(*m_PreviewRenderer->m_Camera,
+                    m_PreviewBoundsMin, m_PreviewBoundsMax, false);
+            }
 
             HandlePreviewInput();
         }

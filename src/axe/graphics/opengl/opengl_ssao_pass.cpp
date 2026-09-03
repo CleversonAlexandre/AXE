@@ -40,8 +40,26 @@ namespace axe
     void main()
     {
         vec3 fragPosWorld = texture(u_Position, v_TexCoord).rgb;
-        vec3 normal       = normalize(texture(u_Normal, v_TexCoord).rgb);
-        vec3 noise        = normalize(texture(u_Noise, v_TexCoord * u_NoiseScale).rgb);
+        vec3 rawNormal    = texture(u_Normal, v_TexCoord).rgb;
+
+        // ── SSAO_ROBUST_V1 — PIXEL SEM GEOMETRIA ──────────────────────────
+        //
+        // No G-Buffer, ceu e vazio tem normal (0,0,0). `normalize` de vetor
+        // nulo e INDEFINIDO em GLSL: na pratica sai NaN, e a partir dai o TBN,
+        // as amostras e a oclusao viram lixo — que o blur depois espalha por
+        // cima da silhueta dos objetos. E parte dos "pequenos artefatos" que
+        // sobraram: eles moram na borda entre objeto e ceu.
+        //
+        // 1.0 = sem oclusao, que e a resposta certa para "aqui nao ha
+        // superficie para ocluir".
+        if (dot(rawNormal, rawNormal) < 0.01)
+        {
+            FragColor = 1.0;
+            return;
+        }
+
+        vec3 normal = normalize(rawNormal);
+        vec3 noise  = normalize(texture(u_Noise, v_TexCoord * u_NoiseScale).rgb);
 
         // TBN em world space
         vec3 tangent   = normalize(noise - normal * dot(noise, normal));
@@ -59,8 +77,26 @@ namespace axe
             offset.xyz /= offset.w;
             offset.xyz  = offset.xyz * 0.5 + 0.5;
 
+            // ── SSAO_ROBUST_V1 — AMOSTRA FORA DA TELA ─────────────────────
+            //
+            // Amostra que cai fora do viewport lia o texel da borda (clamp) e
+            // devolvia uma profundidade que nao tem nada a ver com aquele
+            // ponto — oclusao inventada nas bordas do viewport, que APARECE E
+            // SOME conforme a camera se move.
+            if (offset.x < 0.0 || offset.x > 1.0 ||
+                offset.y < 0.0 || offset.y > 1.0)
+                continue;
+
             // Profundidade real da geometria naquele pixel
             vec3 samplePosReal = texture(u_Position, offset.xy).rgb;
+
+            // Amostra que caiu no CEU nao oclui nada. Sem isto, o (0,0,0) do
+            // fundo era lido como um ponto na origem do mundo — muitas vezes
+            // mais perto que o fragmento — e produzia uma auréola escura em
+            // volta de tudo que se recorta contra o ceu.
+            vec3 sampleNormal = texture(u_Normal, offset.xy).rgb;
+            if (dot(sampleNormal, sampleNormal) < 0.01)
+                continue;
 
             // Compara distância à câmera
             float sampleDepth = length((u_View * vec4(samplePosReal, 1.0)).xyz);
@@ -231,7 +267,7 @@ namespace axe
     {
         if (!settings.Enabled) return;
 
-        
+
 
         glDisable(GL_DEPTH_TEST);
         glBindVertexArray(m_QuadVAO);

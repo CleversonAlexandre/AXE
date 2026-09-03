@@ -139,6 +139,13 @@ namespace axe
 		glUniform3f(GetUniformLocation(name), value.x, value.y, value.z);
 	}
 
+	// POSTPROCESS_DOMAIN_V1 — ver a nota na interface (shader.hpp).
+	void OpenGLShader::SetFloat2(const std::string& name, const glm::vec2& value)
+	{
+		Bind();
+		glUniform2f(GetUniformLocation(name), value.x, value.y);
+	}
+
 	void OpenGLShader::SetMat3(const std::string& name, const float* value)
 	{
 		Bind();

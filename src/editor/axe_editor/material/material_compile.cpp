@@ -44,16 +44,24 @@ namespace axe
         const bool isLightDomain = (m_Graph->Domain == MaterialDomain::LightFunction);
         const bool isParticleDomain = (m_Graph->Domain == MaterialDomain::Particle);
 
-        if ((isLightDomain || isParticleDomain) && m_Asset
+        // POSTPROCESS_DOMAIN_V1 — terceiro dominio com compilador proprio.
+        // Continua na forma explicita (e nao `!= Surface`) pela razao descrita
+        // acima: DeferredDecal, Volume e UserInterface seguem sem compilador, e
+        // um `else` os coziria como se fossem outra coisa.
+        const bool isPostProcessDomain = (m_Graph->Domain == MaterialDomain::PostProcess);
+
+        if ((isLightDomain || isParticleDomain || isPostProcessDomain) && m_Asset
             && !m_Asset->GetFilePath().empty())
         {
-            auto domainResult = isLightDomain
-                ? MaterialCompiler::CompileLightFunction(m_Graph.get())
-                : MaterialCompiler::CompileParticleFunction(m_Graph.get());
+            auto domainResult =
+                isLightDomain ? MaterialCompiler::CompileLightFunction(m_Graph.get()) :
+                isParticleDomain ? MaterialCompiler::CompileParticleFunction(m_Graph.get()) :
+                MaterialCompiler::CompilePostProcess(m_Graph.get());
 
-            const auto cookedDomain = isLightDomain
-                ? CookedMaterialDomain::LightFunction
-                : CookedMaterialDomain::Particle;
+            const auto cookedDomain =
+                isLightDomain ? CookedMaterialDomain::LightFunction :
+                isParticleDomain ? CookedMaterialDomain::Particle :
+                CookedMaterialDomain::PostProcess;
 
             if (!domainResult.Success)
                 LogError("Compilação (" + std::string(CookedMaterial::DomainName(cookedDomain))

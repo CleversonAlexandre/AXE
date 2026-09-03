@@ -1,3 +1,4 @@
+#include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
 #include "editor/axe_editor/particles/particle_editor_window.hpp"
 #include "axe/particles/particle_system_component.hpp"
 #include "axe/scene/components.hpp"
@@ -985,6 +986,15 @@ namespace axe
             ImTextureID tex = (ImTextureID)(uintptr_t)m_PreviewFramebuffer->GetColorAttachmentRendererID();
             if (tex != (ImTextureID)0)
                 ImGui::Image(tex, sz, ImVec2(0, 1), ImVec2(1, 0));
+
+            // VIEW_GIZMO_V1 — mesmo widget do viewport. Os cantos vem do
+            // GetItemRect logo apos a Image: e o retangulo REAL dela, e nao o
+            // da janela, que difere quando ha barra de ferramentas ou aba.
+            // showTools=false: preview e pequeno, e os botoes de dolly/pan
+            // comeriam area util — o arrasto e o clique nos eixos bastam.
+            if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+                ui::DrawViewGizmo(*m_PreviewRenderer->m_Camera,
+                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false);
             HandlePreviewInput();
         }
         ImGui::End();

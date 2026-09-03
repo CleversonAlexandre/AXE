@@ -89,7 +89,74 @@ namespace axe
         Surface,
         LightFunction,
         Particle,
+
+        // POSTPROCESS_DOMAIN_V1 — efeito de tela inteira escrito no grafo.
+        //
+        // Aqui a POSICAO no enum nao importa para o arquivo: o `.axeshader`
+        // grava o dominio como STRING ("surface", "particle", ...) via
+        // DomainName/DomainFromName, justamente para nao amarrar o formato a
+        // uma ordem de enum. Quem NAO tem essa protecao e o MaterialDomain do
+        // editor, serializado por indice no `.axegraph` — la, entrada nova so
+        // no fim.
+        //
+        // Ao adicionar um dominio aqui: DomainName E DomainFromName, em
+        // material_cooked.cpp. Esquecer o segundo faz o cozido carregar como
+        // "surface" com um aviso no log, em vez de falhar.
+        PostProcess,
     };
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SHADING_MODEL_V1 — o modelo de sombreamento viaja no G-Buffer
+    //
+    //  ── O PROBLEMA ──────────────────────────────────────────────────────────
+    //
+    //  `MaterialShadingModel` existia no dropdown do Material Editor e era
+    //  serializado no `.axegraph`, mas o MaterialCompiler NUNCA lia o campo.
+    //  Escolher "Unlit" nao mudava um pixel. Era menu sem fio ligado.
+    //
+    //  ── POR QUE O ID MORA AQUI, E NAO NO ENUM DA UI ─────────────────────────
+    //
+    //  `MaterialShadingModel` (node_types.hpp, no EDITOR) tem 12 entradas, das
+    //  quais 10 sao placeholders da Unreal que o motor nao implementa. Mandar
+    //  aquele indice para o G-Buffer amarraria o formato de runtime a uma
+    //  ordem de menu — bastaria alguem reordenar o dropdown para todo material
+    //  ja gravado passar a ser sombreado de outro jeito.
+    //
+    //  Entao existem DOIS enums de proposito: o da UI, que pode crescer e
+    //  reordenar a vontade, e este, que e o CONTRATO entre o GLSL gerado pelo
+    //  editor e o lighting pass do axe.dll. O compilador traduz um no outro num
+    //  ponto so.
+    //
+    //  ── ONDE ELE VIAJA ──────────────────────────────────────────────────────
+    //
+    //  No canal .b do attachment 3 do G-Buffer (o `g_PBR`), que era `vec2` num
+    //  alvo RGBA8: .b e .a estavam ALOCADOS e sem uso. Nenhum attachment novo,
+    //  nenhum byte a mais de banda.
+    //
+    //  ATENCAO: .b e .a nao eram zero, eram INDEFINIDOS — um `out vec2` nao
+    //  escreve os outros canais. Por isso TODOS os escritores de g_PBR viraram
+    //  vec4 na mesma rodada (o shader fixo do geometry pass e o gerado pelo
+    //  compilador). Se um dia aparecer um terceiro escritor e ele esquecer o
+    //  .b, aquele material vai ser sombreado por lixo de memoria.
+    //
+    //  Material antigo grava 0 = DefaultLit e continua identico.
+    // ═════════════════════════════════════════════════════════════════════════
+    enum class ShadingModelID : int
+    {
+        DefaultLit = 0,  // Cook-Torrance completo — o caminho de sempre
+        Unlit = 1,  // sem luz nenhuma: albedo + emissive direto
+        Toon = 2,  // difusa quantizada em bandas + especular de corte duro
+    };
+
+    // Fator de codificacao do ID num canal UNORM de 8 bits. O decode e
+    // `int(v * 255.0 + 0.5)`, e o +0.5 nao e decoracao: sem ele, o
+    // arredondamento para baixo transformaria um 2 que voltou como 1.9999 em 1.
+    constexpr float kShadingModelEncodeScale = 1.0f / 255.0f;
+
+    // Bandas do Toon viajam no .a do mesmo texel, normalizadas por 16 — o
+    // limite superior util (acima de ~8 degraus o resultado ja e indistinguivel
+    // de sombreamento continuo, que e justamente o que o Toon nao quer).
+    constexpr float kToonStepsMax = 16.0f;
 
     struct CookedMaterialData
     {

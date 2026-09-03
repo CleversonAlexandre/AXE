@@ -37,6 +37,7 @@ namespace axe
         void DrawPostProcess(PostProcessComponent& pp);
         void DrawInteriorVolume(InteriorVolumeComponent& iv);
         void DrawProbeVolume(ProbeVolumeComponent& pv);
+        void DrawSkyLight(SkyLightComponent& sl);   // SKY_LIGHT_V1
         void DrawReflectionProbe(ReflectionProbeComponent& rp);
 
         static void MarkGraphCacheDirty();
@@ -48,7 +49,8 @@ namespace axe
         // Callback para abrir o Particle Editor a partir do Inspector
         std::function<void(std::shared_ptr<class ParticleSystemAsset>)> m_OnOpenParticleSystem;
     private:
-        void DrawTransform(Transform& transform);
+        // readOnly — SKY_LIGHT_V1b: exibe sem permitir edicao (Sky Light).
+        void DrawTransform(Transform& transform, bool readOnly = false);
         void DrawMaterial(entt::entity entity);
         void DrawMaterialParams(Material& mat);
         void DrawTextureSlot(const char* label,

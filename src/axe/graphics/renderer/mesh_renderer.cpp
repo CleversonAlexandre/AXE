@@ -451,16 +451,24 @@ namespace axe
 
 
         // IBL — slots 5, 6, 7
-        bool hasIBL = m_Environment && m_Environment->HasSkybox() &&
-            m_Environment->Skybox->HasIBL();
+        //
+        // SKY_IBL_V1 — mesma troca do lighting pass deferred: a fonte agora e
+        // IBLSource(). Sem isto, o preview do Material Editor (que roda neste
+        // caminho forward) continuaria sem a luz do ceu procedural e nao
+        // bateria mais com o viewport.
+        //
+        // O HasSkybox() saiu da condicao de proposito: ele testa o cubemap de
+        // ARQUIVO, e a captura procedural nao passa por ele.
+        const CubemapTexture* ibl = m_Environment ? m_Environment->IBLSource() : nullptr;
+        const bool hasIBL = (ibl != nullptr);
 
         shader->SetInt("u_HasIBL", hasIBL ? 1 : 0);
 
         if (hasIBL)
         {
-            m_Environment->Skybox->BindIrradiance(5);
-            m_Environment->Skybox->BindPrefiltered(6);
-            m_Environment->Skybox->BindBRDFLut(7);
+            ibl->BindIrradiance(5);
+            ibl->BindPrefiltered(6);
+            ibl->BindBRDFLut(7);
 
             shader->SetInt("u_IrradianceMap", 5);
             shader->SetInt("u_PrefilteredMap", 6);

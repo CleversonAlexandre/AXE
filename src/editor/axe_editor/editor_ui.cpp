@@ -1,3 +1,4 @@
+#include "axe_editor/asset/asset_viewer_window.hpp"   // ASSET_VIEWER_V1
 #include "editor_ui.hpp"
 #include "axe/audio/audio_engine.hpp"
 #include "axe/project/project_manager.hpp"
@@ -23,6 +24,7 @@ namespace axe
 		m_MaterialEditorWindow.Draw();
 		m_ParticleEditorWindow.Draw();
 		m_SoundCueEditorWindow.Draw();
+		m_AssetViewerWindow.Draw();   // ASSET_VIEWER_V1
 		DrawAudioMixer();
 
 		// Input Settings — carrega o InputConfig.json do projeto atual na
@@ -306,9 +308,9 @@ namespace axe
 				ImGui::MenuItem("Hierarchy", nullptr, &m_ShowHierarchy);
 				ImGui::MenuItem("Viewport", nullptr, &m_ShowViewport);
 				ImGui::MenuItem("Inspector", nullptr, &m_ShowInspector);
-				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);				
+				ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);
 				ImGui::Separator();
-				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);										
+				ImGui::MenuItem("Environment", nullptr, &m_ShowEnvironment);
 				ImGui::Separator();
 				ImGui::MenuItem("Game Mode", nullptr, &m_ShowGameMode);
 
@@ -318,8 +320,8 @@ namespace axe
 					if (seqOpen) m_SequencerWindow.Open();
 					else         m_SequencerWindow.Close();
 				}
-				
-				       
+
+
 				ImGui::EndMenu();
 			}
 
@@ -484,5 +486,5 @@ namespace axe
 		ImGui::End();
 	}
 
-	
+
 }

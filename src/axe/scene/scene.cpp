@@ -17,6 +17,29 @@ namespace axe
 		return entity;
 	}
 
+	// PPVOLUME_ONE_PATH_V1 — ver a nota em scene.hpp.
+	entt::entity Scene::CreatePostProcessVolume(const std::string& name)
+	{
+		entt::entity entity = CreateEntity(name);
+
+		m_Registry.emplace<PostProcessComponent>(entity);
+
+		// Os tres nascem DESATIVADOS: criar um post process global nao pode
+		// escurecer a cena por acidente. Eles existem para estarem a mao no
+		// Inspector — a ESCALA do Transform e a caixa compartilhada dos tres.
+		auto& iv = m_Registry.emplace<InteriorVolumeComponent>(entity);
+		iv.Data.Enabled = false;
+		auto& pv = m_Registry.emplace<ProbeVolumeComponent>(entity);
+		pv.Settings.Enabled = false;
+		auto& rp = m_Registry.emplace<ReflectionProbeComponent>(entity);
+		rp.Settings.Enabled = false;
+
+		if (auto* tc = m_Registry.try_get<TransformComponent>(entity))
+			tc->Data.Scale = { 10.0f, 4.0f, 10.0f };
+
+		return entity;
+	}
+
 	entt::entity Scene::CreateLight(const std::string& name)
 	{
 		entt::entity entity = CreateEntity(name);
@@ -31,6 +54,20 @@ namespace axe
 		return entity;
 	}
 
+
+	// SKY_LIGHT_V1 — ver o comentario no header.
+	entt::entity Scene::CreateSkyLight(const std::string& name)
+	{
+		entt::entity entity = CreateEntity(name);
+
+		auto& sky = m_Registry.emplace<SkyLightComponent>(entity);
+		sky.Data = std::make_shared<SkyLight>();
+
+		// Sem transform util: o ceu vem de todas as direcoes, entao posicao e
+		// rotacao nao significam nada aqui. Fica na origem so para o gizmo de
+		// selecao ter onde aparecer.
+		return entity;
+	}
 
 	void Scene::DestroyEntity(entt::entity entity)
 	{

@@ -9,6 +9,7 @@
 #include "axe/log/log.hpp"
 #include <glad/glad.h>
 #include <algorithm>
+#include <cmath>
 #include <GLFW/glfw3.h>
 
 namespace axe
@@ -43,15 +44,32 @@ namespace axe
     uniform int       u_SSAODebug;
 
     // Shadow — suporta CSM (texture array) ou shadow map simples (fallback)
-    uniform sampler2DArray u_ShadowMapCSM;         // texture array com 4 cascades
+    //
+    // SHADOW_HWPCF_V1 — a MESMA textura chega em duas unidades, com dois
+    // sampler objects diferentes (ver cascaded_shadow_pass.hpp):
+    //   u_ShadowMapCSM (unidade 11) — sampler2DArrayShadow: a unidade de
+    //     textura compara e ja devolve 0..1 filtrado bilinearmente. 1 = passou
+    //     no teste = ILUMINADO.
+    //   u_ShadowMapRaw (unidade 12) — sampler2DArray: profundidade crua, que
+    //     e o que a busca de bloqueador do PCSS precisa.
+    uniform sampler2DArrayShadow u_ShadowMapCSM;   // comparacao por hardware
+    uniform sampler2DArray       u_ShadowMapRaw;   // profundidade crua (PCSS)
     uniform sampler2D      u_ShadowMap;            // shadow map simples (fallback)
     uniform mat4  u_LightSpaceMatrixCSM[4];        // matrizes por cascade
     uniform float u_CascadeSplitDepths[4];         // splits em view space (z negativo)
+    uniform float u_CascadeTexelWorld[4];          // SHADOW_ACNE_V1 — metros por texel
+    uniform float u_CascadeDepthRange[4];          // PCSS_V1 — metros do intervalo [0,1]
+    uniform float u_SunAngularRadius;              // PCSS_V1 — tan(metade do angulo); 0 = PCF fixo
+    uniform float u_MaxPenumbraTexels;
     uniform int   u_CascadeCount;                  // 0 = sem CSM
     uniform mat4  u_LightSpaceMatrix;
     uniform int   u_HasShadowMap;
     uniform mat4  u_View;
     uniform float u_ShadowBias;
+
+    // ── CONTACT_SHADOW_V1 ────────────────────────────────────────────────
+    uniform mat4  u_ViewProjection;        // para projetar o raio na tela
+    uniform float u_ContactShadowLength;   // metros; 0 = desligado
 
     // Luz direcional
     uniform vec3  u_LightDirection;
@@ -59,6 +77,8 @@ namespace axe
     uniform float u_LightIntensity;
     uniform float u_AmbientStrength;
     uniform float u_AmbientShadowFactor; // 0=ambient bloqueado por sombra, 1=ambient livre
+    uniform vec3  u_SkyLightColor;       // SKY_LIGHT_V1 — tinta do ambiente
+    uniform float u_AmbientFloor;        // SKY_SUN_GATE_V1b — piso, 0 = sem luz
     uniform vec3  u_CameraPosition;
     uniform int   u_HasLight;
 
@@ -194,19 +214,328 @@ namespace axe
         return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
     }
 
-    // PCF 3x3 em uma cascade específica
-    float PCFShadow(sampler2DArray shadowArray, int cascade, vec3 projCoords, float bias)
+    // ═════════════════════════════════════════════════════════════════════
+    //  PCSS_V1 — disco de Poisson
+    //
+    //  16 pontos distribuidos de forma quase-uniforme mas NAO regular. Uma
+    //  grade regular com raio variavel produz padrao de moire visivel na
+    //  penumbra.
+    //
+    //  ── SHADOW_ROTDISK_V1 — CORRECAO DO QUE ESTE COMENTARIO PROMETIA ────
+    //
+    //  O Poisson resolve o moire da GRADE, e so ele. Com a tabela FIXA, os
+    //  mesmos 16 offsets sao usados em todo pixel da tela, entao o erro de
+    //  amostragem continua sendo uma FUNCAO DETERMINISTICA DA POSICAO.
+    //
+    //  Onde o shadow map esta sub-amostrado — chao visto em angulo rasante,
+    //  cascade longe onde um texel cobre dezenas de centimetros — funcao
+    //  deterministica da posicao e exatamente a receita de um padrao de
+    //  interferencia. E o "efeito de agua" / as ondas concentricas no chao.
+    //
+    //  A correcao e girar o disco por um angulo diferente em cada pixel. O
+    //  erro nao diminui: ele deixa de ser correlacionado entre pixels
+    //  vizinhos e vira granulado fino, que o olho le como textura em vez de
+    //  como estrutura. E o que a Unreal faz.
+    //
+    //  O angulo vem de Interleaved Gradient Noise (Jorge Jimenez), que e
+    //  barato e distribui bem em blocos pequenos. Em ESPACO DE TELA de
+    //  proposito: assim o TAA, que trabalha em espaco de tela, consegue
+    //  integrar o granulado entre frames e some com ele. Sem TAA o
+    //  granulado fica estatico na tela — ainda muito melhor que a onda.
+    // ═════════════════════════════════════════════════════════════════════
+    float ShadowDitherAngle(vec2 fragCoord)
+    {
+        float n = fract(52.9829189 *
+                        fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
+        return n * 6.28318530718;
+    }
+
+    const vec2 kPoisson16[16] = vec2[](
+        vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
+        vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
+        vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
+        vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
+        vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
+        vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
+        vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
+        vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790));
+
+    // ── SHADOW_HWPCF_V1 — um tap com comparacao no hardware ──────────────
+    //
+    // Devolve OCLUSAO (1 = na sombra). O sampler devolve 1 = iluminado, entao
+    // inverte. Cada chamada ja custa 4 texels filtrados bilinearmente pela
+    // unidade de textura, pelo preco de um.
+    float ShadowTap(int cascade, vec2 uv, float refZ)
+    {
+        return 1.0 - texture(u_ShadowMapCSM, vec4(uv, float(cascade), refZ));
+    }
+
+    // PCF 3x3 em uma cascade específica. Com o tap ja filtrado, os 9 pontos
+    // cobrem na pratica 4x4 texels com peso bilinear — antes eram 9 decisoes
+    // duras de 0 ou 1.
+    float PCFShadow(int cascade, vec3 projCoords, float bias)
     {
         float shadow = 0.0;
-        vec2 texelSize = 1.0 / textureSize(shadowArray, 0).xy;
+        vec2 texelSize = 1.0 / vec2(textureSize(u_ShadowMapCSM, 0).xy);
+        float refZ = projCoords.z - bias;
         for (int x = -1; x <= 1; x++)
             for (int y = -1; y <= 1; y++)
-            {
-                float pcf = texture(shadowArray,
-                    vec3(projCoords.xy + vec2(x, y) * texelSize, float(cascade))).r;
-                shadow += projCoords.z - bias > pcf ? 1.0 : 0.0;
-            }
+                shadow += ShadowTap(cascade,
+                                    projCoords.xy + vec2(x, y) * texelSize, refZ);
         return shadow / 9.0;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  CSM_BLEND_V1 — amostra UMA cascade
+    //
+    //  Extraido para funcao porque agora ele e chamado DUAS vezes na faixa de
+    //  transicao (esta cascade e a proxima), para poder misturar as duas.
+    // ═════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════
+    //  PCSS_V1 — PENUMBRA QUE CRESCE COM A DISTANCIA
+    //
+    //  ── O QUE ESTAVA FALTANDO ──────────────────────────────────────────
+    //
+    //  O PCF de raio fixo borra a sombra IGUALMENTE em todo lugar. Sombra de
+    //  sol de verdade nao e assim: no ponto em que o pe encosta no chao ela e
+    //  quase perfeitamente nitida, e vai abrindo conforme o objeto se afasta
+    //  da superficie. E o sinal mais forte de "isto esta apoiado ali" que uma
+    //  imagem ao ar livre tem — e a ausencia dele e boa parte do que o olho
+    //  acusa como "sombra de jogo".
+    //
+    //  A causa fisica e o TAMANHO ANGULAR do sol (0.53 grau). Uma fonte
+    //  pontual daria borda dura a qualquer distancia.
+    //
+    //  ── COMO E CALCULADO, EM TRES PASSOS ────────────────────────────────
+    //
+    //  1. BUSCA DE BLOQUEADOR: amostra o mapa numa vizinhanca e tira a
+    //     profundidade MEDIA do que esta na frente deste ponto.
+    //  2. LARGURA DA PENUMBRA: a distancia entre bloqueador e receptor,
+    //     convertida para metros pelo DepthRange da cascade, vezes o tamanho
+    //     angular do sol.
+    //  3. PCF com esse raio, em texeis desta cascade.
+    //
+    //  Sem bloqueador nenhum, sai cedo com "iluminado" — e o caso da maior
+    //  parte da tela, entao o custo medio fica bem abaixo do pior caso.
+    // ═════════════════════════════════════════════════════════════════════
+    float PCSSShadow(int cascade, vec3 projCoords, float bias)
+    {
+        vec2 texelSize = 1.0 / vec2(textureSize(u_ShadowMapCSM, 0).xy);
+
+        // SHADOW_ROTDISK_V1 — o disco inteiro gira por pixel. O MESMO angulo
+        // serve a busca e ao filtro (girar duas vezes nao acrescenta nada e
+        // custaria outro seno).
+        float ang = ShadowDitherAngle(gl_FragCoord.xy);
+        float cs = cos(ang), sn = sin(ang);
+        mat2 rot = mat2(cs, -sn, sn, cs);
+
+        // Raio da busca: proporcional ao maior borrao que este sol pode
+        // produzir, limitado pelo teto. Buscar em toda a tela seria correto e
+        // inviavel.
+        float searchTexels = max(u_MaxPenumbraTexels * 0.5, 2.0);
+
+        float refZ = projCoords.z - bias;
+
+        float blockerSum = 0.0;
+        int   blockers   = 0;
+
+        for (int i = 0; i < 16; i++)
+        {
+            // Profundidade CRUA — sampler sem comparacao e sem filtro. Aqui o
+            // valor e lido como numero (a que distancia esta o bloqueador),
+            // entao interpolar seria erro (ver SHADOW_HWPCF_V1).
+            vec2 uv = projCoords.xy + (rot * kPoisson16[i]) * searchTexels * texelSize;
+            float d = texture(u_ShadowMapRaw, vec3(uv, float(cascade))).r;
+            if (d < refZ)
+            {
+                blockerSum += d;
+                blockers++;
+            }
+        }
+
+        if (blockers == 0) return 0.0;   // nada na frente: iluminado
+
+        float avgBlocker = blockerSum / float(blockers);
+
+        // Distancia REAL, em metros, entre quem projeta e quem recebe.
+        float gapMeters = (projCoords.z - avgBlocker) * u_CascadeDepthRange[cascade];
+
+        // Largura da penumbra pelo tamanho angular da fonte, convertida para
+        // texeis desta cascade.
+        float penumbraMeters = gapMeters * u_SunAngularRadius;
+        float radiusTexels = penumbraMeters / max(u_CascadeTexelWorld[cascade], 1e-6);
+
+        // Piso de 1 texel: abaixo disso nao ha o que filtrar, e a borda ficaria
+        // serrilhada em vez de nitida.
+        radiusTexels = clamp(radiusTexels, 1.0, u_MaxPenumbraTexels);
+
+        float shadow = 0.0;
+        for (int i = 0; i < 16; i++)
+        {
+            vec2 uv = projCoords.xy + (rot * kPoisson16[i]) * radiusTexels * texelSize;
+            shadow += ShadowTap(cascade, uv, refZ);
+        }
+        return shadow / 16.0;
+    }
+
+    float SampleCascade(int cascade, vec3 fragPos, vec3 normal, vec3 lightDir)
+    {
+        // ── SHADOW_ACNE_V1 — NORMAL OFFSET ────────────────────────────────
+        //
+        // Desloca o PONTO DE AMOSTRAGEM ao longo da normal antes de projetar
+        // na luz, em vez de mexer na profundidade comparada.
+        //
+        // A acne acontece porque um texel do shadow map cobre uma area do
+        // mundo, e dentro dessa area a superficie sobe e desce — metade dela
+        // fica acima da profundidade gravada e se auto-sombreia. Empurrar o
+        // ponto para FORA da superficie por cerca de um texel tira a amostra
+        // dessa zona de duvida.
+        //
+        // Por que e melhor que bias de profundidade: bias grande o bastante
+        // para matar a acne descola a sombra do pe do objeto (peter-panning).
+        // O deslocamento por normal e LATERAL — nao mexe em quem esta na
+        // frente de quem, entao o contato continua no lugar.
+        //
+        // A escala vem do tamanho REAL do texel desta cascade: o mesmo valor
+        // fixo seria pouco perto e demais longe. E cresce em superficie
+        // rasante, que e onde a area coberta por texel e maior.
+        float ndl = clamp(dot(normal, lightDir), 0.0, 1.0);
+        float offsetScale = u_CascadeTexelWorld[cascade] * 1.5 * (2.0 - ndl);
+        vec3  offsetPos = fragPos + normal * offsetScale;
+
+        vec4 fragPosLS  = u_LightSpaceMatrixCSM[cascade] * vec4(offsetPos, 1.0);
+        vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
+        if (projCoords.z > 1.0) return 0.0;
+
+        // ═════════════════════════════════════════════════════════════════
+        //  SHADOW_BIAS_METERS_V1 — O BIAS PASSA A TER UNIDADE
+        //
+        //  ── O QUE ESTAVA ERRADO ────────────────────────────────────────
+        //
+        //  projCoords.z e uma FRACAO do intervalo de profundidade desta
+        //  cascade — e esse intervalo e completamente diferente em cada uma.
+        //  Medido na configuracao real (2048px, lambda 0.75, zMult 5):
+        //
+        //    Shadow Distance  50 -> cascade 0 cobre  27 m, cascade 3  367 m
+        //    Shadow Distance 200 -> cascade 0 cobre 100 m, cascade 3 1474 m
+        //
+        //  O mesmo u_ShadowBias = 0.005 valia, portanto, 14 cm na cascade 0 e
+        //  1,8 METRO na cascade 3 — e ao trocar o Shadow Distance de 50 para
+        //  200 todos esses numeros multiplicavam por ~4 de uma vez.
+        //
+        //  O `biasScale = cascade*0.5+1` era um chute para compensar: dava
+        //  2,5x entre a primeira e a ultima cascade, quando a razao real e
+        //  ~15x. E por isso que UM slider de Shadow Bias nunca conseguia
+        //  ficar certo nas 4 cascades ao mesmo tempo, e por isso que mexer no
+        //  Shadow Distance obrigava a re-ajustar o bias.
+        //
+        //  ── COMO FICA ──────────────────────────────────────────────────
+        //
+        //  O bias e calculado em METROS e so no fim convertido para a escala
+        //  desta cascade. Duas parcelas:
+        //
+        //  1. TEXEL x INCLINACAO. Dentro de um texel a superficie sobe ou
+        //     desce, e quanto mais rasante a luz, mais ela sobe. A variacao
+        //     maxima e o tamanho do texel vezes a tangente do angulo — que e
+        //     a quantidade EXATA que precisa ser compensada. Como isso ja
+        //     usa o texel REAL da cascade, a parcela se ajusta sozinha em
+        //     todas as 4 e em qualquer Shadow Distance.
+        //
+        //  2. u_ShadowBias, agora um piso constante EM METROS, para a
+        //     precisao do proprio depth buffer. E o unico numero que sobra
+        //     para o artista, e ele passa a significar sempre a mesma coisa.
+        //
+        //  A tangente e limitada em 4 (~76 graus): sem teto, luz rasante
+        //  manda o bias para o infinito e a sombra descola do objeto.
+        // ═════════════════════════════════════════════════════════════════
+        float slopeTan = min(sqrt(1.0 - ndl * ndl) / max(ndl, 0.15), 4.0);
+        float biasMeters = u_ShadowBias
+                         + u_CascadeTexelWorld[cascade] * (0.5 + slopeTan);
+
+        float bias = biasMeters / max(u_CascadeDepthRange[cascade], 1e-4);
+
+        // PCSS_V1 — SunAngularRadius em 0 volta ao PCF de raio fixo, que e
+        // mais barato. E o interruptor, e ele vive no Inspector da luz.
+        if (u_SunAngularRadius > 0.0)
+            return PCSSShadow(cascade, projCoords, bias);
+
+        return PCFShadow(cascade, projCoords, bias);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  CONTACT_SHADOW_V1 — A SOMBRA QUE O SHADOW MAP NAO CONSEGUE TER
+    //
+    //  ── O PROBLEMA QUE ELA RESOLVE ───────────────────────────────────────
+    //
+    //  Todo shadow map tem uma resolucao, e nela um texel cobre centimetros
+    //  (perto) a dezenas de centimetros (longe). Contato menor que um texel
+    //  simplesmente NAO EXISTE no mapa: o pe encostando no chao, o vinco onde
+    //  a caixa toca a parede, a base de um poste. O olho le isso como o objeto
+    //  FLUTUANDO — e nenhum ajuste de bias, cascade ou penumbra conserta,
+    //  porque a informacao nunca foi gravada.
+    //
+    //  ── COMO FUNCIONA ────────────────────────────────────────────────────
+    //
+    //  Em vez de consultar um mapa, marcha um raio curto do fragmento EM
+    //  DIRECAO AO SOL, projeta cada passo na tela e pergunta ao G-Buffer de
+    //  posicao o que esta visivel ali. Se a superficie visivel esta NA FRENTE
+    //  do ponto marchado, alguma coisa bloqueia o sol — e essa alguma coisa
+    //  tem tamanho de pixel, nao de texel de shadow map.
+    //
+    //  E o `Contact Shadow Length` da Unreal, e o motivo de existir la e o
+    //  mesmo: complementar o shadow map na escala em que ele nao alcanca.
+    //
+    //  ── OS TRES CUIDADOS QUE FAZEM A DIFERENCA ───────────────────────────
+    //
+    //  1. JANELA DE ESPESSURA. Se a superficie visivel esta MUITO mais perto,
+    //     ela nao e um bloqueador — e outro objeto na frente, sem relacao. Sem
+    //     essa janela aparece uma auréola escura em volta de tudo, que e o
+    //     defeito classico de sombra em espaco de tela.
+    //
+    //  2. DITHER. Sem jitter, 12 passos fixos viram 12 degraus visiveis. Com
+    //     jitter o mesmo erro vira granulado, que o TAA integra e some.
+    //
+    //  3. FUNDO. Posicao (0,0,0) no G-Buffer e ceu, nao geometria na origem
+    //     do mundo — o mesmo cuidado do SSAO_ROBUST_V1.
+    // ═════════════════════════════════════════════════════════════════════
+    float ContactShadow(vec3 fragPos, vec3 N, vec3 L)
+    {
+        if (u_ContactShadowLength <= 0.0) return 0.0;
+
+        const int kSteps = 12;
+        float stepLen = u_ContactShadowLength / float(kSteps);
+
+        // Fracao pseudo-aleatoria por pixel, reaproveitando o ruido do disco
+        // de sombra (2*pi -> 0..1).
+        float jitter = fract(ShadowDitherAngle(gl_FragCoord.xy) * 0.15915494);
+
+        // Sai da propria superficie antes de comecar, senao o primeiro passo
+        // acha o proprio fragmento e tudo fica sombreado.
+        vec3 origin = fragPos + N * (stepLen * 0.5);
+
+        // Janela de espessura: bloqueador plausivel esta ENTRE estes dois.
+        float minDiff = stepLen * 0.25;
+        float maxDiff = stepLen * 4.0;
+
+        for (int i = 1; i <= kSteps; ++i)
+        {
+            vec3 p = origin + L * (stepLen * (float(i) + jitter));
+
+            vec4 clip = u_ViewProjection * vec4(p, 1.0);
+            if (clip.w <= 0.0) break;                       // atras da camera
+            vec2 ndc = clip.xy / clip.w;
+            if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0) break; // saiu da tela
+            vec2 uv = ndc * 0.5 + 0.5;
+
+            vec3 surf = texture(u_Position, uv).xyz;
+            if (dot(surf, surf) < 1e-6) continue;            // ceu
+
+            float diff = length(p - u_CameraPosition)
+                       - length(surf - u_CameraPosition);
+
+            if (diff > minDiff && diff < maxDiff) return 1.0;
+        }
+        return 0.0;
     }
 
     float ShadowCalculation(vec3 fragPos, vec3 normal, vec3 lightDir)
@@ -214,9 +543,9 @@ namespace axe
         // ── CSM — seleciona cascade pela profundidade view space ───────────
         if (u_CascadeCount > 0)
         {
-            // Converte fragPos (world) para view space para selecionar cascade por profundidade
             vec4 fragViewPos = u_View * vec4(fragPos, 1.0);
             float depth = abs(fragViewPos.z);
+
             int cascade = u_CascadeCount - 1;
             for (int i = 0; i < u_CascadeCount; ++i)
             {
@@ -227,15 +556,51 @@ namespace axe
                 }
             }
 
-            vec4 fragPosLS  = u_LightSpaceMatrixCSM[cascade] * vec4(fragPos, 1.0);
-            vec3 projCoords = fragPosLS.xyz / fragPosLS.w * 0.5 + 0.5;
-            if (projCoords.z > 1.0) return 0.0;
+            float shadow = SampleCascade(cascade, fragPos, normal, lightDir);
 
-            // Bias adaptativo por cascade — cascades longe precisam de mais bias
-            float biasScale = max(1.0, float(cascade) * 0.5 + 1.0);
-            float bias = max(u_ShadowBias * biasScale * (1.0 - dot(normal, lightDir)), u_ShadowBias * biasScale);
+            // ═══════════════════════════════════════════════════════════════
+            //  CSM_BLEND_V1 — A METADE QUE FALTAVA
+            //
+            //  O CSM_STABLE_V1 acabou com a sombra NADANDO (esfera + snap de
+            //  texel). O que sobrou foi a EMENDA entre cascades: a escolha era
+            //  um corte seco, e cada cascade tem um tamanho de texel diferente.
+            //  Na linha exata do split, a sombra mudava de nitidez e de
+            //  posicao de um pixel para o vizinho — e como essa linha e uma
+            //  DISTANCIA DA CAMERA, ela varre o chao conforme voce anda. O
+            //  olho le isso como "a sombra se mexeu".
+            //
+            //  E por isso que aumentar o Shadow Distance de 50 para 200
+            //  "melhorou um pouco" sem resolver: empurrou os splits para
+            //  longe, entao a emenda passou a cruzar o chao mais longe de
+            //  voce — mas ela continua la, e agora com menos resolucao.
+            //
+            //  Aqui as duas cascades sao amostradas na faixa final de cada uma
+            //  e misturadas. A emenda deixa de ser uma linha e vira uma
+            //  transicao que o olho nao acha.
+            //
+            //  Custa um segundo PCF 3x3 SOMENTE nos ~12% finais de cada
+            //  cascade — o resto da tela continua com uma amostra so.
+            // ═══════════════════════════════════════════════════════════════
+            const float kBlendFraction = 0.12;
 
-            return PCFShadow(u_ShadowMapCSM, cascade, projCoords, bias);
+            if (cascade < u_CascadeCount - 1)
+            {
+                float splitEnd   = u_CascadeSplitDepths[cascade];
+                float splitBegin = (cascade == 0) ? 0.0 : u_CascadeSplitDepths[cascade - 1];
+                float range      = max(splitEnd - splitBegin, 1e-4);
+
+                float bandStart = splitEnd - range * kBlendFraction;
+
+                if (depth > bandStart)
+                {
+                    float t = clamp((depth - bandStart) / max(splitEnd - bandStart, 1e-4),
+                                    0.0, 1.0);
+                    float next = SampleCascade(cascade + 1, fragPos, normal, lightDir);
+                    shadow = mix(shadow, next, t);
+                }
+            }
+
+            return shadow;
         }
 
         // ── Fallback: shadow map simples ───────────────────────────────────
@@ -420,8 +785,13 @@ namespace axe
         return shadow * 0.25;
     }
 
+    // SHADING_MODEL_V1 — `isToon`/`toonSteps` entraram na assinatura para que
+    // uma luz de ponto sobre um material toon tambem caia em bandas. Sem isso,
+    // o personagem ficaria celula sob o sol e PBR liso sob um poste — o mesmo
+    // material com duas aparencias, dependendo de qual luz o alcanca.
     vec3 CalcPointLight(PointLight pl, vec3 fragPos, vec3 N, vec3 V,
-                        vec3 albedo, float metallic, float roughness, vec3 F0)
+                        vec3 albedo, float metallic, float roughness, vec3 F0,
+                        bool isToon, float toonSteps)
     {
         vec3  L    = normalize(pl.Position - fragPos);
         vec3  H    = normalize(V + L);
@@ -450,6 +820,22 @@ namespace axe
 
         vec3 radiance = pl.Color * pl.Intensity * att;
 
+        // SHADING_MODEL_V1 — mesma regra do sol: quantiza a LUZ (aqui, o
+        // NdotL ja atenuado pela distancia e pelo cone), nunca a cor.
+        if (isToon)
+        {
+            float lit  = max(dot(N, L), 0.0) * att;
+            float band = floor(clamp(lit, 0.0, 1.0) * toonSteps + 0.5) / toonSteps;
+
+            float specCut  = mix(0.995, 0.75, roughness);
+            float toonSpec = step(specCut, pow(max(dot(N, H), 0.0), 64.0))
+                           * (1.0 - roughness) * band;
+
+            // `pl.Color * pl.Intensity` e nao `radiance`: a atenuacao ja
+            // entrou no `band`, e aplica-la duas vezes apagaria a luz.
+            return (albedo * band + vec3(toonSpec)) * pl.Color * pl.Intensity;
+        }
+
         float NDF = DistributionGGX(N, H, roughness);
         float G   = GeometrySmith(N, V, L, roughness);
         vec3  F   = FresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -472,9 +858,20 @@ namespace axe
         vec4  albedoM   = texture(u_Albedo, v_TexCoord);
         vec3  albedo    = albedoM.rgb;
         float metallic  = albedoM.a;
-        vec2  pbr       = texture(u_PBR, v_TexCoord).rg;
+
+        // SHADING_MODEL_V1 — o texel do G-Buffer 3 carrega QUATRO coisas:
+        //   .r roughness   .g ambient occlusion
+        //   .b id do shading model   .a bandas do toon
+        // Os dois ultimos eram canais alocados e sem uso. Ver a nota longa em
+        // axe/material/material_cooked.hpp.
+        vec4  pbr       = texture(u_PBR, v_TexCoord);
         float roughness = pbr.r;
         float matAO     = pbr.g;
+
+        // O +0.5 nao e decoracao: sem ele, um id 2 que voltasse do UNORM como
+        // 1.9999 viraria 1 — o material seria Unlit em vez de Toon.
+        int   shadingModel = int(pbr.b * 255.0 + 0.5);
+        float toonSteps    = max(floor(pbr.a * 16.0 + 0.5), 2.0);
 
         float ao = matAO;
         if (u_HasSSAO == 1)
@@ -496,8 +893,27 @@ namespace axe
             return;
         }
 
+        // ── SHADING_MODEL_V1 — UNLIT ─────────────────────────────────────────
+        //
+        // Sai ANTES de tudo: nem sombra, nem ambient, nem IBL, nem probes.
+        // Unlit quer dizer que o albedo E a cor final — e a base de cartoon
+        // chapado, de VFX, de interface no mundo e de qualquer material que
+        // precise ter exatamente a cor que o artista pintou.
+        //
+        // Aqui em cima, e nao no fim com um mix, porque assim o pixel Unlit
+        // custa quase nada: pula o Cook-Torrance, o loop de point lights, a
+        // avaliacao de probes e a de reflection probes.
+        if (shadingModel == 1)
+        {
+            FragColor = vec4(albedo + texture(u_Emissive, v_TexCoord).rgb, 1.0);
+            return;
+        }
+
         vec3 V = normalize(u_CameraPosition - fragPos);
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+        // SHADING_MODEL_V1 — atalho de leitura para o resto do main.
+        bool isToon = (shadingModel == 2);
 
         // Interior Volumes — quanto da luz externa (sol + ambient/IBL)
         // chega neste fragmento. 1.0 = fragmento fora de qualquer volume.
@@ -513,7 +929,56 @@ namespace axe
         float probeSkyVis = 1.0;
         float probeOcc = 1.0;
         EvalProbeVolumes(fragPos, N, probeW, probeIrr, probeSkyVis, probeOcc);
-        float probeSunOcc = mix(1.0, probeOcc, probeW);
+        // ═════════════════════════════════════════════════════════════════
+        //  PROBE_SUN_AUTHORITY_V1 — CADA SISTEMA NO SEU LUGAR
+        //
+        //  ── O SINTOMA ─────────────────────────────────────────────────────
+        //
+        //  O personagem "pulava" do escuro para o claro ao andar, e a fronteira
+        //  entre sombra e luz parecia um PLANO liso que nao correspondia a
+        //  objeto nenhum.
+        //
+        //  ── A CAUSA ───────────────────────────────────────────────────────
+        //
+        //  probeOcc vem de sh0.a — a visibilidade GEOMETRICA do ceu bakeada em
+        //  cada probe — e estava multiplicando o SOL DIRETO em todo pixel
+        //  dentro do volume. So que o grid e ESPARSO (6x3x6 sobre a caixa
+        //  inteira): entre uma probe e a vizinha ha metros. O sol entao acendia
+        //  e apagava na resolucao do GRID, com interpolacao trilinear — o que
+        //  na tela vira exatamente aquilo: um degrade largo e liso, sem relacao
+        //  com a geometria, e um personagem que muda de iluminacao aos saltos.
+        //
+        //  E pior: isso DISPUTA com o shadow map. Onde o shadow map diz
+        //  "iluminado" e a probe diz "ocluido", aparece uma sombra que nao e a
+        //  sombra de nada.
+        //
+        //  ── COMO A UNREAL FAZ ─────────────────────────────────────────────
+        //
+        //  A Unreal NAO usa probes para ocluir sol direto. La a oclusao do sol
+        //  e sempre do shadow map (CSM por pixel, continuo) e, mais longe,
+        //  Distance Field Shadows. O volumetric lightmap da INDIRETA e so isso.
+        //  Occlusion Probes e uma ideia da Unity, e la ela existe para luz
+        //  BAKEADA que nao tem sombra em tempo real nenhuma.
+        //
+        //  ── A CORRECAO ────────────────────────────────────────────────────
+        //
+        //  A oclusao por probe passa a agir SO onde o shadow map nao alcanca —
+        //  alem do Shadow Distance. Dentro do alcance, quem manda no sol e o
+        //  shadow map, que e por pixel e continuo. A troca e suave nos ultimos
+        //  20% da distancia, entao nao ha linha nova.
+        //
+        //  Interior fechado dentro do alcance nao perde nada: quem trata esse
+        //  caso e o Interior Volume (interiorDirect), que e explicito.
+        // ═════════════════════════════════════════════════════════════════
+        float shadowAuthority = 0.0;
+        if (u_HasShadowMap == 1 && u_CascadeCount > 0)
+        {
+            float viewDepth = abs((u_View * vec4(fragPos, 1.0)).z);
+            float far = max(u_CascadeSplitDepths[u_CascadeCount - 1], 1e-3);
+            shadowAuthority = 1.0 - smoothstep(far * 0.8, far, viewDepth);
+        }
+
+        float probeSunOcc = mix(mix(1.0, probeOcc, probeW), 1.0, shadowAuthority);
 
         // --- Luz direcional ---
         vec3  Lo     = vec3(0.0);
@@ -541,6 +1006,13 @@ namespace axe
             if (u_HasShadowMap == 1)
                 shadow = ShadowCalculation(fragPos, N, L);
 
+            // CONTACT_SHADOW_V1 — complementa, nao substitui. Pulado onde a
+            // sombra do mapa ja e total (nao ha o que escurecer) e onde a
+            // face nao ve o sol (NdotL 0) — as duas condicoes cobrem a maior
+            // parte da tela, entao o custo medio fica bem abaixo do pior caso.
+            if (shadow < 0.999 && NdotL > 0.0)
+                shadow = max(shadow, ContactShadow(fragPos, N, L));
+
             // Cookie — projeta fragPos no plano perpendicular à direção da
             // luz (paralela, então sem perspectiva — só tiling por escala)
             vec3 dirCookieTint = vec3(1.0);
@@ -551,15 +1023,47 @@ namespace axe
                 dirCookieTint = texture(u_DirCookie, fract(vec2(cu, cv))).rgb;
             }
 
-            // interiorDirect: dentro de um Interior Volume, o sol não
-            // entra — independente do shadow map cobrir ou não o teto.
-            Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5) * dirCookieTint * interiorDirect * probeSunOcc;
+            // ── SHADING_MODEL_V1 — TOON ──────────────────────────────────────
+            //
+            // A quantizacao acontece no termo de LUZ (NdotL ja multiplicado
+            // pela sombra e pelas oclusoes), e nao na cor final. Quantizar a
+            // cor produziria posterizacao — degraus na textura e no ambient
+            // tambem. Quantizar a luz produz CELULA: a textura passa inteira,
+            // so a iluminacao dela e que anda em degraus. E a diferenca entre
+            // parecer estilizado e parecer com pouca profundidade de cor.
+            //
+            // Note que sombra, Interior Volumes e Occlusion Probes entram
+            // ANTES do degrau — o toon herda de graca todo o sistema de
+            // sombras que ja existe, em vez de precisar do seu proprio.
+            if (isToon)
+            {
+                float lit  = NdotL * (1.0 - shadow) * interiorDirect * probeSunOcc;
+                float band = floor(clamp(lit, 0.0, 1.0) * toonSteps + 0.5) / toonSteps;
+
+                // Especular de corte duro. O limiar vem do ROUGHNESS: liso =
+                // brilho pequeno e concentrado, aspero = maior e mais suave.
+                // Reusa um parametro que o artista ja mexe, em vez de gastar o
+                // ultimo canal livre do G-Buffer com um slider novo.
+                float specCut  = mix(0.995, 0.75, roughness);
+                float toonSpec = step(specCut, pow(max(dot(N, H), 0.0), 64.0))
+                               * (1.0 - roughness) * band;
+
+                // `* band` no especular de proposito: brilho especular dentro
+                // da banda de sombra e o erro classico do toon caseiro.
+                Lo += (albedo * band + vec3(toonSpec)) * radiance * dirCookieTint;
+            }
+            else
+            {
+                // interiorDirect: dentro de um Interior Volume, o sol não
+                // entra — independente do shadow map cobrir ou não o teto.
+                Lo += (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow) * mix(1.0, ao, 0.5) * dirCookieTint * interiorDirect * probeSunOcc;
+            }
         }
 
         // --- Point lights --- (independente da direcional)
         for (int i = 0; i < u_NumPointLights; i++)
         {
-            vec3 contribution = CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0);
+            vec3 contribution = CalcPointLight(u_PointLights[i], fragPos, N, V, albedo, metallic, roughness, F0, isToon, toonSteps);
 
             // Sombra da luz — só quando ela ganhou uma camada neste frame
             if (u_PointLights[i].ShadowLayer >= 0)
@@ -651,11 +1155,14 @@ namespace axe
 
             vec3 ibl = (kD_amb * diffuse_ibl + specular_ibl) * ao * u_IBLIntensity;
             vec3 flatAmbient = u_AmbientStrength * albedo * ao * skyAtten;
-            ambient = (ibl + flatAmbient) * shadowedAmbient;
+            // SKY_LIGHT_V1 — a tinta do Sky Light multiplica TODO o ambiente
+            // (IBL e chapado), porque os dois representam a mesma coisa: luz
+            // que vem do ceu.
+            ambient = (ibl + flatAmbient) * shadowedAmbient * u_SkyLightColor;
         }
         else
         {
-            ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao * shadowedAmbient;
+            ambient = u_AmbientStrength * (u_HasLight == 1 ? u_LightColor : vec3(1.0)) * albedo * ao * shadowedAmbient * u_SkyLightColor;
             // Sem IBL: as probes substituem o ambient constante inteiro
             ambient = mix(ambient, probeIrr * albedo * ao, probeW);
         }
@@ -665,10 +1172,23 @@ namespace axe
         ambient *= interiorAmbient;
 
         vec3 color = ambient + Lo;
-        // O piso mínimo (2% do albedo) também é "luz de fora" — dentro de
-        // um interior ele acompanha o fator, senão a sala nunca escurece
-        // de verdade.
-        color = max(color, albedo * 0.02 * interiorAmbient);
+
+        // ═════════════════════════════════════════════════════════════════
+        //  SKY_SUN_GATE_V1b — O PISO DE 2% ERA UM PISO DE VERDADE
+        //
+        //  Aqui havia `max(color, albedo * 0.02 * interiorAmbient)` com o
+        //  0.02 CRAVADO. Um piso constante significa que a cena NUNCA fica
+        //  preta: apagado o sol, apagado o Sky Light, apagado o HDRI, cada
+        //  superficie continuava devolvendo 2% do proprio albedo. Era por
+        //  isso que "de noite os objetos ainda aparecem".
+        //
+        //  Um piso desses e mentira: ele nao representa luz nenhuma da cena,
+        //  so evita preto puro. Agora o valor vem da CPU e ja chega
+        //  multiplicado pelo mesmo portao do sol e pelo estado do Sky Light,
+        //  entao ele acompanha a luz que EXISTE — e vai a zero quando nao ha
+        //  nenhuma, que e o comportamento pedido.
+        // ═════════════════════════════════════════════════════════════════
+        color = max(color, albedo * u_AmbientFloor * interiorAmbient);
 
         // Emissive — somado direto, sem ser afetado por luz/sombra/AO,
         // assim como no caminho forward (preview do material).
@@ -680,6 +1200,9 @@ namespace axe
 
     void OpenGLLightingPass::Initialize()
     {
+        // Carimbo de versao — conferir NO LOG antes de investigar sombreamento.
+        AXE_CORE_INFO("PCSS_V1: penumbra por tamanho angular do sol + SHADOW_ACNE_V1 (normal offset)");
+
         try
         {
             m_Shader = Shader::Create(s_QuadVert, s_LightingFrag);
@@ -832,12 +1355,33 @@ namespace axe
         }
         m_Shader->SetInt("u_SSAODebug", m_SSAODebug ? 1 : 0);
 
-        // Shadow — slot 5 (legacy) + slot 11 (CSM array)
+        // ── SHADOW_HWPCF_V1 — as unidades dos samplers de sombra ─────────
+        //
+        // Fixadas em 11/12 SEMPRE, inclusive quando nao ha CSM. Uniform de
+        // sampler comeca em ZERO, e a unidade 0 tem o G-Buffer de posicao —
+        // um sampler2DArrayShadow apontando para uma textura 2D de cor e
+        // incompatibilidade de tipo, que e comportamento indefinido mesmo
+        // quando o codigo nunca amostra (u_CascadeCount = 0).
+        m_Shader->SetInt("u_ShadowMapCSM", 11);
+        m_Shader->SetInt("u_ShadowMapRaw", 12);
+
+        // Shadow — slot 5 (legacy) + slots 11/12 (CSM array)
         if (csm && csm->IsInitialized())
         {
-            // CSM — texture array com todas as cascades
+            // ── SHADOW_HWPCF_V1 — a MESMA textura em duas unidades ───────
+            //
+            // 11 com o sampler de comparacao (PCF de hardware, filtrado),
+            // 12 com o sampler cru (busca de bloqueador do PCSS). O modo de
+            // comparacao e parametro da textura, e sampler object e a unica
+            // forma de ter os dois no mesmo frame sem duplicar o mapa.
+            //
+            // Os samplers sao DESBINDADOS no fim do Execute: eles ficam
+            // presos a unidade ate serem trocados, e vazariam para qualquer
+            // passe seguinte que use as unidades 11/12.
             glBindTextureUnit(11, csm->GetDepthArrayID());
-            m_Shader->SetInt("u_ShadowMapCSM", 11);
+            glBindTextureUnit(12, csm->GetDepthArrayID());
+            glBindSampler(11, csm->GetCompareSamplerID());
+            glBindSampler(12, csm->GetRawSamplerID());
             m_Shader->SetInt("u_CascadeCount", csm->GetCascadeCount());
 
             const auto& cascades = csm->GetCascades();
@@ -847,7 +1391,44 @@ namespace axe
                 std::string splitKey = "u_CascadeSplitDepths[" + std::to_string(i) + "]";
                 m_Shader->SetMat4(matKey.c_str(), glm::value_ptr(cascades[i].LightSpaceMatrix));
                 m_Shader->SetFloat(splitKey.c_str(), cascades[i].SplitDepth);
+
+                // SHADOW_ACNE_V1 — metros por texel desta cascade.
+                std::string texelKey = "u_CascadeTexelWorld[" + std::to_string(i) + "]";
+                m_Shader->SetFloat(texelKey.c_str(), cascades[i].TexelWorldSize);
+
+                // PCSS_V1
+                std::string rangeKey = "u_CascadeDepthRange[" + std::to_string(i) + "]";
+                m_Shader->SetFloat(rangeKey.c_str(), cascades[i].DepthRange);
             }
+            // ── PCSS_V1 — o tamanho angular da fonte ─────────────────────
+            //
+            // Enviado como a TANGENTE DA METADE do angulo, que e o fator que
+            // multiplica a distancia para dar a largura da penumbra. Converter
+            // aqui, e nao no shader, evita repetir trigonometria por pixel.
+            // ── CLOUDS_SOFTEN_SUN_V1 ─────────────────────────────────
+            //
+            // Tamanho angular EFETIVO do sol: o valor autoral e o de CEU
+            // LIMPO, e a cobertura de nuvens o alarga ate ~35 graus (fonte
+            // difusa de dia encoberto). Curva ao QUADRADO porque nuvem rala
+            // quase nao muda a sombra — so ceu bem fechado e que a dissolve.
+            //
+            // 35 e nao 90: acima disso o PCSS pediria um raio de penumbra que
+            // o teto de MaxPenumbraTexels ja corta — trabalho jogado fora.
+            float sunDeg = light ? light->SunAngularDegrees : 0.0f;
+            if (light && m_HasSkyLight && m_SkyLight.Enabled &&
+                m_SkyLight.ProceduralSky && m_SkyLight.CloudsSoftenSun)
+            {
+                const float c = glm::clamp(m_SkyLight.CloudCoverage, 0.0f, 1.0f);
+                sunDeg = glm::mix(sunDeg, 35.0f, c * c);
+            }
+            const float sunTan = (sunDeg > 0.0f)
+                ? std::tan(glm::radians(sunDeg) * 0.5f) * 2.0f
+                : 0.0f;
+
+            m_Shader->SetFloat("u_SunAngularRadius", sunTan);
+            m_Shader->SetFloat("u_MaxPenumbraTexels",
+                light ? glm::max(light->MaxPenumbraTexels, 1.0f) : 16.0f);
+
             m_Shader->SetInt("u_HasShadowMap", 1);
         }
         else if (shadowMapID != 0)
@@ -865,6 +1446,109 @@ namespace axe
             m_Shader->SetInt("u_CascadeCount", 0);
         }
 
+        // ═════════════════════════════════════════════════════════════════
+        //  SKY_LIGHT_V1 — QUEM MANDA NO AMBIENTE
+        //
+        //  Os tres valores de ambiente (intensidade do IBL, quanto a sombra
+        //  bloqueia o ambiente, e o ambiente chapado) sao resolvidos AQUI,
+        //  num ponto so, antes de qualquer coisa da luz direcional. Assim o
+        //  bloco da luz abaixo nao volta a decidir sobre ambiente — que era
+        //  exatamente o acoplamento que esta rodada desfaz.
+        //
+        //  Precedencia:
+        //    1. Sky Light da cena, se existir (o caminho normal daqui pra
+        //       frente — a migracao do SceneSerializer garante que toda cena
+        //       aberta ganha um);
+        //    2. campos LEGADOS do DirectionalLight, se nao houver Sky Light
+        //       mas houver sol — cena vinda de qualquer caminho que escape da
+        //       migracao continua com a mesma aparencia em vez de escurecer;
+        //    3. nada dos dois: ambiente ZERO. E o caso "cena sem sol e sem
+        //       sky light", e escuro e a resposta certa.
+        //
+        //  Repare que o Sky Light NAO inventa luz: ele escala o cubemap
+        //  capturado do ceu, e esse ceu obedece ao sol desde o
+        //  SKYLIGHT_CHAIN_V1. Sky Light em 1.0 com o sol apagado continua
+        //  dando escuro, que e o comportamento fisico.
+        // ═════════════════════════════════════════════════════════════════
+        {
+            float     iblIntensity = 0.0f;
+            float     ambientShadow = 1.0f;
+            float     flatAmbient = 0.0f;
+            glm::vec3 skyTint(1.0f);
+
+            if (m_HasSkyLight)
+            {
+                if (m_SkyLight.Enabled)
+                {
+                    iblIntensity = m_SkyLight.Intensity;
+                    ambientShadow = m_SkyLight.ShadowFactor;
+                    flatAmbient = m_SkyLight.ConstantAmbient;
+                    skyTint = m_SkyLight.Color;
+                }
+                // Enabled=false cai nos zeros acima de proposito: desligar o
+                // Sky Light tem que apagar o ambiente INTEIRO, inclusive o
+                // chapado. E assim que se ve quanto da imagem e o sol.
+            }
+            else if (light)
+            {
+                iblIntensity = light->IBLIntensity;
+                ambientShadow = light->AmbientShadowFactor;
+                flatAmbient = light->AmbientStrength;
+            }
+
+            // ═════════════════════════════════════════════════════════════
+            //  SKY_SUN_GATE_V1 — SEM SOL NÃO HÁ DIA
+            //
+            //  Eu tinha defendido que um HDRI é fonte de luz própria e por
+            //  isso continuava iluminando sem Luz Direcional. Está errado no
+            //  que importa: um HDRI de céu diurno é uma FOTOGRAFIA de luz do
+            //  sol espalhada pela atmosfera. Apagado o sol, aquela luz não
+            //  existe mais — a foto continua existindo, a luz não.
+            //
+            //  Então o ambiente INTEIRO (IBL e chapado, procedural ou HDRI)
+            //  passa por este portão. É o que faz "apaguei o sol" significar
+            //  escuro, que é o comportamento esperado de qualquer engine.
+            //
+            //  A curva satura em k=0.15, muito mais rápido que a do céu
+            //  (k=0.5), de propósito:
+            //     I = 0     -> 0.00   (apagado é apagado)
+            //     I = 0.15  -> 0.63
+            //     I = 0.5   -> 0.96
+            //     I >= 1    -> ~1.00  (qualquer cena iluminada: intacta)
+            //  Assim ele só morde quando o sol está de fato apagado ou quase,
+            //  e quase não soma com o escurecimento que o céu procedural já
+            //  faz por conta própria.
+            //
+            //  Sem Sky Light na cena (caminho legado) o portão também vale:
+            //  o default do desenho é depender do sol.
+            // ═════════════════════════════════════════════════════════════
+            const bool sunGated = !m_HasSkyLight || m_SkyLight.SunDependent;
+            if (sunGated)
+            {
+                const float sunI = light ? std::max(light->Intensity, 0.0f) : 0.0f;
+                const float gate = 1.0f - std::exp(-sunI / 0.15f);
+                iblIntensity *= gate;
+                flatAmbient *= gate;
+            }
+
+            m_Shader->SetFloat("u_IBLIntensity", iblIntensity);
+            m_Shader->SetFloat("u_AmbientShadowFactor", ambientShadow);
+            m_Shader->SetFloat("u_AmbientStrength", flatAmbient);
+            m_Shader->SetFloat3("u_SkyLightColor", skyTint);
+
+            // Piso minimo do ambiente. Era 0.02 cravado NO SHADER; agora
+            // acompanha a luz que existe: some junto com o sol, e some de vez
+            // com o Sky Light desligado.
+            float ambientFloor = 0.02f;
+            if (m_HasSkyLight && !m_SkyLight.Enabled) ambientFloor = 0.0f;
+            if (sunGated)
+            {
+                const float sunI = light ? std::max(light->Intensity, 0.0f) : 0.0f;
+                ambientFloor *= 1.0f - std::exp(-sunI / 0.15f);
+            }
+            m_Shader->SetFloat("u_AmbientFloor", ambientFloor);
+        }
+
         // Luz direcional
         if (light)
         {
@@ -874,11 +1558,25 @@ namespace axe
             // Material attachado, então essa multiplicação é segura mesmo
             // sem nenhum grafo configurado.
             m_Shader->SetFloat3("u_LightColor", light->Color * light->LightMaterialResult);
-            m_Shader->SetFloat("u_LightIntensity", light->Intensity);
-            m_Shader->SetFloat("u_AmbientStrength", light->AmbientStrength);
-            m_Shader->SetFloat("u_AmbientShadowFactor", light->AmbientShadowFactor);
+            // CLOUDS_SOFTEN_SUN_V1 — nuvem tambem TIRA luz direta (parte vira
+            // difusa e volta pelo ceu, que o Sky Light ja captura). Ate 45% a
+            // menos com cobertura total, e LINEAR de proposito: perda de
+            // direta comeca com pouca nuvem, diferente do alargamento da
+            // sombra, que so vem com ceu fechado.
+            float directDim = 1.0f;
+            if (m_HasSkyLight && m_SkyLight.Enabled &&
+                m_SkyLight.ProceduralSky && m_SkyLight.CloudsSoftenSun)
+                directDim = 1.0f - 0.45f * glm::clamp(m_SkyLight.CloudCoverage, 0.0f, 1.0f);
+
+            m_Shader->SetFloat("u_LightIntensity", light->Intensity * directDim);
             m_Shader->SetFloat("u_ShadowBias", light->ShadowBias);
-            m_Shader->SetFloat("u_IBLIntensity", light->IBLIntensity);
+            m_Shader->SetFloat("u_ContactShadowLength",
+                std::max(light->ContactShadowLength, 0.0f));   // CONTACT_SHADOW_V1
+            // SKY_LIGHT_V1 — u_IBLIntensity / u_AmbientStrength /
+            // u_AmbientShadowFactor NAO sao mais decididos aqui: sairam para o
+            // bloco do Sky Light, acima. Deixa-los aqui sobrescreveria o Sky
+            // Light com os valores legados da luz e o desacoplamento seria
+            // apenas aparente.
 
             // Cookie — slot 10. Right/Up: base ortonormal perpendicular à
             // direção da luz, pra projetar fragPos num plano 2D.
@@ -902,22 +1600,34 @@ namespace axe
         else
         {
             m_Shader->SetInt("u_HasLight", 0);
-            m_Shader->SetFloat("u_IBLIntensity", 1.0f);
-            m_Shader->SetFloat("u_AmbientStrength", 0.0f);
-            m_Shader->SetFloat("u_AmbientShadowFactor", 1.0f);
-            m_Shader->SetFloat("u_ShadowBias", 0.005f);
+            // SKY_LIGHT_V1 — aqui havia um u_IBLIntensity = 1.0f FORCADO:
+            // apagar a luz direcional colocava o ambiente no MAXIMO, que e o
+            // contrario do esperado e era parte do "apaguei o sol e a cena
+            // continua clara". O ambiente agora e do Sky Light, resolvido
+            // acima; sem Sky Light e sem sol ele e zero.
+            m_Shader->SetFloat("u_ShadowBias", 0.02f);
+            m_Shader->SetFloat("u_ContactShadowLength", 0.0f);   // sem sol, sem contato
             m_Shader->SetInt("u_HasDirCookie", 0);
         }
 
         m_Shader->SetFloat3("u_CameraPosition", cameraPosition);
         m_Shader->SetMat4("u_View", glm::value_ptr(view));
 
+        // CONTACT_SHADOW_V1 — a view-projection deste frame.
+        const glm::mat4 viewProj = m_Projection * view;
+        m_Shader->SetMat4("u_ViewProjection", glm::value_ptr(viewProj));
+
         // IBL — slots 6, 7, 8
-        if (environment && environment->HasIBL())
+        //
+        // SKY_IBL_V1 — a fonte deixou de ser "o Skybox" e passou a ser
+        // IBLSource(): o cubemap do ceu procedural quando ele existe, senao o
+        // HDRI. Ver a nota em SceneEnvironment.
+        const CubemapTexture* ibl = environment ? environment->IBLSource() : nullptr;
+        if (ibl)
         {
-            environment->Skybox->BindIrradiance(6);
-            environment->Skybox->BindPrefiltered(7);
-            environment->Skybox->BindBRDFLut(8);
+            ibl->BindIrradiance(6);
+            ibl->BindPrefiltered(7);
+            ibl->BindBRDFLut(8);
             m_Shader->SetInt("u_IrradianceMap", 6);
             m_Shader->SetInt("u_PrefilteredMap", 7);
             m_Shader->SetInt("u_BRDFLut", 8);
@@ -1066,6 +1776,15 @@ namespace axe
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         // Restaura estado
+        //
+        // SHADOW_HWPCF_V1 — sampler object fica preso a UNIDADE, nao ao
+        // programa nem a textura: sem soltar aqui, o proximo passe que usasse
+        // as unidades 11/12 herdaria comparacao de profundidade ligada e leria
+        // a propria textura como 0/1. Mesma regra do glPolygonOffset do shadow
+        // pass — quem clobbera estado global, restaura.
+        glBindSampler(11, 0);
+        glBindSampler(12, 0);
+
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

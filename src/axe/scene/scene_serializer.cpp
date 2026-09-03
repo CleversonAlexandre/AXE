@@ -29,6 +29,8 @@ namespace axe
 	SceneSerializer::MaterialRecompileCallback SceneSerializer::s_MaterialRecompileCallback = nullptr;
 	SceneSerializer::LightMaterialRecompileCallback    SceneSerializer::s_LightMaterialRecompileCallback = nullptr;
 	SceneSerializer::ParticleMaterialRecompileCallback SceneSerializer::s_ParticleMaterialRecompileCallback = nullptr;
+	// POSTPROCESS_DOMAIN_V1
+	SceneSerializer::PostProcessMaterialRecompileCallback SceneSerializer::s_PostProcessMaterialRecompileCallback = nullptr;
 
 	// ══════════════════════════════════════════════════════════════════════
 	//  Serialização CANÔNICA de uma entity — fonte ÚNICA da verdade.
@@ -124,6 +126,102 @@ namespace axe
 					components["Light"]["cookie_uuid"] = c->Data->CookieTextureUUID;
 					components["Light"]["cookie_scale"] = c->Data->CookieScale;
 					components["Light"]["light_material_uuid"] = c->Data->LightMaterialUUID;
+
+					// ── SHADOW_PERSIST_V1 ────────────────────────────────────
+					//
+					// Estes tres NUNCA foram gravados. Quem ajustava Shadow
+					// Distance ou Bias no Inspector via a mudanca em tela,
+					// salvava a cena, reabria — e encontrava o valor padrao de
+					// volta, sem erro nenhum para explicar.
+					//
+					// Nao e um bug do renderer, e por isso passou tanto tempo:
+					// a imagem estava certa o tempo todo, so o arquivo e que
+					// nao guardava o que a fez ficar certa.
+					components["Light"]["cast_shadows"] = c->Data->CastShadows;
+					components["Light"]["shadow_distance"] = c->Data->ShadowDistance;
+					components["Light"]["shadow_bias"] = c->Data->ShadowBias;
+
+					// PCSS_V1
+					components["Light"]["sun_angular_deg"] = c->Data->SunAngularDegrees;
+					components["Light"]["max_penumbra_texels"] = c->Data->MaxPenumbraTexels;
+
+					// ── SKY_PERSIST_V1 ───────────────────────────────────────
+					//
+					// O CEU PROCEDURAL INTEIRO nunca foi gravado. Ligar "Ativar
+					// Ceu Procedural", ajustar hora, turbidez e nuvens, salvar
+					// e reabrir devolvia tudo ao padrao — com o ceu DESLIGADO.
+					//
+					// Consequencia que passou despercebida: o SKY_IBL_V1, que
+					// so age com o ceu procedural ligado, era impossivel de
+					// manter numa cena salva. A luz de ambiente vinda do ceu
+					// existia e nunca sobrevivia a um reload.
+					//
+					// AmbientShadowFactor entra pelo mesmo motivo: e ele que
+					// decide se a sombra fica preta (interior) ou aberta ao
+					// ambiente (exterior), e voltava ao padrao a cada reload.
+					components["Light"]["ambient_shadow_factor"] = c->Data->AmbientShadowFactor;
+
+					components["Light"]["contact_shadow_length"] = c->Data->ContactShadowLength;
+					components["Light"]["procedural_sky"] = c->Data->ProceduralSky;
+					components["Light"]["tod_enabled"] = c->Data->TimeOfDayEnabled;
+					components["Light"]["tod_hour"] = c->Data->Hour;
+					components["Light"]["tod_speed"] = c->Data->DaySpeed;
+					components["Light"]["sun_latitude"] = c->Data->SunLatitude;
+					components["Light"]["turbidity"] = c->Data->Turbidity;
+					components["Light"]["cloud_coverage"] = c->Data->CloudCoverage;
+					components["Light"]["cloud_speed"] = c->Data->CloudSpeed;
+					components["Light"]["cloud_color"] = {
+						c->Data->CloudColor.x, c->Data->CloudColor.y, c->Data->CloudColor.z };
+					components["Light"]["night_color"] = {
+						c->Data->NightColor.x, c->Data->NightColor.y, c->Data->NightColor.z };
+				}
+			}
+
+			// ── ENV_PERSIST_V1 — o EnvironmentComponent NUNCA foi salvo ──
+			//
+			// Nem HDRIPath, nem SkyboxRotation. A cena guardava o HDRI no
+			// bloco "environment" do topo (que descreve o SceneEnvironment do
+			// RENDER), mas o COMPONENTE da entidade voltava vazio a cada load
+			// — e e ele que o viewport_renderer le todo frame para sincronizar.
+			// Resultado: o que ele configurava na entidade Environment nao
+			// sobrevivia a reabrir o projeto.
+			if (auto* c = registry.try_get<EnvironmentComponent>(entity))
+			{
+				components["Environment"]["hdri_path"] = c->HDRIPath;
+				components["Environment"]["skybox_rotation"] = c->SkyboxRotation;
+				components["Environment"]["use_hdri"] = c->UseHDRI;
+			}
+
+			// ── SKY_LIGHT_V1 ─────────────────────────────────────────────
+			if (auto* c = registry.try_get<SkyLightComponent>(entity))
+			{
+				if (c->Data)
+				{
+					components["SkyLight"]["enabled"] = c->Data->Enabled;
+					components["SkyLight"]["intensity"] = c->Data->Intensity;
+					components["SkyLight"]["color"] = {
+						c->Data->Color.x, c->Data->Color.y, c->Data->Color.z };
+					components["SkyLight"]["shadow_factor"] = c->Data->ShadowFactor;
+					components["SkyLight"]["constant_ambient"] = c->Data->ConstantAmbient;
+
+					// SKY_OWNS_SKY_V1 — configuracao do ceu, que veio do
+					// DirectionalLight. A presenca da chave "procedural_sky"
+					// e o que o loader usa para saber se este SkyLight ja e
+					// da versao nova (ver a migracao no fim do Deserialize).
+					components["SkyLight"]["sun_dependent"] = c->Data->SunDependent;
+					components["SkyLight"]["procedural_sky"] = c->Data->ProceduralSky;
+					components["SkyLight"]["turbidity"] = c->Data->Turbidity;
+					components["SkyLight"]["cloud_coverage"] = c->Data->CloudCoverage;
+					components["SkyLight"]["cloud_speed"] = c->Data->CloudSpeed;
+					components["SkyLight"]["clouds_soften_sun"] = c->Data->CloudsSoftenSun;
+					components["SkyLight"]["cloud_color"] = {
+						c->Data->CloudColor.x, c->Data->CloudColor.y, c->Data->CloudColor.z };
+					components["SkyLight"]["night_color"] = {
+						c->Data->NightColor.x, c->Data->NightColor.y, c->Data->NightColor.z };
+					components["SkyLight"]["tod_enabled"] = c->Data->TimeOfDayEnabled;
+					components["SkyLight"]["tod_hour"] = c->Data->Hour;
+					components["SkyLight"]["tod_speed"] = c->Data->DaySpeed;
+					components["SkyLight"]["sun_latitude"] = c->Data->SunLatitude;
 				}
 			}
 
@@ -189,6 +287,11 @@ namespace axe
 			if (auto* c = registry.try_get<PostProcessComponent>(entity))
 			{
 				components["PostProcess"]["is_global"] = c->IsGlobal;
+
+				// POSTPROCESS_DOMAIN_V1 — material de efeito de tela inteira.
+				components["PostProcess"]["user_material"] = c->Settings.UserMaterialUUID;
+				components["PostProcess"]["user_blend_point"] = (int)c->Settings.UserBlendPoint;
+				components["PostProcess"]["user_intensity"] = c->Settings.UserIntensity;
 				components["PostProcess"]["exposure"] = c->Settings.Exposure;
 				components["PostProcess"]["bloom_enabled"] = c->Settings.BloomEnabled;
 				components["PostProcess"]["bloom_threshold"] = c->Settings.BloomThreshold;
@@ -464,6 +567,26 @@ namespace axe
 
 		// Aplica TODOS os componentes (menos Relationship, que é 2º passo do
 		// caller via idMap) numa entity JÁ criada.
+		// ── SKY_OWNS_SKY_V1 ──────────────────────────────────────────────────
+		//
+		// Sinaliza que a cena carregada tem um SkyLight da versao ANTERIOR (sem
+		// os campos de ceu). Precisa ser estatica de arquivo porque quem
+		// descobre isso e o loader de componentes — uma funcao livre, chamada
+		// tanto pelo Deserialize quanto pelo DeserializeEntities (colar de
+		// entidades) — e quem age e a migracao no fim do Deserialize. Passar
+		// por parametro obrigaria a mudar a assinatura de todo o caminho,
+		// inclusive de um chamador que nao tem nada a ver com migracao.
+		//
+		// Sempre ZERADA no inicio do Deserialize: sem isso, um paste de
+		// entidades poderia deixar a flag ligada e disparar uma migracao na
+		// proxima cena aberta.
+		static bool s_SkyNeedsSkyFieldsMigration = false;
+
+		// SKY_OFF_V1 -> ENV_PERSIST_V1: a static que segurava o use_hdri ate o
+		// componente existir SAIU. Ela so era necessaria porque o
+		// EnvironmentComponent nao era serializado; agora ele e, com os tres
+		// campos juntos, e o valor chega pelo caminho normal de componente.
+
 		void DeserializeEntityComponents(const json& components, entt::entity entity, entt::registry& registry)
 		{
 			if (components.contains("Folder"))
@@ -745,6 +868,33 @@ namespace axe
 				light->SpecularStrength = t["specular"];
 				light->Shininess = t["shininess"];
 				light->CookieScale = t.value("cookie_scale", 5.0f);
+
+				// SHADOW_PERSIST_V1 — defaults iguais aos do struct, para cena
+				// gravada antes disto abrir exatamente como abria.
+				light->CastShadows = t.value("cast_shadows", true);
+				light->ShadowDistance = t.value("shadow_distance", 50.0f);
+				light->ShadowBias = t.value("shadow_bias", 0.005f);
+
+				// PCSS_V1
+				light->SunAngularDegrees = t.value("sun_angular_deg", 0.53f);
+				light->MaxPenumbraTexels = t.value("max_penumbra_texels", 16.0f);
+
+				// SKY_PERSIST_V1 — defaults iguais aos do struct.
+				light->AmbientShadowFactor = t.value("ambient_shadow_factor", 1.0f);
+
+				light->ContactShadowLength = t.value("contact_shadow_length", 0.15f);
+				light->ProceduralSky = t.value("procedural_sky", false);
+				light->TimeOfDayEnabled = t.value("tod_enabled", false);
+				light->Hour = t.value("tod_hour", 12.0f);
+				light->DaySpeed = t.value("tod_speed", 1.0f);
+				light->SunLatitude = t.value("sun_latitude", -23.0f);
+				light->Turbidity = t.value("turbidity", 2.5f);
+				light->CloudCoverage = t.value("cloud_coverage", 0.4f);
+				light->CloudSpeed = t.value("cloud_speed", 0.015f);
+				if (t.contains("cloud_color") && t["cloud_color"].size() == 3)
+					light->CloudColor = { t["cloud_color"][0], t["cloud_color"][1], t["cloud_color"][2] };
+				if (t.contains("night_color") && t["night_color"].size() == 3)
+					light->NightColor = { t["night_color"][0], t["night_color"][1], t["night_color"][2] };
 				std::string dirCookieUUID = t.value("cookie_uuid", std::string());
 				if (!dirCookieUUID.empty())
 				{
@@ -757,6 +907,60 @@ namespace axe
 				}
 				ResolveLightMaterial(t, light->LightMaterialUUID, light->LightMaterialShader, light->LightMaterialSamplers);
 				registry.emplace<LightComponent>(entity, light);
+			}
+
+			// ── ENV_PERSIST_V1 ───────────────────────────────────────────
+			if (components.contains("Environment"))
+			{
+				auto& t = components["Environment"];
+				EnvironmentComponent ec;
+				ec.HDRIPath = t.value("hdri_path", std::string());
+				ec.SkyboxRotation = t.value("skybox_rotation", 0.0f);
+				ec.UseHDRI = t.value("use_hdri", true);
+				registry.emplace<EnvironmentComponent>(entity, ec);
+			}
+
+			// ── SKY_LIGHT_V1 ─────────────────────────────────────────────
+			if (components.contains("SkyLight"))
+			{
+				auto& t = components["SkyLight"];
+				auto sky = std::make_shared<SkyLight>();
+				sky->Enabled = t.value("enabled", true);
+				sky->Intensity = t.value("intensity", 1.0f);
+				if (t.contains("color") && t["color"].is_array() && t["color"].size() == 3)
+					sky->Color = { t["color"][0], t["color"][1], t["color"][2] };
+				sky->ShadowFactor = t.value("shadow_factor", 1.0f);
+				sky->ConstantAmbient = t.value("constant_ambient", 0.0f);
+
+				// ── SKY_OWNS_SKY_V1 ──────────────────────────────────────
+				//
+				// Um SkyLight salvo pela versao ANTERIOR nao tem nenhuma
+				// destas chaves: ele foi criado quando o ceu ainda morava no
+				// DirectionalLight. Carregar os defaults da struct nesse caso
+				// desligaria o ceu procedural de quem ja o usava — cena
+				// mudando de aparencia sozinha, sem erro nenhum.
+				//
+				// A ausencia de "procedural_sky" e a marca dessa versao, e e
+				// so o que a migracao no fim do Deserialize precisa saber.
+				if (!t.contains("procedural_sky"))
+					s_SkyNeedsSkyFieldsMigration = true;
+
+				sky->SunDependent = t.value("sun_dependent", true);
+				sky->ProceduralSky = t.value("procedural_sky", false);
+				sky->Turbidity = t.value("turbidity", 2.5f);
+				sky->CloudCoverage = t.value("cloud_coverage", 0.4f);
+				sky->CloudSpeed = t.value("cloud_speed", 0.015f);
+				sky->CloudsSoftenSun = t.value("clouds_soften_sun", true);
+				if (t.contains("cloud_color") && t["cloud_color"].is_array() && t["cloud_color"].size() == 3)
+					sky->CloudColor = { t["cloud_color"][0], t["cloud_color"][1], t["cloud_color"][2] };
+				if (t.contains("night_color") && t["night_color"].is_array() && t["night_color"].size() == 3)
+					sky->NightColor = { t["night_color"][0], t["night_color"][1], t["night_color"][2] };
+				sky->TimeOfDayEnabled = t.value("tod_enabled", false);
+				sky->Hour = t.value("tod_hour", 12.0f);
+				sky->DaySpeed = t.value("tod_speed", 1.0f);
+				sky->SunLatitude = t.value("sun_latitude", -23.0f);
+
+				registry.emplace<SkyLightComponent>(entity, sky);
 			}
 
 			if (components.contains("PointLight"))
@@ -844,6 +1048,13 @@ namespace axe
 				auto& t = components["PostProcess"];
 				PostProcessComponent pp;
 				pp.IsGlobal = t["is_global"];
+
+				// POSTPROCESS_DOMAIN_V1 — .value() com default: cena salva ANTES
+				// desta rodada abre normalmente, sem efeito nenhum.
+				pp.Settings.UserMaterialUUID = t.value("user_material", std::string());
+				pp.Settings.UserBlendPoint = (PostProcessBlendPoint)
+					t.value("user_blend_point", (int)PostProcessBlendPoint::AfterTonemap);
+				pp.Settings.UserIntensity = t.value("user_intensity", 1.0f);
 				pp.Settings.Exposure = t["exposure"];
 				pp.Settings.BloomEnabled = t["bloom_enabled"];
 				pp.Settings.BloomThreshold = t["bloom_threshold"];
@@ -889,6 +1100,42 @@ namespace axe
 				ssr.Intensity = t.value("ssr_intensity", 1.0f);
 				ssr.EdgeFade = t.value("ssr_edge_fade", 0.1f);
 				registry.emplace<PostProcessComponent>(entity, pp);
+
+				// ── PPVOLUME_ONE_PATH_V1 — AUTO-CURA ─────────────────────────
+				//
+				// Cena gravada antes de o Post Process Volume ganhar os tres
+				// volumes companheiros (ou criada pelo caminho antigo do
+				// bootstrap) abre com a entidade INCOMPLETA: o Inspector nao
+				// mostra Interior Volume, Probe Volume nem Reflection Probe, e
+				// a unica saida seria apagar e recriar — perdendo exposure,
+				// SSAO e o resto que ja estava ajustado ali.
+				//
+				// Aqui eles sao completados, DESATIVADOS. Nao muda um pixel da
+				// imagem: e exatamente o que a criacao de hoje produz.
+				//
+				// Os blocos de InteriorVolume/ProbeVolume/ReflectionProbe rodam
+				// ANTES deste ponto no mesmo laco, entao o que veio do arquivo
+				// ja esta aplicado e nao e sobrescrito.
+				bool healed = false;
+				if (!registry.any_of<InteriorVolumeComponent>(entity))
+				{
+					registry.emplace<InteriorVolumeComponent>(entity).Data.Enabled = false;
+					healed = true;
+				}
+				if (!registry.any_of<ProbeVolumeComponent>(entity))
+				{
+					registry.emplace<ProbeVolumeComponent>(entity).Settings.Enabled = false;
+					healed = true;
+				}
+				if (!registry.any_of<ReflectionProbeComponent>(entity))
+				{
+					registry.emplace<ReflectionProbeComponent>(entity).Settings.Enabled = false;
+					healed = true;
+				}
+
+				if (healed)
+					AXE_CORE_INFO("PPVOLUME_ONE_PATH_V1: Post Process Volume completado com os "
+						"volumes que faltavam (desativados). Salve a cena para gravar.");
 			}
 
 			if (components.contains("Rigidbody"))
@@ -1174,6 +1421,10 @@ namespace axe
 		return p;
 	}
 
+	// EDITOR_CAM_PERSIST_V1 — as duas caixas de correio (ver o header).
+	SceneSerializer::EditorCameraState SceneSerializer::PendingEditorCamera{};
+	SceneSerializer::EditorCameraState SceneSerializer::LoadedEditorCamera{};
+
 	bool SceneSerializer::Serialize(const Scene& scene, const std::filesystem::path& filepath,
 		const SceneEnvironment* env)
 	{
@@ -1200,6 +1451,21 @@ namespace axe
 		{
 			root["scene"]["environment"]["hdri_path"] = env->SkyboxPath;
 			root["scene"]["environment"]["skybox_rotation"] = env->SkyboxRotation;
+
+		}
+
+		// EDITOR_CAM_PERSIST_V1 — so grava se o editor preencheu. O jogo
+		// empacotado tambem chama o Serialize e nao tem camera de editor;
+		// gravar zeros ali plantaria uma orbita invalida na cena.
+		if (PendingEditorCamera.Valid)
+		{
+			auto& c = root["scene"]["editor_camera"];
+			c["focal"] = { PendingEditorCamera.FocalPoint.x,
+						   PendingEditorCamera.FocalPoint.y,
+						   PendingEditorCamera.FocalPoint.z };
+			c["distance"] = PendingEditorCamera.Distance;
+			c["pitch"] = PendingEditorCamera.Pitch;
+			c["yaw"] = PendingEditorCamera.Yaw;
 		}
 
 		json entities = json::array();
@@ -1273,9 +1539,28 @@ namespace axe
 		std::ifstream file(filepath);
 		if (!file.is_open()) return false;
 
+		// SKY_OWNS_SKY_V1 — zera antes de carregar; o loader de componentes a
+		// liga se encontrar um SkyLight sem os campos de ceu.
+		s_SkyNeedsSkyFieldsMigration = false;
+
+		// EDITOR_CAM_PERSIST_V1 — invalida antes; so vira Valid se o arquivo
+		// tiver o bloco. Cena antiga nao mexe na camera do usuario.
+		LoadedEditorCamera = EditorCameraState{};
+
 		json root;
 		try {
 			root = json::parse(file);
+
+			if (root["scene"].contains("editor_camera"))
+			{
+				auto& c = root["scene"]["editor_camera"];
+				if (c.contains("focal") && c["focal"].is_array() && c["focal"].size() == 3)
+					LoadedEditorCamera.FocalPoint = { c["focal"][0], c["focal"][1], c["focal"][2] };
+				LoadedEditorCamera.Distance = c.value("distance", 10.0f);
+				LoadedEditorCamera.Pitch = c.value("pitch", 0.0f);
+				LoadedEditorCamera.Yaw = c.value("yaw", 0.0f);
+				LoadedEditorCamera.Valid = true;
+			}
 
 			if (env && root["scene"].contains("environment"))
 			{
@@ -1428,6 +1713,117 @@ namespace axe
 						pvc.Settings.Resolution.x, pvc.Settings.Resolution.y,
 						pvc.Settings.Resolution.z);
 				}
+			}
+		}
+
+		// ═════════════════════════════════════════════════════════════════
+		//  SKY_LIGHT_V1 — MIGRACAO DE CENA ANTIGA
+		//
+		//  Antes desta versao a luz de ambiente nao tinha entidade: intensidade
+		//  do IBL, ambiente chapado e fator de sombra moravam DENTRO do
+		//  DirectionalLight. Toda cena salva ate aqui esta nesse formato.
+		//
+		//  Aqui a cena ganha um Sky Light SEMEADO com esses valores. O
+		//  resultado e que ela abre com EXATAMENTE a mesma aparencia de antes
+		//  — e a partir daqui o ambiente tem dono proprio e pode ser ajustado
+		//  (ou apagado) sem tocar no sol.
+		//
+		//  Mesmo padrao de auto-cura do PPVOLUME_ONE_PATH_V1: completar em
+		//  silencio o que falta e LOGAR, em vez de exigir que ele apague e
+		//  recrie a entidade perdendo tudo o que ja ajustou.
+		//
+		//  Os campos legados do DirectionalLight NAO sao zerados: eles seguem
+		//  sendo salvos, entao um projeto reaberto numa build anterior a esta
+		//  continua funcionando. Ver o comentario neles em directional_light.hpp.
+		// ═════════════════════════════════════════════════════════════════
+		{
+			auto& registry = scene.GetRegistry();
+
+			bool hasSkyLight = false;
+			for (auto e : registry.view<SkyLightComponent>()) { (void)e; hasSkyLight = true; break; }
+
+			// ── SKY_OWNS_SKY_V1 — SEGUNDO CASO DE MIGRACAO ───────────────
+			//
+			// Cena salva ENTRE o SKY_LIGHT_V1 e agora ja tem um SkyLight, mas
+			// sem os campos de ceu — eles ainda estavam no DirectionalLight.
+			// Sem este caso, o `if (!hasSkyLight)` abaixo nao rodaria, os
+			// campos ficariam nos defaults da struct e o ceu procedural de
+			// quem ja o usava simplesmente se desligaria no proximo load.
+			if (hasSkyLight && s_SkyNeedsSkyFieldsMigration)
+			{
+				auto& registry2 = scene.GetRegistry();
+				DirectionalLight* legacy = nullptr;
+				for (auto e : registry2.view<LightComponent>())
+				{
+					auto& lc = registry2.get<LightComponent>(e);
+					if (lc.Data) { legacy = lc.Data.get(); break; }
+				}
+
+				if (legacy)
+				{
+					for (auto e : registry2.view<SkyLightComponent>())
+					{
+						auto& sc = registry2.get<SkyLightComponent>(e);
+						if (!sc.Data) continue;
+						sc.Data->ProceduralSky = legacy->ProceduralSky;
+						sc.Data->Turbidity = legacy->Turbidity;
+						sc.Data->CloudCoverage = legacy->CloudCoverage;
+						sc.Data->CloudSpeed = legacy->CloudSpeed;
+						sc.Data->CloudColor = legacy->CloudColor;
+						sc.Data->NightColor = legacy->NightColor;
+						sc.Data->TimeOfDayEnabled = legacy->TimeOfDayEnabled;
+						sc.Data->Hour = legacy->Hour;
+						sc.Data->DaySpeed = legacy->DaySpeed;
+						sc.Data->SunLatitude = legacy->SunLatitude;
+						break;
+					}
+					AXE_CORE_INFO("SKY_OWNS_SKY_V1: configuracao do ceu migrada da luz "
+						"direcional para o Sky Light (ceu procedural {}).",
+						legacy->ProceduralSky ? "LIGADO" : "desligado");
+				}
+			}
+
+			if (!hasSkyLight)
+			{
+				// Semente: os valores legados da PRIMEIRA luz direcional. Sem
+				// luz nenhuma, os defaults da struct — cena vazia nao deveria
+				// nascer com ambiente herdado de lugar nenhum.
+				SkyLight seed;
+				bool fromLegacy = false;
+				for (auto e : registry.view<LightComponent>())
+				{
+					auto& lc = registry.get<LightComponent>(e);
+					if (!lc.Data) continue;
+					seed.Intensity = lc.Data->IBLIntensity;
+					seed.ShadowFactor = lc.Data->AmbientShadowFactor;
+					seed.ConstantAmbient = lc.Data->AmbientStrength;
+
+					// SKY_OWNS_SKY_V1 — o ceu vem junto, pelo mesmo motivo:
+					// abrir a cena tem que dar a MESMA imagem de antes.
+					seed.ProceduralSky = lc.Data->ProceduralSky;
+					seed.Turbidity = lc.Data->Turbidity;
+					seed.CloudCoverage = lc.Data->CloudCoverage;
+					seed.CloudSpeed = lc.Data->CloudSpeed;
+					seed.CloudColor = lc.Data->CloudColor;
+					seed.NightColor = lc.Data->NightColor;
+					seed.TimeOfDayEnabled = lc.Data->TimeOfDayEnabled;
+					seed.Hour = lc.Data->Hour;
+					seed.DaySpeed = lc.Data->DaySpeed;
+					seed.SunLatitude = lc.Data->SunLatitude;
+
+					fromLegacy = true;
+					break;
+				}
+
+				entt::entity e = scene.CreateSkyLight();
+				auto& sc = registry.get<SkyLightComponent>(e);
+				if (sc.Data) *sc.Data = seed;
+
+				AXE_CORE_INFO("SKY_LIGHT_V1: cena sem Sky Light — criado {} "
+					"(Intensity {:.2f}, ShadowFactor {:.2f}, ConstantAmbient {:.2f}). "
+					"O ambiente agora e desta entidade, nao mais da luz direcional.",
+					fromLegacy ? "a partir dos valores da luz direcional" : "com os padroes",
+					seed.Intensity, seed.ShadowFactor, seed.ConstantAmbient);
 			}
 		}
 

@@ -278,20 +278,45 @@ namespace axe
 		glDisable(GL_DEPTH_TEST);
 		m_SkyShader->Bind();
 		m_SkyShader->SetMat4("u_InvVP", glm::value_ptr(invVP));
-		if (environment && environment->HasSkybox())
+		// ═══════════════════════════════════════════════════════════════════
+		//  GI_SKY_SOURCE_V1 — O BAKE PASSA A VER O CEU DE VERDADE
+		//
+		//  Aqui estava `HasSkybox()`, que testa SO o cubemap HDRI de arquivo.
+		//  Numa cena com ceu PROCEDURAL — que e o caso desde o SKY_OWNS_SKY_V1
+		//  — o teste falhava e o bake caia num fallback de azul inventado,
+		//  modulado pela cor do sol.
+		//
+		//  Isso e pior do que parece num sistema de GI: a cor que rebate nas
+		//  paredes vem do ceu. Bakear contra um azul de mentira faz o BOUNCE
+		//  inteiro ficar com a cor errada — e como o resultado ainda parece
+		//  plausivel, e o tipo de erro que ninguem acha olhando.
+		//
+		//  IBLSource() e a MESMA funcao que o lighting pass usa para escolher
+		//  a fonte de ambiente (ceu procedural capturado tem prioridade, senao
+		//  o HDRI). Usando ela aqui, o bake e a iluminacao direta passam a
+		//  concordar por construcao, em vez de por coincidencia — e o ceu que
+		//  entra no bake ja obedece ao sol pelo SKYLIGHT_CHAIN_V1.
+		//
+		//  O fallback continua existindo para o instante em que ainda nao ha
+		//  cubemap nenhum (primeiro frame, antes da captura do ceu), mas agora
+		//  ele NAO inventa azul: sem sol ele da preto, coerente com o resto.
+		// ═══════════════════════════════════════════════════════════════════
+		const CubemapTexture* skySource = environment ? environment->IBLSource() : nullptr;
+		if (skySource)
 		{
-			environment->Skybox->Bind(0);
+			skySource->Bind(0);
 			m_SkyShader->SetInt("u_Sky", 0);
 			m_SkyShader->SetInt("u_HasSky", 1);
 		}
 		else
 		{
 			m_SkyShader->SetInt("u_HasSky", 0);
-			// Fallback: azul-céu neutro modulado pela cor do sol, pra não
-			// bakear um mundo de breu quando não há HDRI carregado.
+			// Sem cubemap ainda: ceu neutro modulado pelo sol. Sem sol da
+			// PRETO de proposito — inventar azul aqui reintroduziria a luz
+			// sem fonte que o SKY_SUN_GATE_V1 tirou do lighting pass.
 			glm::vec3 skyCol = queue.Light
 				? queue.Light->Color * (0.4f * queue.Light->Intensity)
-				: glm::vec3(0.4f, 0.5f, 0.7f);
+				: glm::vec3(0.0f);
 			m_SkyShader->SetFloat3("u_SkyColor", skyCol);
 		}
 		glBindVertexArray(m_SkyVAO);

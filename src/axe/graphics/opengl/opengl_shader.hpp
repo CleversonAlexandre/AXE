@@ -26,6 +26,7 @@ namespace axe
 
 		void SetFloat(const std::string& name, float value) override;
 		void SetFloat3(const std::string& name, const glm::vec3& value) override;
+		void SetFloat2(const std::string& name, const glm::vec2& value) override;   // POSTPROCESS_DOMAIN_V1
 		void SetMat3(const std::string& name, const float* value) override;
 		void SetBool(const std::string& name, bool value) override;
 

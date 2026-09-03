@@ -14,6 +14,7 @@
 // PROJETADAS e desenhadas no draw list do ImGui, sempre por cima: e o que a
 // Unreal faz com os controles dela, e pelo mesmo motivo.
 
+#include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
 #include "control_rig_window.hpp"
 #include "editor/axe_editor/rig/rig_control_gizmos.hpp"
 #include "editor/axe_editor/ui/editor_widgets.hpp"
@@ -706,6 +707,15 @@ namespace axe
 				const uint64_t tex = (uint64_t)m_PreviewFramebuffer->GetColorAttachmentRendererID(0);
 
 				ImGui::Image((ImTextureID)tex, m_PreviewSize, ImVec2(0, 1), ImVec2(1, 0));
+
+				// VIEW_GIZMO_V1 — mesmo widget do viewport. Os cantos vem do
+				// GetItemRect logo apos a Image: e o retangulo REAL dela, e nao o
+				// da janela, que difere quando ha barra de ferramentas ou aba.
+				// showTools=false: preview e pequeno, e os botoes de dolly/pan
+				// comeriam area util — o arrasto e o clique nos eixos bastam.
+				if (m_PreviewRenderer && m_PreviewRenderer->m_Camera)
+					ui::DrawViewGizmo(*m_PreviewRenderer->m_Camera,
+						ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false);
 			}
 			else
 			{
@@ -736,7 +746,11 @@ namespace axe
 			// Clique simples (sem Alt, que e da camera) seleciona o controle.
 			// O teste do gizmo evita que clicar numa seta que passa por cima de
 			// outro controle selecione o outro e comece a arrastar o errado.
+			// VIEW_GIZMO_V1 — o gizmo de navegacao entra na mesma guarda do
+			// ImGuizmo, e pelo mesmo motivo: sem ela, clicar num eixo do
+			// gizmo selecionaria o controle do rig que estiver atras dele.
 			if (m_PreviewHovered && hovered >= 0 && !overGizmo &&
+				!ui::ViewGizmoCapturesMouse() &&
 				ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
 			{
 				m_SelectedElement = hovered;

@@ -310,8 +310,156 @@ namespace axe
 
 	OpenGLCubemap::~OpenGLCubemap()
 	{
-		if (m_RendererID)
-			glDeleteTextures(1, &m_RendererID);
+		// SKY_IBL_V1 — antes so o cubemap base era liberado; irradiance,
+		// prefiltered e a LUT vazavam. Passava despercebido porque um HDRI
+		// vivia a sessao inteira. Com o ceu procedural nascendo e morrendo por
+		// cena, o vazamento seria por cena.
+		if (m_RendererID)    glDeleteTextures(1, &m_RendererID);
+		if (m_IrradianceID)  glDeleteTextures(1, &m_IrradianceID);
+		if (m_PrefilteredID) glDeleteTextures(1, &m_PrefilteredID);
+		if (m_BRDFLutID)     glDeleteTextures(1, &m_BRDFLutID);
+	}
+
+	// ═════════════════════════════════════════════════════════════════════════
+	//  SKY_IBL_V1 — CAPTURA POR CALLBACK
+	//
+	//  Mesma espinha do LoadFromHDRI: monta FBO de captura, as 6 matrizes de
+	//  view, o cubo, renderiza as faces e chama as MESMAS tres funcoes de
+	//  convolucao. A unica diferenca e quem desenha a face — la e o shader
+	//  equiretangular, aqui e o callback de quem chamou (na pratica, o DrawSky
+	//  do SkyboxRenderer).
+	//
+	//  E por isso que este caminho nao tem uma linha de GLSL de ceu: o ceu
+	//  continua morando so no SkyboxRenderer.
+	// ═════════════════════════════════════════════════════════════════════════
+	bool OpenGLCubemap::CaptureFaces(uint32_t faceSize, const FaceDrawFn& drawFace,
+		bool generateBRDF)
+	{
+		if (!drawFace || faceSize == 0) return false;
+
+		// Estado salvo pelo mesmo motivo do LoadFromHDRI: isto roda NO MEIO do
+		// frame e nao pode devolver o FBO, o viewport ou o depth trocados.
+		GLint prevFBO = 0;
+		GLint prevViewport[4];
+		GLboolean prevDepthMask, prevDepthTest, prevCull, prevBlend;
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+		glGetIntegerv(GL_VIEWPORT, prevViewport);
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+		glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
+		glGetBooleanv(GL_CULL_FACE, &prevCull);
+		glGetBooleanv(GL_BLEND, &prevBlend);
+
+		// Blend DESLIGADO durante a captura: isto roda no meio do frame, e um
+		// blend herdado do passe anterior misturaria o ceu com o lixo do
+		// framebuffer de captura. Depth mask LIGADO pelo mesmo motivo — com
+		// ele desligado, o glClear(GL_DEPTH_BUFFER_BIT) das convolucoes nao
+		// limparia nada.
+		glDisable(GL_BLEND);
+		glDepthMask(GL_TRUE);
+
+		const bool firstTime = (m_RendererID == 0);
+		if (firstTime)
+		{
+			m_FaceSize = faceSize;
+
+			glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_RendererID);
+			glBindTexture(GL_TEXTURE_CUBE_MAP, m_RendererID);
+			for (int i = 0; i < 6; i++)
+				glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
+					m_FaceSize, m_FaceSize, 0, GL_RGB, GL_FLOAT, nullptr);
+
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		}
+
+		uint32_t captureFBO = 0, captureRBO = 0;
+		glCreateFramebuffers(1, &captureFBO);
+		glCreateRenderbuffers(1, &captureRBO);
+		glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
+		glBindRenderbuffer(GL_RENDERBUFFER, captureRBO);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, m_FaceSize, m_FaceSize);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+			GL_RENDERBUFFER, captureRBO);
+
+		glm::mat4 captureProjection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+		glm::mat4 captureViews[] = {
+			glm::lookAt(glm::vec3(0), glm::vec3(1, 0, 0), glm::vec3(0,-1, 0)),
+			glm::lookAt(glm::vec3(0), glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
+			glm::lookAt(glm::vec3(0), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1)),
+			glm::lookAt(glm::vec3(0), glm::vec3(0,-1, 0), glm::vec3(0, 0,-1)),
+			glm::lookAt(glm::vec3(0), glm::vec3(0, 0, 1), glm::vec3(0,-1, 0)),
+			glm::lookAt(glm::vec3(0), glm::vec3(0, 0,-1), glm::vec3(0,-1, 0)),
+		};
+
+		// Cubo da convolucao — as duas Generate* abaixo desenham nele.
+		uint32_t cubeVAO = 0, cubeVBO = 0, cubeEBO = 0;
+		glGenVertexArrays(1, &cubeVAO);
+		glGenBuffers(1, &cubeVBO);
+		glGenBuffers(1, &cubeEBO);
+		glBindVertexArray(cubeVAO);
+		glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(s_CubeVertices), s_CubeVertices, GL_STATIC_DRAW);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeEBO);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(s_CubeIndices), s_CubeIndices, GL_STATIC_DRAW);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+		glBindVertexArray(0);
+
+		while (glGetError() != GL_NO_ERROR) {}
+
+		// Estado das FACES: identico ao SkyboxRenderer::Render (depth e cull
+		// desligados). O callback e o DrawSky, entao ele tem de rodar sob o
+		// mesmo estado sob o qual foi escrito — senao o cubemap nao seria o
+		// mesmo ceu que aparece na tela, que e o unico ponto disto tudo.
+		//
+		// Sem ambiguidade entre a face da frente e a de tras do cubo: com FOV
+		// de 90 graus a partir do centro, as faces atras da camera tem w
+		// negativo e o proprio frustum as descarta.
+		glDisable(GL_DEPTH_TEST);
+		glDisable(GL_CULL_FACE);
+		glViewport(0, 0, m_FaceSize, m_FaceSize);
+
+		for (int i = 0; i < 6; i++)
+		{
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+				GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, m_RendererID, 0);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			drawFace(captureViews[i], captureProjection);
+		}
+
+		glBindTexture(GL_TEXTURE_CUBE_MAP, m_RendererID);
+		glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+		// A convolucao volta a precisar de depth (as Generate* limpam e
+		// desenham o cubo com o depth do RBO).
+		glEnable(GL_DEPTH_TEST);
+
+		GenerateIrradianceMap(captureFBO, captureRBO, cubeVAO, captureViews, captureProjection);
+		GeneratePrefilteredMap(captureFBO, captureRBO, cubeVAO, captureViews, captureProjection);
+		if (generateBRDF && m_BRDFLutID == 0)
+			GenerateBRDFLut(captureFBO, captureRBO);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glDeleteFramebuffers(1, &captureFBO);
+		glDeleteRenderbuffers(1, &captureRBO);
+		glDeleteVertexArrays(1, &cubeVAO);
+		glDeleteBuffers(1, &cubeVBO);
+		glDeleteBuffers(1, &cubeEBO);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+		glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+		glDepthMask(prevDepthMask);
+		if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+		if (prevCull)      glEnable(GL_CULL_FACE);  else glDisable(GL_CULL_FACE);
+		if (prevBlend)     glEnable(GL_BLEND);      else glDisable(GL_BLEND);
+		glBindVertexArray(0);
+		glUseProgram(0);
+
+		m_Loaded = true;
+		return true;
 	}
 
 	bool OpenGLCubemap::LoadFromHDRI(const std::string& filepath)
@@ -496,23 +644,32 @@ namespace axe
 	{
 		constexpr uint32_t size = 32;
 
-		glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_IrradianceID);
-		glBindTexture(GL_TEXTURE_CUBE_MAP, m_IrradianceID);
-		for (int i = 0; i < 6; i++)
-			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
-				size, size, 0, GL_RGB, GL_FLOAT, nullptr);
+		// SKY_IBL_V1 — so ALOCA na primeira vez. O rebake do ceu procedural
+		// chama esta funcao de novo; recriar a textura vazaria a antiga e
+		// invalidaria o handle que o lighting pass ja tem em maos.
+		if (m_IrradianceID == 0)
+		{
+			glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_IrradianceID);
+			glBindTexture(GL_TEXTURE_CUBE_MAP, m_IrradianceID);
+			for (int i = 0; i < 6; i++)
+				glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
+					size, size, 0, GL_RGB, GL_FLOAT, nullptr);
 
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		}
 
 		glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
 		glBindRenderbuffer(GL_RENDERBUFFER, captureRBO);
 		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, size, size);
 
-		auto shader = Shader::Create(s_IrradianceVertSrc, s_IrradianceFragSrc);
+		// SKY_IBL_V1 — compila UMA vez. Ver a nota do membro no header.
+		if (!m_IrradianceShader)
+			m_IrradianceShader = Shader::Create(s_IrradianceVertSrc, s_IrradianceFragSrc);
+		auto& shader = m_IrradianceShader;
 		shader->Bind();
 		shader->SetInt("u_EnvironmentMap", 0);
 		shader->SetMat4("u_Projection", glm::value_ptr(proj));
@@ -538,20 +695,26 @@ namespace axe
 		constexpr uint32_t size = 128;
 		constexpr uint32_t numMips = 5;
 
-		glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_PrefilteredID);
-		glBindTexture(GL_TEXTURE_CUBE_MAP, m_PrefilteredID);
-		for (int i = 0; i < 6; i++)
-			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
-				size, size, 0, GL_RGB, GL_FLOAT, nullptr);
+		// SKY_IBL_V1 — mesma regra do irradiance: aloca so na primeira vez.
+		if (m_PrefilteredID == 0)
+		{
+			glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &m_PrefilteredID);
+			glBindTexture(GL_TEXTURE_CUBE_MAP, m_PrefilteredID);
+			for (int i = 0; i < 6; i++)
+				glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F,
+					size, size, 0, GL_RGB, GL_FLOAT, nullptr);
 
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+			glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+		}
 
-		auto shader = Shader::Create(s_IrradianceVertSrc, s_PrefilterFragSrc);
+		if (!m_PrefilterShader)
+			m_PrefilterShader = Shader::Create(s_IrradianceVertSrc, s_PrefilterFragSrc);
+		auto& shader = m_PrefilterShader;
 		shader->Bind();
 		shader->SetInt("u_EnvironmentMap", 0);
 		shader->SetMat4("u_Projection", glm::value_ptr(proj));

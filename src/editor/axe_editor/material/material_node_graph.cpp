@@ -4,6 +4,11 @@
 // undo/redo de deleção de node (DeleteNodeWithHistory).
 
 #include "material_editor_window.hpp"
+
+// MATERIAL_EDITOR_STYLE_V1 — widgets e icones compartilhados do editor.
+// Ver a nota em editor_widgets.hpp sobre por que eles existem.
+#include "editor/axe_editor/ui/editor_widgets.hpp"
+#include "editor/axe_editor/ui/editor_icons.hpp"
 #include "editor/axe_editor/editor_icon_library.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/graphics/texture.hpp"
@@ -56,100 +61,116 @@ namespace axe
         {"Particle Color", "Particle Color"},
     };
 
+    // CUSTOM_NODE_V1 — categoria propria, e nao um item perdido em "Utility".
+    // Este node nao e mais uma operacao: e a saida do grafo para tudo que a
+    // lista acima nao cobre.
+    static const MatNE s_MatCustom[] = {
+        {"Custom (GLSL)", "Custom"},
+    };
+
+    // POSTPROCESS_DOMAIN_V1 — so tem efeito no dominio Post Process; fora dele
+    // compilam para valor neutro (ver GenerateNodeCode). Ficam no menu de
+    // qualquer jeito: node que some conforme o dominio esconde do usuario que
+    // ele existe.
+    static const MatNE s_MatScreen[] = {
+        {"Scene Color",         "Scene Color"},
+        {"Screen UV",           "Screen UV"},
+        // POSTPROCESS_GBUFFER_V1 — a GEOMETRIA da cena, nao so a cor.
+        {"Scene Depth",         "Scene Depth"},
+        {"Scene Normal",        "Scene Normal"},
+        {"Scene Shading Model", "Scene Shading Model"},
+        // POSTPROCESS_SKY_V1 — o ceu nao esta no G-Buffer; estes tres sao o
+        // que permite estiliza-lo no grafo.
+        {"Scene Is Background",  "Scene Is Background"},
+        {"Screen Ray Direction", "Screen Ray Direction"},
+        {"Sun",                  "Sun"},
+    };
+
     struct MatCatDef { const char* name; const MatNE* e; int n; ImVec4 col; };
+
+    // As contagens agora sao IM_ARRAYSIZE. Eram numeros digitados ao lado de
+    // cada array — e um numero MENOR que o array significa item que nunca
+    // aparece no menu, sem erro nenhum para avisar. Ja aconteceu nesta engine,
+    // no menu do Script Editor.
     static const MatCatDef s_MatCats[] = {
-        {"Constants", s_MatConstants, 4, {0.55f, 0.55f, 0.95f, 1}},
-        {"Texture",   s_MatTexture,   3, {0.9f,  0.55f, 0.2f,  1}},
-        {"Math",      s_MatMath,      17, {0.4f, 0.65f, 1.0f,  1}},
-        {"Vector",    s_MatVector,    7, {0.3f,  0.85f, 0.55f, 1}},
-        {"Utility",   s_MatUtility,   7, {0.85f, 0.3f,  0.75f, 1}},
-        {"Animation", s_MatAnimation, 2, {0.95f, 0.35f, 0.6f,  1}},
-        {"Particle",  s_MatParticle,  2, {0.1f,  0.75f, 0.55f, 1}},
+        {"Constants", s_MatConstants, IM_ARRAYSIZE(s_MatConstants), {0.55f, 0.55f, 0.95f, 1}},
+        {"Texture",   s_MatTexture,   IM_ARRAYSIZE(s_MatTexture),   {0.9f,  0.55f, 0.2f,  1}},
+        {"Math",      s_MatMath,      IM_ARRAYSIZE(s_MatMath),      {0.4f,  0.65f, 1.0f,  1}},
+        {"Vector",    s_MatVector,    IM_ARRAYSIZE(s_MatVector),    {0.3f,  0.85f, 0.55f, 1}},
+        {"Utility",   s_MatUtility,   IM_ARRAYSIZE(s_MatUtility),   {0.85f, 0.3f,  0.75f, 1}},
+        {"Animation", s_MatAnimation, IM_ARRAYSIZE(s_MatAnimation), {0.95f, 0.35f, 0.6f,  1}},
+        {"Particle",  s_MatParticle,  IM_ARRAYSIZE(s_MatParticle),  {0.1f,  0.75f, 0.55f, 1}},
+        {"Custom",    s_MatCustom,    IM_ARRAYSIZE(s_MatCustom),    {0.75f, 0.45f, 0.15f, 1}},
+        {"Screen",    s_MatScreen,    IM_ARRAYSIZE(s_MatScreen),    {0.2f,  0.6f,  0.8f,  1}},
     };
 
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MATERIAL_EDITOR_STYLE_V1 — a barra do Material Graph
+    //
+    //  Era o ultimo lugar do editor que ainda desenhava ImageButton com PNG
+    //  carregado do disco, enquanto Script, Control Rig, Anim Graph e Sequencer
+    //  ja usam ui::IconButton com os glifos da Font Awesome subsetada.
+    //
+    //  A diferenca aparecia: os PNG nao acompanham o tamanho da fonte nem o DPI,
+    //  nao herdam a cor de intencao (Accent) e ficam borrados em qualquer escala
+    //  que nao seja a nativa. E, quando o icone nao carregava, o botao
+    //  simplesmente NAO EXISTIA — repare que cada bloco antigo era um
+    //  `if (icons.GetUndo())` em volta do botao inteiro.
+    //
+    //  Os tooltips continuam sendo os mesmos, e o IconButton os EXIGE.
+    // ═════════════════════════════════════════════════════════════════════════
     void MaterialEditorWindow::DrawNodeGraphWindow()
     {
         if (ImGui::Begin("Material Graph"))
         {
-            // Toolbar
-            auto& icons = EditorIconLibrary::Get();
-            float btnSize = 24.0f;
-
-            // Undo
-            bool canUndo = m_History.CanUndo();
-            if (!canUndo) ImGui::BeginDisabled();
-            if (icons.GetUndo())
-            {
-                if (ImGui::ImageButton("##undo",
-                    (ImTextureID)(uintptr_t)icons.GetUndo()->GetRendererID(),
-                    ImVec2(btnSize, btnSize),
-                    ImVec2(0, 1),
-                    ImVec2(1, 0)
-                ))
-                    m_History.Undo();
-            }
-            if (!canUndo) ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Undo: %s", m_History.GetUndoName().c_str());
-
+            const bool canUndo = m_History.CanUndo();
+            ImGui::BeginDisabled(!canUndo);
+            if (ui::IconButton(ICON_UNDO,
+                canUndo ? ("Desfazer: " + m_History.GetUndoName()).c_str() : "Nada a desfazer"))
+                m_History.Undo();
+            ImGui::EndDisabled();
             ImGui::SameLine();
 
-            // Redo
-            bool canRedo = m_History.CanRedo();
-            if (!canRedo) ImGui::BeginDisabled();
-            if (icons.GetRedo())
-            {
-                if (ImGui::ImageButton("##redo",
-                    (ImTextureID)(uintptr_t)icons.GetRedo()->GetRendererID(),
-                    ImVec2(btnSize, btnSize),
-                    ImVec2(0, 1),
-                    ImVec2(1, 0)))
-                    m_History.Redo();
-            }
-            if (!canRedo) ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Redo: %s", m_History.GetRedoName().c_str());
+            const bool canRedo = m_History.CanRedo();
+            ImGui::BeginDisabled(!canRedo);
+            if (ui::IconButton(ICON_REDO,
+                canRedo ? ("Refazer: " + m_History.GetRedoName()).c_str() : "Nada a refazer"))
+                m_History.Redo();
+            ImGui::EndDisabled();
 
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+            ui::ToolbarSeparator();
+
+            if (ui::IconButton(ICON_SAVE, "Salvar o grafo (.axegraph)"))
+                SaveGraph();
             ImGui::SameLine();
 
-            // Salvar
-            if (icons.GetSave())
+            // Compilar e a ACAO PRINCIPAL desta janela — dai o Accent::Primary.
+            // E o unico botao aqui que muda o que aparece na cena.
+            if (ui::IconButton(ICON_BOLT,
+                "Compilar e aplicar\n\nGera o GLSL a partir do grafo, aplica no\n"
+                "material e regrava o .axeshader cozido.",
+                ui::Accent::Primary))
             {
-                if (ImGui::ImageButton("##save",
-                    (ImTextureID)(uintptr_t)icons.GetSave()->GetRendererID(),
-                    ImVec2(btnSize, btnSize),
-                    ImVec2(0, 1),
-                    ImVec2(1, 0)
-                ))
-                    SaveGraph();
+                if (m_Material)
+                    CompileAndApply();
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Salvar grafo");
 
-            ImGui::SameLine();
-
-            // Compilar
-            if (icons.GetCompile())
+            // O dominio do material fica na barra, e nao so escondido no painel
+            // de parametros: ele muda COMPLETAMENTE o que o grafo significa, e
+            // quem abre o material precisa ver isso sem procurar.
+            if (m_Graph)
             {
-                if (ImGui::ImageButton("##compile",
-                    (ImTextureID)(uintptr_t)icons.GetCompile()->GetRendererID(),
-                    ImVec2(btnSize, btnSize),
-                    ImVec2(0, 1),
-                    ImVec2(1, 0)
-                ))
-                {
-                    // Chama o mesmo código do "Compile and Apply"
-                    if (m_Material)
-                        CompileAndApply();
+                ui::ToolbarSeparator();
 
+                const char* domainLabel =
+                    m_Graph->Domain == MaterialDomain::LightFunction ? ICON_BOLT "  Light Function" :
+                    m_Graph->Domain == MaterialDomain::Particle ? ICON_WAND "  Particle" :
+                    m_Graph->Domain == MaterialDomain::PostProcess ? ICON_IMAGE "  Post Process" :
+                    ICON_CUBE "  Surface";
 
-                }
+                ImGui::TextDisabled("%s", domainLabel);
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Compilar e aplicar");
 
             ImGui::Separator();
             DrawNodeGraph();
@@ -481,7 +502,13 @@ if (r)
                 if (!filtering)
                     ImGui::Separator();
 
-                for (int ci = 0; ci < 7; ci++)
+                // CUSTOM_NODE_V1 — era `ci < 7` digitado. Com a categoria
+                // Custom somando 8, o `7` teria feito ela nunca aparecer no
+                // menu — e o node existiria, compilaria e seria inalcancavel.
+                // Exatamente o bug que ja aconteceu no menu do Script Editor.
+                static_assert(IM_ARRAYSIZE(s_MatCats) <= 9,
+                    "m_NodeCatOpen menor que a tabela de categorias");
+                for (int ci = 0; ci < IM_ARRAYSIZE(s_MatCats); ci++)
                 {
                     auto& cat = s_MatCats[ci];
                     ImVec4 col = cat.col;

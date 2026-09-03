@@ -4,6 +4,12 @@
 // slot de textura usado pelos parâmetros legados (não-PBR).
 
 #include "material_editor_window.hpp"
+
+// MATERIAL_EDITOR_STYLE_V1 — os mesmos ui::SectionHeader/IconButton e glifos
+// que o Script Editor, o Control Rig e o Anim Graph ja usam.
+#include "editor/axe_editor/ui/editor_widgets.hpp"
+#include "editor/axe_editor/ui/editor_icons.hpp"
+
 #include "axe/asset/asset_database.hpp"
 #include "editor/axe_editor/asset/asset_picker.hpp"
 #include <glm/gtc/type_ptr.hpp>
@@ -48,8 +54,20 @@ namespace axe
             if (nodePtr)
             {
                 Node* node = nodePtr->get();
-                ImGui::Text("Node: %s", node->Name.c_str());
-                ImGui::Separator();
+
+                // MATERIAL_EDITOR_STYLE_V1 — cabecalho na mesma forma do
+                // "Functions"/"Parameters" dos outros paineis, com o icone
+                // dizendo QUE TIPO de node e antes de o nome ser lido.
+                const char* nodeIcon =
+                    node->Name == "Custom" ? ICON_CODE :
+                    node->Name == "Texture Sample" ? ICON_IMAGE :
+                    node->Name == "Scene Color" ? ICON_IMAGE :
+                    node->Name == "Screen UV" ? ICON_BORDER_ALL :
+                    node->Name == "Color" ? ICON_PALETTE :
+                    node->Name == "Time" ? ICON_CLOCK :
+                    ICON_CIRCLE_NODES;
+
+                ui::SectionHeader(nodeIcon, node->Name.c_str(), ui::Accent::Primary);
 
                 if (node->Name == "Float" && node->IsConstant)
                 {
@@ -86,6 +104,128 @@ namespace axe
                             node->Value.TextureUUID = record.UUID;
                         });
                 }
+                // ═══════════════════════════════════════════════════════════
+                //  CUSTOM_NODE_V1 — o editor do node Custom
+                //
+                //  Tres coisas, nesta ordem, porque e a ordem em que se pensa:
+                //  o tipo da saida, as entradas (nome + tipo), e o codigo que
+                //  usa as entradas para produzir a saida.
+                // ═══════════════════════════════════════════════════════════
+                else if (node->Name == "Custom")
+                {
+                    static const char* kTypeNames[] = { "Float", "Vec2", "Vec3", "Vec4" };
+
+                    // ── Tipo da saida ────────────────────────────────────
+                    ImGui::TextDisabled("Output Type");
+                    ImGui::SetNextItemWidth(-1);
+                    int outT = (int)node->CustomOutputType;
+                    if (outT > 3) outT = 0;   // Texture2D/Any nao valem como saida
+                    if (ImGui::Combo("##customout", &outT, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
+                    {
+                        node->CustomOutputType = (PinType)outT;
+                        // O pin PRECISA acompanhar: e o Type dele que o
+                        // compilador usa para tipar quem consome este node.
+                        // Sem esta linha, mudar a saida para Vec3 geraria uma
+                        // funcao que devolve vec3 atribuida a um float.
+                        if (!node->Outputs.empty())
+                            node->Outputs[0].Type = node->CustomOutputType;
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Inputs");
+
+                    int removeIndex = -1;
+                    for (int i = 0; i < (int)node->Inputs.size(); i++)
+                    {
+                        ImGui::PushID(i);
+
+                        char buf[64];
+                        std::snprintf(buf, sizeof(buf), "%s", node->Inputs[i].Name.c_str());
+                        ImGui::SetNextItemWidth(120.0f);
+                        if (ImGui::InputText("##name", buf, sizeof(buf)))
+                            node->Inputs[i].Name = buf;
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Este e o nome da VARIAVEL dentro do seu codigo.");
+
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(70.0f);
+                        int t = (int)node->Inputs[i].Type;
+                        if (t > 3) t = 0;
+                        if (ImGui::Combo("##type", &t, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
+                            node->Inputs[i].Type = (PinType)t;
+
+                        ImGui::SameLine();
+                        // Nunca deixa ficar sem nenhuma entrada: um Custom sem
+                        // parametro ainda compila, mas o node fica sem pino e
+                        // vira uma constante escondida no grafo.
+                        ImGui::BeginDisabled(node->Inputs.size() <= 1);
+                        if (ImGui::SmallButton("-")) removeIndex = i;
+                        ImGui::EndDisabled();
+
+                        ImGui::PopID();
+                    }
+
+                    bool pinsChanged = false;
+
+                    if (removeIndex >= 0)
+                    {
+                        // Remover um pin invalida os LINKS que chegavam nele.
+                        // Deixar link pendurado num pin que nao existe mais e
+                        // como o grafo trava depois; melhor cortar aqui.
+                        ed::PinId dead = node->Inputs[removeIndex].ID;
+                        m_Graph->RemoveLinksForPin(dead);
+                        node->Inputs.erase(node->Inputs.begin() + removeIndex);
+                        pinsChanged = true;
+                    }
+
+                    if (ImGui::SmallButton("+ Input"))
+                    {
+                        node->Inputs.emplace_back(m_Graph->GetNextID(),
+                            "In", PinType::Float, ed::PinKind::Input);
+                        pinsChanged = true;
+                    }
+
+                    if (pinsChanged)
+                    {
+                        // BuildNodes religa Pin::ParentNode/Kind. Sem ele, o
+                        // pin novo existe mas nao sabe de quem e — e o
+                        // CanCreateLink do editor de nodes rejeita a ligacao.
+                        m_Graph->BuildNodes();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Code (GLSL)");
+
+                    // Buffer estatico grande + copia por node: o InputTextMultiline
+                    // do ImGui quer um char*, e guardar um buffer por node
+                    // custaria memoria a toa. A copia acontece a cada frame em
+                    // que ESTE node esta selecionado — que e um node so.
+                    static char s_CodeBuf[4096];
+                    static int  s_CodeBufNode = -1;
+                    if (s_CodeBufNode != (int)node->ID.Get())
+                    {
+                        std::snprintf(s_CodeBuf, sizeof(s_CodeBuf), "%s",
+                            node->CustomCode.c_str());
+                        s_CodeBufNode = (int)node->ID.Get();
+                    }
+
+                    if (ImGui::InputTextMultiline("##customcode", s_CodeBuf,
+                        sizeof(s_CodeBuf), ImVec2(-1, 200)))
+                    {
+                        node->CustomCode = s_CodeBuf;
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f),
+                        "Corpo de uma funcao: precisa terminar em 'return'.\n"
+                        "As entradas acima viram variaveis com o nome que voce deu.\n"
+                        "Disponiveis tambem: v_TexCoord, v_FragPos, v_Normal,\n"
+                        "u_Time, u_CameraPosition.");
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled(
+                        "Erro de GLSL aparece no Shader Log ao compilar.");
+                }
                 else
                 {
                     // Mostra os pins de input do node
@@ -108,8 +248,10 @@ namespace axe
         }
 
         // Sem node selecionado — mostra parâmetros globais do material
-        ImGui::TextDisabled("Selecione um node para editar.");
-        ImGui::Separator();
+        ImGui::TextDisabled(ICON_CIRCLE_INFO "  Selecione um node para editar.");
+        ImGui::Spacing();
+
+        ui::SectionHeader(ICON_SLIDERS, "Material", ui::Accent::Primary);
 
         // --- Material Domain / Blend Mode / Shading Model ---
         // Estrutura inspirada na Unreal. Só os itens marcados como
@@ -135,30 +277,74 @@ namespace axe
                 }
             };
 
+        // As contagens agora sao IM_ARRAYSIZE, e nao numeros digitados.
+        //
+        // Nao e preciosismo: ja aconteceu na engine (a tabela do menu do
+        // Script Editor tinha 11 digitado para 12 entradas, e o ultimo item
+        // simplesmente nunca aparecia). Aqui o erro seria pior — o array de
+        // "disponivel" e o de nomes sao lidos com o MESMO indice, entao um
+        // descompasso leria fora do array. Este arquivo acabou de ganhar uma
+        // entrada nova em Shading Model; a proxima nao vai precisar lembrar
+        // de mexer no numero.
         static const char* s_DomainNames[] = {
             "Surface", "Light Function", "Particle", "Deferred Decal", "Volume", "Post Process", "User Interface" };
-        static const bool s_DomainAvailable[] = { true, true, true, false, false, false, false };
+        // POSTPROCESS_DOMAIN_V1 — "Post Process" (indice 5) passou a ser REAL.
+        static const bool s_DomainAvailable[] = { true, true, true, false, false, true, false };
+        static_assert(IM_ARRAYSIZE(s_DomainNames) == IM_ARRAYSIZE(s_DomainAvailable),
+            "Material Domain: nomes e disponibilidade fora de sincronia");
         int domain = (int)m_Graph->Domain;
         // Mapeia o enum (que tem Particle=2, DeferredDecal=3...) pra o índice do combo
-        drawDomainCombo("Material Domain", s_DomainNames, s_DomainAvailable, 7, domain);
+        drawDomainCombo("Material Domain", s_DomainNames, s_DomainAvailable,
+            IM_ARRAYSIZE(s_DomainNames), domain);
         m_Graph->Domain = (MaterialDomain)domain;
 
         static const char* s_BlendNames[] = {
             "Opaque", "Masked", "Translucent", "Additive", "Modulate", "Alpha Composite", "Alpha Holdout" };
         static const bool s_BlendAvailable[] = { true, true, true, true, false, false, false };
+        static_assert(IM_ARRAYSIZE(s_BlendNames) == IM_ARRAYSIZE(s_BlendAvailable),
+            "Blend Mode: nomes e disponibilidade fora de sincronia");
         int blend = (int)m_Graph->BlendMode;
-        drawDomainCombo("Blend Mode", s_BlendNames, s_BlendAvailable, 7, blend);
+        drawDomainCombo("Blend Mode", s_BlendNames, s_BlendAvailable,
+            IM_ARRAYSIZE(s_BlendNames), blend);
         m_Graph->BlendMode = (MaterialBlendMode)blend;
 
+        // SHADING_MODEL_V1 — "Toon" e novo e REAL. A ordem aqui espelha o
+        // enum MaterialShadingModel (node_types.hpp), incluindo o Toon no fim.
         static const char* s_ShadingNames[] = {
             "Default Lit", "Unlit", "Subsurface", "Clear Coat", "Preintegrated Skin",
             "Two Sided Foliage", "Hair", "Cloth", "Eye", "Single Layer Water",
-            "Thin Translucent", "From Material Expression" };
+            "Thin Translucent", "From Material Expression", "Toon" };
         static const bool s_ShadingAvailable[] = {
-            true, true, false, false, false, false, false, false, false, false, false, false };
+            true, true, false, false, false, false, false, false, false, false, false, false, true };
+        static_assert(IM_ARRAYSIZE(s_ShadingNames) == IM_ARRAYSIZE(s_ShadingAvailable),
+            "Shading Model: nomes e disponibilidade fora de sincronia");
         int shading = (int)m_Graph->ShadingModel;
-        drawDomainCombo("Shading Model", s_ShadingNames, s_ShadingAvailable, 12, shading);
+        drawDomainCombo("Shading Model", s_ShadingNames, s_ShadingAvailable,
+            IM_ARRAYSIZE(s_ShadingNames), shading);
         m_Graph->ShadingModel = (MaterialShadingModel)shading;
+
+        // SHADING_MODEL_V1 — controles que so existem no Toon. Aparecem
+        // condicionalmente porque um slider de bandas num material DefaultLit
+        // seria um controle que nao faz nada, que e como o Shading Model
+        // inteiro estava ate esta rodada.
+        if (m_Graph->ShadingModel == MaterialShadingModel::Toon)
+        {
+            ImGui::Spacing();
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##toonsteps", &m_Graph->ToonSteps, 2, 8, "Bandas: %d");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Degraus da luz difusa.\n"
+                    "3 = celula classica (luz / meio-tom / sombra).\n"
+                    "Acima de 8 ja e indistinguivel de sombreamento continuo.");
+
+            ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f),
+                "Toon: o tamanho do brilho especular vem do\n"
+                "Roughness — quanto mais liso, menor e mais duro.");
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Recompile para aplicar (Compile/Save).");
+        }
 
         if (m_Graph->Domain == MaterialDomain::LightFunction)
         {
@@ -176,7 +362,8 @@ namespace axe
                 "Vars disponíveis: v_UV, v_Color, v_Age01, u_Time.");
         }
 
-        ImGui::Separator();
+        ImGui::Spacing();
+        ui::SectionHeader(ICON_PALETTE, "Surface", ui::Accent::Neutral);
 
         bool usePBR = mat.UsePBR;
         if (ImGui::Checkbox("PBR", &usePBR))

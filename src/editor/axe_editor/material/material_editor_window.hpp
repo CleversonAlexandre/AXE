@@ -192,7 +192,11 @@ namespace axe
         // Menu "Create New Node" — busca + categorias colapsáveis (mesmo
         // padrão visual usado no Script Editor)
         char m_NodeSearchBuf[128] = {};
-        bool m_NodeCatOpen[7] = { false, false, false, false, false, false, false };
+        // CUSTOM_NODE_V1 / POSTPROCESS_DOMAIN_V1 — 9 categorias ("Custom" e "Screen"). O tamanho e
+        // conferido contra s_MatCats por static_assert em material_node_graph.cpp:
+        // este array e indexado pelo MESMO indice da tabela de categorias, e um
+        // descompasso escreveria fora dele.
+        bool m_NodeCatOpen[9] = { false, false, false, false, false, false, false, false, false };
         void UpdateCommentChildren(Node* commentNode);
         std::shared_ptr<Material> m_Material;
         std::shared_ptr<Material> m_PreviewMaterial;

@@ -73,9 +73,39 @@ namespace axe
         // load e nao precisa de cache; este caminho e o de tempo de jogo. O que
         // NAO pode divergir e a ordem — callback primeiro, cozido depois — e e
         // por isso que ela esta escrita igual, e nao "melhorada" aqui.
-        auto cb = (domain == CookedMaterialDomain::LightFunction)
-            ? SceneSerializer::GetLightMaterialRecompileCallback()
-            : SceneSerializer::GetParticleMaterialRecompileCallback();
+        // ── POSTPROCESS_DOMAIN_V1 — BUG CORRIGIDO AQUI ───────────────────────
+        //
+        // Isto era um TERNARIO: LightFunction ? callbackDeLuz : callbackDeParticula.
+        // Enquanto so existiam dois dominios, o "senao" era exato. Ao entrar um
+        // TERCEIRO (PostProcess), ele caiu em silencio no ramo de particula: o
+        // editor compilava o grafo de post process como BILLBOARD DE PARTICULA
+        // e devolvia esse shader ao passe de tela cheia.
+        //
+        // O sintoma nao foi "nao funciona" — foi pior. Um shader que espera
+        // atributos de particula, desenhado sobre o quad de tela, sem
+        // u_SceneColor e sem escrever o alvo inteiro: a tela ficava com o lixo
+        // do buffer nao inicializado, ou preta.
+        //
+        // Switch explicito, e `default` com callback NULO de proposito: um
+        // dominio novo que alguem esqueca de ligar aqui cai no COZIDO — que e
+        // conservador e correto — em vez de receber o shader de outro dominio.
+        // Um ternario nao tem como avisar; um switch tem.
+        SceneSerializer::LightMaterialRecompileCallback cb = nullptr;
+        switch (domain)
+        {
+        case CookedMaterialDomain::LightFunction:
+            cb = SceneSerializer::GetLightMaterialRecompileCallback();
+            break;
+        case CookedMaterialDomain::Particle:
+            cb = SceneSerializer::GetParticleMaterialRecompileCallback();
+            break;
+        case CookedMaterialDomain::PostProcess:
+            cb = SceneSerializer::GetPostProcessMaterialRecompileCallback();
+            break;
+        default:
+            cb = nullptr;
+            break;
+        }
 
         if (cb)
             entry.Ok = cb(materialAssetUUID, entry.ShaderRef, entry.Samplers);
@@ -100,14 +130,31 @@ namespace axe
         return true;
     }
 
+    // POSTPROCESS_DOMAIN_V1 — ver a nota na declaracao.
+    namespace
+    {
+        std::uint64_t& GenerationCounter()
+        {
+            static std::uint64_t s_Generation = 1;
+            return s_Generation;
+        }
+    }
+
+    std::uint64_t MaterialShaderCache::Generation()
+    {
+        return GenerationCounter();
+    }
+
     void MaterialShaderCache::Invalidate(const std::string& materialAssetUUID)
     {
         Entries().erase(materialAssetUUID);
+        ++GenerationCounter();
     }
 
     void MaterialShaderCache::Clear()
     {
         Entries().clear();
+        ++GenerationCounter();
     }
 
 } // namespace axe

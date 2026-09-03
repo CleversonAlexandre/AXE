@@ -34,6 +34,10 @@ namespace axe
             return;
         }
 
+        // ASSET_VIEWER_V1 — guarda o que a janela de inspecao vai mostrar.
+        m_Channels = static_cast<uint32_t>(channels);
+        m_Path = filepath;
+
         m_Width = static_cast<uint32_t>(width);
         m_Height = static_cast<uint32_t>(height);
 
@@ -174,5 +178,54 @@ namespace axe
     void OpenGLTexture2D::Unbind() const
     {
         glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  ASSET_VIEWER_V1 — filtro e wrap aplicados na hora
+    //
+    //  Sao parametros de AMOSTRAGEM, nao do conteudo: mudam como o driver le a
+    //  textura, nao os pixels. Por isso nao precisam de reimportacao — e por
+    //  isso o usuario consegue comparar Nearest e Linear vendo o resultado em
+    //  vez de adivinhar.
+    //
+    //  glTextureParameteri (DSA) e nao glTexParameteri: nao mexe no que estiver
+    //  bindado. Trocar o estado de bind aqui vazaria para o passe que estivesse
+    //  no meio do trabalho — a mesma armadilha do glPolygonOffset do shadow
+    //  pass, que ja mordeu nesta engine.
+    // ═══════════════════════════════════════════════════════════════════════
+    void OpenGLTexture2D::SetFilter(Filter f)
+    {
+        if (!m_Loaded || m_RendererID == 0) return;
+        m_Filter = f;
+
+        GLint minF = GL_LINEAR_MIPMAP_LINEAR;
+        GLint magF = GL_LINEAR;
+
+        switch (f)
+        {
+        case Filter::Nearest:   minF = GL_NEAREST; magF = GL_NEAREST; break;
+        case Filter::Linear:    minF = GL_LINEAR;  magF = GL_LINEAR;  break;
+        case Filter::Trilinear: default: break;   // usa os mips gerados no import
+        }
+
+        glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, minF);
+        glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, magF);
+    }
+
+    void OpenGLTexture2D::SetWrap(Wrap w)
+    {
+        if (!m_Loaded || m_RendererID == 0) return;
+        m_Wrap = w;
+
+        GLint mode = GL_REPEAT;
+        switch (w)
+        {
+        case Wrap::Clamp:  mode = GL_CLAMP_TO_EDGE;   break;
+        case Wrap::Mirror: mode = GL_MIRRORED_REPEAT; break;
+        case Wrap::Repeat: default: break;
+        }
+
+        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, mode);
+        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, mode);
     }
 }

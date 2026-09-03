@@ -21,6 +21,7 @@ namespace axe
         {
         case CookedMaterialDomain::LightFunction: return "light_function";
         case CookedMaterialDomain::Particle:      return "particle";
+        case CookedMaterialDomain::PostProcess:   return "post_process";
         case CookedMaterialDomain::Surface:
         default:                                  return "surface";
         }
@@ -38,6 +39,7 @@ namespace axe
             if (name == "surface") { out = CookedMaterialDomain::Surface;       return true; }
             if (name == "light_function") { out = CookedMaterialDomain::LightFunction; return true; }
             if (name == "particle") { out = CookedMaterialDomain::Particle;      return true; }
+            if (name == "post_process") { out = CookedMaterialDomain::PostProcess;   return true; }
 
             out = CookedMaterialDomain::Surface;
             return false;

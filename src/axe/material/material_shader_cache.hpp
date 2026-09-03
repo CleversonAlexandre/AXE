@@ -51,6 +51,7 @@
 #include "axe/core/types.hpp"
 #include "axe/material/material_cooked.hpp"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -73,6 +74,18 @@ namespace axe
 
         static void Invalidate(const std::string& materialAssetUUID);
         static void Clear();
+
+        // POSTPROCESS_DOMAIN_V1 — contador que sobe a cada Invalidate/Clear.
+        //
+        // Existe porque este cache passou a ter um SEGUNDO nivel de cache em
+        // cima dele: o OpenGLPostProcessPass guarda o shader do efeito por
+        // UUID, para nao refazer a busca todo frame. Sem um jeito de saber que
+        // algo foi invalidado, esse cache de cima continuaria devolvendo o
+        // shader ANTIGO — o usuario recompilaria o material e nao veria
+        // diferenca nenhuma ate reabrir a cena.
+        //
+        // Comparar dois inteiros e o preco de manter os dois em dia.
+        static std::uint64_t Generation();
     };
 
 } // namespace axe

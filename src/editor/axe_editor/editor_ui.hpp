@@ -1,4 +1,5 @@
 #pragma once
+#include "axe_editor/asset/asset_viewer_window.hpp"   // ASSET_VIEWER_V1
 #include "hierarchy_window.hpp"
 #include "viewport_window.hpp"
 #include "inspector_window.hpp"
@@ -45,6 +46,7 @@ namespace axe
         AnimClipWindow       m_AnimClipWindow;
         InputSettingsWindow  m_InputSettingsWindow;
         AssetReportWindow    m_AssetReportWindow;   // B3.2
+        AssetViewerWindow    m_AssetViewerWindow;   // ASSET_VIEWER_V1
         SequencerWindow m_SequencerWindow;
 
         // Callbacks conectados pelo EditorLayer
@@ -96,10 +98,10 @@ namespace axe
         bool m_ShowAssetBrowser = true;
         bool m_ShowEnvironment = false;
         bool m_ShowGameMode = false;
-        
+
 
         ViewportRenderer* m_ViewportRenderer = nullptr;
 
-        
+
     };
 }

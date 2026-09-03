@@ -42,6 +42,8 @@ IncludeDir["entt"] = "src/vendor/entt/src"
 IncludeDir["nlohmann"] = "src/vendor"
 IncludeDir["stb"] = "src/vendor/stb"
 IncludeDir["imguinodeeditor"] = "src/vendor/imgui-node-editor"
+-- VIEW_GIZMO_V1 — ImViewGuizmo (MIT, header-only, ja usa glm)
+IncludeDir["imviewguizmo"] = "src/vendor/imview-guizmo"
 IncludeDir["Jolt"] = "src/vendor/JoltPhysics"
 -- miniaudio: header unico, dominio publico / MIT-0. Sem submodulo, sem
 -- CMake, sem .lib e sem DLL pra copiar no post-build — so o include.
@@ -278,6 +280,7 @@ project "editor"
         "src/vendor/imguizmo/ImGuizmo.h",
         "src/vendor/imguizmo/ImGuizmo.cpp",
         "src/vendor/imguizmo/ImZoomSlider.h",
+        "src/vendor/imview-guizmo/ImViewGuizmo.h",   -- VIEW_GIZMO_V1
 
           "src/vendor/imgui-node-editor/imgui_node_editor.h",
         "src/vendor/imgui-node-editor/imgui_node_editor.cpp",
@@ -308,6 +311,7 @@ project "editor"
         "%{IncludeDir.entt}",
         "%{IncludeDir.nlohmann}",
          "%{IncludeDir.imguinodeeditor}",
+        "%{IncludeDir.imviewguizmo}",   -- VIEW_GIZMO_V1
     }
 
     libdirs

@@ -45,7 +45,7 @@ namespace axe
         Particle,
         DeferredDecal,  // [indisponível] decal projetado num superfície
         Volume,         // [indisponível] material volumétrico
-        PostProcess,    // [indisponível] efeito de tela inteira
+        PostProcess,    // POSTPROCESS_DOMAIN_V1 — efeito de tela inteira (real)
         UserInterface,  // [indisponível] material pra UI/widgets
     };
 
@@ -66,6 +66,13 @@ namespace axe
     // Shading Model — qual fórmula de iluminação usar. DefaultLit (PBR
     // completo, já existente) e Unlit (sem luz nenhuma, mostra a cor
     // direto — base pra cartoon/VFX/UI) são reais; o resto é placeholder.
+    // SHADING_MODEL_V1 — este enum e da UI e pode crescer/reordenar; quem vai
+    // pro G-Buffer e o `ShadingModelID` de axe/material/material_cooked.hpp.
+    // Ver a nota longa la sobre por que sao dois enums separados.
+    //
+    // "Toon" entrou no FIM de proposito: o valor e serializado por INDICE no
+    // `.axegraph`, entao inseri-lo no meio re-sombrearia todo material ja
+    // salvo. Mesma regra dos pins do Material Output.
     enum class MaterialShadingModel
     {
         DefaultLit,
@@ -80,6 +87,7 @@ namespace axe
         SingleLayerWater,       // [indisponível]
         ThinTranslucent,        // [indisponível]
         FromMaterialExpression, // [indisponível]
+        Toon,                   // SHADING_MODEL_V1 — sempre no FIM (ver acima)
     };
 
     //enum class PinKind
@@ -160,6 +168,31 @@ namespace axe
         // (o node deixava de ser reconhecido como tipo "Comment").
         std::string StringValue;
         float CommentColor[3] = { 0.10f, 0.35f, 0.45f };
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  CUSTOM_NODE_V1 — GLSL escrito a mao dentro do grafo
+        //
+        //  Usado apenas quando Name == "Custom". E o equivalente do node
+        //  Custom da Unreal: em vez de esperar que a engine ganhe um node
+        //  para cada operacao imaginavel, o usuario escreve o GLSL.
+        //
+        //  ── POR QUE UM CAMPO NO NODE, E NAO UM NODE-FILHO ──────────────────
+        //
+        //  O compilador percorre `Node` cru (nao ha polimorfismo de node no
+        //  MaterialGraph: tudo e despachado por `Name` em GenerateNodeCode).
+        //  Criar uma subclasse aqui obrigaria a introduzir dynamic_cast no
+        //  compilador, na serializacao e no desenho — tres lugares — para um
+        //  node so. `StringValue` e `CommentColor` acima ja seguem exatamente
+        //  este padrao para o Comment.
+        //
+        //  Os NOMES e TIPOS das entradas nao moram aqui: eles ja sao os
+        //  proprios `Pin` do node (Pin::Name, Pin::Type). O que muda no
+        //  Custom e que essa lista e EDITAVEL pelo usuario, e nao fixa pela
+        //  fabrica — e por isso ele e o unico node cujos pins precisam ser
+        //  reconstruidos na desserializacao (ver MaterialGraph::Deserialize).
+        // ═══════════════════════════════════════════════════════════════════
+        std::string CustomCode;
+        PinType     CustomOutputType = PinType::Float;
 
         Node(int id, const char* name, ImColor color = ImColor(255, 255, 255)) :
             ID(id), Name(name), Color(color), Type(NodeType::Blueprint), Size(0, 0)

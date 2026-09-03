@@ -63,7 +63,7 @@ namespace axe
         layout(location = 0) out vec3 g_Position;  // world space
         layout(location = 1) out vec3 g_Normal;    // world space
         layout(location = 2) out vec4 g_Albedo;
-        layout(location = 3) out vec2 g_PBR;
+        layout(location = 3) out vec4 g_PBR;
 
         in vec3 v_FragPos;
         in vec3 v_Normal;
@@ -115,7 +115,17 @@ namespace axe
             roughness = texture(u_RoughnessMap, v_TexCoord).r;
 
         g_Albedo = vec4(albedo, u_Metallic);
-        g_PBR    = vec2(roughness, 1.0);
+
+        // SHADING_MODEL_V1 — .b = 0 = DefaultLit, .a = 0.
+        //
+        // Este e o shader fixo, usado por malha SEM material de grafo: ela nao
+        // tem shading model para escolher, e DefaultLit e o que ela sempre foi.
+        //
+        // Escrever os quatro canais nao e formalidade: um `out vec2` deixava
+        // .b e .a INDEFINIDOS, e agora o lighting pass LE o .b. Sem esta linha,
+        // toda malha sem material de grafo seria sombreada por lixo de memoria
+        // de video — as vezes PBR, as vezes Unlit, mudando de frame em frame.
+        g_PBR    = vec4(roughness, 1.0, 0.0, 0.0);
     }
 )";
     void OpenGLGeometryPass::Initialize()

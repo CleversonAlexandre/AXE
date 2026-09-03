@@ -67,6 +67,21 @@ namespace axe
 		Node* AddVec2Node();
 		Node* AddVec3Node();
 		Node* AddTextureCoordinateNode();
+		Node* AddCustomNode();   // CUSTOM_NODE_V1 — GLSL escrito a mao
+
+		// POSTPROCESS_DOMAIN_V1 — leitura da imagem da cena
+		Node* AddSceneColorNode();
+		Node* AddSceneUVNode();
+
+		// POSTPROCESS_GBUFFER_V1 — leitura da GEOMETRIA da cena
+		Node* AddSceneDepthNode();
+		Node* AddSceneNormalNode();
+		Node* AddSceneShadingModelNode();
+
+		// POSTPROCESS_SKY_V1 — o ceu autoravel no grafo
+		Node* AddSceneIsBackgroundNode();
+		Node* AddScreenRayDirectionNode();
+		Node* AddSunNode();
 
 		// Dispatcher genérico por nome — usado por Deserialize(), pelo menu
 		// de criação (busca) e pelo undo de deleção, eliminando a antiga
@@ -80,6 +95,14 @@ namespace axe
 		//Links
 		void AddLink(ed::PinId startPin, ed::PinId endPin);
 		void RemoveLink(ed::LinkId id);
+
+		// CUSTOM_NODE_V1 — apaga todos os links que tocam um pin.
+		//
+		// Necessario porque o node Custom e o unico que PERDE pinos em tempo
+		// de edicao (o usuario remove uma entrada no painel). Um link apontando
+		// para um pin que nao existe mais nao da erro na hora: da erro depois,
+		// quando o compilador ou o desenho tentam resolver o pino.
+		void RemoveLinksForPin(ed::PinId pin);
 		void BuildNodes();
 		void BuildNode(std::unique_ptr<Node>* node);
 		void DeleteNode(ed::NodeId nodeId);
@@ -109,6 +132,17 @@ namespace axe
 		MaterialDomain Domain = MaterialDomain::Surface;
 		MaterialBlendMode BlendMode = MaterialBlendMode::Opaque;
 		MaterialShadingModel ShadingModel = MaterialShadingModel::DefaultLit;
+
+		// SHADING_MODEL_V1 — quantos degraus a luz difusa tem no Toon.
+		//
+		// Viaja no .a do g_PBR, entao e POR MATERIAL: dois personagens podem
+		// ter bandas diferentes na mesma cena, sem uniform global e sem um
+		// segundo lighting pass.
+		//
+		// 3 e a celula classica (luz / meio-tom / sombra). Acima de ~8 o
+		// resultado ja e indistinguivel de sombreamento continuo, que e
+		// exatamente o que o Toon nao quer — dai o teto de 16.
+		int ToonSteps = 3;
 
 
 		// Posições salvas durante o Draw — válidas para Serialize()
