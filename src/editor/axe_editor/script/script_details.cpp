@@ -366,16 +366,66 @@ namespace axe
         else if (def.Type == "SpringArm")
         {
             bool armChanged = false;
-            if (ImGui::DragFloat("Length##sa", &def.SALength, 1.f, 50.f, 1000.f, "%.0f")) armChanged = true;
-            if (ImGui::DragFloat("Height##sa", &def.SAHeightOffset, 0.1f, -10.f, 20.f, "%.2f")) armChanged = true;
+
+            // ── BP_CAMERA_V1 — LENGTH AGORA E EDITADO EM METROS ───────────
+            //
+            // O campo do ARQUIVO continua em centimetros (nenhum .axescript
+            // migra), mas o painel mostra metros. Era a unica das cinco
+            // medidas do braco que nao estava em metros, e o Inspector da
+            // cena mostra todas em metros — entao "Length 275" aqui virava
+            // "Comprimento 2,8 m" la e o Socket Offset 5 virava 5 METROS.
+            // Dois editores da mesma coisa discordando na unidade e o motivo
+            // de "ajusto e nao corresponde na cena".
+            float lengthMeters = def.SALength / 100.0f;
+
+            if (ImGui::DragFloat("Length##sa", &lengthMeters, 0.05f, 0.5f, 50.f, "%.2f m"))
+            {
+                def.SALength = lengthMeters * 100.0f;
+                armChanged = true;
+            }
+
+            if (ImGui::DragFloat("Height##sa", &def.SAHeightOffset, 0.1f, -10.f, 20.f, "%.2f m")) armChanged = true;
+
             float off[3] = { def.SASocketOffX,def.SASocketOffY,def.SASocketOffZ };
-            if (ImGui::DragFloat3("Socket Offset##sa", off, 0.05f))
+            if (ImGui::DragFloat3("Socket Offset##sa", off, 0.05f, -50.f, 50.f, "%.2f m"))
             {
                 def.SASocketOffX = off[0]; def.SASocketOffY = off[1]; def.SASocketOffZ = off[2]; armChanged = true;
             }
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("X = lateral   Y = altura   Z = afasta do alvo (metros).\n"
+                    "Desloca o ENQUADRAMENTO: a camera e o ponto para onde\n"
+                    "ela olha andam juntos.");
+
             if (ImGui::DragFloat("Smoothing##sa", &def.SALagSpeed, 0.1f, 0.5f, 30.f, "%.1f")) armChanged = true;
-            ImGui::Checkbox("Camera Lag##sa", &def.SAEnableLag);
-            ImGui::Checkbox("Mouse Rotates##sa", &def.SAMouseRotates);
+            if (ImGui::Checkbox("Camera Lag##sa", &def.SAEnableLag)) armChanged = true;
+
+            // ── BP_CAMERA_V1 — modo do braco ──────────────────────────────
+            ImGui::Separator();
+
+            const char* kModes[] = { "Orbit (third person)", "Fixed (locked)" };
+
+            if (ImGui::Combo("Rig Mode##sa", &def.SARigMode, kModes, IM_ARRAYSIZE(kModes)))
+                armChanged = true;
+
+            if (def.SARigMode == 1)
+            {
+                ImGui::BeginDisabled();
+                bool mr = def.SAMouseRotates;
+                ImGui::Checkbox("Mouse Rotates##sa", &mr);
+                ImGui::EndDisabled();
+
+                if (ImGui::DragFloat("Fixed Yaw##sa", &def.SAFixedYaw, 1.f, -180.f, 180.f, "%.1f")) armChanged = true;
+                if (ImGui::DragFloat("Fixed Pitch##sa", &def.SAFixedPitch, 1.f, -89.f, 89.f, "%.1f")) armChanged = true;
+
+                ImGui::TextDisabled("  Side-scroller: Yaw 0 = camera at -X");
+                ImGui::TextDisabled("                 Yaw 180 = camera at +X");
+                ImGui::TextDisabled("                 Yaw -90 = camera at +Z (old default)");
+            }
+            else
+            {
+                if (ImGui::Checkbox("Mouse Rotates##sa", &def.SAMouseRotates)) armChanged = true;
+            }
 
             auto& pr = m_PreviewScene->GetRegistry();
             auto& sa = pr.get_or_emplace<SpringArmComponent>(m_PreviewEntity);
@@ -385,6 +435,11 @@ namespace axe
             sa.LagSpeed = def.SALagSpeed;
             sa.EnableCameraLag = def.SAEnableLag;
             sa.MouseRotates = def.SAMouseRotates;
+            sa.Mode = (CameraRigMode)def.SARigMode;
+            sa.FixedYaw = def.SAFixedYaw;
+            sa.FixedPitch = def.SAFixedPitch;
+
+            (void)armChanged;
         }
         else if (def.Type == "Camera")
         {

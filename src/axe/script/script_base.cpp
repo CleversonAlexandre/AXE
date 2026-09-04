@@ -345,6 +345,44 @@ namespace axe
         if (CameraPtr) CameraPtr->Fov = glm::clamp(fov, 10.f, 170.f);
     }
 
+    // ── BP_CAMERA_V1 ─────────────────────────────────────────────────────────
+
+    void ScriptCameraProxy::LockRotation(float yawDegrees, float pitchDegrees)
+    {
+        if (!CameraPtr) return;
+
+        // O clamp de pitch e o MESMO do mouse look em terceira pessoa
+        // (UpdateThirdPerson, -45..45). Um valor fora disso e alcancavel por
+        // script mas nao por mouse, e a diferenca so apareceria como "a camera
+        // se comporta diferente dependendo de quem a girou".
+        CameraPtr->TPLockYaw = yawDegrees;
+        CameraPtr->TPLockPitch = glm::clamp(pitchDegrees, -89.0f, 89.0f);
+        CameraPtr->TPLockRotation = true;
+    }
+
+    void ScriptCameraProxy::UnlockRotation()
+    {
+        if (CameraPtr) CameraPtr->TPLockRotation = false;
+    }
+
+    void ScriptCameraProxy::SetSocketOffset(const glm::vec3& offset)
+    {
+        if (CameraPtr) CameraPtr->TPSocketOffset = offset;
+    }
+
+    void ScriptCameraProxy::SetDistance(float meters)
+    {
+        // Distancia negativa poe a camera do outro lado do alvo, olhando para o
+        // nada. Zero a poe DENTRO do personagem, com o near plane cortando a
+        // malha por dentro. Nenhum dos dois e um pedido plausivel.
+        if (CameraPtr) CameraPtr->TPDistance = glm::max(0.01f, meters);
+    }
+
+    void ScriptCameraProxy::SetHeight(float meters)
+    {
+        if (CameraPtr) CameraPtr->TPHeight = meters;
+    }
+
     glm::vec3 ScriptCameraProxy::GetForward() const
     {
         // MESMA formula de GameCamera::UpdateThirdPerson (camDir.x = cos(yaw),

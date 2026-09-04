@@ -945,8 +945,31 @@ namespace axe
 			const auto& tc = reg.get<TransformComponent>(e);
 			const auto& cc = reg.get<CameraComponent>(e);
 
-			const glm::vec3 pos = tc.Data.Position;
-			const glm::vec3 fwd = CameraEntityForward(tc.Data);
+			// ── ARM_SOLVER_V1 — o frustum de um pawn NAO fica no pawn ────
+			//
+			// Este desenho usava sempre o transform da ENTIDADE. Num pawn de
+			// jogo o CameraComponent mora na MESMA entidade do personagem, e
+			// quem afasta a camera e o braco — entao o frustum nascia nos PES
+			// do personagem, apontando para onde ELE olha, enquanto o Play
+			// punha a camera metros atras e virada de outro jeito. Era a
+			// terceira das tres contas divergentes (ver a nota em
+			// GameCamera::SolveSpringArm).
+			//
+			// Uma camera de cutscene (CameraComponent SEM SpringArm) continua
+			// exatamente como antes: o transform dela e que manda.
+			glm::vec3 pos = tc.Data.Position;
+			glm::vec3 fwd = CameraEntityForward(tc.Data);
+
+			if (const auto* sa = reg.try_get<SpringArmComponent>(e))
+			{
+				const auto pose = GameCamera::SolveSpringArm(*sa, tc.Data.Position);
+
+				pos = pose.Position;
+
+				const glm::vec3 d = pose.LookAt - pose.Position;
+				if (glm::dot(d, d) > 1e-8f)
+					fwd = glm::normalize(d);
+			}
 
 			// Base ortonormal a partir da frente. O "up do mundo" como
 			// referencia e o mesmo que a GameCamera usa no lookAt — uma camera

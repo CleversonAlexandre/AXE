@@ -41,18 +41,45 @@ namespace axe
     ScriptGraphWindow::ScriptGraphWindow() = default;
     ScriptGraphWindow::~ScriptGraphWindow() { Shutdown(); }
 
+    // ── SCRIPT_FUNCGRAPH_V1 ──────────────────────────────────────────────────
+    //
+    // Devolve (criando na primeira vez) o contexto do node-editor daquele
+    // grafo. Ver a nota no header sobre por que UM contexto por grafo.
+    void ScriptGraphWindow::UseEdContextFor(int functionIndex)
+    {
+        auto it = m_EdCtxByGraph.find(functionIndex);
+
+        if (it == m_EdCtxByGraph.end())
+        {
+            ed::Config cfg;
+            cfg.SettingsFile = nullptr;   // nada em disco: o layout mora no .axescript
+            it = m_EdCtxByGraph.emplace(functionIndex, ed::CreateEditor(&cfg)).first;
+        }
+
+        m_EdCtx = it->second;
+    }
+
+    void ScriptGraphWindow::DestroyAllEdContexts()
+    {
+        for (auto& kv : m_EdCtxByGraph)
+            if (kv.second) ed::DestroyEditor(kv.second);
+
+        m_EdCtxByGraph.clear();
+        m_EdCtx = nullptr;
+    }
+
     void ScriptGraphWindow::Initialize()
     {
-        AXE_EDITOR_INFO("Script Editor — SCRIPT_SKELETAL_V2 (include fix + root transform + anim path)");
+        AXE_EDITOR_INFO("Script Editor — BP_CAMERA_V1 + SCRIPT_FUNCGRAPH_V1 "
+            "(braco de camera chegando no jogo, sync completo das instancias, "
+            "um canvas por funcao)");
 
-        ed::Config cfg;
-        cfg.SettingsFile = nullptr;
-        m_EdCtx = ed::CreateEditor(&cfg);
+        UseEdContextFor(-1);
     }
 
     void ScriptGraphWindow::Shutdown()
     {
-        if (m_EdCtx) { ed::DestroyEditor(m_EdCtx); m_EdCtx = nullptr; }
+        DestroyAllEdContexts();
         m_PreviewRenderer.reset();
         m_PreviewFramebuffer.reset();
         m_CameraPreviewEntity = entt::null;
@@ -64,9 +91,29 @@ namespace axe
     void ScriptGraphWindow::OpenForAsset(std::shared_ptr<ScriptAsset> asset)
     {
         if (!asset) return;
+
+        // ── SCRIPT_FUNCGRAPH_V1 ──────────────────────────────────────────
+        //
+        // Os contextos do node-editor sao indexados por INDICE de funcao, e
+        // esse indice so quer dizer alguma coisa dentro de um asset: a funcao 2
+        // do BP_Player nao e a funcao 2 do BP_Inimigo. Trocar de script sem
+        // limpar entregaria o canvas de uma ao grafo da outra.
+        //
+        // Reabrir o MESMO script preserva os contextos — e com eles o zoom e o
+        // pan de cada funcao, que e exatamente o que se espera de voltar a um
+        // arquivo.
+        const std::string newOwner = asset->GetFilePath().string();
+
+        if (newOwner != m_EdCtxOwnerPath)
+        {
+            DestroyAllEdContexts();
+            m_EdCtxOwnerPath = newOwner;
+        }
+
         m_ScriptAsset = asset;
         m_Graph = asset->GetGraph().get();
         m_EditingFunctionIndex = -1; // abrir um novo asset sempre começa no grafo principal
+        UseEdContextFor(-1);
         m_IsOpen = true;
         m_FirstFrame = true;
         m_CtxBuf[0] = m_CompSearchBuf[0] = '\0';
@@ -104,6 +151,7 @@ namespace axe
         SaveNodePositions(); // salva posições do grafo da função antes de saída
         m_Graph = m_ScriptAsset->GetGraph().get();
         m_EditingFunctionIndex = -1;
+        UseEdContextFor(-1);   // SCRIPT_FUNCGRAPH_V1 — DEPOIS do SaveNodePositions
         m_SelectedVar = -1;
         m_LastCanvasSelectedNode = {};
         m_FirstFrame = true; // recentra a câmera no grafo recém-aberto
@@ -122,9 +170,16 @@ namespace axe
         for (int i = 0; i < (int)funcs.size(); i++) if (&funcs[i] == func) { idx = i; break; }
         if (idx < 0 || m_EditingFunctionIndex == idx) return;
 
+        // SCRIPT_FUNCGRAPH_V1 — ORDEM OBRIGATORIA: o SaveNodePositions le o
+        // canvas do grafo que esta SAINDO, entao ele tem de rodar enquanto
+        // m_EdCtx e m_Graph ainda sao os antigos. Trocar o contexto antes
+        // gravaria as posicoes do canvas novo no modelo do grafo velho — que e
+        // exatamente o bug que este patch veio corrigir, so que por outro
+        // caminho.
         SaveNodePositions(); // salva posições do grafo anterior antes de saída
         m_Graph = func->Graph.get();
         m_EditingFunctionIndex = idx;
+        UseEdContextFor(idx);
         m_SelectedVar = -1;
         m_LastCanvasSelectedNode = {};
         m_FirstFrame = true;
@@ -921,6 +976,11 @@ namespace axe
             m_EditingFunctionIndex = -1;
             m_Graph = m_ScriptAsset->GetGraph().get();
         }
+
+        // SCRIPT_FUNCGRAPH_V1 — o undo pode ter DEVOLVIDO o autor ao grafo
+        // principal (quando a Function em que ele estava deixou de existir).
+        // Sem esta linha o canvas continuaria sendo o da funcao que sumiu.
+        UseEdContextFor(m_EditingFunctionIndex);
 
         SyncComponentsToPreview();
 

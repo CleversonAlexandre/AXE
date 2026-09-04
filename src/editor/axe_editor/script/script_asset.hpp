@@ -136,14 +136,33 @@ namespace axe
         bool  CCGravity = true;
 
         // ── SpringArm ─────────────────────────────────────────────────────────
-        float SALength = 300.0f; // comprimento do braço (unidades)
-        float SAHeightOffset = 0.0f;  // offset vertical relativo ao pawn
-        float SASocketOffX = 0.0f;
-        float SASocketOffY = 0.0f;
-        float SASocketOffZ = 0.0f;
+        //
+        // ATENCAO A UNIDADE — SALength esta em CENTIMETROS (convencao Unreal) e
+        // vira metros dividido por 100 nos dois pontos que criam o componente
+        // (InstantiateScriptAsset e SyncScriptInstances). SAHeightOffset e
+        // SASocketOff* estao em METROS e NAO sao divididos.
+        //
+        // Essa mistura e a razao de "ajusto o Socket Offset e ele nao
+        // corresponde na cena": digitar 5 aqui virava 5 METROS la, enquanto
+        // digitar 275 no Length virava 2,75 m. BP_CAMERA_V1 nao mexe no
+        // ARQUIVO (nenhum .axescript precisa migrar) — o painel e que passou a
+        // MOSTRAR o Length em metros, para que os dois editores concordem.
+        float SALength = 300.0f; // comprimento do braço — CENTIMETROS
+        float SAHeightOffset = 0.0f;  // offset vertical relativo ao pawn — METROS
+        float SASocketOffX = 0.0f;    // METROS
+        float SASocketOffY = 0.0f;    // METROS
+        float SASocketOffZ = 0.0f;    // METROS
         float SALagSpeed = 8.0f;
         bool  SAEnableLag = true;
         bool  SAMouseRotates = true;
+
+        // BP_CAMERA_V1 — modo do braco. 0 = Orbit, 1 = Fixed. Guardado como int
+        // (e nao como o enum da engine) porque ScriptComponentDef e um registro
+        // de AUTORIA serializado em JSON: um int atravessa versoes do enum sem
+        // migracao, e o cast acontece num ponto so, na hora de criar o componente.
+        int   SARigMode = 0;
+        float SAFixedYaw = -90.0f;
+        float SAFixedPitch = -10.0f;
 
         // ── Camera ────────────────────────────────────────────────────────────
         float CamFov = 60.0f;

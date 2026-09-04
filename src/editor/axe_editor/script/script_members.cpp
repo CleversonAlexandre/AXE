@@ -900,6 +900,21 @@ namespace axe
                 PushUndo("Remove Function");
                 m_ScriptAsset->RemoveFunction(removeFunc);
                 CommitUndo("Remove Function");
+
+                // ── SCRIPT_FUNCGRAPH_V1 ──────────────────────────────────
+                //
+                // Os contextos do node-editor sao indexados por INDICE de
+                // funcao, e o erase acima deslocou todos os indices depois do
+                // removido. Sem esta limpeza, a funcao 3 passaria a desenhar no
+                // canvas que era da 4 — a mesma classe de bug (canvas de um
+                // grafo servindo a outro) que este patch veio eliminar.
+                //
+                // Reconstruir do zero custa o zoom e o pan das funcoes
+                // restantes, e so isso: as POSICOES dos nodes moram no modelo,
+                // e sao reaplicadas no primeiro frame de cada grafo.
+                DestroyAllEdContexts();
+                UseEdContextFor(m_EditingFunctionIndex);
+                m_FirstFrame = true;
             }
             ImGui::Spacing();
         }

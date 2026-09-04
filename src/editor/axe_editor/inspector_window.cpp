@@ -325,15 +325,23 @@ namespace axe
 		}
 		else if (auto* ec = registry.try_get<EnvironmentComponent>(entity))
 			DrawEnvironment(*ec);
-		else if (auto* sa = registry.try_get<SpringArmComponent>(entity))
-		{
-			bool removeArm = false;
-			bool openArm = DrawComponentHeader("Spring Arm", entity, 4, &removeArm);
-			if (removeArm) { registry.remove<SpringArmComponent>(entity); return; }
-			if (openArm) DrawSpringArm(*sa);
-		}
-		else if (auto* cam = registry.try_get<CameraComponent>(entity))
-			DrawCamera(*cam);
+		// ── BP_CAMERA_V1 — SpringArm e Camera SAIRAM da cadeia ───────────
+		//
+		// Eram dois `else if` consecutivos. Todo pawn de jogo tem OS DOIS, o
+		// ramo do SpringArm vencia, e o painel da Camera nunca era desenhado:
+		// FOV, near/far, sensibilidade e "Camera Principal" existiam na
+		// entidade e eram inalcancaveis pelo Inspector.
+		//
+		// E a MESMA armadilha que a nota logo abaixo ja descreve para o
+		// Material — que foi tirado desta cadeia pelo mesmo motivo, e cujo
+		// comentario avisa em letras claras: "Bastava a entidade ter um
+		// SpringArm (todo personagem com camera tem) para o primeiro ramo
+		// vencer". Camera era o caso seguinte da mesma lista e ficou.
+		//
+		// O ramo vazio aqui e proposital: ele PRESERVA a cadeia. Sem ele, uma
+		// entidade so com SpringArm cairia no `else` final e ganharia um slot
+		// de Material vazio que ela nao tinha antes.
+		else if (registry.any_of<SpringArmComponent, CameraComponent>(entity)) {}
 		else if (auto* folder = registry.try_get<FolderComponent>(entity))
 			DrawFolder(*folder);
 		else if (registry.any_of<PointLightComponent>(entity)) {}
@@ -361,6 +369,27 @@ namespace axe
 		// Material e ortogonal aos outros componentes: quem tem, mostra.
 		if (registry.any_of<MaterialComponent>(entity))
 			DrawMaterial(entity);
+
+		// ── BP_CAMERA_V1 — Spring Arm e Camera, cada um por si ───────────
+		//
+		// Mesma regra: quem tem, mostra. Um pawn tem os dois e ve os dois; uma
+		// camera de cutscene tem so o CameraComponent e ve so ele.
+		if (auto* sa = registry.try_get<SpringArmComponent>(entity))
+		{
+			bool removeArm = false;
+			bool openArm = DrawComponentHeader("Spring Arm", entity, 4, &removeArm);
+
+			if (removeArm)
+			{
+				registry.remove<SpringArmComponent>(entity);
+				return;
+			}
+
+			if (openArm) DrawSpringArm(*sa);
+		}
+
+		if (auto* cam = registry.try_get<CameraComponent>(entity))
+			DrawCamera(*cam);
 
 		// ── Sequence Player: FORA da cadeia else-if, pelo mesmo motivo ───
 		//
@@ -963,10 +992,46 @@ namespace axe
 	{
 		ImGui::DragFloat("Comprimento", &sa.Length, 0.1f, 0.5f, 50.0f, "%.1f m");
 		ImGui::DragFloat("Altura", &sa.HeightOffset, 0.1f, 0.0f, 20.0f, "%.1f m");
-		ImGui::DragFloat3("Socket Offset", &sa.SocketOffset.x, 0.05f, -10.f, 10.f, "%.2f");
+		ImGui::DragFloat3("Socket Offset", &sa.SocketOffset.x, 0.05f, -50.f, 50.f, "%.2f m");
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Desloca o ENQUADRAMENTO, no espaco do braco:\n"
+				"  X = lateral   Y = altura   Z = afasta do alvo\n"
+				"A camera e o ponto para onde ela olha andam juntos.");
+
 		ImGui::DragFloat("Suavização", &sa.LagSpeed, 0.1f, 0.5f, 30.0f, "%.1f");
 		ImGui::Checkbox("Lag de câmera", &sa.EnableCameraLag);
-		ImGui::Checkbox("Mouse rotaciona", &sa.MouseRotates);
+
+		// ── BP_CAMERA_V1 — modo do braco ─────────────────────────────────
+		ImGui::Separator();
+
+		int mode = (int)sa.Mode;
+		const char* kModes[] = { "Orbit (terceira pessoa)", "Fixed (travado)" };
+
+		if (ImGui::Combo("Modo", &mode, kModes, IM_ARRAYSIZE(kModes)))
+			sa.Mode = (CameraRigMode)mode;
+
+		if (sa.Mode == CameraRigMode::Fixed)
+		{
+			// "Mouse rotaciona" nao some, fica DESABILITADO: sumir daria a
+			// impressao de que o campo se perdeu, e o autor voltaria ao modo
+			// Orbit so para conferir se ele ainda existe.
+			ImGui::BeginDisabled();
+			bool mr = sa.MouseRotates;
+			ImGui::Checkbox("Mouse rotaciona", &mr);
+			ImGui::EndDisabled();
+
+			ImGui::DragFloat("Yaw fixo", &sa.FixedYaw, 1.0f, -180.0f, 180.0f, "%.1f");
+			ImGui::DragFloat("Pitch fixo", &sa.FixedPitch, 1.0f, -89.0f, 89.0f, "%.1f");
+
+			ImGui::TextDisabled("  Camera lateral de plataforma:");
+			ImGui::TextDisabled("  Yaw 0 = camera no -X   |   Yaw 180 = camera no +X");
+			ImGui::TextDisabled("  Yaw -90 = camera no +Z (o padrao antigo)");
+		}
+		else
+		{
+			ImGui::Checkbox("Mouse rotaciona", &sa.MouseRotates);
+		}
 	}
 
 	void InspectorWindow::DrawSpline(SplineComponent& sp)

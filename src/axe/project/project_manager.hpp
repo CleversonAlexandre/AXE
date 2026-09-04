@@ -18,6 +18,41 @@ namespace axe
 		// Cria um novo projeto na pasta indicada
 		bool NewProject(const std::string& name, const std::filesystem::path& path);
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  PROJECT_NEW_V2 — a validacao de destino, num lugar so
+		//
+		//  ── POR QUE ELA MORA AQUI ─────────────────────────────────────────
+		//
+		//  "Posso criar um projeto com este nome nesta pasta?" e uma pergunta
+		//  sobre PROJETO, nao sobre interface. Ela e feita hoje pelo launcher
+		//  e pelo menu File do editor, e sera feita por qualquer coisa que
+		//  venha a criar projeto. Deixar cada um responder do seu jeito e como
+		//  a rotina de material acabou espalhada em seis copias, cada uma
+		//  errando de um jeito diferente.
+		//
+		//  O NewProject continua recusando pasta existente — sobrescrever o
+		//  trabalho de alguem seria imperdoavel. O que faltava era poder
+		//  PERGUNTAR antes, para a interface oferecer a saida certa em vez de
+		//  um "falhou, verifique se a pasta ja existe" depois do clique.
+		// ═══════════════════════════════════════════════════════════════════
+		enum class NewProjectCheck
+		{
+			Ok,                // pode criar
+			NoPath,            // pasta base vazia
+			InvalidName,       // nome vazio ou com caractere que o disco recusa
+			ExistingProject,   // ja ha um .axeproject ali — oferecer abrir
+			OccupiedFolder,    // pasta existe sem projeto — oferecer outro nome
+		};
+
+		static NewProjectCheck CheckNewProject(const std::string& name,
+			const std::filesystem::path& folder,
+			std::filesystem::path& outRoot,
+			std::filesystem::path& outProjectFile);
+
+		// Primeiro nome livre a partir de `base`: "Meujogo", "Meujogo_2", ...
+		static std::string SuggestFreeName(const std::string& base,
+			const std::filesystem::path& folder);
+
 		// Abre um projeto existente a partir do axe.project.
 		//
 		// `recordAsRecent` decide se este open vira "ultimo projeto" e entra na

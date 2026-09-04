@@ -7,6 +7,7 @@
 #include "editor/axe_editor/import/mesh_loader.hpp"
 #include "editor/axe_editor/script/script_asset.hpp"
 #include "axe/scene/components.hpp"
+#include "axe/graphics/game_camera.hpp"   // ARM_SOLVER_V1 — a conta do braco
 #include "axe/mesh/mesh_factory.hpp"
 #include "axe/material/material_asset.hpp"
 #include "editor/axe_editor/material/material_compiler.hpp"
@@ -710,17 +711,31 @@ namespace axe
 
         if (sa && camTc && !m_SpringArmDragging)
         {
-            camTc->Data.Position = tc->Data.Position + glm::vec3(
-                sa->SocketOffset.x,
-                sa->HeightOffset + sa->SocketOffset.y,
-                sa->Length + sa->SocketOffset.z);
+            // ── ARM_SOLVER_V1 ────────────────────────────────────────────
+            //
+            // Era `pawn + (socket.x, height + socket.y, length + socket.z)`:
+            // um eixo Z cru. Isso ignorava o PITCH (por isso a camera do
+            // preview nascia na altura dos pes enquanto o Play a levantava),
+            // ignorava o modo TRAVADO (mudar o Fixed Yaw nao mexia nada aqui)
+            // e apontava sempre PARA o personagem, o que contradiz o socket
+            // offset — que existe justamente para deslocar o enquadramento.
+            //
+            // Agora e a mesma funcao que o Play chama. O que voce ve aqui e
+            // onde a camera vai estar.
+            const auto pose = GameCamera::SolveSpringArm(*sa, tc->Data.Position);
+
+            camTc->Data.Position = pose.Position;
             camTc->Data.Scale = glm::vec3(0.35f);
-            glm::vec3 dir = camTc->Data.Position - tc->Data.Position;
-            if (glm::length(dir) > 0.001f)
+
+            // A malha da camera aponta pelas COSTAS: o codigo antigo usava
+            // `camPos - pawnPos`, que e o vetor de tras. Mantido igual para a
+            // orientacao do modelo nao inverter.
+            glm::vec3 back = pose.Position - pose.LookAt;
+            if (glm::length(back) > 0.001f)
             {
-                dir = glm::normalize(dir);
-                camTc->Data.Rotation.y = glm::atan(dir.x, dir.z);
-                camTc->Data.Rotation.x = glm::asin(-dir.y);
+                back = glm::normalize(back);
+                camTc->Data.Rotation.y = glm::atan(back.x, back.z);
+                camTc->Data.Rotation.x = glm::asin(-back.y);
             }
         }
 
@@ -748,13 +763,13 @@ namespace axe
         auto* sa2D = reg.try_get<SpringArmComponent>(m_PreviewEntity);
         if (sa2D && m_ScriptAsset)
         {
-            glm::vec3 pawnPos = tc->Data.Position;
-            glm::vec3 camOffset = {
-                sa2D->SocketOffset.x,
-                sa2D->HeightOffset + sa2D->SocketOffset.y,
-                sa2D->Length + sa2D->SocketOffset.z
-            };
-            glm::vec3 camPos = pawnPos + camOffset;
+            // ARM_SOLVER_V1 — o desenho do braco usa o MESMO solver da malha
+            // acima e do Play. Antes era uma terceira copia da conta, e ela
+            // ficava num lugar diferente da propria malha de camera que a
+            // linha deveria estar ligando.
+            const glm::vec3 pawnPos = tc->Data.Position;
+            const auto      armPose = GameCamera::SolveSpringArm(*sa2D, pawnPos);
+            const glm::vec3 camPos = armPose.Position;
 
             auto worldToScreen = [&](const glm::vec3& world) -> ImVec2
                 {
@@ -789,7 +804,13 @@ namespace axe
             float frustumLen = 0.8f;
             float frustumHalf = std::tan(halfFovRad) * frustumLen;
 
-            glm::vec3 camDir = glm::normalize(pawnPos - camPos);
+            // ARM_SOLVER_V1 — para onde a camera OLHA, e nao "para o
+            // personagem": com socket offset os dois nao sao a mesma direcao,
+            // e desenhar o frustum mirando o pawn mentiria sobre o
+            // enquadramento que o jogo vai dar.
+            glm::vec3 camDir = armPose.LookAt - armPose.Position;
+            camDir = (glm::dot(camDir, camDir) > 1e-8f)
+                ? glm::normalize(camDir) : glm::vec3(0.0f, 0.0f, -1.0f);
             glm::vec3 camRight = glm::normalize(glm::cross(camDir, glm::vec3(0, 1, 0)));
             glm::vec3 camUp = glm::normalize(glm::cross(camRight, camDir));
 

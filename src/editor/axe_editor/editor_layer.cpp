@@ -2526,12 +2526,114 @@ namespace axe
                             }
                         }
                     }
+                    // ── BP_CAMERA_V1 — o braco inteiro, e nao dois campos ──
+                    //
+                    // Este ramo copiava SO Length e HeightOffset, e usava
+                    // try_get. Consequencias, todas relatadas em uso real:
+                    //
+                    //   - mexer no Socket Offset, no Lag ou no Mouse Rotates
+                    //     do Blueprint nao chegava na instancia da cena —
+                    //     era preciso apagar a entidade e instanciar de novo;
+                    //   - try_get significa "so atualizo se ja existir": um
+                    //     Spring Arm ADICIONADO ao Blueprint depois da
+                    //     entidade nascer nunca aparecia nela.
+                    //
+                    // get_or_emplace resolve o segundo caso e e o mesmo que os
+                    // ramos de CharacterController e SkeletalMesh ja usavam.
                     else if (def.Type == "SpringArm")
                     {
-                        if (auto* sa = registry.try_get<SpringArmComponent>(entity))
+                        auto& sa = registry.get_or_emplace<SpringArmComponent>(entity);
+
+                        sa.Length = def.SALength / 100.0f;
+                        sa.HeightOffset = def.SAHeightOffset;
+                        sa.SocketOffset = { def.SASocketOffX, def.SASocketOffY, def.SASocketOffZ };
+                        sa.LagSpeed = def.SALagSpeed;
+                        sa.EnableCameraLag = def.SAEnableLag;
+                        sa.MouseRotates = def.SAMouseRotates;
+                        sa.Mode = (CameraRigMode)def.SARigMode;
+                        sa.FixedYaw = def.SAFixedYaw;
+                        sa.FixedPitch = def.SAFixedPitch;
+                    }
+                    // ── BP_CAMERA_V1 — a Camera NAO TINHA RAMO NENHUM ──────
+                    //
+                    // O componente era criado no InstantiateScriptAsset e
+                    // depois disso ficava congelado: FOV, near/far,
+                    // sensibilidade e "camera principal" editados no
+                    // Blueprint nunca alcancavam a cena.
+                    //
+                    // Somado ao painel escondido no Inspector (ver a nota do
+                    // BP_CAMERA_V1 la), a Camera era um componente que o autor
+                    // nao conseguia nem ver nem atualizar.
+                    else if (def.Type == "Camera")
+                    {
+                        auto& cam = registry.get_or_emplace<CameraComponent>(entity);
+
+                        cam.Fov = def.CamFov;
+                        cam.NearClip = def.CamNearClip;
+                        cam.FarClip = def.CamFarClip;
+                        cam.Sensitivity = def.CamSensitivity;
+                        cam.IsPrimary = def.CamIsPrimary;
+                    }
+                    // ── BP_CAMERA_V1 — Collider e Rigidbody tambem faltavam ─
+                    //
+                    // Mesma historia: criados uma vez, nunca atualizados.
+                    // Mudar o tamanho da capsula ou a massa no Blueprint
+                    // exigia recriar a entidade.
+                    //
+                    // Os campos de RUNTIME (BodyID/IsCreated/Velocity/listas de
+                    // contato) ficam intocados de proposito — sao do Jolt, e
+                    // zera-los aqui deixaria o corpo orfao no mundo fisico.
+                    else if (def.Type == "Collider" ||
+                        def.Type.find("Collider") != std::string::npos)
+                    {
+                        auto& col = registry.get_or_emplace<ColliderComponent>(entity);
+
+                        if (def.ColliderShape == "Sphere")       col.Shape = ColliderShape::Sphere;
+                        else if (def.ColliderShape == "Capsule") col.Shape = ColliderShape::Capsule;
+                        else if (def.ColliderShape == "Mesh")    col.Shape = ColliderShape::Mesh;
+                        else                                     col.Shape = ColliderShape::Box;
+
+                        col.HalfExtent = { def.ColliderSizeX, def.ColliderSizeY, def.ColliderSizeZ };
+                        col.Radius = def.ColliderRadius;
+                        col.Height = def.ColliderHeight;
+                        col.CapsuleRadius = def.ColliderCapsuleRadius;
+                        col.Offset = { def.ColliderOffsetX, def.ColliderOffsetY, def.ColliderOffsetZ };
+                        col.IsTrigger = def.IsTrigger;
+                        col.ShowDebug = def.ShowDebug;
+                    }
+                    else if (def.Type == "Rigidbody")
+                    {
+                        auto& rb = registry.get_or_emplace<RigidbodyComponent>(entity);
+
+                        rb.Type = def.BodyType == "Static" ? BodyType::Static :
+                            def.BodyType == "Kinematic" ? BodyType::Kinematic : BodyType::Dynamic;
+                        rb.Mass = def.Mass;
+                        rb.Friction = def.Friction;
+                        rb.Restitution = def.Restitution;
+                        rb.LinearDamping = def.LinearDamping;
+                        rb.AngularDamping = def.AngularDamping;
+                        rb.UseGravity = def.UseGravity;
+                        rb.LockRotX = def.LockRotX;
+                        rb.LockRotY = def.LockRotY;
+                        rb.LockRotZ = def.LockRotZ;
+                    }
+                    // BP_CAMERA_V1 — trocar a malha no Blueprint tambem exigia
+                    // recriar a entidade. So reage a MUDANCA de UUID: resolver
+                    // a malha a cada Save do script seria recarregar geometria
+                    // de graco a cada Ctrl+S.
+                    else if (def.Type == "Mesh")
+                    {
+                        auto& mc = registry.get_or_emplace<MeshComponent>(entity);
+
+                        if (mc.AssetUUID != def.AssetUUID)
                         {
-                            sa->Length = def.SALength / 100.0f;
-                            sa->HeightOffset = def.SAHeightOffset;
+                            mc.AssetUUID = def.AssetUUID;
+
+                            auto data = MeshFactory::ResolveByUUID(def.AssetUUID);
+                            if (!data)
+                                data = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
+
+                            mc.Data = data;
                         }
                     }
                 }
@@ -2549,7 +2651,9 @@ namespace axe
 
         if (updated > 0)
         {
-            AXE_EDITOR_INFO("[BP_SYNC_V2] BP '{}': {} instancia(s) na cena atualizada(s).",
+            AXE_EDITOR_INFO("[BP_SYNC_V3/BP_CAMERA_V1] BP '{}': {} instancia(s) na cena "
+                "atualizada(s) — Mesh, Collider, Rigidbody, CharacterController, "
+                "SkeletalMesh, Material, SpringArm e Camera.",
                 scriptAsset->GetName(), updated);
         }
         else if (seen > 0)
@@ -2756,6 +2860,9 @@ namespace axe
                 sa.LagSpeed = def.SALagSpeed;
                 sa.EnableCameraLag = def.SAEnableLag;
                 sa.MouseRotates = def.SAMouseRotates;
+                sa.Mode = (CameraRigMode)def.SARigMode;   // BP_CAMERA_V1
+                sa.FixedYaw = def.SAFixedYaw;
+                sa.FixedPitch = def.SAFixedPitch;
                 registry.emplace<SpringArmComponent>(entity, sa);
             }
             else if (def.Type == "Camera")

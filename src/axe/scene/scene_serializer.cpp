@@ -418,6 +418,10 @@ namespace axe
 				components["SpringArm"]["lag_speed"] = sa->LagSpeed;
 				components["SpringArm"]["enable_lag"] = sa->EnableCameraLag;
 				components["SpringArm"]["mouse_rotates"] = sa->MouseRotates;
+				// BP_CAMERA_V1
+				components["SpringArm"]["rig_mode"] = (int)sa->Mode;
+				components["SpringArm"]["fixed_yaw"] = sa->FixedYaw;
+				components["SpringArm"]["fixed_pitch"] = sa->FixedPitch;
 			}
 
 			if (auto* sc = registry.try_get<ScriptComponent>(entity))
@@ -1251,6 +1255,12 @@ namespace axe
 				sa.MouseRotates = t.value("mouse_rotates", true);
 				if (t.contains("socket_offset") && t["socket_offset"].size() == 3)
 					sa.SocketOffset = { t["socket_offset"][0], t["socket_offset"][1], t["socket_offset"][2] };
+				// BP_CAMERA_V1 — defaults IGUAIS aos do struct: uma cena gravada
+				// antes destes campos carrega em Orbit com os mesmos angulos que
+				// o Play ja usava fixo, entao nada muda de comportamento.
+				sa.Mode = (CameraRigMode)t.value("rig_mode", (int)CameraRigMode::Orbit);
+				sa.FixedYaw = t.value("fixed_yaw", -90.0f);
+				sa.FixedPitch = t.value("fixed_pitch", -10.0f);
 				registry.emplace<SpringArmComponent>(entity, sa);
 			}
 

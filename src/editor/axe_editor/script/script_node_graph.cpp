@@ -73,7 +73,16 @@ namespace axe
     static const NE sCam[] = {
         {"Get Camera Direction","GetCameraDirection"},
         {"Camera Shake","CameraShake"},{"Camera Follow","CameraFollow"},
-        {"Camera Stop Follow","CameraStopFollow"},{"Set Camera FOV","SetCameraFOV"} };
+        {"Camera Stop Follow","CameraStopFollow"},{"Set Camera FOV","SetCameraFOV"},
+        // BP_CAMERA_V1 — a contagem vem de NECount(sCam) logo abaixo, entao
+        // acrescentar aqui basta. (Se algum dia alguem trocar por um numero
+        // literal, os cinco de baixo somem do menu em silencio — ja aconteceu
+        // com "Particle Burst" na tabela de componentes.)
+        {"Camera Lock Rotation","CameraLockRotation"},
+        {"Camera Unlock Rotation","CameraUnlockRotation"},
+        {"Camera Set Socket Offset","CameraSetSocketOffset"},
+        {"Camera Set Distance","CameraSetDistance"},
+        {"Camera Set Height","CameraSetHeight"} };
     // Cutscene — comeca/para uma sequence do Sequencer pelo NOME da entidade
     // que carrega o Sequence Player.
     static const NE sSeq[] = {
@@ -176,9 +185,16 @@ namespace axe
     };
     static const CompNodeEntry s_SpringArmNodes[] = {
         {"Get Spring Arm","GetSpringArm"},{"Set Spring Arm","SetSpringArm"},
+        // BP_CAMERA_V1
+        {"Camera Set Socket Offset","CameraSetSocketOffset"},
+        {"Camera Set Distance","CameraSetDistance"},
+        {"Camera Set Height","CameraSetHeight"},
     };
     static const CompNodeEntry s_CameraNodes[] = {
         {"Get Camera","GetCamera"},{"Set Camera FOV","SetCameraFOV"},
+        // BP_CAMERA_V1
+        {"Camera Lock Rotation","CameraLockRotation"},
+        {"Camera Unlock Rotation","CameraUnlockRotation"},
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -451,11 +467,23 @@ namespace axe
         m_SuppressCtxMenuThisFrame = false;
         m_HandCursor = HandCursor::None;
 
-        // Restaura posições salvas no JSON na primeira frame
+        // Restaura posições salvas no JSON na primeira frame.
+        //
+        // ── SCRIPT_FUNCGRAPH_V1: a guarda `!= 0` saiu ───────────────────────
+        //
+        // Ela pulava justamente o node que estava em (0,0) — e (0,0) e a
+        // posicao de qualquer node que o autor nunca arrastou, o "Function
+        // Entry" a frente de todos. Pulado, ele ficava com a posicao que o
+        // canvas tivesse naquele ID; e o SaveNodePositions seguinte gravava
+        // essa posicao no modelo. Era assim que uma funcao herdava, de vez, o
+        // layout da outra.
+        //
+        // A guarda so nao doia porque o contexto era compartilhado por
+        // acidente; com um contexto por grafo ela e simplesmente errada: um
+        // node em (0,0) tem de ser posto em (0,0).
         if (m_FirstFrame && m_Graph)
             for (auto& node : m_Graph->GetNodes())
-                if (node->Position.x != 0.f || node->Position.y != 0.f)
-                    ed::SetNodePosition(node->ID, node->Position);
+                ed::SetNodePosition(node->ID, node->Position);
 
         // SC9 — depois de um Undo/Redo o canvas ainda mostra as posições de
         // antes. Empurrar o modelo de volta aqui, dentro do Begin/End, é o
@@ -1746,7 +1774,13 @@ namespace axe
                         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 0.6f));
                         ImGui::TextUnformatted("-- Transform --");
                         ImGui::PopStyleColor();
-                        drawGroup(s_TransformNodes, 4, { 0.75f,0.75f,0.75f,1 });
+                        // BP_CAMERA_V1 — as contagens abaixo eram LITERAIS ao
+                        // lado de cada array. E a armadilha que ja escondeu o
+                        // "Particle Burst" do menu de componentes: acrescentar
+                        // uma entrada e esquecer o numero faz o no novo existir,
+                        // compilar e simplesmente nao aparecer. IM_ARRAYSIZE
+                        // tira a possibilidade.
+                        drawGroup(s_TransformNodes, IM_ARRAYSIZE(s_TransformNodes), { 0.75f,0.75f,0.75f,1 });
 
                         for (auto& def : m_ScriptAsset->GetComponents())
                         {
@@ -1754,11 +1788,11 @@ namespace axe
                             ImGui::Text("-- %s --", def.Type.c_str());
                             ImGui::PopStyleColor();
 
-                            if (def.Type == "Rigidbody")                              drawGroup(s_RigidbodyNodes, 3, { 0.3f,0.8f,1.f,1 });
-                            else if (def.Type.find("Collider") != std::string::npos)       drawGroup(s_ColliderNodes, 2, { 0.3f,1.f,0.5f,1 });
-                            else if (def.Type == "CharacterController")                    drawGroup(s_CCNodes, 3, { 1.f,0.7f,0.2f,1 });
-                            else if (def.Type == "SpringArm")                              drawGroup(s_SpringArmNodes, 2, { 0.9f,0.6f,1.f,1 });
-                            else if (def.Type == "Camera")                                 drawGroup(s_CameraNodes, 2, { 0.7f,0.5f,1.f,1 });
+                            if (def.Type == "Rigidbody")                              drawGroup(s_RigidbodyNodes, IM_ARRAYSIZE(s_RigidbodyNodes), { 0.3f,0.8f,1.f,1 });
+                            else if (def.Type.find("Collider") != std::string::npos)       drawGroup(s_ColliderNodes, IM_ARRAYSIZE(s_ColliderNodes), { 0.3f,1.f,0.5f,1 });
+                            else if (def.Type == "CharacterController")                    drawGroup(s_CCNodes, IM_ARRAYSIZE(s_CCNodes), { 1.f,0.7f,0.2f,1 });
+                            else if (def.Type == "SpringArm")                              drawGroup(s_SpringArmNodes, IM_ARRAYSIZE(s_SpringArmNodes), { 0.9f,0.6f,1.f,1 });
+                            else if (def.Type == "Camera")                                 drawGroup(s_CameraNodes, IM_ARRAYSIZE(s_CameraNodes), { 0.7f,0.5f,1.f,1 });
                         }
                         ImGui::Unindent(6);
                     }

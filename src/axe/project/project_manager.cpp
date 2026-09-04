@@ -21,6 +21,55 @@ namespace axe
 		return instance;
 	}
 
+	// PROJECT_NEW_V2 — ver a nota no header.
+	ProjectManager::NewProjectCheck ProjectManager::CheckNewProject(
+		const std::string& name,
+		const std::filesystem::path& folder,
+		std::filesystem::path& outRoot,
+		std::filesystem::path& outProjectFile)
+	{
+		if (folder.empty()) return NewProjectCheck::NoPath;
+
+		// A barra entra na lista de proibidos junto com os caracteres que o
+		// Windows recusa: um nome com barra criaria uma SUBPASTA em vez do
+		// projeto, e o erro so apareceria depois, no lugar errado.
+		if (name.empty() || name.find_first_of("\\/:*?\"<>|") != std::string::npos)
+			return NewProjectCheck::InvalidName;
+
+		outRoot = folder / name;
+		outProjectFile = outRoot / (name + ".axeproject");
+
+		std::error_code ec;
+
+		if (!std::filesystem::exists(outRoot, ec))
+			return NewProjectCheck::Ok;
+
+		// Pasta ocupada por um PROJETO e pasta ocupada por qualquer coisa sao
+		// situacoes diferentes: numa o trabalho existe e o que se quer e
+		// abri-lo; na outra e so um nome tomado.
+		if (std::filesystem::exists(outProjectFile, ec))
+			return NewProjectCheck::ExistingProject;
+
+		return NewProjectCheck::OccupiedFolder;
+	}
+
+	std::string ProjectManager::SuggestFreeName(const std::string& base,
+		const std::filesystem::path& folder)
+	{
+		std::error_code ec;
+
+		// Para em 999: se chegou ali, ou ha algo errado com o caminho, ou o
+		// problema nao e mais o nome do projeto.
+		for (int i = 2; i < 1000; ++i)
+		{
+			const std::string candidate = base + "_" + std::to_string(i);
+			if (!std::filesystem::exists(folder / candidate, ec))
+				return candidate;
+		}
+
+		return base;
+	}
+
 	bool ProjectManager::NewProject(const std::string& name, const std::filesystem::path& path)
 	{
 		// Cria a pasta raiz do projeto

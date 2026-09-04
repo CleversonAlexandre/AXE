@@ -54,7 +54,17 @@ namespace axe
         std::function<void(const std::string&)> OnOpenScene;
         std::function<void(const std::string&)> OnSaveScene;
         std::function<void()> OnSaveProject;
+
+        // Estado do dialogo "Novo Projeto" do menu File.
+        void DrawNewProjectDialog();
+        bool m_NewProjectOpen = false;
+        char m_NewProjectName[256] = "NovoProjeto";
+        char m_NewProjectFolder[512] = "";
         std::function<void(const std::string&)> OnOpenProject;
+
+        // PROJECT_NEW_V2 — cria e ja abre. O EditorLayer sabe que trocar de
+        // projeto significa trocar a si mesmo; a UI so pede.
+        std::function<void(const std::string& name, const std::string& folder)> OnNewProject;
         std::function<void()> OnDrawEnvironment;
         std::function<void()> OnUndo;
         std::function<void()> OnRedo;

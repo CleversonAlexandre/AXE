@@ -1919,6 +1919,66 @@ namespace axe
             return;
         }
 
+        // ── BP_CAMERA_V1 — controle do braco em tempo de jogo ────────────────
+
+        else if (name == "Camera Lock Rotation")
+        {
+            // Os defaults reproduzem o angulo que o Play ja usava fixo antes
+            // deste no existir — um pino solto nao gira a camera para um lugar
+            // arbitrario.
+            std::string yaw = "-90.0f", pitch = "-10.0f";
+            for (const auto& inp : node->Inputs)
+            {
+                if (inp.Name == "Yaw")   yaw = ResolvePin(ctx, inp);
+                if (inp.Name == "Pitch") pitch = ResolvePin(ctx, inp);
+            }
+            ctx.Line("GetCamera().LockRotation(" + yaw + ", " + pitch + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Unlock Rotation")
+        {
+            ctx.Line("GetCamera().UnlockRotation();");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Set Socket Offset")
+        {
+            std::string off = "glm::vec3(0.0f)";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Offset") off = ResolvePin(ctx, inp);
+            ctx.Line("GetCamera().SetSocketOffset(" + off + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Set Distance")
+        {
+            std::string dist = "5.0f";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Distance") dist = ResolvePin(ctx, inp);
+            ctx.Line("GetCamera().SetDistance(" + dist + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
+        else if (name == "Camera Set Height")
+        {
+            std::string h = "2.0f";
+            for (const auto& inp : node->Inputs)
+                if (inp.Name == "Height") h = ResolvePin(ctx, inp);
+            ctx.Line("GetCamera().SetHeight(" + h + ");");
+            auto* next = FindNextFlowNode(ctx, node);
+            GenerateNode(ctx, next, deltaTimeVar, depth + 1);
+            return;
+        }
+
         else if (name == "Array Add")
         {
             // node->IntValue == -1 significa que o pin Array nunca foi conectado

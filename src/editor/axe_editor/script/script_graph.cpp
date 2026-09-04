@@ -1157,6 +1157,56 @@ namespace axe
             return node;
         }
 
+        // ── BP_CAMERA_V1 — controle do BRACO em tempo de jogo ────────────────
+        //
+        // O SpringArm da entidade e a configuracao INICIAL, lida uma vez no
+        // OnStart. Estes cinco nos existem para mudar de ideia DURANTE a
+        // partida: travar a camera de lado numa secao de plataforma, soltar de
+        // volta numa arena, aproximar num corredor.
+        //
+        // Antes deles nao havia forma nenhuma de travar a camera por script —
+        // so Shake, Follow, Stop Follow e FOV.
+        if (t == "CameraLockRotation")
+        {
+            auto node = makeNode(baseId, "Camera Lock Rotation", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Yaw", ScriptPinType::Float, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Pitch", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CameraUnlockRotation")
+        {
+            auto node = makeNode(baseId, "Camera Unlock Rotation", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CameraSetSocketOffset")
+        {
+            auto node = makeNode(baseId, "Camera Set Socket Offset", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Offset", ScriptPinType::Vec3, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CameraSetDistance")
+        {
+            auto node = makeNode(baseId, "Camera Set Distance", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Distance", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+        if (t == "CameraSetHeight")
+        {
+            auto node = makeNode(baseId, "Camera Set Height", ScriptNodeCategory::Action);
+            node->Inputs.emplace_back(m_NextId++, "Flow In", ScriptPinType::Flow, ed::PinKind::Input);
+            node->Inputs.emplace_back(m_NextId++, "Height", ScriptPinType::Float, ed::PinKind::Input);
+            node->Outputs.emplace_back(m_NextId++, "Flow Out", ScriptPinType::Flow, ed::PinKind::Output);
+            return node;
+        }
+
         // ── Get Self — outputa a entity atual como Object, plugável em Target ─
         // Permite usar os novos Get/Set Position/Rotation/Scale em si mesmo,
         // ou passar para Particle Play etc. com target = self.

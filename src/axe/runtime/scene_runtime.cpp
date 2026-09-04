@@ -196,6 +196,19 @@ namespace axe
                             m_GameCamera.TPHeight = sa->HeightOffset;
                             m_GameCamera.TPLagSpeed = sa->LagSpeed;
                             m_GameCamera.TPMouseRotates = sa->MouseRotates;
+
+                            // ── BP_CAMERA_V1 ────────────────────────────────
+                            //
+                            // Tres campos do SpringArm nunca chegavam a
+                            // GameCamera: SocketOffset, EnableCameraLag e
+                            // (porque nao existia) o modo travado. Eles eram
+                            // editaveis no Inspector e no Script Editor, e o
+                            // jogo simplesmente os ignorava.
+                            m_GameCamera.TPSocketOffset = sa->SocketOffset;
+                            m_GameCamera.TPEnableLag = sa->EnableCameraLag;
+                            m_GameCamera.TPLockRotation = (sa->Mode == CameraRigMode::Fixed);
+                            m_GameCamera.TPLockYaw = sa->FixedYaw;
+                            m_GameCamera.TPLockPitch = sa->FixedPitch;
                         }
                         if (auto* cam = registry.try_get<CameraComponent>(m_PlayerEntity))
                         {
@@ -206,13 +219,34 @@ namespace axe
                         }
                         if (tc)
                         {
-                            glm::vec3 startPos = tc->Data.Position +
-                                glm::vec3(0, m_GameCamera.TPHeight, m_GameCamera.TPDistance);
-                            m_GameCamera.Reset(startPos, -90.0f, -10.0f);
+                            // BP_CAMERA_V1 — o Play nascia SEMPRE em (-90, -10),
+                            // ignorando o braco. Num braco travado isso valia um
+                            // frame de camera no lugar errado antes do lerp
+                            // corrigir; com lag desligado, valia a cena inteira
+                            // comecando torta.
+                            const float yaw0 = m_GameCamera.TPLockRotation
+                                ? m_GameCamera.TPLockYaw : -90.0f;
+                            const float pitch0 = m_GameCamera.TPLockRotation
+                                ? m_GameCamera.TPLockPitch : -10.0f;
+
+                            const glm::vec3 dir0 =
+                                GameCamera::ForwardFromYawPitch(yaw0, pitch0);
+
+                            glm::vec3 startPos = tc->Data.Position
+                                + glm::vec3(0, m_GameCamera.TPHeight, 0)
+                                - dir0 * m_GameCamera.TPDistance;
+
+                            m_GameCamera.Reset(startPos, yaw0, pitch0);
                             m_GameCamera.SetTarget(&tc->Data.Position);
                         }
-                        AXE_CORE_INFO("GameMode: pawn encontrado (entity {}), camera third person.",
-                            (uint32_t)m_PlayerEntity);
+                        AXE_CORE_INFO("GameMode: pawn encontrado (entity {}), camera third person "
+                            "[BP_CAMERA_V1 modo={} yaw={:.1f} pitch={:.1f} socket=({:.2f},{:.2f},{:.2f})].",
+                            (uint32_t)m_PlayerEntity,
+                            m_GameCamera.TPLockRotation ? "Fixed" : "Orbit",
+                            m_GameCamera.TPLockYaw, m_GameCamera.TPLockPitch,
+                            m_GameCamera.TPSocketOffset.x,
+                            m_GameCamera.TPSocketOffset.y,
+                            m_GameCamera.TPSocketOffset.z);
                     }
                 }
             }

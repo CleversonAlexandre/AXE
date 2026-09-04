@@ -412,14 +412,47 @@ namespace axe
 	// ── Spring Arm ───────────────────────────────────────────────────────────
 	// Define a posição da câmera em relação à entidade (braço de câmera).
 	// Usado pelo GameCamera em modo ThirdPerson.
+	// ── BP_CAMERA_V1 — COMO O BRACO SE COMPORTA ──────────────────────────────
+	//
+	// Orbit  — o de sempre: o braco gira em volta do pawn e o mouse comanda o
+	//          angulo. E o que um jogo de terceira pessoa quer.
+	//
+	// Fixed  — o braco NAO gira. Fica travado em FixedYaw/FixedPitch e so
+	//          acompanha o pawn transladando. E o que um jogo de plataforma
+	//          quer: a camera olha sempre do mesmo lado, e o mouse nao mexe
+	//          nela.
+	//
+	// Ficou no SpringArm, e nao num componente novo, porque e propriedade do
+	// BRACO — a mesma razao pela qual Length e MouseRotates moram aqui. Um
+	// "CameraRigComponent" separado obrigaria toda entidade a carregar dois
+	// componentes que nunca fazem sentido sozinhos.
+	enum class CameraRigMode : int
+	{
+		Orbit = 0,
+		Fixed = 1,
+	};
+
 	struct SpringArmComponent
 	{
-		float Length = 5.0f;    // distância atrás do pawn
-		float HeightOffset = 2.0f; // altura acima do pawn
-		glm::vec3 SocketOffset = { 0, 0, 0 }; // offset lateral/depth fino
+		float Length = 5.0f;    // distância atrás do pawn (METROS)
+		float HeightOffset = 2.0f; // altura acima do pawn (METROS)
+		glm::vec3 SocketOffset = { 0, 0, 0 }; // offset no espaço do braço (METROS)
 		float LagSpeed = 8.0f;   // suavização do follow (lerp)
 		bool  EnableCameraLag = true;
 		bool  MouseRotates = true;  // mouse orbita a câmera
+
+		// ── BP_CAMERA_V1 ────────────────────────────────────────────────
+		//
+		// Modo travado + os dois angulos, em GRAUS — como tudo que e angulo
+		// de camera nesta engine (o Transform e que guarda radianos; ver a
+		// nota "RADIANOS NO TRANSFORM, GRAUS NA GameCamera" no SceneRuntime).
+		//
+		// Os defaults reproduzem exatamente o que o Play ja fazia antes de
+		// estes campos existirem (`Reset(startPos, -90.0f, -10.0f)`), entao
+		// cena antiga carregada sem eles no JSON continua identica.
+		CameraRigMode Mode = CameraRigMode::Orbit;
+		float FixedYaw = -90.0f;
+		float FixedPitch = -10.0f;
 	};
 
 	struct CameraComponent

@@ -2,6 +2,8 @@
 #include "editor_ui.hpp"
 #include "axe/audio/audio_engine.hpp"
 #include "axe/project/project_manager.hpp"
+#include "axe_editor/ui/editor_icons.hpp"
+#include "axe_editor/ui/editor_widgets.hpp"
 #include "axe/project/project.hpp"
 #include "axe/asset/asset_database.hpp"
 #include "axe/scene/game_mode_asset.hpp"
@@ -13,6 +15,126 @@
 #include "axe/log/log.hpp"
 namespace axe
 {
+	// ═══════════════════════════════════════════════════════════════════════
+	//  PROJECT_NEW_V2 — o dialogo de novo projeto
+	//
+	//  Ele NAO reimplementa a validacao: pergunta ao ProjectManager, o mesmo
+	//  que o launcher pergunta. Foi assim que a rotina de material virou seis
+	//  copias divergentes — duas telas fazendo a mesma pergunta cada uma do
+	//  seu jeito, e o usuario vendo respostas diferentes sem saber por que.
+	// ═══════════════════════════════════════════════════════════════════════
+	void EditorUI::DrawNewProjectDialog()
+	{
+		if (!m_NewProjectOpen) return;
+
+		ImGui::OpenPopup("Novo Projeto###NewProject");
+
+		const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+		ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
+
+		if (!ImGui::BeginPopupModal("Novo Projeto###NewProject", &m_NewProjectOpen,
+			ImGuiWindowFlags_AlwaysAutoResize))
+			return;
+
+		ui::SectionHeader(ICON_FILE, "Nome", ui::Accent::Neutral);
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputText("##npname", m_NewProjectName, sizeof(m_NewProjectName));
+
+		ImGui::Spacing();
+		// PROJECT_NEW_V2d — o mesmo rotulo do launcher. Duas telas para a mesma
+		// coisa nao podem chamar o campo de nomes diferentes.
+		ui::SectionHeader(ICON_FOLDER_OPEN, "Onde criar (a pasta-mae)",
+			ui::Accent::Neutral);
+
+		const float btnW = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
+		ImGui::SetNextItemWidth(-btnW);
+		ImGui::InputText("##npfolder", m_NewProjectFolder, sizeof(m_NewProjectFolder));
+		ImGui::SameLine();
+
+		if (ui::IconButton(ICON_FOLDER_OPEN, "Escolher a pasta"))
+		{
+			auto picked = FileDialog::PickFolder("Selecione a pasta do projeto");
+			if (!picked.empty())
+				std::strncpy(m_NewProjectFolder, picked.string().c_str(),
+					sizeof(m_NewProjectFolder) - 1);
+		}
+
+		std::filesystem::path root, projectFile;
+		const auto check = ProjectManager::CheckNewProject(
+			m_NewProjectName, std::filesystem::path(m_NewProjectFolder),
+			root, projectFile);
+
+		ImGui::Spacing();
+
+		switch (check)
+		{
+		case ProjectManager::NewProjectCheck::Ok:
+			ImGui::TextDisabled("Sera criado em: %s", root.string().c_str());
+			break;
+		case ProjectManager::NewProjectCheck::NoPath:
+			ImGui::TextDisabled("Escolha a pasta onde o projeto vai morar.");
+			break;
+		case ProjectManager::NewProjectCheck::InvalidName:
+			ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f),
+				"Nome vazio ou com caractere que o disco nao aceita.");
+			break;
+		case ProjectManager::NewProjectCheck::ExistingProject:
+			ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.35f, 1.0f),
+				"Ja existe um projeto AXE nessa pasta.");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Usar outro nome"))
+			{
+				const std::string free = ProjectManager::SuggestFreeName(
+					m_NewProjectName, std::filesystem::path(m_NewProjectFolder));
+				std::strncpy(m_NewProjectName, free.c_str(),
+					sizeof(m_NewProjectName) - 1);
+			}
+			break;
+		case ProjectManager::NewProjectCheck::OccupiedFolder:
+			ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.35f, 1.0f),
+				"Ja existe uma pasta com esse nome.");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Usar outro nome"))
+			{
+				const std::string free = ProjectManager::SuggestFreeName(
+					m_NewProjectName, std::filesystem::path(m_NewProjectFolder));
+				std::strncpy(m_NewProjectName, free.c_str(),
+					sizeof(m_NewProjectName) - 1);
+			}
+			break;
+		}
+
+		ImGui::Spacing();
+		ImGui::TextDisabled("O projeto atual sera fechado. Salve antes, se precisar.");
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		ImGui::BeginDisabled(check != ProjectManager::NewProjectCheck::Ok);
+
+		if (ui::AccentButton(ICON_PLUS "  Criar e abrir", ui::Accent::Add,
+			nullptr, ImVec2(170, 34)))
+		{
+			if (OnNewProject)
+				OnNewProject(m_NewProjectName, m_NewProjectFolder);
+
+			m_NewProjectOpen = false;
+			ImGui::CloseCurrentPopup();
+		}
+
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+
+		if (ui::AccentButton("Cancelar", ui::Accent::Neutral, nullptr, ImVec2(120, 34)))
+		{
+			m_NewProjectOpen = false;
+			ImGui::CloseCurrentPopup();
+		}
+
+		ImGui::EndPopup();
+	}
+
 	void EditorUI::Draw()
 	{
 		BeginDockspace();
@@ -25,6 +147,7 @@ namespace axe
 		m_ParticleEditorWindow.Draw();
 		m_SoundCueEditorWindow.Draw();
 		m_AssetViewerWindow.Draw();   // ASSET_VIEWER_V1
+		DrawNewProjectDialog();       // PROJECT_NEW_V2
 		DrawAudioMixer();
 
 		// Input Settings — carrega o InputConfig.json do projeto atual na
@@ -280,12 +403,34 @@ namespace axe
 
 				ImGui::Separator();
 
-				if (ImGui::MenuItem("Salvar Projeto", nullptr, false, !playing))
+				// ── PROJECT_NEW_V2 — criar projeto SEM sair da engine ──────
+				//
+				// Antes so havia "Abrir Projeto...". Para criar outro era
+				// preciso fechar o editor, e — se o nome ja existisse — ir ao
+				// Explorer renomear a pasta antiga, porque o launcher recusava
+				// sem oferecer saida. Duas ferramentas fora da engine para uma
+				// operacao que e da engine.
+				if (ImGui::MenuItem(ICON_PLUS "  Novo Projeto...", nullptr, false, !playing))
+				{
+					m_NewProjectOpen = true;
+
+					if (m_NewProjectFolder[0] == '\0')
+					{
+						// Comeca na pasta do projeto ATUAL: quem cria o segundo
+						// projeto quase sempre o quer ao lado do primeiro.
+						const auto& cur = ProjectManager::Get().GetCurrent();
+						const std::string parent = cur.RootPath.parent_path().string();
+						std::strncpy(m_NewProjectFolder, parent.c_str(),
+							sizeof(m_NewProjectFolder) - 1);
+					}
+				}
+
+				if (ImGui::MenuItem(ICON_SAVE "  Salvar Projeto", nullptr, false, !playing))
 				{
 					if (OnSaveProject) OnSaveProject();
 				}
 
-				if (ImGui::MenuItem("Abrir Projeto...", nullptr, false, !playing))
+				if (ImGui::MenuItem(ICON_FOLDER_OPEN "  Abrir Projeto...", nullptr, false, !playing))
 				{
 					auto path = FileDialog::Open(
 						"AXE Project\0*.axeproject\0All Files\0*.*\0",

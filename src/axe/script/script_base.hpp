@@ -56,6 +56,23 @@ namespace axe
         void StopFollow();
         void SetFOV(float fov);
 
+        // ── BP_CAMERA_V1 — controle do BRACO em tempo de jogo ─────────────
+        //
+        // O SpringArm da entidade e a configuracao INICIAL: ele e lido uma vez
+        // no OnStart. Estes quatro sao para mudar de ideia durante a partida —
+        // travar a camera de lado numa secao de plataforma, soltar de volta
+        // numa arena, aproximar num corredor.
+        //
+        // Escrevem direto na GameCamera (nao no componente) de proposito: o
+        // componente e autoria, a GameCamera e o estado vivo. Escrever no
+        // componente faria uma cena salva no meio do Play carregar com a
+        // camera travada e nada explicando o porque.
+        void LockRotation(float yawDegrees, float pitchDegrees);
+        void UnlockRotation();
+        void SetSocketOffset(const glm::vec3& offset);
+        void SetDistance(float meters);
+        void SetHeight(float meters);
+
         // ── Movimento relativo a camera (mouse look) ──────────────────────
         //
         // Achatados no plano do chao (Y = 0) de proposito: com a camera

@@ -164,6 +164,10 @@ namespace axe
         j["sa_lag_speed"] = SALagSpeed;
         j["sa_enable_lag"] = SAEnableLag;
         j["sa_mouse_rotates"] = SAMouseRotates;
+        // BP_CAMERA_V1
+        j["sa_rig_mode"] = SARigMode;
+        j["sa_fixed_yaw"] = SAFixedYaw;
+        j["sa_fixed_pitch"] = SAFixedPitch;
 
         // Camera
         j["cam_fov"] = CamFov;
@@ -264,6 +268,11 @@ namespace axe
             SASocketOffY = j["sa_socket_off"][1];
             SASocketOffZ = j["sa_socket_off"][2];
         }
+        // BP_CAMERA_V1 — defaults iguais aos do struct: .axescript antigo abre
+        // em Orbit, com os mesmos angulos que o Play ja usava fixo.
+        SARigMode = j.value("sa_rig_mode", 0);
+        SAFixedYaw = j.value("sa_fixed_yaw", -90.0f);
+        SAFixedPitch = j.value("sa_fixed_pitch", -10.0f);
 
         // Camera
         CamFov = j.value("cam_fov", 60.0f);

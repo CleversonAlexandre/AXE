@@ -16,6 +16,7 @@
 #include "axe/mesh/mesh_factory.hpp"
 #include <string>
 #include <vector>
+#include <unordered_map> // SCRIPT_FUNCGRAPH_V1: um ed::EditorContext por grafo
 #include <utility> // std::pair no retorno de CollectAnimGraphParams
 #include <sstream>
 #include <entt/entt.hpp>
@@ -317,8 +318,41 @@ namespace axe
         bool       m_ComboRequested = false;
         void SaveNodePositions();           // salva posições do editor de volta nos ScriptNodes
 
-        // Node editor
+        // ── Node editor — UM CONTEXTO POR GRAFO (SCRIPT_FUNCGRAPH_V1) ────────
+        //
+        // Era UM contexto so, compartilhado pelo grafo principal e por TODAS as
+        // funcoes. O imgui-node-editor guarda posicao, selecao, zoom e pan num
+        // mapa indexado por ID DE NODE — e os IDs recomecam em cada grafo. Dois
+        // grafos diferentes tinham nodes com o mesmo ID disputando a mesma
+        // entrada.
+        //
+        // O estrago era permanente, e nao so visual: ao entrar num grafo, o
+        // DrawNodeGraph so reaplicava a posicao dos nodes cujo Position nao
+        // fosse (0,0) — um node nunca arrastado ficava com a posicao que o node
+        // de MESMO ID do outro grafo tinha deixado no canvas. O
+        // SaveNodePositions seguinte gravava essa posicao estranha no modelo, e
+        // dali em diante ela era a "posicao salva". Era o "mexo nos nodes de
+        // uma funcao e desarruma a outra".
+        //
+        // Chave: -1 = grafo principal, >= 0 = indice da funcao. NAO o ponteiro
+        // do ScriptGraph: os grafos morrem com o asset, e um asset novo pode
+        // nascer no mesmo endereco — a chave apontaria para um contexto de
+        // outro script sem nada avisando. Por isso os contextos sao destruidos
+        // quando o ASSET aberto muda (ver m_EdCtxOwnerPath).
+        std::unordered_map<int, ed::EditorContext*> m_EdCtxByGraph;
+
+        // Contexto do grafo ATUALMENTE aberto. Todo o resto do editor continua
+        // usando este ponteiro; quem o mantem apontando para o lugar certo e o
+        // UseEdContextFor, chamado nas tres trocas de grafo.
         ed::EditorContext* m_EdCtx = nullptr;
+
+        // Qual asset e dono dos contextos acima. Comparado por caminho (e nao
+        // por ponteiro) porque e o que sobrevive a um reload do asset.
+        std::string m_EdCtxOwnerPath;
+
+        void UseEdContextFor(int functionIndex);
+        void DestroyAllEdContexts();
+
         ScriptGraph* m_Graph = nullptr;
         // Índice (não ponteiro!) da ScriptFunction atualmente aberta no
         // canvas, ou -1 se for o grafo principal. Índice em vez de ponteiro
