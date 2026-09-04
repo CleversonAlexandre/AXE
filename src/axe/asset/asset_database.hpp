@@ -25,6 +25,23 @@ namespace axe
 		const AssetRecord* GetByUUID(const std::string& uuid) const;
 		const AssetRecord* GetByPath(const std::filesystem::path& path) const;
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  ASSET_VIEWER_V2 — gravar configuracao de importacao
+		//
+		//  Ponto UNICO para mexer nas settings: atualiza o registro em memoria
+		//  E o `.axemeta` no disco na mesma chamada. Deixar o chamador fazer os
+		//  dois passos convidaria a esquecer o segundo, e o sintoma seria o pior
+		//  possivel — funciona na sessao e some ao reabrir, que foi exatamente
+		//  a limitacao da fase 1.
+		//
+		//  Devolve false se o UUID nao existe. NAO invalida cache nem
+		//  reimporta: quem sabe se e malha ou textura e a janela, e ela chama o
+		//  invalidador certo depois. Misturar as duas coisas aqui poria o
+		//  AssetDatabase conhecendo MeshLoader e Texture2D, que e acoplamento
+		//  que ele nao tem hoje e nao precisa ter.
+		// ═══════════════════════════════════════════════════════════════════
+		bool SetImportSettings(const std::string& uuid, const AssetImportSettings& s);
+
 		// Lista todos os assets de um tipo
 		std::vector<const AssetRecord*> GetAllOfType(AssetType type) const;
 

@@ -13,6 +13,7 @@
 #include "axe/core/types.hpp"
 #include "axe/mesh/mesh.hpp"
 #include "axe/material/material.hpp"
+#include "axe/asset/asset.hpp"        // ASSET_VIEWER_V2 — AssetImportSettings
 #include <memory>
 #include <string>
 
@@ -51,7 +52,11 @@ namespace axe
 		static void InvalidateCache(const std::string& filepath);
 
 	private:
-		static LoadedAsset ProcessMesh(void* aiMeshPtr, const void* aiScenePtr);
+		// ASSET_VIEWER_V2 — recebe as settings do asset para aplicar escala e
+		// pivo NOS VERTICES, antes de o Mesh ir para a GPU. Depois disso os
+		// dados de CPU nao sao mais transformaveis sem reimportar.
+		static LoadedAsset ProcessMesh(void* aiMeshPtr, const void* aiScenePtr,
+			const AssetImportSettings& importSettings = {});
 	};
 
 } // namespace axe

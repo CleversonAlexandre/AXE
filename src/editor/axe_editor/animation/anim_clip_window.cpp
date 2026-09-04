@@ -26,6 +26,8 @@
 #include "axe/log/log.hpp"
 
 #include "editor/axe_editor/asset/asset_picker.hpp"
+#include "axe_editor/ui/editor_icons.hpp"
+#include "axe_editor/ui/editor_widgets.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include "axe/animation/animation_sampler.hpp"
 #include "axe/mesh/mesh_factory.hpp"
@@ -533,11 +535,42 @@ namespace axe
 		// (emplace duplicado e assert do EnTT).
 		auto& tc = reg.get<TransformComponent>(e);
 
-		// Origem do personagem + offset autorado. A ancoragem no OSSO
-		// (Socket/Attached) entra junto com o disparo no runtime — la os
-		// skinning matrices ja estao na mao; aqui o offset da a posicao.
-		tc.Data.Position = n.LocationOffset;
-		tc.Data.Rotation = glm::radians(n.RotationOffset);   // Transform guarda radianos
+		// ═══════════════════════════════════════════════════════════════════
+		//  NOTIFY_SOCKET_V1 — a MESMA conta do runtime, chamada daqui
+		//
+		//  Este bloco dizia que a ancoragem no osso "entra junto com o disparo
+		//  no runtime" e que aqui bastava o offset. Era essa diferenca: no
+		//  editor a particula nascia no offset cru (que o autor posicionou
+		//  olhando o cano), e no jogo nascia a partir da origem do personagem —
+		//  nos pes. Duas convencoes para a mesma pergunta.
+		//
+		//  Agora as duas chamam AnimationWorld::ResolveSocketWorld. Se a conta
+		//  mudar, muda nos dois ao mesmo tempo, porque e a mesma funcao.
+		// ═══════════════════════════════════════════════════════════════════
+		glm::mat4 socketWorld(1.0f);
+
+		if (m_PreviewEntity != entt::null
+			&& AnimationWorld::ResolveSocketWorld(*m_PreviewScene, m_PreviewEntity,
+				n.Socket, socketWorld))
+		{
+			glm::mat3 basis(socketWorld);
+			basis[0] = glm::normalize(basis[0]);
+			basis[1] = glm::normalize(basis[1]);
+			basis[2] = glm::normalize(basis[2]);
+
+			const glm::quat sockRot = glm::quat_cast(basis);
+
+			tc.Data.Position = glm::vec3(socketWorld[3]) + sockRot * n.LocationOffset;
+			tc.Data.Rotation = glm::eulerAngles(
+				sockRot * glm::quat(glm::radians(n.RotationOffset)));
+		}
+		else
+		{
+			// Sem socket escolhido: offset cru, como sempre foi aqui.
+			tc.Data.Position = n.LocationOffset;
+			tc.Data.Rotation = glm::radians(n.RotationOffset);
+		}
+
 		tc.Data.Scale = n.Scale;
 
 		auto& ps = reg.emplace<ParticleSystemComponent>(e);
@@ -672,7 +705,10 @@ namespace axe
 
 	void AnimClipWindow::DrawToolbar()
 	{
-		if (ImGui::Button("Save"))
+		// Primary: e a acao principal desta janela, e o asterisco no titulo ja
+		// avisa quando ha o que salvar.
+		if (ui::AccentButton(ICON_SAVE "  Salvar", ui::Accent::Primary,
+			"Grava o .axeskel (sockets, clipes e notifies)"))
 		{
 			// O meta ja foi copiado pro asset a cada edicao (MarkMetaEdited);
 			// aqui e so persistir o .axeskel.
@@ -1133,13 +1169,80 @@ namespace axe
 	//  SC35 — sockets: lista e edicao
 	// ─────────────────────────────────────────────────────────────────────────
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  SOCKET_UNDO_V1 — desfazer/refazer nos sockets
+	//
+	//  ── POR QUE UM PAR DE FUNCOES E NAO UM Push DIRETO ────────────────────
+	//
+	//  Um DragFloat3 dispara a cada frame de arrasto. Empilhar um comando por
+	//  frame encheria o historico com centenas de passos de um milimetro, e
+	//  desfazer viraria inutil: seriam 300 Ctrl+Z para voltar um gesto.
+	//
+	//  Begin captura o "antes" quando o gesto COMECA; End compara e empilha UM
+	//  comando quando ele termina. E o mesmo par de estados (dirty/commit) que
+	//  o painel ja usava para decidir quando gravar — undo entra de carona no
+	//  ritmo que ja existia.
+	// ═══════════════════════════════════════════════════════════════════════
+	void AnimClipWindow::BeginSocketEdit()
+	{
+		if (m_SocketEditOpen || !m_Skeleton) return;
+
+		auto& sockets = m_Skeleton->GetSockets();
+		if (m_SelectedSocket < 0 || m_SelectedSocket >= (int)sockets.size()) return;
+
+		m_SocketBeforeEdit = sockets[m_SelectedSocket];
+		m_SocketEditOpen = true;
+	}
+
+	void AnimClipWindow::EndSocketEdit(const char* actionName)
+	{
+		if (!m_SocketEditOpen || !m_Skeleton) { m_SocketEditOpen = false; return; }
+		m_SocketEditOpen = false;
+
+		auto& sockets = m_Skeleton->GetSockets();
+		if (m_SelectedSocket < 0 || m_SelectedSocket >= (int)sockets.size()) return;
+
+		const int index = m_SelectedSocket;
+		const SkeletalMeshAsset::Socket before = m_SocketBeforeEdit;
+		const SkeletalMeshAsset::Socket after = sockets[index];
+
+		// Gesto que terminou onde comecou nao e uma acao. Sem esta guarda, um
+		// clique sem arrasto entraria no historico e o primeiro Ctrl+Z nao
+		// faria nada visivel — que e como se perde a confianca no undo.
+		if (before.Name == after.Name
+			&& before.BoneName == after.BoneName
+			&& before.Location == after.Location
+			&& before.Rotation == after.Rotation
+			&& before.Scale == after.Scale
+			&& before.PreviewMeshUUID == after.PreviewMeshUUID)
+			return;
+
+		auto apply = [this, index](const SkeletalMeshAsset::Socket& value)
+			{
+				if (!m_Skeleton) return;
+				auto& list = m_Skeleton->GetSockets();
+				if (index < 0 || index >= (int)list.size()) return;
+				list[index] = value;
+				m_SelectedSocket = index;
+				m_Skeleton->Save();
+			};
+
+		Command cmd;
+		cmd.Name = actionName;
+		cmd.Execute = [apply, after]() { apply(after); };
+		cmd.Undo = [apply, before]() { apply(before); };
+
+		// O valor novo JA esta no asset — o painel escreveu nele. Push
+		// executaria de novo, o que aqui e inofensivo e mantem o Redo correto.
+		m_SocketHistory.Push(std::move(cmd));
+	}
+
 	void AnimClipWindow::DrawSocketList()
 	{
 		auto& sockets = m_Skeleton->GetSockets();
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Sockets");
-		ImGui::SameLine();
+		ui::SectionHeader(ICON_LINK, "Sockets", ui::Accent::Neutral);
 
 		// Add usa o osso SELECIONADO na arvore acima. Sem osso selecionado o
 		// botao fica desabilitado com a explicacao no tooltip, em vez de criar
@@ -1149,7 +1252,8 @@ namespace axe
 
 		if (!canAdd) ImGui::BeginDisabled();
 
-		if (ImGui::SmallButton("+ Add"))
+		if (ui::IconButton(ICON_PLUS, "Criar socket no osso selecionado",
+			ui::Accent::Add))
 		{
 			SkeletalMeshAsset::Socket s;
 			s.BoneName = m_SelectedBone;
@@ -1171,23 +1275,121 @@ namespace axe
 			}
 
 			s.Name = candidate;
-			sockets.push_back(s);
-			m_SelectedSocket = (int)sockets.size() - 1;
-			m_Skeleton->Save();
+
+			// SOCKET_UNDO_V1 — criar entra no historico. O Execute insere e o
+			// Undo remove, os dois pelo INDICE do fim da lista: enquanto os
+			// comandos forem desfeitos na ordem, esse indice e estavel.
+			Command cmd;
+			cmd.Name = "Criar socket";
+			cmd.Execute = [this, s]()
+				{
+					if (!m_Skeleton) return;
+					auto& list = m_Skeleton->GetSockets();
+					list.push_back(s);
+					m_SelectedSocket = (int)list.size() - 1;
+					m_Skeleton->Save();
+				};
+			cmd.Undo = [this]()
+				{
+					if (!m_Skeleton) return;
+					auto& list = m_Skeleton->GetSockets();
+					if (list.empty()) return;
+					list.pop_back();
+					m_SelectedSocket = -1;
+					m_Skeleton->Save();
+				};
+			m_SocketHistory.Push(std::move(cmd));
 		}
 
 		if (!canAdd)
 		{
 			ImGui::EndDisabled();
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-				ImGui::SetTooltip("Select a bone in the tree above first.");
+				ImGui::SetTooltip("Selecione um osso na arvore acima primeiro.");
+		}
+
+		// ── Deletar, agora com botao proprio ──────────────────────────────
+		//
+		// Antes so existia no menu de contexto do item, que e um lugar onde
+		// ninguem procura sem ja saber que esta la. O menu continua
+		// funcionando; isto e a porta visivel.
+		ImGui::SameLine();
+		{
+			const bool canDelete = m_SelectedSocket >= 0
+				&& m_SelectedSocket < (int)sockets.size();
+
+			ImGui::BeginDisabled(!canDelete);
+
+			if (ui::IconButton(ICON_TRASH, "Apagar o socket selecionado\n"
+				"(pode ser desfeito com Ctrl+Z)", ui::Accent::Danger) && canDelete)
+			{
+				const int index = m_SelectedSocket;
+				const SkeletalMeshAsset::Socket removed = sockets[index];
+
+				Command cmd;
+				cmd.Name = "Apagar socket";
+				cmd.Execute = [this, index]()
+					{
+						if (!m_Skeleton) return;
+						auto& list = m_Skeleton->GetSockets();
+						if (index < 0 || index >= (int)list.size()) return;
+						list.erase(list.begin() + index);
+
+						// O indice selecionado apontaria para outro socket (ou
+						// para fora) depois do erase. Limpar e o unico estado
+						// honesto: o que estava selecionado deixou de existir.
+						m_SelectedSocket = -1;
+						m_Skeleton->Save();
+					};
+				cmd.Undo = [this, index, removed]()
+					{
+						if (!m_Skeleton) return;
+						auto& list = m_Skeleton->GetSockets();
+						const int at = std::min(index, (int)list.size());
+						list.insert(list.begin() + at, removed);
+						m_SelectedSocket = at;
+						m_Skeleton->Save();
+					};
+				m_SocketHistory.Push(std::move(cmd));
+			}
+
+			ImGui::EndDisabled();
+		}
+
+		// ── Undo / Redo ───────────────────────────────────────────────────
+		//
+		// Pilha propria desta janela — ver a nota do m_SocketHistory no header.
+		// Os atalhos so respondem com a janela em foco, pelo mesmo motivo: o
+		// Ctrl+Z do editor de cena nao pode desfazer um socket, nem o
+		// contrario.
+		ImGui::SameLine();
+		{
+			ImGui::BeginDisabled(!m_SocketHistory.CanUndo());
+			if (ui::IconButton(ICON_UNDO, "Desfazer (Ctrl+Z)"))
+				m_SocketHistory.Undo();
+			ImGui::EndDisabled();
+
+			ImGui::SameLine();
+			ImGui::BeginDisabled(!m_SocketHistory.CanRedo());
+			if (ui::IconButton(ICON_REDO, "Refazer (Ctrl+Y)"))
+				m_SocketHistory.Redo();
+			ImGui::EndDisabled();
+
+			const bool focused = ImGui::IsWindowFocused(
+				ImGuiFocusedFlags_RootAndChildWindows);
+
+			if (focused && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
+			{
+				if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) m_SocketHistory.Undo();
+				if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) m_SocketHistory.Redo();
+			}
 		}
 
 		ImGui::Separator();
 
 		if (sockets.empty())
 		{
-			ImGui::TextDisabled("No sockets yet.");
+			ImGui::TextDisabled("Nenhum socket ainda.");
 			return;
 		}
 
@@ -1203,15 +1405,38 @@ namespace axe
 
 			if (ImGui::BeginPopupContextItem("##sockctx"))
 			{
-				if (ImGui::MenuItem("Delete"))
+				if (ImGui::MenuItem(ICON_TRASH "  Apagar"))
 				{
-					sockets.erase(sockets.begin() + i);
+					// Passa pelo MESMO caminho do botao: selecionar e deixar o
+					// bloco de cima empilhar o comando. Apagar aqui direto
+					// deixaria uma das duas portas fora do undo, e a diferenca
+					// so apareceria quando alguem tentasse desfazer.
+					m_SelectedSocket = i;
 
-					// O indice selecionado apontaria para outro socket (ou
-					// para fora) depois do erase. Limpar e o unico estado
-					// honesto: o que estava selecionado deixou de existir.
-					m_SelectedSocket = -1;
-					m_Skeleton->Save();
+					const SkeletalMeshAsset::Socket removed = sockets[i];
+					const int index = i;
+
+					Command cmd;
+					cmd.Name = "Apagar socket";
+					cmd.Execute = [this, index]()
+						{
+							if (!m_Skeleton) return;
+							auto& list = m_Skeleton->GetSockets();
+							if (index < 0 || index >= (int)list.size()) return;
+							list.erase(list.begin() + index);
+							m_SelectedSocket = -1;
+							m_Skeleton->Save();
+						};
+					cmd.Undo = [this, index, removed]()
+						{
+							if (!m_Skeleton) return;
+							auto& list = m_Skeleton->GetSockets();
+							const int at = std::min(index, (int)list.size());
+							list.insert(list.begin() + at, removed);
+							m_SelectedSocket = at;
+							m_Skeleton->Save();
+						};
+					m_SocketHistory.Push(std::move(cmd));
 
 					ImGui::EndPopup();
 					ImGui::PopID();
@@ -1253,7 +1478,7 @@ namespace axe
 		char nameBuf[128] = {};
 		strncpy(nameBuf, s.Name.c_str(), sizeof(nameBuf) - 1);
 
-		ImGui::TextDisabled("Name");
+		ui::SectionHeader(ICON_FILE, "Nome", ui::Accent::Neutral);
 		ImGui::SetNextItemWidth(-1);
 
 		if (ImGui::InputText("##sockname", nameBuf, sizeof(nameBuf)))
@@ -1274,7 +1499,7 @@ namespace axe
 			commit = true;
 
 			if (s.Name != nameBuf)
-				ImGui::SetTooltip("Name must be unique and non-empty.");
+				ImGui::SetTooltip("O nome tem de ser unico e nao pode ser vazio.");
 		}
 
 		// ── Osso pai ─────────────────────────────────────────────────────────
@@ -1282,7 +1507,7 @@ namespace axe
 		// Combo, e nao "usa o selecionado na arvore": remontar um socket para
 		// outro osso e uma correcao deliberada, e depender da selecao da
 		// arvore faria isso acontecer sem querer ao navegar.
-		ImGui::TextDisabled("Parent bone");
+		ui::SectionHeader(ICON_BONE, "Osso pai", ui::Accent::Neutral);
 		ImGui::SetNextItemWidth(-1);
 
 		if (const auto& skel = m_Skeleton->GetSkeleton())
@@ -1306,7 +1531,7 @@ namespace axe
 
 		// ── Transform relativo ao osso ───────────────────────────────────────
 		ImGui::Spacing();
-		ImGui::TextDisabled("Relative to bone");
+		ui::SectionHeader(ICON_ARROWS, "Relativo ao osso", ui::Accent::Primary);
 
 		auto vec3Row = [&](const char* label, const char* id, glm::vec3& v, float step)
 			{
@@ -1315,8 +1540,18 @@ namespace axe
 
 				// dirty por frame de arrasto (o preview acompanha ao vivo),
 				// commit so quando o arrasto termina (um Save por gesto).
-				if (ImGui::DragFloat3(id, &v.x, step, 0.0f, 0.0f, "%.3f")) dirty = true;
-				if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
+				// SOCKET_UNDO_V1 — o "antes" e capturado quando o arrasto
+				// COMECA. Um comando por gesto, e nao um por frame.
+				if (ImGui::DragFloat3(id, &v.x, step, 0.0f, 0.0f, "%.3f"))
+				{
+					BeginSocketEdit();
+					dirty = true;
+				}
+				if (ImGui::IsItemDeactivatedAfterEdit())
+				{
+					commit = true;
+					EndSocketEdit("Transform do socket");
+				}
 			};
 
 		vec3Row("Location", "##sockloc", s.Location, 0.01f);
@@ -1341,6 +1576,34 @@ namespace axe
 		//  A raiz do problema e a falta de um fator de unidade no asset da
 		//  malha, gravado na importacao. Enquanto ele nao existe, a compensacao
 		//  por socket e o lugar honesto para ela morar.
+		// ═══════════════════════════════════════════════════════════════════
+		//  SOCKET_SIZE_V3 — o tamanho no MUNDO, em vez de um fator misterioso
+		//
+		//  ── O QUE O "Match mesh units" FAZIA, E POR QUE VIROU UM BECO ──────
+		//
+		//  Ele escrevia Scale = 1 / (escala do personagem no preview). Como o
+		//  Y Bot vem do Mixamo em centimetros, essa conta da SEMPRE ~100.263 —
+		//  o mesmo numero, para qualquer malha. Clicar com 100.263 ja no campo
+		//  nao mudava nada; digitar outro valor e clicar devolvia 100.263.
+		//  Nao era defeito de implementacao: o botao so nao dependia da malha.
+		//
+		//  Ele nasceu certo. Naquela epoca a malha nao tinha unidade nenhuma
+		//  gravada, e cancelar a heranca do personagem era a unica compensacao
+		//  possivel. O `mesh_scale` do `.axemeta` acabou com essa necessidade:
+		//  a malha agora TEM um tamanho real, e o que falta saber e com que
+		//  tamanho ela vai aparecer.
+		//
+		//  ── O QUE ENTRA NO LUGAR ──────────────────────────────────────────
+		//
+		//  O numero que importa: quantos metros a malha vai medir na mao do
+		//  personagem. Ele sai da conta completa
+		//
+		//      tamanho da malha  x  Scale do socket  x  escala do personagem
+		//
+		//  e o campo ao lado resolve o Scale para o tamanho que se pedir. Em
+		//  vez de um fator sem unidade que so um dos tres sistemas entende,
+		//  digita-se "0.186" e a pistola fica com 18,6 cm.
+		// ═══════════════════════════════════════════════════════════════════
 		if (m_PreviewScene && m_PreviewEntity != entt::null)
 		{
 			auto& preg = m_PreviewScene->GetRegistry();
@@ -1348,20 +1611,96 @@ namespace axe
 			if (auto* ctc = preg.try_get<TransformComponent>(m_PreviewEntity))
 			{
 				const glm::vec3 cs = ctc->Data.Scale;
-				const bool scaled =
-					std::abs(cs.x - 1.0f) > 0.0001f ||
-					std::abs(cs.y - 1.0f) > 0.0001f ||
-					std::abs(cs.z - 1.0f) > 0.0001f;
 
-				if (scaled)
+				// Mede a malha UMA vez por UUID — ver a nota do
+				// m_SocketMeshMeasuredUUID no header.
+				if (s.PreviewMeshUUID != m_SocketMeshMeasuredUUID)
 				{
-					ImGui::Spacing();
+					m_SocketMeshMeasuredUUID = s.PreviewMeshUUID;
+					m_SocketMeshSize = 0.0f;
 
-					if (ImGui::Button("Match mesh units", ImVec2(-1, 0)))
+					if (!s.PreviewMeshUUID.empty())
 					{
-						// Divisao guardada: escala zero em qualquer eixo daria
-						// infinito, e um transform com inf some da tela sem
-						// erro nenhum — trocaria um bug invisivel por outro.
+						if (auto mesh = MeshFactory::ResolveByUUID(s.PreviewMeshUUID))
+						{
+							const auto& verts = mesh->GetVertices();
+							if (!verts.empty())
+							{
+								glm::vec3 mn = verts[0].Position, mx = mn;
+								for (const auto& v : verts)
+								{
+									mn = glm::min(mn, v.Position);
+									mx = glm::max(mx, v.Position);
+								}
+								const glm::vec3 sz = mx - mn;
+								m_SocketMeshSize = std::max({ sz.x, sz.y, sz.z });
+							}
+						}
+					}
+				}
+
+				if (m_SocketMeshSize > 0.0001f)
+				{
+					// A escala efetiva usa o eixo X dos dois fatores. Scale
+					// nao-uniforme num socket e patologia, nao caso de uso — e
+					// tratar os tres eixos aqui daria tres numeros que nao
+					// respondem a pergunta ("que tamanho isso tem?").
+					const float effective = s.Scale.x * cs.x;
+					const float worldSize = m_SocketMeshSize * effective;
+
+					ImGui::Spacing();
+					ImGui::TextDisabled("Tamanho no mundo");
+
+					ImGui::SetNextItemWidth(-1);
+
+					static float s_TargetWorld = 0.0f;
+					if (!ImGui::IsAnyItemActive())
+						s_TargetWorld = worldSize;
+
+					if (ImGui::DragFloat("##sockworld", &s_TargetWorld,
+						0.005f, 0.001f, 100.0f, "%.3f m"))
+					{
+						BeginSocketEdit();
+
+						// Resolve o Scale do socket para o tamanho pedido. A
+						// escala do personagem entra na conta porque o socket
+						// a HERDA — ignora-la daria um numero certo no painel
+						// e errado na tela.
+						const float denom = m_SocketMeshSize * cs.x;
+						if (denom > 1e-6f)
+						{
+							const float k = s_TargetWorld / denom;
+							s.Scale = glm::vec3(k);
+							dirty = true;
+						}
+					}
+					if (ImGui::IsItemDeactivatedAfterEdit())
+					{
+						commit = true;
+						EndSocketEdit("Tamanho do socket");
+					}
+
+					ImGui::TextDisabled("malha %.3f m  x  %.3f  =  %.3f m",
+						m_SocketMeshSize, effective, worldSize);
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip(
+							"Tamanho real do asset (Asset Viewer > Importacao),\n"
+							"multiplicado pelo Scale do socket e pela escala do\n"
+							"personagem no preview (%.4f).\n\n"
+							"O personagem veio em centimetros, por isso o fator\n"
+							"~100 no Scale: ele cancela essa heranca. Nao e um\n"
+							"numero errado, e a conversao de unidade do modelo.",
+							cs.x);
+
+					// Substitui o "Match mesh units". Faz a mesma conta que ele
+					// fazia — e agora com um nome que diz o que ela significa.
+					if (ui::AccentButton(ICON_EXPAND "  Tamanho real do asset",
+						ui::Accent::Neutral,
+						"Escreve o Scale que faz a malha aparecer exatamente\n"
+						"com o tamanho que ela tem no Asset Viewer.",
+						ImVec2(-1, 0)))
+					{
+						BeginSocketEdit();
 						s.Scale = {
 							cs.x != 0.0f ? 1.0f / cs.x : 1.0f,
 							cs.y != 0.0f ? 1.0f / cs.y : 1.0f,
@@ -1369,22 +1708,15 @@ namespace axe
 						};
 						dirty = true;
 						commit = true;
+						EndSocketEdit("Tamanho real do socket");
 					}
-
-					if (ImGui::IsItemHovered())
-						ImGui::SetTooltip(
-							"The character is previewed at %.3f scale, and anything\n"
-							"attached to a bone inherits it — as it will at runtime.\n"
-							"This fills Scale with the factor that cancels it out,\n"
-							"for a mesh authored in different units.",
-							cs.x);
 				}
 			}
 		}
 
 		// ── Preview mesh ─────────────────────────────────────────────────────
 		ImGui::Spacing();
-		ImGui::TextDisabled("Preview mesh (editor only)");
+		ui::SectionHeader(ICON_CUBE, "Malha de preview (so no editor)", ui::Accent::Neutral);
 
 		if (AssetPicker::Draw("Mesh", s.PreviewMeshUUID,
 			{ AssetType::Mesh }, [&](const AssetRecord&) { dirty = true; commit = true; }))
@@ -1394,8 +1726,51 @@ namespace axe
 		}
 
 		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Shown here so you can position the socket.\n"
-				"It is not attached at runtime.");
+			ImGui::SetTooltip("Serve para posicionar o socket aqui no editor.\n"
+				"Ela nao e anexada em runtime.");
+
+		// ═══════════════════════════════════════════════════════════════════
+		//  SOCKET_UNITS_V2 — as DUAS escalas, lado a lado
+		//
+		//  ── O QUE ESTA NOTA CONSERTA ───────────────────────────────────────
+		//
+		//  O comentario do "Match mesh units", logo acima, termina dizendo que
+		//  a raiz do problema e a falta de um fator de unidade no asset da
+		//  malha, gravado na importacao. Esse fator agora EXISTE: e o
+		//  `mesh_scale` do `.axemeta`.
+		//
+		//  Com ele, passaram a existir DOIS lugares que mexem no tamanho do
+		//  que o socket mostra — a escala de importacao do asset e o Scale do
+		//  socket — e nada na tela dizia isso. O sintoma real foi uma pistola
+		//  reimportada com 1 m de comprimento aparecendo gigante na mao do
+		//  personagem: o socket estava certo, ele so multiplicou fielmente uma
+		//  malha que ja vinha grande do outro sistema.
+		//
+		//  ── POR QUE MOSTRAR EM VEZ DE CORRIGIR ────────────────────────────
+		//
+		//  Nao da para o socket "compensar" a escala de importacao: ela e a
+		//  escala REAL do asset no mundo, e cancela-la aqui faria o preview
+		//  mentir de novo — o inverso do defeito que o Match mesh units evita.
+		//  O que faltava nao era conserto, era informacao.
+		// ═══════════════════════════════════════════════════════════════════
+		if (!s.PreviewMeshUUID.empty())
+		{
+			if (const AssetRecord* prec = AssetDatabase::Get().GetByUUID(s.PreviewMeshUUID))
+			{
+				const float importScale = prec->Import.MeshScale;
+
+				if (std::abs(importScale - 1.0f) > 0.0001f)
+				{
+					ImGui::TextDisabled("Escala de importacao do asset: %.4f", importScale);
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip(
+							"Vem do .axemeta da malha (Asset Viewer > Importacao).\n"
+							"O Scale acima MULTIPLICA por cima dela.\n"
+							"Se o objeto aparece grande demais aqui, confira\n"
+							"primeiro o tamanho real do asset no Asset Viewer.");
+				}
+			}
+		}
 
 		// Grava so quando algo mudou de fato E o gesto acabou: este painel roda
 		// por frame, e um Save por frame reescreveria o .axeskel continuamente.
@@ -1432,25 +1807,50 @@ namespace axe
 		// ── Transporte (|< passo-a-passo >| Stop, como na Unreal) ────────
 		const float frameStep = 1.0f / 30.0f;
 
-		if (ImGui::Button("|<")) { SetPreviewTime(0.0f); }
+		// Os mesmos icones e as mesmas cores do transporte do viewport: verde
+		// para tocar, ambar para pausar, vermelho para parar. Duas barras de
+		// transporte na mesma engine com aparencias diferentes fazem o usuario
+		// reaprender o obvio a cada janela.
+		if (ui::IconButton(ICON_ARROW_LEFT, "Ir para o inicio"))
+		{
+			SetPreviewTime(0.0f);
+		}
 		ImGui::SameLine();
 
-		if (ImGui::Button("<")) { m_Playing = false; SetPreviewTime(std::max(0.0f, now - frameStep)); }
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous frame");
+		if (ui::IconButton(ICON_ROTATE_LEFT, "Frame anterior"))
+		{
+			m_Playing = false;
+			SetPreviewTime(std::max(0.0f, now - frameStep));
+		}
 		ImGui::SameLine();
 
-		if (ImGui::Button(m_Playing ? "Pause" : "Play "))
+		if (ui::ToggleButton(m_Playing ? ICON_PAUSE : ICON_PLAY, m_Playing,
+			m_Playing ? "Pausar" : "Tocar",
+			m_Playing ? ui::Accent::Warning : ui::Accent::Add))
+		{
 			m_Playing = !m_Playing;
+		}
 		ImGui::SameLine();
 
-		if (ImGui::Button(">")) { m_Playing = false; SetPreviewTime(std::min(duration, now + frameStep)); }
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next frame");
+		if (ui::IconButton(ICON_FORWARD_STEP, "Proximo frame"))
+		{
+			m_Playing = false;
+			SetPreviewTime(std::min(duration, now + frameStep));
+		}
 		ImGui::SameLine();
 
-		if (ImGui::Button(">|")) { m_Playing = false; SetPreviewTime(duration); }
+		if (ui::IconButton(ICON_ARROW_RIGHT, "Ir para o fim"))
+		{
+			m_Playing = false;
+			SetPreviewTime(duration);
+		}
 		ImGui::SameLine();
 
-		if (ImGui::Button("Stop")) { m_Playing = false; SetPreviewTime(0.0f); }
+		if (ui::IconButton(ICON_STOP, "Parar e voltar ao inicio", ui::Accent::Danger))
+		{
+			m_Playing = false;
+			SetPreviewTime(0.0f);
+		}
 		ImGui::SameLine();
 		ImGui::Text("%.2fs / %.2fs   frame %d", now, duration, (int)(now * 30.0f));
 		ImGui::SameLine(0.0f, 24.0f);
@@ -1836,20 +2236,61 @@ namespace axe
 
 			// ── Ancoragem e transform (Anim Notify Details da Unreal) ────
 			ImGui::Spacing();
-			ImGui::TextDisabled("Attach");
-			ImGui::Separator();
+			ui::SectionHeader(ICON_LINK, "Ancoragem", ui::Accent::Primary);
 
-			// Socket: combo com os OSSOS reais do esqueleto. "" = origem do
-			// personagem. (No preview, o spawn ainda usa a origem + offset;
-			// a ancoragem no osso entra junto com o disparo no runtime.)
+			// ═══════════════════════════════════════════════════════════════
+			//  NOTIFY_SOCKET_V3 — o padrao silencioso que custou duas rodadas
+			//
+			//  O combo abaixo nascia em "(character origin)" sem rotulo e sem
+			//  nenhum aviso. Quem posicionava o FX olhando o cano no preview
+			//  do editor via a particula certa ali — porque o preview usava o
+			//  offset cru — e errada no jogo, que somava esse offset a origem
+			//  do personagem, la nos pes.
+			//
+			//  Um padrao que produz o resultado errado em silencio e pior que
+			//  um erro: o erro voce ve. Entao o painel agora DIZ, em ambar, o
+			//  que a escolha atual significa, e oferece o conserto de um
+			//  clique quando o esqueleto tem socket.
+			// ═══════════════════════════════════════════════════════════════
+			if (n.Socket.empty() && m_Skeleton)
 			{
-				const char* current = n.Socket.empty() ? "(character origin)" : n.Socket.c_str();
+				ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.35f, 1.0f),
+					"Sai da ORIGEM do personagem (os pes).");
+				ImGui::TextDisabled("O offset abaixo e medido a partir dali, e nao");
+				ImGui::TextDisabled("da arma — por isso o FX nao acompanha a mao.");
+
+				const auto& sks = m_Skeleton->GetSockets();
+
+				if (!sks.empty())
+				{
+					char btn[128];
+					std::snprintf(btn, sizeof(btn), ICON_LINK "  Ancorar em '%s'",
+						sks[0].Name.c_str());
+
+					if (ui::AccentButton(btn, ui::Accent::Primary,
+						"Faz o FX sair do socket, na pose de cada frame",
+						ImVec2(-1, 0)))
+					{
+						n.Socket = sks[0].Name;
+						MarkMetaEdited();
+					}
+				}
+				else
+				{
+					ImGui::TextDisabled("Este esqueleto ainda nao tem socket.");
+					ImGui::TextDisabled("Crie um na aba Skeleton, no osso da mao.");
+				}
+			}
+
+			{
+				const char* current = n.Socket.empty()
+					? "(origem do personagem)" : n.Socket.c_str();
 
 				ImGui::SetNextItemWidth(-1);
 
 				if (ImGui::BeginCombo("##nsocket", current))
 				{
-					if (ImGui::Selectable("(character origin)", n.Socket.empty()))
+					if (ImGui::Selectable("(origem do personagem)", n.Socket.empty()))
 					{
 						n.Socket.clear();
 						MarkMetaEdited();
@@ -1857,6 +2298,29 @@ namespace axe
 
 					if (const auto& skel = m_Skeleton->GetSkeleton())
 					{
+						// ── Sockets primeiro ────────────────────────────
+						//
+						// Um socket ja carrega posicao, giro e escala
+						// autorados no painel Skeleton — e onde a ponta do
+						// cano realmente esta. Escolher o OSSO cru poe o FX no
+						// punho, e o autor tem de reencontrar o cano na mao
+						// com tres floats. Os ossos continuam na lista logo
+						// abaixo para quem quer exatamente isso.
+						for (const auto& sk : m_Skeleton->GetSockets())
+						{
+							std::string label = ICON_LINK "  " + sk.Name;
+							if (ImGui::Selectable(label.c_str(), n.Socket == sk.Name))
+							{
+								n.Socket = sk.Name;
+								MarkMetaEdited();
+							}
+							if (ImGui::IsItemHovered())
+								ImGui::SetTooltip("Socket em '%s'", sk.BoneName.c_str());
+						}
+
+						if (!m_Skeleton->GetSockets().empty())
+							ImGui::Separator();
+
 						for (const auto& b : skel->GetBones())
 						{
 							if (ImGui::Selectable(b.Name.c_str(), n.Socket == b.Name))

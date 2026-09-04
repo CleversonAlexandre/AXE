@@ -98,35 +98,107 @@ namespace axe
             if (dot(sampleNormal, sampleNormal) < 0.01)
                 continue;
 
-            // Compara distância à câmera
-            float sampleDepth = length((u_View * vec4(samplePosReal, 1.0)).xyz);
-            float fragDepth   = length((u_View * vec4(samplePos,     1.0)).xyz);
+            // ── SSAO_QUALITY_V2 — profundidade em Z DE VIEW ────────────────
+            //
+            // Era `length(viewPos)`, a distancia radial ate a camera. Para um
+            // mesmo plano, essa distancia CRESCE do centro para as bordas da
+            // tela: o range check ficava mais frouxo nos cantos e mais
+            // apertado no meio, e a oclusao do mesmo chao mudava conforme a
+            // camera girava. Z de view e constante para um plano paralelo ao
+            // filme, que e a comparacao que o algoritmo pressupoe.
+            float sampleDepth = -(u_View * vec4(samplePosReal, 1.0)).z;
+            float fragDepth   = -(u_View * vec4(samplePos,     1.0)).z;
+            float centerDepth = -(u_View * vec4(fragPosWorld,  1.0)).z;
+
+            // Bias proporcional a distancia. Bias fixo em metros e cego a
+            // perspectiva: o valor que evita acne a dois metros e insuficiente
+            // a trinta, onde um texel de profundidade cobre muito mais mundo.
+            // O termo constante mantem o comportamento de quem ja calibrou o
+            // slider; o proporcional e o piso que impede acne com bias 0.
+            float bias = u_Bias + centerDepth * 0.002;
 
             float rangeCheck = smoothstep(0.0, 1.0,
-                u_Radius / abs(length((u_View * vec4(fragPosWorld, 1.0)).xyz) - sampleDepth));
+                u_Radius / max(abs(centerDepth - sampleDepth), 1e-4));
 
-            occlusion += (sampleDepth >= fragDepth + u_Bias ? 0.0 : 1.0) * rangeCheck;
+            occlusion += (sampleDepth >= fragDepth + bias ? 0.0 : 1.0) * rangeCheck;
         }
 
-        occlusion = 1.0 - (occlusion / float(u_KernelSize));
-        FragColor = pow(occlusion, u_Power);
+        // ── SSAO_QUALITY_V2 — SEM pow aqui. Ver a nota no blur. ────────────
+        FragColor = 1.0 - (occlusion / float(u_KernelSize));
     }
 )";
 
+    // ═══════════════════════════════════════════════════════════════════════
+    //  SSAO_QUALITY_V2 — o blur, e a ORDEM que estava invertida
+    //
+    //  ── O DEFEITO ──────────────────────────────────────────────────────────
+    //
+    //  O `pow(occlusion, u_Power)` era aplicado no passe de AO, ANTES do blur.
+    //  Com Power alto isso e desastroso: pow(0.9, 8) = 0.43 e pow(0.8, 8) =
+    //  0.17. Dois pixels vizinhos que diferiam 0.1 por puro ruido de amostragem
+    //  passavam a diferir 0.26 — e o blur so podia espalhar essa diferenca ja
+    //  amplificada, nunca desfaze-la. Era por isso que subir a intensidade
+    //  fazia aparecerem manchas em vez de simplesmente escurecer.
+    //
+    //  Denoise primeiro, amplificar depois. A mesma imagem, com o mesmo Power,
+    //  fica limpa — porque o expoente age sobre a media, e nao sobre o ruido.
+    //
+    //  ── E O BLUR PASSOU A RESPEITAR SILHUETA ──────────────────────────────
+    //
+    //  Uma caixa 5x5 cega mistura a oclusao de um objeto com a do chao atras
+    //  dele. Com raio grande isso vira um halo de sujeira em volta de tudo. O
+    //  peso agora cai quando a profundidade do vizinho se afasta da do centro:
+    //  o borrao para na silhueta, que e onde o olho mais repara.
+    // ═══════════════════════════════════════════════════════════════════════
     static const char* s_BlurFrag = R"(
         #version 460 core
         out float FragColor;
         in vec2 v_TexCoord;
+
         uniform sampler2D u_Input;
+        uniform sampler2D u_Position;   // G-Buffer, em WORLD space
+        uniform mat4      u_View;
+        uniform float     u_Power;
+
         void main()
         {
             vec2 texelSize = 1.0 / vec2(textureSize(u_Input, 0));
+
+            vec3 centerWorld = texture(u_Position, v_TexCoord).rgb;
+            float centerZ = -(u_View * vec4(centerWorld, 1.0)).z;
+
+            // Tolerancia proporcional a distancia: o mesmo desnivel em metros
+            // significa coisas diferentes a dois e a trinta metros da camera.
+            float tolerance = max(centerZ * 0.02, 0.02);
+
             float result = 0.0;
+            float weightSum = 0.0;
+
             for (int x = -2; x <= 2; x++)
+            {
                 for (int y = -2; y <= 2; y++)
-                    result += texture(u_Input,
-                        v_TexCoord + vec2(x, y) * texelSize).r;
-            FragColor = result / 25.0;
+                {
+                    vec2 uv = v_TexCoord + vec2(x, y) * texelSize;
+
+                    vec3 sampleWorld = texture(u_Position, uv).rgb;
+                    float sampleZ = -(u_View * vec4(sampleWorld, 1.0)).z;
+
+                    // Peso 1 enquanto o vizinho esta no mesmo plano, caindo a 0
+                    // quando ele pertence a outra superficie.
+                    float w = 1.0 - smoothstep(0.0, tolerance, abs(sampleZ - centerZ));
+
+                    result += texture(u_Input, uv).r * w;
+                    weightSum += w;
+                }
+            }
+
+            // weightSum nunca e zero — o proprio centro entra com peso 1 — mas
+            // a guarda fica: um NaN aqui pinta a tela inteira de preto, e ja
+            // custou uma sessao nesta engine.
+            float ao = (weightSum > 1e-4) ? (result / weightSum)
+                                          : texture(u_Input, v_TexCoord).r;
+
+            FragColor = pow(clamp(ao, 0.0, 1.0), u_Power);
         }
     )";
 
@@ -290,7 +362,6 @@ namespace axe
         m_SSAOShader->SetInt("u_KernelSize", settings.KernelSize);
         m_SSAOShader->SetFloat("u_Radius", settings.Radius);
         m_SSAOShader->SetFloat("u_Bias", settings.Bias);
-        m_SSAOShader->SetFloat("u_Power", settings.Power);
         m_SSAOShader->SetFloat4("u_NoiseScale",
             glm::vec4((float)m_Width / 4.0f, (float)m_Height / 4.0f, 0.0f, 0.0f));
 
@@ -308,7 +379,14 @@ namespace axe
         glClear(GL_COLOR_BUFFER_BIT);
         m_BlurShader->Bind();
         glBindTextureUnit(0, m_OcclusionRawTex);
+        glBindTextureUnit(1, gbuffer.GetPositionID());
         m_BlurShader->SetInt("u_Input", 0);
+        m_BlurShader->SetInt("u_Position", 1);
+        m_BlurShader->SetMat4("u_View", glm::value_ptr(view));
+
+        // SSAO_QUALITY_V2 — o Power mudou de passe: agora ele age sobre a
+        // media ja filtrada, e nao sobre o ruido bruto.
+        m_BlurShader->SetFloat("u_Power", settings.Power);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

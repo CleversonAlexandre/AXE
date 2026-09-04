@@ -102,7 +102,83 @@ namespace axe
         // que o editor usa de fato. Ver editor_icons.hpp — acrescentar um define
         // sem regerar o subset produz um retangulo vazio, nao um erro.
         {
-            io.Fonts->AddFontDefault();
+            // ═══════════════════════════════════════════════════════════
+            //  UI_FONT_V1 — a fonte de TEXTO
+            //
+            //  ── O DEFEITO QUE ISTO CONSERTA ────────────────────────────
+            //
+            //  Ate aqui o editor usava a ProggyClean embutida do ImGui
+            //  (AddFontDefault). Ela e bitmap, so tem ASCII, e nao tem
+            //  glifo nenhum acima de 0x7F — ou seja, TODO acento e todo
+            //  travessao do editor saiam como '?'. E por isso que o titulo
+            //  aparecia "Asset Viewer ? Pistol": o travessao nao existia na
+            //  fonte, e nao havia erro nenhum para investigar.
+            //
+            //  ── POR QUE FONTE DO SISTEMA, E NAO UMA EMBARCADA ─────────
+            //
+            //  Embarcar uma TTF de texto significa escolher uma licenca,
+            //  versionar um binario de centenas de KB e mante-lo. A fonte da
+            //  interface do proprio sistema resolve o mesmo problema, ja
+            //  esta instalada, e casa com o resto do desktop do usuario.
+            //
+            //  ── E SE NAO ACHAR NENHUMA ────────────────────────────────
+            //
+            //  Cai na ProggyClean, exatamente como antes. O editor nunca
+            //  fica sem fonte: o pior caso e o comportamento atual.
+            // ═══════════════════════════════════════════════════════════
+            {
+                // 16 px. A primeira tentativa foi 14 — perto demais da
+                // ProggyClean para valer a troca, e ainda apertado numa tela
+                // grande. 16 e o corpo de editor moderno (VS Code, Rider) e e
+                // o que da respiro sem empurrar os layouts ajustados em pixel
+                // pela engine. Um numero so controla tudo: mude aqui.
+                constexpr float kUIFontSize = 16.0f;
+
+                const char* kCandidates[] = {
+                    "C:/Windows/Fonts/segoeui.ttf",   // Windows 7+
+                    "C:/Windows/Fonts/tahoma.ttf",    // fallback antigo
+                    "C:/Windows/Fonts/arial.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/System/Library/Fonts/SFNS.ttf",
+                };
+
+                // Latin-1 mais a Pontuacao Geral. A segunda faixa nao e
+                // luxo: travessao (U+2014), meia-risca e aspas curvas caem
+                // TODAS fora do Latin-1, e sao exatamente os caracteres que
+                // apareciam como '?' — GetGlyphRangesDefault() para em
+                // 0x00FF e nao cobriria nenhum deles.
+                static const ImWchar kTextRange[] = {
+                    0x0020, 0x00FF,   // ASCII + Latin-1 (todo acento)
+                    0x2010, 0x2027,   // travessao, meia-risca, aspas curvas
+                    0,
+                };
+
+                ImFontConfig textCfg;
+                textCfg.OversampleH = 2;   // texto pequeno em tela nao-HiDPI
+                textCfg.OversampleV = 1;
+                textCfg.PixelSnapH = false;
+
+                ImFont* uiFont = nullptr;
+                for (const char* candidate : kCandidates)
+                {
+                    if (!std::filesystem::exists(candidate)) continue;
+
+                    // Latin-1: cobre todo acento de portugues, espanhol,
+                    // frances e alemao. Nao ha custo em pedir a faixa
+                    // inteira — o atlas so gera os glifos que ela contem.
+                    uiFont = io.Fonts->AddFontFromFileTTF(candidate,
+                        kUIFontSize, &textCfg, kTextRange);
+
+                    if (uiFont) break;
+                }
+
+                if (!uiFont)
+                {
+                    io.Fonts->AddFontDefault();
+                    AXE_CORE_WARN("ImGui: nenhuma fonte de sistema encontrada — "
+                        "usando a ProggyClean embutida (sem acentos).");
+                }
+            }
 
             static const ImWchar kIconRange[] = { 0xe4e2, 0xf84c, 0 };
 
@@ -131,7 +207,12 @@ namespace axe
 
             if (std::filesystem::exists(kIconFont))
             {
-                io.Fonts->AddFontFromFileTTF(kIconFont, 13.0f, &cfg, kIconRange);
+                // 13 px era o corpo da ProggyClean. Com o texto em 16 os
+                // icones ficariam visivelmente menores que as letras ao lado
+                // deles — a barra de ferramentas inteira pareceria desalinhada.
+                // Um pouco MENOR que o texto e proposital: o glifo de icone
+                // ocupa a caixa toda, a letra nao.
+                io.Fonts->AddFontFromFileTTF(kIconFont, 15.0f, &cfg, kIconRange);
             }
             else
             {

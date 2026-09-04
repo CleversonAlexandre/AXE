@@ -1,4 +1,5 @@
 #include <glm/gtc/quaternion.hpp>   // NOTIFY_FX_SPACE_V1
+#include <set>                            // NOTIFY_SOCKET_V3
 #include "animation_world.hpp"
 
 #include "axe/animation/animation_sampler.hpp"
@@ -205,13 +206,56 @@ namespace axe
 				skel.GraphInstance.Update(*skeleton, deltaTime, advance, worldXform, inPlay);
 				skel.GraphInstance.Evaluate(*skeleton, m_ScratchPose, worldXform, inPlay);
 
-				DispatchNotifies(scene, entity,
-					skel.GraphInstance.GetFiredNotifies(), inPlay);
+				// ═══════════════════════════════════════════════════════════
+				//  NOTIFY_SOCKET_V2 — ORDEM. Era so isso, e era tudo.
+				//
+				//  ── OS DOIS DEFEITOS ──────────────────────────────────────
+				//
+				//  1. DispatchNotifies rodava ANTES de BuildSkinningMatrices,
+				//     que e quem preenche BoneGlobals. No instante do disparo,
+				//     BoneGlobals era do frame ANTERIOR — ou vazio, no
+				//     primeiro. ResolveSocketWorld exige pose fresca e devolvia
+				//     false, caindo na origem do personagem: NOS PES.
+				//
+				//  2. BoneGlobals so era calculado quando alguem os pedia —
+				//     `ShowSkeleton || _WantsBoneGlobals` — e _WantsBoneGlobals
+				//     so era ligado para personagem que fosse alvo de um
+				//     SocketAttachmentComponent. Personagem com notify de
+				//     socket mas sem arma anexada NUNCA tinha globals, e a
+				//     ancoragem nao tinha como funcionar em frame nenhum.
+				//
+				//  ── POR QUE FUNCIONAVA NO EDITOR ──────────────────────────
+				//
+				//  O preview do Animation Editor desenha o esqueleto e prende
+				//  a malha de preview no socket — as duas coisas ligam
+				//  BoneGlobals. La a pose sempre existia; na cena, quase nunca.
+				//  Era essa a diferenca entre "certo na animacao" e "errado no
+				//  viewport", e nao a conta em si.
+				//
+				//  ── O CONSERTO ────────────────────────────────────────────
+				//
+				//  Olhar os notifies do frame ANTES de construir as matrizes:
+				//  se algum quer socket, as globals passam a ser obrigatorias
+				//  neste frame. Depois constroi a pose. So entao dispara.
+				//
+				//  Custo: uma varredura numa lista que quase sempre esta vazia.
+				// ═══════════════════════════════════════════════════════════
+				const auto& firedGraph = skel.GraphInstance.GetFiredNotifies();
+
+				bool needGlobals = skel.ShowSkeleton || skel._WantsBoneGlobals;
+
+				for (const auto& n : firedGraph)
+				{
+					if (!n.Socket.empty()) { needGlobals = true; break; }
+				}
 
 				AnimationSampler::BuildSkinningMatrices(*skeleton,
 					m_ScratchPose,
 					skel.BonePalette,
-					(skel.ShowSkeleton || skel._WantsBoneGlobals) ? &skel.BoneGlobals : nullptr);
+					needGlobals ? &skel.BoneGlobals : nullptr);
+
+				// Agora sim: a pose deste frame ja esta em BoneGlobals.
+				DispatchNotifies(scene, entity, firedGraph, inPlay);
 				continue;
 			}
 
@@ -272,11 +316,17 @@ namespace axe
 
 			skel.Player.Update(*skeleton, deltaTime, advance);
 
+			// Declarado FORA do if: a construcao da pose, abaixo, precisa saber
+			// se algum notify deste frame quer socket — e ela roda mesmo
+			// quando o if nao entra.
+			static thread_local std::vector<AnimNotify> s_ManualFiredRef;
+			s_ManualFiredRef.clear();
+
 			if (manualClip && advance && !manualClip->Notifies.empty())
 			{
 				const float manualNow = manualClip->WrapTime(skel.Player.GetTime());
 
-				static thread_local std::vector<AnimNotify> s_ManualFired;
+				auto& s_ManualFired = s_ManualFiredRef;
 				s_ManualFired.clear();
 
 				for (const auto& n : manualClip->Notifies)
@@ -289,14 +339,29 @@ namespace axe
 						s_ManualFired.push_back(n);
 				}
 
-				if (!s_ManualFired.empty())
-					DispatchNotifies(scene, entity, s_ManualFired, inPlay);
 			}
 
-			AnimationSampler::BuildSkinningMatrices(*skeleton,
-				skel.Player.GetPose(),
-				skel.BonePalette,
-				(skel.ShowSkeleton || skel._WantsBoneGlobals) ? &skel.BoneGlobals : nullptr);
+			// NOTIFY_SOCKET_V2 — a MESMA ordem do caminho do AnimGraph, acima.
+			// Este caminho (clipe tocado direto, sem grafo) tinha o disparo no
+			// mesmo lugar errado. Consertar so um dos dois daria uma engine em
+			// que a particula sai certa com AnimGraph e errada sem — a pior
+			// forma de um bug voltar.
+			{
+				bool needGlobals = skel.ShowSkeleton || skel._WantsBoneGlobals;
+
+				for (const auto& n : s_ManualFiredRef)
+				{
+					if (!n.Socket.empty()) { needGlobals = true; break; }
+				}
+
+				AnimationSampler::BuildSkinningMatrices(*skeleton,
+					skel.Player.GetPose(),
+					skel.BonePalette,
+					needGlobals ? &skel.BoneGlobals : nullptr);
+
+				if (!s_ManualFiredRef.empty())
+					DispatchNotifies(scene, entity, s_ManualFiredRef, inPlay);
+			}
 		}
 
 		UpdateSocketAttachments(scene);
@@ -382,6 +447,55 @@ namespace axe
 
 			att._Valid = true;
 		}
+	}
+
+	// NOTIFY_SOCKET_V1 — ver a nota no header.
+	bool AnimationWorld::ResolveSocketWorld(Scene& scene, entt::entity character,
+		const std::string& socketName, glm::mat4& out)
+	{
+		if (socketName.empty()) return false;
+
+		auto& registry = scene.GetRegistry();
+		if (!registry.valid(character)) return false;
+
+		auto* smc = registry.try_get<SkeletalMeshComponent>(character);
+		if (!smc || !smc->Asset) return false;
+
+		const Skeleton* skeleton = smc->GetSkeleton();
+		if (!skeleton || smc->BoneGlobals.empty())
+			return false;   // pose ainda nao calculada neste frame
+
+		// Socket do `.axeskel` primeiro; nome de osso cru como alternativa.
+		// Aceitar os dois e o que faz o campo funcionar para quem escolheu
+		// "GunSocket" e para quem escolheu "mixamorig:RightHand".
+		std::string boneName = socketName;
+		glm::mat4 socketLocal(1.0f);
+
+		if (const auto* sock = smc->Asset->FindSocket(socketName))
+		{
+			boneName = sock->BoneName;
+			socketLocal = smc->Asset->GetSocketLocalTransform(*sock);
+		}
+
+		int boneIndex = -1;
+		const auto& bones = skeleton->GetBones();
+
+		for (int i = 0; i < (int)bones.size(); ++i)
+		{
+			if (bones[i].Name == boneName) { boneIndex = i; break; }
+		}
+
+		if (boneIndex < 0 || boneIndex >= (int)smc->BoneGlobals.size())
+			return false;
+
+		// EXATAMENTE a mesma composicao do UpdateSocketAttachments e do
+		// preview do Animation Editor. Se estas tres contas divergirem, a
+		// arma some no jogo depois de ter sido posicionada certinha.
+		out = scene.GetWorldTransform(character)
+			* smc->BoneGlobals[boneIndex]
+			* socketLocal;
+
+		return true;
 	}
 
 	void AnimationWorld::DispatchNotifies(Scene& scene, entt::entity character,
@@ -472,10 +586,163 @@ namespace axe
 				//  escala ou rotacao, sem depender de offset autorado. E o que
 				//  a Unreal faz, e ele ja tem um GunSocket criado.
 				// ═══════════════════════════════════════════════════════════
-				const glm::quat charRot = glm::quat(baseRot);
-				tc.Data.Position = basePos + charRot * n.LocationOffset;
-				tc.Data.Rotation = glm::radians(n.RotationOffset);
+				// ═══════════════════════════════════════════════════════════
+				//  NOTIFY_SOCKET_V1 — a ancoragem que a nota acima prometia
+				//
+				//  Com um socket escolhido, o FX sai da matriz do OSSO na pose
+				//  do frame. E a unica forma correta: o offset a partir da
+				//  ORIGEM do personagem so podia acertar numa pose e num lugar
+				//  — a mao se move durante a animacao, a origem nao. Autorado
+				//  olhando o disparo, ele errava em todo o resto.
+				//
+				//  Do socket entram POSICAO e ROTACAO, nunca a escala. A escala
+				//  do socket costuma ser ~100 (o modelo Mixamo vem em
+				//  centimetros), e herda-la faria a particula nascer cem vezes
+				//  maior. O tamanho do FX e o n.Scale, que o autor ve.
+				//
+				//  O LocationOffset continua em METROS, so que agora girado
+				//  pela orientacao do socket: "meio metro a frente do cano"
+				//  segue o cano para onde ele apontar.
+				// ═══════════════════════════════════════════════════════════
+				glm::mat4 socketWorld(1.0f);
+
+				if (ResolveSocketWorld(scene, character, n.Socket, socketWorld))
+				{
+					// Colunas normalizadas: tira a escala e deixa so o giro.
+					glm::mat3 basis(socketWorld);
+					basis[0] = glm::normalize(basis[0]);
+					basis[1] = glm::normalize(basis[1]);
+					basis[2] = glm::normalize(basis[2]);
+
+					const glm::quat sockRot = glm::quat_cast(basis);
+
+					tc.Data.Position = glm::vec3(socketWorld[3])
+						+ sockRot * n.LocationOffset;
+
+					tc.Data.Rotation = glm::eulerAngles(
+						sockRot * glm::quat(glm::radians(n.RotationOffset)));
+				}
+				else
+				{
+					// ── O aviso que faltava ────────────────────────────────
+					//
+					// Um socket ESCOLHIDO que nao resolve e um defeito; um
+					// notify sem socket e uso normal. Distinguir os dois em log
+					// e o que separa "esta no lugar errado e eu nao sei por
+					// que" de uma linha dizendo exatamente o que falhou.
+					//
+					// Foi a ausencia disto que fez o defeito de ordem sobreviver
+					// a uma rodada inteira: a particula so aparecia no chao, em
+					// silencio, e o silencio parecia sucesso.
+					if (!n.Socket.empty())
+					{
+						static bool s_SocketWarnOnce = false;
+
+						if (!s_SocketWarnOnce)
+						{
+							AXE_CORE_WARN("AnimNotify '{}': socket '{}' nao resolveu — "
+								"o FX saiu da ORIGEM do personagem. Causas: o socket "
+								"nao existe no .axeskel, o osso foi renomeado no "
+								"reimport, ou a pose ainda nao foi calculada neste "
+								"frame.", n.Name, n.Socket);
+							s_SocketWarnOnce = true;
+						}
+					}
+
+					// Sem socket: a convencao antiga, descrita acima.
+					const glm::quat charRot = glm::quat(baseRot);
+					tc.Data.Position = basePos + charRot * n.LocationOffset;
+					tc.Data.Rotation = glm::radians(n.RotationOffset);
+				}
+
 				tc.Data.Scale = n.Scale;
+
+				// ═══════════════════════════════════════════════════════════
+				//  NOTIFY_ATTACH_V1 — o FX PRESO no socket
+				//
+				//  ── O QUE SOBRAVA DE ERRO ─────────────────────────────────
+				//
+				//  O FX era posicionado aqui, e este ponto roda ANTES dos
+				//  scripts, da fisica e da sequence — os tres movem o
+				//  personagem. Parado nao se nota; andando, o clarao nasce
+				//  `velocidade x dt` atras do cano. Compensar com offset seria
+				//  pior: acertaria correndo e erraria parado.
+				//
+				//  ── A CORRECAO ────────────────────────────────────────────
+				//
+				//  O campo AnimNotify::Attached existe desde sempre e nunca
+				//  teve efeito. Ele quer dizer exatamente isto: com Attached, o
+				//  FX vira um SocketAttachmentComponent — a mesma maquinaria da
+				//  arma na mao, recomposta no FIM do frame. Ele deixa de ter
+				//  posicao propria e passa a ter o cano como referencial: em
+				//  qualquer velocidade, ele nasce e permanece no cano.
+				//
+				//  O TransformComponent vira LOCAL ao socket (o
+				//  Scene::GetWorldTransform faz `_SocketWorld * local`), entao
+				//  os offsets autorados continuam significando a mesma coisa.
+				//
+				//  Sem Attached o FX fica solto no mundo, como antes — que e o
+				//  que se quer de um impacto ou de uma casca ejetada.
+				// ═══════════════════════════════════════════════════════════
+				if (n.Attached && !n.Socket.empty())
+				{
+					glm::mat4 probe(1.0f);
+
+					if (ResolveSocketWorld(scene, character, n.Socket, probe))
+					{
+						auto& att = registry.emplace<SocketAttachmentComponent>(e);
+						att.Target = character;
+						att.SocketName = n.Socket;
+
+						// LOCAL ao socket. O que estava em mundo, calculado
+						// acima, e descartado de proposito: quem manda no
+						// transform agora e o anexo.
+						tc.Data.Position = n.LocationOffset;
+						tc.Data.Rotation = glm::radians(n.RotationOffset);
+						tc.Data.Scale = n.Scale;
+
+						// Uma passada imediata evita o FX aparecer na origem no
+						// PRIMEIRO frame: o UpdateSocketAttachments do fim do
+						// frame ainda nao rodou para esta entidade recem-criada.
+						UpdateSocketAttachments(scene);
+					}
+				}
+
+				// ═══════════════════════════════════════════════════════════
+				//  NOTIFY_SOCKET_V3 — dizer em voz alta de onde o FX saiu
+				//
+				//  Duas rodadas foram gastas discutindo se a particula estava
+				//  ancorada ou nao, olhando o resultado na tela. Isso e
+				//  adivinhacao: "no lugar errado" tem varias causas e todas se
+				//  parecem. Uma linha de log responde a pergunta de uma vez.
+				//
+				//  UMA vez por nome de notify, e nao por disparo: um notify de
+				//  tiro dispara varias vezes por segundo, e um log por disparo
+				//  afogaria o console — e ai ninguem le nenhum.
+				// ═══════════════════════════════════════════════════════════
+				{
+					static thread_local std::set<std::string> s_Logged;
+
+					if (s_Logged.insert(n.Name).second)
+					{
+						if (n.Socket.empty())
+						{
+							AXE_CORE_INFO("AnimNotify '{}': SEM socket — o FX saiu da "
+								"ORIGEM do personagem ({:.2f}, {:.2f}, {:.2f}) mais o "
+								"offset, e nao da arma. Escolha um socket no campo "
+								"Ancoragem do notify.",
+								n.Name, basePos.x, basePos.y, basePos.z);
+						}
+						else
+						{
+							AXE_CORE_INFO("AnimNotify '{}': ancorado em '{}' -> "
+								"({:.2f}, {:.2f}, {:.2f}).",
+								n.Name, n.Socket,
+								tc.Data.Position.x, tc.Data.Position.y,
+								tc.Data.Position.z);
+						}
+					}
+				}
 
 				// Material de cada emitter — via CACHE.
 				//

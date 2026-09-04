@@ -37,7 +37,31 @@ namespace axe
         const auto tCooked = fs::last_write_time(cooked, ec);
         if (ec) return false;
 
-        return tCooked >= tSrc;
+        if (tCooked < tSrc)
+            return false;
+
+        // ── ASSET_VIEWER_V2 — o .axemeta tambem invalida o cozido ──────────
+        //
+        // A partir da fase 2 o `.axemeta` carrega escala e pivo, e eles sao
+        // aplicados NOS VERTICES na importacao — ou seja, ficam ASSADOS dentro
+        // do `.axemesh`. Mexer na configuracao nao toca no FBX, entao sem esta
+        // comparacao o cozido continuaria "em dia" carregando a geometria
+        // antiga: o usuario ajustaria a escala, veria a malha mudar na hora
+        // (reimportacao direta), e no proximo start do editor ela voltaria ao
+        // tamanho errado — sem erro, sem log, sem pista.
+        //
+        // Meta ausente e o caso normal de quem nunca configurou nada: nao
+        // invalida.
+        const fs::path meta = fs::path(source).string() + ".axemeta";
+        if (fs::exists(meta, ec))
+        {
+            const auto tMeta = fs::last_write_time(meta, ec);
+            if (ec) return false;
+            if (tCooked < tMeta)
+                return false;
+        }
+
+        return true;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

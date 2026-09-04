@@ -6,6 +6,7 @@
 #include "axe/lighting/directional_light.hpp"
 #include "axe/asset/asset.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "editor/axe_editor/asset/asset_spawn_defaults.hpp"   // THUMB_MATERIAL_V1
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/skinned_mesh.hpp"
 #include "axe/animation/pose.hpp"
@@ -382,32 +383,14 @@ namespace axe
             {
                 if (def.Type != "Material" || def.AssetUUID.empty()) continue;
 
-                if (const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID))
-                {
-                    if (auto matAsset = MaterialAsset::LoadFromFile(r->FilePath))
-                    {
-                        auto graphPath = r->FilePath;
-                        graphPath.replace_extension(".axegraph");
-                        if (std::filesystem::exists(graphPath))
-                        {
-                            try
-                            {
-                                std::ifstream gf(graphPath);
-                                auto gj = nlohmann::json::parse(gf);
-                                auto matGraph = std::make_unique<MaterialGraph>();
-                                matGraph->Deserialize(gj);
-                                auto result = MaterialCompiler::Compile(matGraph.get());
-                                if (result.Success)
-                                {
-                                    auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
-                                    if (shader) matAsset->GetMaterial()->SetShader(shader);
-                                }
-                            }
-                            catch (...) {}
-                        }
-                        m_PendingMaterial = matAsset->GetMaterial();
-                    }
-                }
+                // THUMB_MATERIAL_V1 — a SEXTA copia da rotina de material.
+                //
+                // Esta fazia so dois dos tres passos (lia o .axemat e
+                // compilava o shader, sem trazer a textura), e era por isso
+                // que a miniatura de um BP com material aparecia sem cor
+                // enquanto o mesmo material no asset aparecia certo.
+                if (auto mat = AssetSpawnDefaults::ResolveMaterial(def.AssetUUID))
+                    m_PendingMaterial = mat;
                 break;
             }
 

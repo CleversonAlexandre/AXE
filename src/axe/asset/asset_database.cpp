@@ -41,6 +41,55 @@ namespace axe
 		return std::filesystem::path(assetPath.string() + ".axemeta");
 	}
 
+	// ═══════════════════════════════════════════════════════════════════════
+	//  IMPORT_PERSIST_V2 — o mapeamento JSON das settings, uma vez so
+	//
+	//  Antes elas eram escritas e lidas so no `.axemeta`. Faltava o INDICE do
+	//  projeto (`axe_assets.json`), que e por onde o motor carrega os assets ao
+	//  abrir — e o Load montava cada AssetRecord a partir dele SEM nunca olhar
+	//  o meta. Resultado: a escala era gravada corretamente, e simplesmente
+	//  nao existia mais no proximo start. Escrever certo e ler de outro lugar.
+	//
+	//  Com dois arquivos carregando a mesma informacao, duas copias do
+	//  mapeamento seriam a garantia de que um campo novo entraria so em uma
+	//  delas. Por isso estas duas funcoes.
+	// ═══════════════════════════════════════════════════════════════════════
+	static void ImportSettingsToJson(const AssetImportSettings& imp, json& out)
+	{
+		out["mesh_scale"] = imp.MeshScale;
+		out["recenter_pivot"] = imp.RecenterPivot;
+		out["drop_to_floor"] = imp.DropToFloor;
+		out["texture_filter"] = imp.TextureFilter;
+		out["texture_wrap"] = imp.TextureWrap;
+
+		// Gravadas so quando saem do padrao: um meta de textura nao ganha um
+		// "collision_shape": -1 inutil.
+		if (!imp.DefaultMaterialUUID.empty())
+			out["default_material"] = imp.DefaultMaterialUUID;
+		if (imp.CollisionShape >= 0)
+			out["collision_shape"] = imp.CollisionShape;
+		if (imp.CollisionPadding != 0.0f)
+			out["collision_padding"] = imp.CollisionPadding;
+		if (imp.CollisionIsTrigger)
+			out["collision_trigger"] = true;
+	}
+
+	static void ImportSettingsFromJson(const json& in, AssetImportSettings& imp)
+	{
+		// Os defaults sao os mesmos do struct de proposito: um arquivo gravado
+		// antes desta versao nao tem estas chaves e tem de continuar
+		// significando exatamente o que significava.
+		imp.MeshScale = in.value("mesh_scale", 1.0f);
+		imp.RecenterPivot = in.value("recenter_pivot", false);
+		imp.DropToFloor = in.value("drop_to_floor", false);
+		imp.TextureFilter = in.value("texture_filter", 2);
+		imp.TextureWrap = in.value("texture_wrap", 0);
+		imp.DefaultMaterialUUID = in.value("default_material", std::string());
+		imp.CollisionShape = in.value("collision_shape", -1);
+		imp.CollisionPadding = in.value("collision_padding", 0.0f);
+		imp.CollisionIsTrigger = in.value("collision_trigger", false);
+	}
+
 	bool AssetDatabase::ReadMeta(const std::filesystem::path& metaPath, AssetRecord& out) const
 	{
 		if (!std::filesystem::exists(metaPath))
@@ -81,6 +130,11 @@ namespace axe
 			out.Name = j.value("name", "");
 			out.ScriptClassType = j.value("script_class_type", "");
 
+			// ASSET_VIEWER_V2 — bloco ausente = tudo no padrao, que e o caso
+			// de todo asset importado antes desta versao.
+			if (j.contains("import") && j["import"].is_object())
+				ImportSettingsFromJson(j["import"], out.Import);
+
 			// Caminho absoluto salvo no meta
 			std::string path = j.value("path", "");
 			if (!path.empty())
@@ -107,9 +161,33 @@ namespace axe
 		if (!record.ScriptClassType.empty())
 			j["script_class_type"] = record.ScriptClassType;
 
+		// ── ASSET_VIEWER_V2 — configuracao de importacao ───────────────────
+		//
+		// So grava se houver algo a dizer. Meta de asset nunca configurado
+		// continua identico ao que era, e um diff no git so aparece quando
+		// alguem realmente mexeu — o que mantem o historico legivel.
+		if (!record.Import.IsDefault())
+			ImportSettingsToJson(record.Import, j["import"]);
+
 		std::ofstream file(metaPath);
 		if (file.is_open())
 			file << j.dump(4);
+	}
+
+	// ASSET_VIEWER_V2 — ver o comentario no header.
+	bool AssetDatabase::SetImportSettings(const std::string& uuid,
+		const AssetImportSettings& settings)
+	{
+		auto it = m_Records.find(uuid);
+		if (it == m_Records.end())
+		{
+			AXE_CORE_WARN("AssetDatabase::SetImportSettings: UUID '{}' nao registrado.", uuid);
+			return false;
+		}
+
+		it->second.Import = settings;
+		WriteMeta(it->second);
+		return true;
 	}
 
 	std::string AssetDatabase::Register(const std::filesystem::path& filepath)
@@ -346,6 +424,14 @@ namespace axe
 			entry["virtual_folder"] = record.VirtualFolder;
 			if (!record.ScriptClassType.empty())
 				entry["script_class_type"] = record.ScriptClassType;
+
+			// IMPORT_PERSIST_V2 — o indice tambem carrega as settings. Nao e
+			// duplicacao inutil: no jogo empacotado o `.axemeta` pode nao ir
+			// junto, e sem isto a malha carregaria com a escala errada la — o
+			// mesmo defeito, so que descoberto depois de empacotar.
+			if (!record.Import.IsDefault())
+				ImportSettingsToJson(record.Import, entry["import"]);
+
 			j.push_back(entry);
 		}
 
@@ -414,6 +500,38 @@ namespace axe
 				record.Name = entry.value("name", "");
 				record.VirtualFolder = entry.value("virtual_folder", "");
 				record.ScriptClassType = entry.value("script_class_type", "");
+
+				// ── IMPORT_PERSIST_V2 — ESTA ERA A LINHA QUE FALTAVA ────────
+				//
+				// O indice vem primeiro; o `.axemeta`, quando existe, VENCE.
+				//
+				// Essa ordem nao e detalhe. O meta mora ao lado do asset: ele
+				// sobrevive a apagar o indice, viaja junto no controle de
+				// versao e pode ser editado a mao. O indice e cache — e
+				// deixar um cache ganhar do arquivo autoritativo e como se
+				// perde uma configuracao ja gravada.
+				if (entry.contains("import") && entry["import"].is_object())
+					ImportSettingsFromJson(entry["import"], record.Import);
+
+				{
+					const auto metaPath = GetMetaPath(record.FilePath);
+					std::error_code mec;
+					if (std::filesystem::exists(metaPath, mec))
+					{
+						std::ifstream mf(metaPath);
+						if (mf.is_open())
+						{
+							try
+							{
+								json mj = json::parse(mf, nullptr, false);
+								if (!mj.is_discarded() && mj.contains("import")
+									&& mj["import"].is_object())
+									ImportSettingsFromJson(mj["import"], record.Import);
+							}
+							catch (...) {}
+						}
+					}
+				}
 
 				// Migração: se é script mas class_type não está no índice,
 				// lê direto do .axescript (só ocorre na primeira run após o update)

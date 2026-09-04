@@ -1,3 +1,4 @@
+#include "axe/asset/asset_database.hpp"   // ASSET_VIEWER_V2
 #include "editor/axe_editor/import/mesh_loader.hpp"
 #include "axe/log/log.hpp"
 #include "axe/graphics/shader.hpp"
@@ -89,6 +90,80 @@ namespace axe
 		s_MeshCache.erase(filepath);
 	}
 
+	namespace
+	{
+		// ═══════════════════════════════════════════════════════════════════
+		//  ASSET_VIEWER_V2 — escala e pivo aplicados NA IMPORTACAO
+		//
+		//  Transforma os VERTICES, e nao o Transform de quem usa a malha. E a
+		//  diferenca que importa: corrigido aqui, TODA entidade que usar o
+		//  asset ja nasce certa, o socket encaixa, a colisao encaixa e a
+		//  particula ancorada cai no lugar. Corrigido no Transform, a
+		//  compensacao vive em cada uso e briga de novo em cada um deles.
+		//
+		//  Ordem das operacoes, e ela nao e negociavel:
+		//
+		//    1. ESCALA primeiro. Recentrar antes escalaria o deslocamento
+		//       junto e o centro nao cairia na origem.
+		//    2. RECENTRAR em seguida, ja na escala final.
+		//    3. ASSENTAR NO CHAO por ultimo, porque depende do bounding box
+		//       depois de recentrado.
+		//
+		//  As NORMAIS nao sao tocadas: escala uniforme preserva direcao, e e
+		//  exatamente por isso que MeshScale e uniforme (ver a nota na struct).
+		//  Translacao tambem nao afeta normal.
+		// ═══════════════════════════════════════════════════════════════════
+		void ApplyImportSettings(std::vector<Vertex>& vertices,
+			const AssetImportSettings& imp)
+		{
+			if (vertices.empty()) return;
+
+			const bool needScale = (imp.MeshScale != 1.0f && imp.MeshScale > 0.0f);
+			if (!needScale && !imp.RecenterPivot && !imp.DropToFloor)
+				return;
+
+			if (needScale)
+				for (auto& v : vertices)
+					v.Position *= imp.MeshScale;
+
+			if (!imp.RecenterPivot && !imp.DropToFloor)
+				return;
+
+			glm::vec3 mn = vertices[0].Position;
+			glm::vec3 mx = mn;
+			for (const auto& v : vertices)
+			{
+				mn = glm::min(mn, v.Position);
+				mx = glm::max(mx, v.Position);
+			}
+
+			glm::vec3 shift(0.0f);
+
+			if (imp.RecenterPivot)
+				shift = -(mn + mx) * 0.5f;
+
+			// Assentar no chao anula o Y do recentrar de proposito: os dois
+			// juntos significam "centrado em XZ, apoiado no chao", que e o que
+			// se quer de um prop. Somar os dois enterraria metade do objeto.
+			if (imp.DropToFloor)
+				shift.y = -(mn.y);
+
+			if (shift != glm::vec3(0.0f))
+				for (auto& v : vertices)
+					v.Position += shift;
+		}
+
+		// Settings do asset, pelo caminho. Asset nao registrado (arrastado de
+		// fora do projeto, preview de importacao) devolve o padrao — nunca
+		// falha, so nao configura.
+		AssetImportSettings SettingsFor(const std::string& filepath)
+		{
+			if (const AssetRecord* rec = AssetDatabase::Get().GetByPath(filepath))
+				return rec->Import;
+			return {};
+		}
+	}
+
 	LoadedAsset MeshLoader::Load(const std::string& filepath, bool quiet)
 	{
 		auto cached = s_MeshCache.find(filepath);
@@ -149,7 +224,7 @@ namespace axe
 
 		if (scene->mNumMeshes == 1)
 		{
-			LoadedAsset single = ProcessMesh(scene->mMeshes[0], scene);
+			LoadedAsset single = ProcessMesh(scene->mMeshes[0], scene, SettingsFor(filepath));
 			s_MeshCache[filepath] = single;
 			return single;
 		}
@@ -189,13 +264,20 @@ namespace axe
 
 		AXE_CORE_INFO("MeshLoader: combinado {} vértices, {} índices", allVertices.size(), allIndices.size());
 
+		// ASSET_VIEWER_V2 — o caminho de multiplas malhas NAO passa por
+		// ProcessMesh (le direto do aiMesh), entao aplica aqui. Esquecer este
+		// lado daria o pior sintoma possivel: FBX de uma malha respeitando a
+		// configuracao e FBX de varias ignorando, sem erro nenhum.
+		ApplyImportSettings(allVertices, SettingsFor(filepath));
+
 		LoadedAsset combined;
 		combined.MeshData = std::make_shared<Mesh>(allVertices, allIndices);
 		s_MeshCache[filepath] = combined;
 		return combined;
 	}
 
-	LoadedAsset MeshLoader::ProcessMesh(void* aiMeshPtr, const void* aiScenePtr)
+	LoadedAsset MeshLoader::ProcessMesh(void* aiMeshPtr, const void* aiScenePtr,
+		const AssetImportSettings& importSettings)
 	{
 		aiMesh* mesh = static_cast<aiMesh*>(aiMeshPtr);
 		const aiScene* scene = static_cast<const aiScene*>(aiScenePtr);
@@ -240,6 +322,10 @@ namespace axe
 		}
 
 		//AXE_CORE_INFO("MeshLoader: {} vértices, {} índices", vertices.size(), indices.size());
+
+		// ASSET_VIEWER_V2 — ULTIMO ponto em que os vertices ainda sao CPU.
+		// Depois do construtor do Mesh eles ja foram para a GPU.
+		ApplyImportSettings(vertices, importSettings);
 
 		LoadedAsset asset;
 		asset.MeshData = std::make_shared<Mesh>(vertices, indices);

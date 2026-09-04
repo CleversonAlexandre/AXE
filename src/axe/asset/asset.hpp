@@ -135,10 +135,133 @@ namespace axe
 	}
 
 	// Um asset registrado no database
+	// ═══════════════════════════════════════════════════════════════════════
+	//  ASSET_VIEWER_V2 — O `.axemeta` VIRA ARQUIVO DE CONFIGURACAO
+	//
+	//  Ate aqui o `.axemeta` guardava so identidade: uuid, tipo, nome, caminho.
+	//  Nao havia NENHUMA configuracao de importacao em lugar nenhum da engine —
+	//  o que chegava do DCC era o que se usava, e corrigir escala ou pivo
+	//  errado so dava por dois caminhos: voltar ao Blender e reexportar, ou
+	//  compensar a mao no Transform de cada entidade que usasse a malha.
+	//
+	//  O segundo e o pior, porque a compensacao fica no projeto para sempre e
+	//  briga de novo em cada socket, cada colisao, cada particula ancorada.
+	//  A pistola deste projeto e o caso vivo: 5x maior que o real e com o pivo
+	//  no canto, compensada com Rotation 90/180 e Scale 0.5 no script.
+	//
+	//  ── ONDE ESTA STRUCT MORA, E POR QUE AQUI ──────────────────────────────
+	//
+	//  Dentro do asset.hpp, junto do AssetRecord que a carrega. Arquivo novo
+	//  obrigaria a regerar o projeto pelo premake (o `files` usa glob, e glob e
+	//  resolvido na hora de gerar) — mesmo motivo que levou o SkyLight para
+	//  dentro do directional_light.hpp e o ShadingModelID para o
+	//  material_cooked.hpp.
+	//
+	//  ── A REGRA QUE SEPARA O QUE ENTRA AQUI ────────────────────────────────
+	//
+	//  Só entra o que muda o ASSET IMPORTADO, e nao o que muda um USO dele.
+	//  Escala e pivo sao do asset: toda entidade que usar a malha quer a mesma
+	//  correcao. Posicao na cena e do uso. Confundir os dois e como o ambiente
+	//  foi parar dentro da luz direcional.
+	// ═══════════════════════════════════════════════════════════════════════
+	struct AssetImportSettings
+	{
+		// ── Malha ──────────────────────────────────────────────────────────
+
+		// Multiplica todos os vertices na importacao. 1 = como veio do DCC.
+		//
+		// Uniforme de proposito: escala nao-uniforme quebra as normais (elas
+		// precisariam da inversa transposta) e transforma esfera de colisao em
+		// elipsoide, que nenhum motor de fisica aceita. Quem precisa de
+		// nao-uniforme quer isso no USO, nao no asset.
+		float MeshScale = 1.0f;
+
+		// Move os vertices para que o centro do bounding box caia na origem.
+		//
+		// Conserta pivo no canto — o defeito que obriga a compensar rotacao a
+		// mao e que estraga qualquer encaixe em socket.
+		bool RecenterPivot = false;
+
+		// Assenta a base do bounding box em Y = 0 depois de recentrar.
+		//
+		// Para prop que fica no chao e o que se quer quase sempre: recentrar
+		// sozinho deixa metade do objeto ENTERRADA. Os dois juntos dao
+		// "centrado em XZ, apoiado no chao".
+		bool DropToFloor = false;
+
+		// ── Textura ────────────────────────────────────────────────────────
+		//
+		// Espelham o que o Asset Viewer ja mexia em tempo de execucao na fase
+		// 1. A diferenca e que agora sobrevivem ao reabrir o motor — na fase 1
+		// o ajuste morria com a sessao, que e meia funcionalidade.
+		int TextureFilter = 2;   // 0 Nearest, 1 Linear, 2 Trilinear
+		int TextureWrap = 0;     // 0 Repeat,  1 Clamp,  2 Mirror
+
+		// ── ASSET_DEFAULTS_V1 — o que o asset leva consigo ao ser instanciado
+		//
+		// ── POR QUE ISTO E PROPRIEDADE DO ASSET ────────────────────────────
+		//
+		// "Toda vez que eu arrasto esta caixa para a cena eu troco o material
+		// e desenho o mesmo collider a mao" e a definicao de uma propriedade
+		// do ASSET vestida de tarefa repetitiva. Uma pistola tem um material e
+		// tem uma forma de colisao; isso nao muda de instancia para instancia,
+		// muda de asset para asset.
+		//
+		// Continua sendo so um PADRAO: o que e criado na cena e um
+		// MaterialComponent e um ColliderComponent comuns, que o Inspector
+		// edita como sempre. Mudar o padrao aqui nao mexe em nada que ja foi
+		// colocado — do contrario o meta de um asset poderia alterar uma cena
+		// salva pelas costas de quem a salvou.
+
+		// Material aplicado ao instanciar. Vazio = usa o que veio do arquivo
+		// (o material do proprio FBX), que e o comportamento de sempre.
+		std::string DefaultMaterialUUID;
+
+		// Forma do collider criado junto. -1 = nenhum.
+		// Os outros valores sao o enum ColliderShape:
+		//   0 Box, 1 Sphere, 2 Capsule, 3 Mesh, 4 ConvexHull
+		//
+		// int, e nao o enum: `asset.hpp` vive na camada de asset e nao conhece
+		// fisica. Incluir physics_components.hpp aqui faria TODO consumidor de
+		// AssetRecord arrastar o modulo de fisica junto.
+		int CollisionShape = -1;
+
+		// Folga em metros somada a cada lado do collider. Positivo alarga.
+		//
+		// Existe porque collider colado na malha prende em quina e em degrau:
+		// o corpo encaixa milimetricamente no vao e trava. Uns poucos
+		// centimetros de folga sao o que separa "anda" de "engancha".
+		float CollisionPadding = 0.0f;
+
+		// Collider que so DETECTA, sem empurrar. Zona de gatilho, area de
+		// coleta, sensor de porta.
+		bool CollisionIsTrigger = false;
+
+		// Tudo no padrao? Serve para NAO gravar o bloco no `.axemeta` quando
+		// nao ha nada a dizer: meta limpo continua limpo, e um diff no git so
+		// aparece quando alguem realmente configurou alguma coisa.
+		bool IsDefault() const
+		{
+			return MeshScale == 1.0f
+				&& !RecenterPivot
+				&& !DropToFloor
+				&& TextureFilter == 2
+				&& TextureWrap == 0
+				&& DefaultMaterialUUID.empty()
+				&& CollisionShape < 0
+				&& CollisionPadding == 0.0f
+				&& !CollisionIsTrigger;
+		}
+	};
+
 	struct AssetRecord
 	{
 		std::string           UUID;
 		std::filesystem::path FilePath;
+
+		// ASSET_VIEWER_V2 — configuracao de importacao, lida e gravada no
+		// `.axemeta` junto da identidade. Ver a nota na struct acima.
+		AssetImportSettings   Import;
 		AssetType             Type = AssetType::Unknown;
 		std::string           Name;
 		std::string           VirtualFolder = ""; // pasta virtual no browser

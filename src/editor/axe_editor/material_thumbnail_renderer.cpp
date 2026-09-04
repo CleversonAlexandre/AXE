@@ -12,6 +12,7 @@
 #include <fstream>
 
 #include "axe/asset/asset_database.hpp"
+#include "editor/axe_editor/asset/asset_spawn_defaults.hpp"   // THUMB_MATERIAL_V1
 #include "axe/asset/asset.hpp"
 
 namespace axe
@@ -74,92 +75,51 @@ namespace axe
         spec.Height = k_ThumbnailSize;
         entry.Framebuffer = Framebuffer::Create(spec);
 
-        // Carrega o material
-        auto matAsset = MaterialAsset::LoadFromFile(filePath);
-        if (matAsset)
+        // ═══════════════════════════════════════════════════════════════════
+        //  THUMB_MATERIAL_V1 — a rotina de material saiu daqui
+        //
+        //  ── ONDE ELA FOI PARAR, E POR QUE ─────────────────────────────────
+        //
+        //  As ~90 linhas que moravam aqui liam o `.axemat`, compilavam o
+        //  shader e caçavam a textura andando do Material Output para tras.
+        //  Eram a QUARTA copia da mesma rotina no editor — e a unica que fazia
+        //  a busca de textura direito.
+        //
+        //  Ela foi promovida a AssetSpawnDefaults::ResolveMaterial, e as
+        //  outras tres (spawn do BP, sincronizacao do BP, preview do Script
+        //  Editor) passaram a chamar de la. Este bloco agora chama tambem.
+        //
+        //  Quatro copias significavam quatro respostas possiveis para
+        //  "carregar um material", e o usuario via a diferenca sem ter como
+        //  explicar: a thumbnail branca, a arma cinza no BP e o material certo
+        //  ao aplicar no asset eram o MESMO defeito visto de tres lugares.
+        //
+        //  ── E O SILENCIO ACABOU ───────────────────────────────────────────
+        //
+        //  Todo caminho de falha aqui era mudo: `catch (...) {}`, um
+        //  `if (result.Success)` sem else, um `if (shader)` sem else. Material
+        //  cujo grafo nao compila mostrava uma esfera branca para sempre, sem
+        //  uma linha de log. Agora o ResolveMaterial avisa, e o que sobra sem
+        //  shader avisa aqui embaixo.
+        // ═══════════════════════════════════════════════════════════════════
+        entry.Material = AssetSpawnDefaults::ResolveMaterial(uuid);
+
+        if (!entry.Material)
         {
-            entry.Material = matAsset->GetMaterial();
+            AXE_EDITOR_WARN("Thumbnail: o material '{}' nao carregou — a "
+                "miniatura fica com a esfera padrao.",
+                filePath.filename().string());
 
-            // Tenta compilar o shader do grafo
-            auto graphPath = filePath;
-            graphPath.replace_extension(".axegraph");
-
-            if (std::filesystem::exists(graphPath))
-            {
-                std::ifstream file(graphPath);
-                try
-                {
-                    nlohmann::json j = nlohmann::json::parse(file);
-                    MaterialGraph graph;
-                    graph.Deserialize(j);
-
-                    auto result = MaterialCompiler::Compile(&graph);
-                    if (result.Success)
-                    {
-                        auto shader = Shader::Create(
-                            result.VertexShader, result.FragmentShader);
-                        if (shader)
-                        {
-                            entry.Material->SetShader(shader);
-
-                            // Transfere texturas na ordem correta
-                            std::function<Node* (ed::PinId)> findTextureSample =
-                                [&](ed::PinId startPin) -> Node*
-                                {
-                                    for (auto& n : graph.GetNodes())
-                                        for (auto& outPin : n->Outputs)
-                                        {
-                                            if (outPin.ID != startPin) continue;
-                                            if (n->Name == "Texture Sample") return n.get();
-                                            for (auto& inPin : n->Inputs)
-                                                for (auto& lnk : graph.GetLinks())
-                                                {
-                                                    if (lnk.EndPin != inPin.ID) continue;
-                                                    Node* found = findTextureSample(lnk.StartPin);
-                                                    if (found) return found;
-                                                }
-                                        }
-                                    return nullptr;
-                                };
-
-                            Node* outputNode = nullptr;
-                            for (auto& n : graph.GetNodes())
-                                if (n->Name == "Material Output") { outputNode = n.get(); break; }
-
-                            if (outputNode)
-                            {
-                                int slot = 0;
-                                std::unordered_set<int> processed;
-
-                                for (auto& inputPin : outputNode->Inputs)
-                                {
-                                    for (auto& lnk : graph.GetLinks())
-                                    {
-                                        if (lnk.EndPin != inputPin.ID) continue;
-                                        Node* texNode = findTextureSample(lnk.StartPin);
-                                        if (texNode && !processed.count(texNode->ID.Get())
-                                            && texNode->Value.TextureVal)
-                                        {
-                                            if (slot == 0)
-                                            {
-                                                entry.Material->AlbedoMap = texNode->Value.TextureVal;
-                                                entry.Material->AlbedoUUID = texNode->Value.TextureUUID;
-                                            }
-                                            processed.insert(texNode->ID.Get());
-                                            ++slot;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (...) {}
-            }
-        }
-        else
-        {
             entry.Material = m_DefaultMaterial;
+        }
+        else if (!entry.Material->GetShader())
+        {
+            // Sem shader a esfera sai chapada. Dizer QUAL material e o que
+            // transforma "algumas miniaturas nao aparecem" numa lista de
+            // materiais para abrir e recompilar.
+            AXE_EDITOR_WARN("Thumbnail: o material '{}' carregou sem shader — "
+                "o .axegraph nao compilou. Abra o material e compile.",
+                filePath.filename().string());
         }
 
         entry.Dirty = true;
@@ -180,94 +140,10 @@ namespace axe
         auto it = m_Cache.find(uuid);
         if (it == m_Cache.end()) return;
 
-        // Recarrega o material com o shader novo
-        const AssetRecord* record = AssetDatabase::Get().GetByUUID(uuid);
-        if (record)
-        {
-            auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
-            if (matAsset)
-            {
-                auto material = matAsset->GetMaterial();
-
-                // Recompila o shader
-                auto graphPath = record->FilePath;
-                graphPath.replace_extension(".axegraph");
-                if (std::filesystem::exists(graphPath))
-                {
-                    std::ifstream file(graphPath);
-                    try
-                    {
-                        nlohmann::json j = nlohmann::json::parse(file);
-                        MaterialGraph graph;
-                        graph.Deserialize(j);
-
-                        auto result = MaterialCompiler::Compile(&graph);
-                        if (result.Success)
-                        {
-                            auto shader = Shader::Create(
-                                result.VertexShader, result.FragmentShader);
-
-                            if (shader)
-                            {
-                                material->SetShader(shader);
-
-                                // Transfere texturas na ordem correta
-                                std::function<Node* (ed::PinId)> findTextureSample =
-                                    [&](ed::PinId startPin) -> Node*
-                                    {
-                                        for (auto& n : graph.GetNodes())
-                                            for (auto& outPin : n->Outputs)
-                                            {
-                                                if (outPin.ID != startPin) continue;
-                                                if (n->Name == "Texture Sample") return n.get();
-                                                for (auto& inPin : n->Inputs)
-                                                    for (auto& lnk : graph.GetLinks())
-                                                    {
-                                                        if (lnk.EndPin != inPin.ID) continue;
-                                                        Node* found = findTextureSample(lnk.StartPin);
-                                                        if (found) return found;
-                                                    }
-                                            }
-                                        return nullptr;
-                                    };
-
-                                Node* outputNode = nullptr;
-                                for (auto& n : graph.GetNodes())
-                                    if (n->Name == "Material Output") { outputNode = n.get(); break; }
-
-                                if (outputNode)
-                                {
-                                    int slot = 0;
-                                    std::unordered_set<int> processed;
-
-                                    for (auto& inputPin : outputNode->Inputs)
-                                    {
-                                        for (auto& lnk : graph.GetLinks())
-                                        {
-                                            if (lnk.EndPin != inputPin.ID) continue;
-                                            Node* texNode = findTextureSample(lnk.StartPin);
-                                            if (texNode && !processed.count(texNode->ID.Get())
-                                                && texNode->Value.TextureVal)
-                                            {
-                                                if (slot == 0)
-                                                {
-                                                    material->AlbedoMap = texNode->Value.TextureVal;
-                                                    material->AlbedoUUID = texNode->Value.TextureUUID;
-                                                }
-                                                processed.insert(texNode->ID.Get());
-                                                ++slot;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    catch (...) {}
-                }
-                it->second.Material = material;
-            }
-        }
+        // THUMB_MATERIAL_V1 — a mesma funcao do Register. Este bloco era a
+        // QUINTA copia: a diferenca entre ele e o de cima era so quem chamava.
+        if (auto mat = AssetSpawnDefaults::ResolveMaterial(uuid))
+            it->second.Material = mat;
 
         it->second.Dirty = true;
         it->second.Rendered = false;

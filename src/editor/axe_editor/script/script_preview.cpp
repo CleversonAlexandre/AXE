@@ -12,6 +12,7 @@
 #include "editor/axe_editor/material/material_compiler.hpp"
 #include "axe/graphics/shader.hpp"
 #include "axe/asset/asset_database.hpp"
+#include "editor/axe_editor/asset/asset_spawn_defaults.hpp"   // BP_MATERIAL_V1
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -362,40 +363,22 @@ namespace axe
                     && existing->Data && existing->Data->GetShader();
                 if (!alreadyLoaded)
                 {
-                    const auto* rec = AssetDatabase::Get().GetByUUID(def.AssetUUID);
-                    if (rec)
+                    // ── BP_MATERIAL_V1 — a terceira copia foi embora ──────
+                    //
+                    // Aqui moravam ~30 linhas que liam o `.axemat`, abriam o
+                    // `.axegraph`, chamavam o MaterialCompiler e montavam o
+                    // shader a mao. Faziam quase tudo — e nao traziam a textura
+                    // do primeiro Texture Sample. Era por isso que a arma
+                    // aparecia cinza NESTE preview mesmo com o material posto.
+                    //
+                    // Tres copias da mesma rotina significavam tres resultados
+                    // possiveis para "carregar um material", e o usuario via a
+                    // diferenca sem ter como explica-la. Agora e uma so.
+                    if (auto mat = AssetSpawnDefaults::ResolveMaterial(def.AssetUUID))
                     {
-                        auto matAsset = MaterialAsset::LoadFromFile(rec->FilePath);
-                        if (matAsset)
-                        {
-                            auto graphPath = rec->FilePath;
-                            graphPath.replace_extension(".axegraph");
-                            if (std::filesystem::exists(graphPath))
-                            {
-                                try
-                                {
-                                    std::ifstream gf(graphPath);
-                                    auto gj = nlohmann::json::parse(gf);
-                                    auto matGraph = std::make_unique<MaterialGraph>();
-                                    matGraph->Deserialize(gj);
-                                    auto result = MaterialCompiler::Compile(matGraph.get());
-                                    if (result.Success)
-                                    {
-                                        auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
-                                        if (shader) matAsset->GetMaterial()->SetShader(shader);
-                                        if (!result.GeometryFragShader.empty())
-                                        {
-                                            auto geoShader = Shader::Create(result.VertexShader, result.GeometryFragShader);
-                                            if (geoShader) matAsset->GetMaterial()->SetGeometryShader(geoShader);
-                                        }
-                                    }
-                                }
-                                catch (...) {}
-                            }
-                            auto& mc = reg.get_or_emplace<MaterialComponent>(m_PreviewEntity);
-                            mc.Data = matAsset->GetMaterial();
-                            mc.MaterialAssetUUID = def.AssetUUID;
-                        }
+                        auto& mc = reg.get_or_emplace<MaterialComponent>(m_PreviewEntity);
+                        mc.Data = mat;
+                        mc.MaterialAssetUUID = def.AssetUUID;
                     }
                 }
             }

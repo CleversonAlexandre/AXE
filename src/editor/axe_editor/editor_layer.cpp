@@ -6,6 +6,7 @@
 #include "axe/animation/anim_graph_asset.hpp"
 #include "axe/animation/rig/control_rig_asset.hpp"
 #include "axe/material/material_asset.hpp"
+#include "axe_editor/asset/asset_spawn_defaults.hpp"   // ASSET_DEFAULTS_V1
 #include "axe/material/material_shader_cache.hpp"   // BATCH_SHADING_MODEL_V1
 #include "axe/particles/particle_system_asset.hpp"
 #include "axe/particles/particle_system_component.hpp"
@@ -398,6 +399,10 @@ namespace axe
                 if (asset.MaterialData)
                     registry.emplace<MaterialComponent>(entity, asset.MaterialData);
 
+                // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                AssetSpawnDefaults::Apply(registry, entity, uuid);
+
                 m_Context.Select(entity);
 
                 if (ProjectManager::Get().HasProject())
@@ -518,42 +523,18 @@ namespace axe
                     if (!registry.valid(selected)) return;
                     if (!registry.all_of<MeshComponent>(selected)) return;
 
-                    auto matAsset = MaterialAsset::LoadFromFile(record->FilePath);
-                    if (!matAsset) return;
-                    auto material = matAsset->GetMaterial();
-
-                    if (SceneSerializer::GetMaterialRecompileCallback())
-                        SceneSerializer::GetMaterialRecompileCallback()(uuid, material.get());
-
-                    auto graphPath = record->FilePath;
-                    graphPath.replace_extension(".axegraph");
-                    if (std::filesystem::exists(graphPath))
-                    {
-                        std::ifstream file(graphPath);
-                        try
-                        {
-                            nlohmann::json j = nlohmann::json::parse(file);
-                            MaterialGraph graph;
-                            graph.Deserialize(j);
-                            int slot = 0;
-                            for (auto& node : graph.GetNodes())
-                            {
-                                if (node->Name != "Texture Sample") continue;
-                                if (!node->Value.TextureVal) { ++slot; continue; }
-                                bool isConnected = false;
-                                for (auto& output : node->Outputs)
-                                    for (auto& link : graph.GetLinks())
-                                        if (link.StartPin == output.ID) isConnected = true;
-                                if (isConnected && slot == 0)
-                                {
-                                    material->AlbedoMap = node->Value.TextureVal;
-                                    material->AlbedoUUID = node->Value.TextureUUID;
-                                }
-                                ++slot;
-                            }
-                        }
-                        catch (...) {}
-                    }
+                    // ASSET_DEFAULTS_V1 — as ~35 linhas que moravam aqui (ler
+                    // o `.axemat`, disparar a recompilacao do shader, pescar a
+                    // textura do primeiro Texture Sample no `.axegraph` irmao)
+                    // foram para AssetSpawnDefaults::ResolveMaterial.
+                    //
+                    // Nao foi arrumacao: o padrao de material do asset precisa
+                    // do MESMO carregamento, e duas copias dele significariam
+                    // um material que carrega diferente conforme o caminho que
+                    // o carregou — que e a forma exata do bug que estamos
+                    // caçando na build empacotada. Uma verdade so.
+                    auto material = AssetSpawnDefaults::ResolveMaterial(uuid);
+                    if (!material) return;
 
                     auto matComp = MaterialComponent{ material };
                     matComp.MaterialAssetUUID = uuid;
@@ -573,6 +554,10 @@ namespace axe
                     auto entity = m_Scene->CreateEntity(record->Name);
                     auto& mc = registry.emplace<MeshComponent>(entity);
                     mc.Data = mesh; mc.AssetUUID = uuid;
+
+                    // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                    // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                    AssetSpawnDefaults::Apply(registry, entity, uuid);
                     m_Context.Select(entity);
                     return;
                 }
@@ -715,6 +700,10 @@ namespace axe
                 auto& mc = registry.emplace<MeshComponent>(entity);
                 mc.Data = asset.MeshData; mc.AssetUUID = uuid;
                 if (asset.MaterialData) registry.emplace<MaterialComponent>(entity, asset.MaterialData);
+
+                // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                AssetSpawnDefaults::Apply(registry, entity, uuid);
                 m_Context.Select(entity);
             };
 
@@ -744,6 +733,10 @@ namespace axe
                     auto entity = m_Scene->CreateEntity(record->Name);
                     auto& mc = registry.emplace<MeshComponent>(entity);
                     mc.Data = mesh; mc.AssetUUID = uuid;
+
+                    // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                    // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                    AssetSpawnDefaults::Apply(registry, entity, uuid);
                     m_Context.Select(entity);
                     return;
                 }
@@ -895,6 +888,10 @@ namespace axe
                 auto& mc = registry.emplace<MeshComponent>(entity);
                 mc.Data = asset.MeshData; mc.AssetUUID = uuid;
                 if (asset.MaterialData) registry.emplace<MaterialComponent>(entity, asset.MaterialData);
+
+                // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                AssetSpawnDefaults::Apply(registry, entity, uuid);
                 m_Context.Select(entity);
             });
 
@@ -1554,6 +1551,12 @@ namespace axe
 
             if (m_EditorUI->m_AnimClipWindow.IsOpen())
                 m_EditorUI->m_AnimClipWindow.RenderPreview();
+
+            // ASSET_VIEWER_V2b — o preview 3D do Asset Viewer entra na MESMA
+            // lista. Renderizar aqui, antes do ImGui, e o que garante que o
+            // framebuffer esteja pronto quando o Draw for apresenta-lo.
+            if (m_EditorUI->m_AssetViewerWindow.IsOpen())
+                m_EditorUI->m_AssetViewerWindow.RenderPreview();
 
             m_EditorUI->Draw();
 
@@ -2500,20 +2503,26 @@ namespace axe
 
                         if (mc.MaterialAssetUUID != def.AssetUUID)
                         {
-                            if (const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID))
+                            // ── BP_MATERIAL_V1 — faltava a TEXTURA ────────
+                            //
+                            // Este bloco fazia dois dos TRES passos: lia o
+                            // `.axemat` e recompilava o shader. Faltava pescar
+                            // a textura do primeiro Texture Sample conectado no
+                            // `.axegraph` irmao — o `.axemat` sozinho nao a
+                            // carrega.
+                            //
+                            // Por isso a arma no BP nascia cinza com o material
+                            // "aplicado": ela tinha o shader certo e nenhum
+                            // albedo. Aplicar o mesmo material direto no asset
+                            // funcionava porque AQUELE caminho fazia os tres.
+                            //
+                            // Agora chama a funcao unica. Era o que o comentario
+                            // logo abaixo, no outro caminho, ja avisava: "seria
+                            // uma terceira copia da mesma rotina".
+                            if (auto mat = AssetSpawnDefaults::ResolveMaterial(def.AssetUUID))
                             {
-                                if (auto ma = MaterialAsset::LoadFromFile(r->FilePath))
-                                {
-                                    mc.Data = ma->GetMaterial();
-                                    mc.MaterialAssetUUID = def.AssetUUID;
-
-                                    // SC45 — mesmo buraco do caminho de
-                                    // instanciacao: trocar o material do BP
-                                    // propagava um material sem shader para
-                                    // as instancias ja na cena.
-                                    if (auto cb = SceneSerializer::GetMaterialRecompileCallback())
-                                        cb(def.AssetUUID, mc.Data.get());
-                                }
+                                mc.Data = mat;
+                                mc.MaterialAssetUUID = def.AssetUUID;
                             }
                         }
                     }
@@ -2652,6 +2661,10 @@ namespace axe
                 mc.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
                 if (!mc.Data)
                     mc.Data = MeshFactory::CreateByUUID(axe::PrimitiveUUID::Cube);
+
+                // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                AssetSpawnDefaults::Apply(registry, entity, def.AssetUUID);
             }
             // ── SkeletalMesh: personagem animado do script ─────────────────
             //
@@ -2765,32 +2778,27 @@ namespace axe
                 }
                 else if (const AssetRecord* r = AssetDatabase::Get().GetByUUID(def.AssetUUID))
                 {
-                    if (auto ma = MaterialAsset::LoadFromFile(r->FilePath))
+                    // ── BP_MATERIAL_V1 ──────────────────────────────────
+                    //
+                    // Os TRES passos, num lugar so: ler o `.axemat`, compilar
+                    // o shader do `.axegraph`, e trazer a textura do primeiro
+                    // Texture Sample conectado. Faltava o terceiro aqui, e o
+                    // sintoma era uma malha com material e sem cor.
+                    //
+                    // O comentario que morava neste bloco dizia que
+                    // recompilar a mao "seria uma terceira copia da mesma
+                    // rotina — ja ha duas". Agora ha uma.
+                    if (auto mat = AssetSpawnDefaults::ResolveMaterial(def.AssetUUID))
                     {
-                        MaterialComponent mc{ ma->GetMaterial() };
+                        MaterialComponent mc{ mat };
                         mc.MaterialAssetUUID = def.AssetUUID;
-
-                        // ── SC45: o material precisa do SHADER ───────────
-                        //
-                        // LoadFromFile le o .axemat — parametros, texturas,
-                        // nome. O SHADER nao esta la: ele e COMPILADO do
-                        // .axegraph ao lado. Sem esta chamada o material
-                        // chegava na cena sem shader, e o personagem nascia
-                        // com a aparencia padrao — o sintoma de "instancia
-                        // sem material", ainda que o MaterialComponent
-                        // estivesse a rigor presente.
-                        //
-                        // A callback e a MESMA que o load de cena usa
-                        // (registrada em OnAttach). Recompilar aqui na mao
-                        // seria uma terceira copia da mesma rotina — ja ha
-                        // duas, e o preview do Script Editor e uma delas.
-                        if (auto cb = SceneSerializer::GetMaterialRecompileCallback())
-                            cb(def.AssetUUID, mc.Data.get());
-
                         registry.emplace<MaterialComponent>(entity, mc);
                     }
                     else
                     {
+                        // Diagnostico preservado: o ResolveMaterial devolve
+                        // nulo pelo mesmo motivo de antes (o `.axemat` nao
+                        // carrega), e a mensagem continua nomeando o asset.
                         AXE_EDITOR_WARN("Script '{}': falha ao carregar o material '{}'.",
                             scriptAsset->GetName(), r->Name);
                     }
@@ -2843,6 +2851,10 @@ namespace axe
                 auto& mc = registry.emplace<MeshComponent>(child);
                 mc.AssetUUID = def.AssetUUID;
                 mc.Data = MeshFactory::ResolveByUUID(def.AssetUUID);
+
+                // ASSET_DEFAULTS_V1 — material padrao e collider do `.axemeta`.
+                // Uma linha em cada ponto de spawn, com a regra vivendo num lugar so.
+                AssetSpawnDefaults::Apply(registry, child, def.AssetUUID);
 
                 if (!mc.Data)
                     AXE_EDITOR_WARN("Script '{}': malha do anexo '{}' nao resolveu.",

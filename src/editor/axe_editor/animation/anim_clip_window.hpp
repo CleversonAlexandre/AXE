@@ -25,6 +25,7 @@
 #include "axe/particles/particle_world.hpp"
 #include "axe/scene/scene.hpp"
 #include "axe/scene/scene_environment.hpp"
+#include "axe/core/command_history.hpp"   // SOCKET_UNDO_V1
 
 #include <imgui.h>
 #include <entt/entt.hpp>
@@ -109,6 +110,36 @@ namespace axe
 		// de ja te-la clicado na arvore, e trabalho repetido.
 		std::string m_SelectedBone;
 		int         m_SelectedSocket = -1;   // indice em GetSockets()
+
+		// ── SOCKET_UNDO_V1 ─────────────────────────────────────────────────
+		//
+		// Pilha PROPRIA, e nao a do editor de cena. Undo/redo e por CONTEXTO:
+		// desfazer aqui tem de desfazer a ultima coisa que se fez nos sockets,
+		// e nao a ultima coisa feita na cena atras da janela. E o mesmo desenho
+		// que o Material Editor e o Script Editor ja usam.
+		//
+		// Os comandos guardam o socket INTEIRO (antes/depois). Guardar so o
+		// campo mexido pareceria mais economico e quebraria no primeiro caso
+		// em que uma acao toca dois campos — como o "Tamanho real", que escreve
+		// os tres eixos de Scale.
+		CommandHistory m_SocketHistory;
+
+		// Copia tirada quando um arrasto COMECA. Sem ela nao ha "antes" para
+		// desfazer: quando o gesto termina, o valor original ja se perdeu.
+		SkeletalMeshAsset::Socket m_SocketBeforeEdit;
+		bool m_SocketEditOpen = false;
+
+		// Tamanho da malha de preview, medido UMA vez por UUID. Percorrer os
+		// vertices a cada frame so para desenhar um label seria pagar caro por
+		// nada — e este painel roda todo frame.
+		std::string m_SocketMeshMeasuredUUID;
+		float       m_SocketMeshSize = 0.0f;   // maior dimensao, em metros
+
+		// Abre um comando de edicao do socket selecionado (guarda o "antes").
+		void BeginSocketEdit();
+
+		// Fecha o comando: compara com o estado atual e empilha se mudou.
+		void EndSocketEdit(const char* actionName);
 
 		void DrawSocketList();      // lista + add/remove, abaixo da arvore
 		void DrawSocketDetails();   // osso pai, transform e preview mesh

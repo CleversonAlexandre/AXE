@@ -362,6 +362,35 @@ namespace axe
             }
         }
 
+        // ═════════════════════════════════════════════════════════════════
+        //  SOCKET_LAG_V1 — a arma escorregando da mao ao correr
+        //
+        //  ── O DEFEITO ─────────────────────────────────────────────────────
+        //
+        //  O AnimationWorld compoe a matriz do anexo de socket no fim do
+        //  proprio OnUpdate — que roda ANTES dos scripts, da fisica e da
+        //  sequence. Esses tres MOVEM o personagem. Ou seja: a arma era
+        //  posicionada usando o lugar onde o personagem ESTAVA, e desenhada no
+        //  frame em que ele ja estava adiante.
+        //
+        //  Parado, os dois lugares coincidem e nada aparece. Correndo, a
+        //  diferenca e `velocidade x dt` — e por isso o escorregao cresce com
+        //  a velocidade, que foi exatamente o relato.
+        //
+        //  ── POR QUE AQUI, E POR QUE DE NOVO ───────────────────────────────
+        //
+        //  Aqui e o ultimo ponto do frame em que alguem ainda mexe no
+        //  personagem. A pose ja esta pronta desde o AnimationWorld e nao muda;
+        //  o que mudou foi so a transform de mundo dele. Recompor custa uma
+        //  varredura num view que costuma ter uma ou duas entidades.
+        //
+        //  A chamada de dentro do OnUpdate NAO foi removida: cinco previews do
+        //  editor criam um AnimationWorld proprio e nunca chegam ate aqui.
+        //  Tirar de la para "nao repetir" quebraria os cinco de uma vez.
+        // ═════════════════════════════════════════════════════════════════
+        if (!paused)
+            m_AnimationWorld.UpdateSocketAttachments(scene);
+
         // ── Audio ────────────────────────────────────────────────────────
         //
         // Fora do bloco de Play: o AudioWorld tambem roda em Edit para
