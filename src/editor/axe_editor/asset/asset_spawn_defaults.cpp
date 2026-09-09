@@ -5,6 +5,7 @@
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 #include "axe/graphics/shader.hpp"
 #include "editor/axe_editor/material/material_compiler.hpp"
+#include "editor/axe_editor/material/material_function.hpp"   // MATFUNC_V2
 #include "axe/scene/components.hpp"
 #include "axe/scene/scene_serializer.hpp"
 #include "axe/log/log.hpp"
@@ -18,6 +19,77 @@
 
 namespace axe
 {
+    // ── MATFUNC_V2 ───────────────────────────────────────────────────────────
+    //
+    // Ver a nota longa no header. Em resumo: monta um material envelope em
+    // memoria com a funcao ligada no Base Color, e compila esse grafo.
+    std::shared_ptr<Material> AssetSpawnDefaults::ResolveMaterialFunctionPreview(
+        const std::string& functionUUID)
+    {
+        if (functionUUID.empty()) return nullptr;
+
+        const AssetRecord* record = AssetDatabase::Get().GetByUUID(functionUUID);
+        if (!record || record->Type != AssetType::MaterialFunction) return nullptr;
+
+        std::error_code ec;
+        if (!std::filesystem::exists(record->FilePath, ec)) return nullptr;
+
+        // So o cabecalho: a assinatura basta para montar os pinos da chamada,
+        // e o grafo da funcao sera lido pelo inlining, no compilador.
+        std::string fnName;
+        std::vector<MaterialFunctionParam> ins, outs;
+        if (!MaterialFunction::ReadSignature(record->FilePath, fnName, ins, outs))
+            return nullptr;
+
+        if (outs.empty())
+        {
+            AXE_EDITOR_WARN("[MATFUNC_V2] a funcao '{}' nao tem Function Output — "
+                "nao ha o que mostrar na miniatura.", record->Name);
+            return nullptr;
+        }
+
+        MaterialGraph wrapper;
+
+        Node* outputNode = wrapper.AddMaterialOutputNode();
+        Node* callNode = wrapper.AddMaterialFunctionNode();
+        if (!outputNode || !callNode) return nullptr;
+
+        callNode->StringValue = functionUUID;
+        wrapper.RebuildFunctionCallPins(callNode, ins, outs);
+
+        if (callNode->Outputs.empty() || outputNode->Inputs.empty()) return nullptr;
+
+        // Pino 0 do Material Output e o Base Color — os indices dos pinos do
+        // Material Output sao posicionais, como o material_graph documenta.
+        // Base Color, e nao Emissive, porque a esfera do preview e iluminada:
+        // o mesmo valor aparece com sombreamento, que e como a funcao vai ser
+        // vista no material de verdade.
+        wrapper.AddLink(callNode->Outputs[0].ID, outputNode->Inputs[0].ID);
+        wrapper.BuildNodes();
+
+        auto result = MaterialCompiler::Compile(&wrapper);
+        if (!result.Success)
+        {
+            AXE_EDITOR_WARN("[MATFUNC_V2] a funcao '{}' nao compilou: {}",
+                record->Name, result.ErrorMessage);
+            return nullptr;
+        }
+
+        auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+        if (!shader)
+        {
+            AXE_EDITOR_WARN("[MATFUNC_V2] o shader de preview da funcao '{}' nao "
+                "linkou.", record->Name);
+            return nullptr;
+        }
+
+        auto material = std::make_shared<Material>();
+        material->SetShader(shader);
+        material->SamplerTextures = result.SamplerTextures;
+        material->IsTransparent = false;   // a esfera do preview e sempre opaca
+        return material;
+    }
+
     std::shared_ptr<Material> AssetSpawnDefaults::ResolveMaterial(
         const std::string& materialUUID)
     {

@@ -70,6 +70,17 @@ namespace axe
 		// habilitado e sem depth-write — ver SceneRenderer::RenderDeferred.
 		bool IsTransparent = false;
 
+		// TWO_SIDED_V1 — desenha as duas faces. Só muda algo no forward
+		// translúcido (a pipeline opaca já é CullMode::None); é o que faz um
+		// plano de água continuar visível quando a câmera passa por baixo.
+		bool TwoSided = false;
+
+		// SCENE_HEIGHT_V6 — este material lê o node Scene Height. É o que faz o
+		// passe de altura RODAR, e é de onde sai a altura da fatia (o Y do
+		// transform deste draw call). Sem nenhum material assim na cena, o
+		// passe inteiro é pulado.
+		bool UsesSceneHeight = false;
+
 		// Emissive MÉDIO do material (cor x intensidade), avaliado pelo
 		// editor no compile do grafo (MaterialCompiler::ComputeBakedEmissive:
 		// renderiza o pin Emissive num FBO 8x8 varrendo UVs e tira a média).

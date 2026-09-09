@@ -303,7 +303,7 @@ namespace axe
                         {0.10f,0.35f,0.45f}, {0.85f,0.85f,0.85f}, {0.75f,0.35f,0.10f},
                         {0.55f,0.15f,0.55f}, {0.70f,0.12f,0.12f}, {0.15f,0.55f,0.20f},
                     };
-                    ImGui::TextDisabled("Cor do Comment:");
+                    ImGui::TextDisabled("Comment color:");
                     for (int s = 0; s < 6; s++)
                     {
                         ImGui::SameLine();
@@ -757,7 +757,7 @@ namespace axe
                     if (!known)
                     {
                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
-                        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f), "nao existe no grafo");
+                        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f), "does not exist in the graph");
                     }
                 }
 
@@ -1084,8 +1084,8 @@ namespace axe
 
         if (!any)
             ImGui::TextDisabled(params.empty()
-                ? "Sem AnimGraph no componente Skeletal Mesh"
-                : "O grafo nao tem parametro deste tipo");
+                ? "No AnimGraph on the Skeletal Mesh component"
+                : "The graph has no parameter of this type");
 
         return picked;
     }

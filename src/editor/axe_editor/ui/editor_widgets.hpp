@@ -60,6 +60,29 @@ namespace axe::ui
 	bool ToggleButton(const char* label, bool active,
 		const char* tooltip = nullptr, Accent onAccent = Accent::Primary);
 
+	// ── SCRIPT_STYLE_V1 ──────────────────────────────────────────────────────
+	//
+	// Os dois botoes de LISTA: remover um item e abrir/fechar um galho.
+	//
+	// Eram a letra "x" e as letras "v"/">" dentro de um ImGui::SmallButton,
+	// repetidos com o mesmo bloco de tres PushStyleColor em NOVE lugares entre
+	// o Script Details e o Script Members. Do lado de quem usa, isso aparece
+	// como letras de texto no meio de uma interface que ja tem icones de
+	// verdade — e um "x" minusculo nao le como fechar, le como a letra x.
+	//
+	// Promovidos para ca pela regra do topo do arquivo: nove usos reais, nao
+	// uma suposicao de que havera outro.
+	//
+	// O `id` e OBRIGATORIO porque estes aparecem muitas vezes por painel (um
+	// por componente, um por variavel) e o ImGui identifica widget por rotulo.
+	// Sem id proprio todos disputariam o mesmo e so o primeiro responderia ao
+	// clique — o mesmo bug que o comentario do IconButton descreve.
+	bool CloseButton(const char* id, const char* tooltip = nullptr);
+
+	// Triangulo de expandir/recolher, com fundo transparente. `open` e o estado
+	// ATUAL; o retorno diz se houve clique (quem chama e que inverte).
+	bool CaretButton(const char* id, bool open, const char* tooltip = nullptr);
+
 	// Cabecalho de secao com faixa colorida. E o "Functions" e o "Variables" dos
 	// paineis de membros.
 	void SectionHeader(const char* icon, const char* label, Accent accent);

@@ -2,6 +2,7 @@
 #include "axe/core/types.hpp"
 #include "axe/core/command_history.hpp"
 #include "axe/material/material_asset.hpp"
+#include "material_function.hpp"   // MATFUNC_V1
 #include <memory>
 #include <string>
 #include <imgui-node-editor/imgui_node_editor.h>
@@ -64,12 +65,44 @@ namespace axe
         void ClearLog();
         void DrawShaderLog();
 
+        // ── SHADER_SOURCE_ECHO_V1 ────────────────────────────────────────
+        //
+        // O driver relata o erro como "ERROR: 0:57:" — a linha de um arquivo
+        // que NAO EXISTE em lugar nenhum: o GLSL e gerado em memoria a partir
+        // do grafo, e o `.axeshader` em disco e o da ultima compilacao
+        // BEM-SUCEDIDA. O autor recebia a coordenada de um texto que nao
+        // tinha como abrir — que e o formato de erro mais caro que existe.
+        //
+        // Isto le os numeros de linha da mensagem do driver e ecoa as linhas
+        // correspondentes do fonte gerado, com duas de contexto. Nao adivinha
+        // nada: mostra o que o compilador leu.
+        //
+        // `label` diz de QUAL shader se trata — o dominio Surface gera dois
+        // (forward e G-Buffer), e confundir qual quebrou custa a tarde.
+        void LogShaderSource(const std::string& source,
+            const std::string& driverError,
+            const char* label);
+
         std::vector<ShaderLogEntry> m_ShaderLog;
 
         void Draw();
 
         // Abre um material para edição
         void OpenMaterial(std::shared_ptr<MaterialAsset> asset);
+
+        // ── MATFUNC_V1 ───────────────────────────────────────────────────────
+        //
+        // A MESMA janela edita as duas coisas, e e o ponto do desenho: uma
+        // Material Function e um MaterialGraph, com os mesmos nodes, o mesmo
+        // canvas e o mesmo painel de detalhes. Uma segunda janela quase igual
+        // seria duas copias de cada correcao futura.
+        //
+        // O que muda em modo funcao: nao ha Domain/Blend/Shading (a funcao nao
+        // vira shader — quem sombreia e o material que a chama), nao ha preview
+        // de esfera, e Compilar apenas VALIDA em vez de cozinhar .axeshader.
+        void OpenMaterialFunction(std::shared_ptr<MaterialFunction> fn);
+
+        bool IsFunctionMode() const { return m_FunctionAsset != nullptr; }
         bool IsOpen() const { return m_Open; }
         void Initialize();
 
@@ -94,6 +127,11 @@ namespace axe
 
         void ReloadGraph()
         {
+            // MATFUNC_V1 — o `!m_Asset` tambem PROTEGE o modo funcao, e nao por
+            // acaso: em modo funcao m_Asset e nulo e o grafo na tela e o da
+            // funcao, do qual nao existe `.axegraph` irmao para reler. Sem esta
+            // saida, um MarkNeedsReload trocaria o grafo por um vazio e o
+            // trabalho do autor iria embora entre um frame e outro.
             if (!m_Asset) return;
             m_Graph = std::make_unique<MaterialGraph>();
             LoadGraph();
@@ -142,7 +180,9 @@ namespace axe
 
         void DrawCommentNode(Node* node);
         void DrawRerouteNode(Node& node);
-        void DrawMaterialParams(Material& mat);
+        // MATFUNC_V1 — ponteiro, e nao referencia: em modo funcao nao existe
+        // Material nenhum para passar.
+        void DrawMaterialParams(Material* matPtr);
         void DrawTextureSlot(const char* label,
             std::shared_ptr<Texture2D>& tex,
             std::string& uuid);
@@ -153,12 +193,21 @@ namespace axe
         ImRect bounds;
 
         std::shared_ptr<MaterialAsset> m_Asset;
+
+        // MATFUNC_V1 — nao-nulo significa modo funcao. Nesse modo m_Asset e
+        // m_Material ficam nulos, e o grafo desenhado no canvas e o de dentro
+        // desta funcao (m_Graph aponta para ele, e nao para um grafo proprio).
+        std::shared_ptr<MaterialFunction> m_FunctionAsset;
         bool m_Open = false;
 
         void DrawNodeGraph();
         void DrawNode(Node& node);
 
         void CompileAndApply();
+
+        // MATFUNC_V2 — remonta o material envelope da funcao aberta (o que a
+        // esfera de preview desenha) e invalida a miniatura dela no browser.
+        void RefreshFunctionPreview();
 
         // Extrai a textura conectada ao Base Color e ao Normal do Material
         // Output e aplica em m_Material->AlbedoMap/NormalMap. Compartilhado
@@ -196,7 +245,12 @@ namespace axe
         // conferido contra s_MatCats por static_assert em material_node_graph.cpp:
         // este array e indexado pelo MESMO indice da tabela de categorias, e um
         // descompasso escreveria fora dele.
-        bool m_NodeCatOpen[9] = { false, false, false, false, false, false, false, false, false };
+        // MATFUNC_V1 — 10 com a categoria Function. O static_assert em
+        // material_node_graph.cpp guarda este tamanho contra a tabela de
+        // categorias: categoria nova sem crescer este vetor e leitura fora do
+        // array, e foi ele que apontou o esquecimento.
+        bool m_NodeCatOpen[10] = { false, false, false, false, false,
+                                   false, false, false, false, false };
         void UpdateCommentChildren(Node* commentNode);
         std::shared_ptr<Material> m_Material;
         std::shared_ptr<Material> m_PreviewMaterial;

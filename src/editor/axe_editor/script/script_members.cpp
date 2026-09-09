@@ -7,6 +7,7 @@
 #include "editor/axe_editor/script/script_asset.hpp"
 #include "editor/axe_editor/script/script_graph.hpp"
 #include "editor/axe_editor/editor_icon_library.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"   // SCRIPT_STYLE_V1
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <algorithm>
@@ -217,12 +218,12 @@ namespace axe
 
                     // Botão X — remove categoria (vars voltam para sem categoria)
                     ImGui::SameLine(headerAvail - 18.f);
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.4f, 0.4f, 1));
-                    if (ImGui::SmallButton(("x##delcat_" + cat).c_str()))
+                    // SCRIPT_STYLE_V1 — o id sai do NOME da categoria: aqui
+                    // nao ha PushID envolvendo a linha, entao duas categorias
+                    // disputariam o mesmo botao.
+                    if (ui::CloseButton(("delcat_" + cat).c_str(),
+                        "Delete this category (variables become uncategorized)"))
                         deleteCat = cat;
-                    ImGui::PopStyleColor(3);
 
                     if (!catOpen) continue;
                     ImGui::Indent(8.f);
@@ -411,11 +412,9 @@ namespace axe
                     // sem nenhuma margem — o hover reto "vazava" visualmente
                     // sobre o canto arredondado do fundo).
                     ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 30.f, cardMin.y + (headerH - 20.f) * 0.5f));
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x")) removeVar = i;
-                    ImGui::PopStyleColor(3);
+                    // SCRIPT_STYLE_V1
+                    if (ui::CloseButton("rmvar", "Remove this variable"))
+                        removeVar = i;
 
                     ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f)); // espaçamento entre cards
                     ImGui::PopID();
@@ -670,11 +669,9 @@ namespace axe
                 ImGui::SameLine();
 
                 ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                if (ImGui::SmallButton("x")) removeEvt = i;
-                ImGui::PopStyleColor(3);
+                // SCRIPT_STYLE_V1
+                if (ui::CloseButton("rmevt", "Remove this event"))
+                    removeEvt = i;
 
                 ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f));
 
@@ -807,11 +804,9 @@ namespace axe
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit parameters (Inputs/Outputs)");
 
                 ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                if (ImGui::SmallButton("x")) removeFunc = i;
-                ImGui::PopStyleColor(3);
+                // SCRIPT_STYLE_V1
+                if (ui::CloseButton("rmfunc", "Remove this function"))
+                    removeFunc = i;
 
                 ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f));
 
@@ -844,16 +839,18 @@ namespace axe
                                     sigChanged = true;
                                 }
                                 ImGui::SameLine(0, 4);
-                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                                if (ImGui::SmallButton("x"))
+                                // SCRIPT_STYLE_V1 — de quebra some um par
+                                // PushStyleColor/PopStyleColor que tinha de ser
+                                // fechado nos DOIS caminhos (inclusive antes do
+                                // break). Desequilibrio de pilha de estilo ja
+                                // derrubou o editor uma vez, no NODECOMBO_V3.
+                                if (ui::CloseButton("rmparam", "Remove this parameter"))
                                 {
                                     params.erase(params.begin() + p);
                                     sigChanged = true;
-                                    ImGui::PopStyleColor();
                                     ImGui::PopID();
                                     break; // índices mudaram — recomeça no próximo frame
                                 }
-                                ImGui::PopStyleColor();
                                 ImGui::PopID();
                             }
                             if (ImGui::SmallButton((std::string("+ ") + label).c_str()))

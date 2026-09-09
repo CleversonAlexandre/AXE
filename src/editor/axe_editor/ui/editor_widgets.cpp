@@ -137,6 +137,104 @@ namespace axe::ui
 		return clicked;
 	}
 
+	// ── SCRIPT_STYLE_V1 ──────────────────────────────────────────────────────
+	//
+	// Altura dos dois: a linha de texto mais um respiro. Vem da FONTE, e nao de
+	// um numero fixo, pelo mesmo motivo do IconButton — trocar o tamanho do
+	// texto do editor nao pode deixar o botao fora de escala.
+	static float ListButtonSize()
+	{
+		return ImGui::GetTextLineHeight() + 4.0f;
+	}
+
+	bool CloseButton(const char* id, const char* tooltip)
+	{
+		const float h = ListButtonSize();
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+
+		// Fundo invisivel em repouso: um "remover" por linha, todos pintados,
+		// viraria uma coluna de manchas vermelhas puxando o olho para a acao
+		// mais destrutiva do painel.
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.22f, 0.22f, 0.85f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.62f, 0.16f, 0.16f, 1.00f));
+
+		char btn[96];
+		std::snprintf(btn, sizeof(btn), "##close_%s", id ? id : "");
+
+		// Botao VAZIO + glifo por cima, centrado pela medida real: mesma razao
+		// explicada em detalhe no IconButton (a Font Awesome tem avanco maior
+		// que o desenho, e o ImGui centraliza pelo avanco).
+		const bool clicked = ImGui::Button(btn, ImVec2(h, h));
+		const bool hovered = ImGui::IsItemHovered();
+
+		ImGui::PopStyleColor(3);
+
+		const ImVec2 sz = ImGui::CalcTextSize(ICON_XMARK);
+		const ImVec2 at(
+			pos.x + floorf((h - sz.x) * 0.5f),
+			pos.y + floorf((h - sz.y) * 0.5f));
+
+		ImGui::GetWindowDrawList()->AddText(at,
+			ImGui::GetColorU32(hovered ? ImVec4(1.00f, 1.00f, 1.00f, 1.0f)
+				: ImVec4(0.60f, 0.60f, 0.60f, 1.0f)),
+			ICON_XMARK);
+
+		if (tooltip && hovered)
+			ImGui::SetTooltip("%s", tooltip);
+
+		return clicked;
+	}
+
+	bool CaretButton(const char* id, bool open, const char* tooltip)
+	{
+		const float h = ListButtonSize();
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.10f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.16f));
+
+		char btn[96];
+		std::snprintf(btn, sizeof(btn), "##caret_%s", id ? id : "");
+
+		const bool clicked = ImGui::Button(btn, ImVec2(h, h));
+		const bool hovered = ImGui::IsItemHovered();
+
+		ImGui::PopStyleColor(3);
+
+		// Triangulo desenhado a mao, e nao ImGui::ArrowButton: o ArrowButton
+		// pinta o fundo do tema e nao aceita ser transparente sem repetir este
+		// mesmo push/pop em quem chama — que e justamente o que este widget
+		// veio eliminar. Tambem nao ha glifo de "caret" no subset da fonte de
+		// icones (ver o aviso no topo de editor_icons.hpp: define sem glifo sai
+		// como retangulo vazio).
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		const float r = floorf(h * 0.22f);
+		const ImVec2 c(pos.x + h * 0.5f, pos.y + h * 0.5f);
+
+		const ImU32 col = ImGui::GetColorU32(
+			hovered ? ImVec4(0.92f, 0.92f, 0.92f, 1.0f)
+			: ImVec4(0.58f, 0.58f, 0.58f, 1.0f));
+
+		if (open)
+			dl->AddTriangleFilled(
+				ImVec2(c.x - r, c.y - r * 0.6f),
+				ImVec2(c.x + r, c.y - r * 0.6f),
+				ImVec2(c.x, c.y + r * 0.9f), col);
+		else
+			dl->AddTriangleFilled(
+				ImVec2(c.x - r * 0.6f, c.y - r),
+				ImVec2(c.x - r * 0.6f, c.y + r),
+				ImVec2(c.x + r * 0.9f, c.y), col);
+
+		if (tooltip && hovered)
+			ImGui::SetTooltip("%s", tooltip);
+
+		return clicked;
+	}
+
 	bool ToggleButton(const char* label, bool active, const char* tooltip,
 		Accent onAccent)
 	{

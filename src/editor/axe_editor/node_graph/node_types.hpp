@@ -24,6 +24,57 @@ namespace axe
         Any
     };
 
+    // ── MATFUNC_V1 ───────────────────────────────────────────────────────────
+    //
+    //  PinType <-> string. Por STRING, e nao por indice do enum, de proposito:
+    //  a nota logo abaixo, sobre MaterialDomain, documenta que o `.axegraph`
+    //  serializa aqueles enums por INDICE e que inserir um valor no meio
+    //  re-sombreia todo material ja salvo.
+    //
+    //  A assinatura de uma Material Function e exatamente o dado que nao pode
+    //  ter essa fragilidade, porque ela atravessa DOIS arquivos: o
+    //  `.axematfunc` e o material que o chama. Um enum reordenado trocaria os
+    //  tipos dos pinos de toda chamada gravada em disco.
+    //
+    //  Nem `Any` nem `Texture2D` aparecem na lista. `Any` so se resolve dentro
+    //  de um node generico, pelo que esta ligado nele — numa assinatura, que e
+    //  desenhada como pino no node de chamada antes de qualquer ligacao
+    //  existir, nao ha o que resolver. E textura nao passa por parametro: ela
+    //  entra na funcao por um Texture Sample dentro dela. Qualquer coisa fora
+    //  da lista le como Float, o mesmo default do resto do grafo.
+    inline const char* PinTypeToString(PinType type)
+    {
+        switch (type)
+        {
+        case PinType::Float: return "Float";
+        case PinType::Vec2:  return "Vec2";
+        case PinType::Vec3:  return "Vec3";
+        case PinType::Vec4:  return "Vec4";
+        default:             return "Float";
+        }
+    }
+
+    inline PinType PinTypeFromString(const std::string& str)
+    {
+        if (str == "Vec2") return PinType::Vec2;
+        if (str == "Vec3") return PinType::Vec3;
+        if (str == "Vec4") return PinType::Vec4;
+        return PinType::Float;
+    }
+
+    // Uma porta nomeada e tipada de uma Material Function — uma entrada ou uma
+    // saida. Mora aqui, e nao em material_function.hpp, porque o MaterialGraph
+    // precisa dela para montar os pinos do node de chamada, e material_function
+    // ja inclui material_graph: no header dele isto seria dependencia circular.
+    //
+    // Igual em forma ao ScriptFunctionParam do Script Editor de proposito — e o
+    // mesmo conceito, e vale que as duas partes da engine se pareçam.
+    struct MaterialFunctionParam
+    {
+        std::string Name = "In";
+        PinType     Type = PinType::Float;
+    };
+
     enum class NodeType
     {
         Blueprint,

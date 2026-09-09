@@ -31,6 +31,32 @@ namespace axe
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::StyleColorsDark(&style);
 
+            // ── COLOR_FLOAT_V1 — seletor de cor em 0..1, nao em 0..255 ──────
+            //
+            // O padrao do ImGui e ImGuiColorEditFlags_Uint8: TODO ColorEdit e
+            // ColorPicker da engine mostra e aceita numero inteiro de 0 a 255.
+            // Quem digita 0.30 num campo desses recebe 0 — o campo trunca, sem
+            // dizer nada, e a cor vira preto.
+            //
+            // Isso mordia justamente onde a precisao importa: a engine guarda
+            // e o GLSL consome cor em float linear 0..1. O grafo de material
+            // salva 0.1398 no .axegraph, mas o unico jeito de DIGITAR esse
+            // valor era converter para 0..255 de cabeca e aceitar o passo de
+            // 1/255. Numa agua estilizada, onde a diferenca entre a cor do
+            // raso e a do fundo e o efeito inteiro, isso e a diferenca entre
+            // acertar e nao acertar.
+            //
+            // SetColorEditOptions troca o DEFAULT global do contexto, entao
+            // vale para os ~20 seletores ja espalhados pelo editor (luz, fog,
+            // ceu, particula, notify de animacao, node Color, parametro de
+            // material) sem tocar em nenhuma chamada. Um call site que queira
+            // 0..255 continua podendo pedir ImGuiColorEditFlags_Uint8.
+            ImGui::SetColorEditOptions(
+                ImGuiColorEditFlags_Float |
+                ImGuiColorEditFlags_DisplayRGB |
+                ImGuiColorEditFlags_InputRGB |
+                ImGuiColorEditFlags_PickerHueBar);
+
             // Arredondamento pronunciado (~8-10px), estilo UE5/Figma
             style.WindowRounding = 8.0f;
             style.ChildRounding = 8.0f;

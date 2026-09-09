@@ -62,7 +62,13 @@ namespace axe
     void MaterialThumbnailRenderer::Register(const std::string& uuid,
         const std::filesystem::path& filePath)
     {
-        if (filePath.extension() != ".axemat") return;
+        // MATFUNC_V2 — Material Function tambem ganha esfera. Ela nao vira
+        // shader sozinha, entao o preview vem de um material ENVELOPE montado
+        // em memoria (ver ResolveMaterialFunctionPreview). Sem isto a funcao
+        // aparecia no browser com o icone generico de arquivo, e a unica forma
+        // de saber o que ela faz era abrir.
+        const bool isFunction = (filePath.extension() == ".axematfunc");
+        if (filePath.extension() != ".axemat" && !isFunction) return;
 
         // Já está no cache — não recarrega
         if (m_Cache.count(uuid)) return;
@@ -102,7 +108,9 @@ namespace axe
         //  uma linha de log. Agora o ResolveMaterial avisa, e o que sobra sem
         //  shader avisa aqui embaixo.
         // ═══════════════════════════════════════════════════════════════════
-        entry.Material = AssetSpawnDefaults::ResolveMaterial(uuid);
+        entry.Material = isFunction
+            ? AssetSpawnDefaults::ResolveMaterialFunctionPreview(uuid)
+            : AssetSpawnDefaults::ResolveMaterial(uuid);
 
         if (!entry.Material)
         {
@@ -142,8 +150,17 @@ namespace axe
 
         // THUMB_MATERIAL_V1 — a mesma funcao do Register. Este bloco era a
         // QUINTA copia: a diferenca entre ele e o de cima era so quem chamava.
-        if (auto mat = AssetSpawnDefaults::ResolveMaterial(uuid))
-            it->second.Material = mat;
+        // MATFUNC_V2 — o Invalidate nao sabe a extensao (so recebe o UUID),
+        // entao pergunta ao banco. Sem isto, recompilar uma funcao deixava a
+        // miniatura dela congelada na versao antiga.
+        const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+        const bool isFunction = rec && rec->Type == AssetType::MaterialFunction;
+
+        auto mat = isFunction
+            ? AssetSpawnDefaults::ResolveMaterialFunctionPreview(uuid)
+            : AssetSpawnDefaults::ResolveMaterial(uuid);
+
+        if (mat) it->second.Material = mat;
 
         it->second.Dirty = true;
         it->second.Rendered = false;

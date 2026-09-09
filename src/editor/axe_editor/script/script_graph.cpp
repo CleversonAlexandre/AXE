@@ -735,6 +735,25 @@ namespace axe
         // não conhece estados nem clipes — escreve valores, e o AnimGraph
         // decide. É o que permite reeditar a state machine inteira sem tocar
         // no script.
+        // ═══════════════════════════════════════════════════════════════════
+        //  SCRIPT_STYLE_V1 — NAO TRADUZA NOME DE PINO NEM DE NO
+        //
+        //  "Parametro" e "Valor" logo abaixo parecem sobra de portugues numa
+        //  interface que virou inglesa. NAO SAO: nome de pino e IDENTIDADE.
+        //
+        //  Ele vai gravado no `.axescript`, e o compilador CASA POR STRING em
+        //  tres arquivos — `inp.Name == "Parametro"` aparece em
+        //  script_graph_compiler.cpp (tres vezes) e em script_node_draw.cpp.
+        //  Renomear aqui COMPILA SEM AVISO e quebra todo grafo ja salvo: o no
+        //  perde o valor, o combo de parametro do AnimGraph para de achar o
+        //  pino, e o C++ gerado sai com o default silenciosamente.
+        //
+        //  A passagem de idioma desta rodada tocou SO rotulo de widget, titulo
+        //  de painel e tooltip. Nome de no e nome de pino ficaram como estao.
+        //
+        //  Se um dia forem traduzidos de verdade, exige migracao com versao no
+        //  arquivo — do mesmo jeito que o `.axeanim` v1 -> v2 foi feito.
+        // ═══════════════════════════════════════════════════════════════════
         if (t == "SetAnimFloat")
         {
             auto node = makeNode(baseId, "Set Anim Float", ScriptNodeCategory::Action);
@@ -1386,7 +1405,7 @@ namespace axe
 
         int id = m_NextId++;
         m_Links.emplace_back(id, startPin, endPin);
-        AXE_CORE_INFO("ScriptGraph: link {} → {}", startPin.Get(), endPin.Get());
+        AXE_CORE_INFO("ScriptGraph: link {} -> {}", startPin.Get(), endPin.Get());
         return &m_Links.back();
     }
 

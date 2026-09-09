@@ -195,6 +195,9 @@ namespace axe
                 mat3 TBN = mat3(T, B, Nm);
                 N = normalize(TBN * normalTex);
             }
+
+            // TWO_SIDED_V1 — ver o mesmo trecho no geometry pass.
+            if (!gl_FrontFacing) N = -N;
            if (u_UsePBR == 0 || !u_HasLight)
             {
                 if (!u_HasLight)
@@ -324,6 +327,21 @@ namespace axe
         transparentSpec.Cull = CullMode::Back;
         m_TransparentPipeline = Pipeline::Create(transparentSpec);
 
+        // ── TWO_SIDED_V1 ─────────────────────────────────────────────────────
+        //
+        // A mesma pipeline translucida, sem descarte de face. O raciocinio de
+        // cima vale para o VIDRO — um volume fechado, onde a parede de tras
+        // desenhada fora de ordem vira remendo. Nao vale para uma FOLHA: um
+        // plano de agua, uma folhagem, um pano. Ali nao existe face de tras
+        // "por dentro" de nada; existe a mesma superficie vista do outro lado,
+        // e descarta-la faz a agua sumir quando a camera desce para baixo dela.
+        //
+        // Quem escolhe e o material (Material::TwoSided), como na Unreal — nao
+        // ha como a renderer adivinhar se aquela malha e um copo ou um lago.
+        PipelineSpecification transparentTwoSidedSpec = transparentSpec;
+        transparentTwoSidedSpec.Cull = CullMode::None;
+        m_TransparentTwoSidedPipeline = Pipeline::Create(transparentTwoSidedSpec);
+
         m_DefaultMaterial = std::make_shared<Material>(m_Shader, "Default");
     }
 
@@ -358,7 +376,12 @@ namespace axe
         // Usa o shader do material se tiver, senão usa o padrão
         auto shader = mat->GetShader() ? mat->GetShader() : m_Shader;
 
-        (transparent ? m_TransparentPipeline : m_Pipeline)->Bind();
+        // TWO_SIDED_V1 — a pipeline opaca ja e CullMode::None, entao so o
+        // caminho translucido tem duas variantes.
+        const auto& pipeline = transparent
+            ? (mat->TwoSided ? m_TransparentTwoSidedPipeline : m_TransparentPipeline)
+            : m_Pipeline;
+        pipeline->Bind();
         shader->Bind();
         mesh.GetVertexArray()->Bind();
 
@@ -489,6 +512,49 @@ namespace axe
             shader->SetInt("u_HasShadowMap", 0);
         }
 
+        // ── SCENE_DEPTH_SURFACE_V1 — a cena opaca atras, no slot 9 ──────────
+        //
+        // Slot 9 porque 0..4 sao os mapas do material, 5/6/7 o IBL e 8 o
+        // shadow map. Ligado SO no passe transparente: no opaco esta mesma
+        // textura e um attachment do FBO corrente, e ler dela ali e
+        // comportamento indefinido.
+        //
+        // u_ScreenSize vai SEMPRE, mesmo sem a textura: um material que usa
+        // Screen UV precisa do tamanho da tela para converter gl_FragCoord, e
+        // uniform declarada e nao enviada vale zero em silencio — armadilha ja
+        // anotada no projeto.
+        shader->SetFloat2("u_ScreenSize", m_ScreenSize);
+
+        // ── SCENE_HEIGHT_V1 — slots 10 e 11 ──────────────────────────────
+        //
+        // Vai para QUALQUER material, transparente ou nao: ao contrario do
+        // G-Buffer logo abaixo, aqui nao ha ciclo de leitura e escrita — o mapa
+        // de topo foi gerado num passe anterior, num alvo que ja terminou.
+        if (m_SceneHeightID != 0 && m_SceneSeedID != 0)
+        {
+            RenderCommand::BindTextureUnit(10, m_SceneHeightID);
+            RenderCommand::BindTextureUnit(11, m_SceneSeedID);
+            shader->SetInt("u_SceneHeightMap", 10);
+            shader->SetInt("u_SceneSeedMap", 11);
+            shader->SetMat4("u_SceneHeightMatrix", glm::value_ptr(m_SceneHeightMatrix));
+            shader->SetInt("u_HasSceneHeight", 1);
+        }
+        else
+        {
+            shader->SetInt("u_HasSceneHeight", 0);
+        }
+
+        if (transparent && m_ScenePositionID != 0)
+        {
+            RenderCommand::BindTextureUnit(9, m_ScenePositionID);
+            shader->SetInt("u_ScenePosition", 9);
+            shader->SetInt("u_HasSceneDepth", 1);
+        }
+        else
+        {
+            shader->SetInt("u_HasSceneDepth", 0);
+        }
+
         RenderCommand::DrawIndexed(mesh.GetVertexArray());
     }
 
@@ -496,6 +562,27 @@ namespace axe
     {
         m_ShadowMapID = depthMapID;
         m_LightSpaceMatrix = lightSpaceMatrix;
+    }
+
+    void MeshRenderer::SetSceneHeightSource(uint32_t heightMapID, uint32_t seedMapID,
+        const glm::mat4& topDownMatrix)
+    {
+        m_SceneHeightID = heightMapID;
+        m_SceneSeedID = seedMapID;
+        m_SceneHeightMatrix = topDownMatrix;
+    }
+
+    void MeshRenderer::SetSceneDepthSource(uint32_t scenePositionTexID,
+        uint32_t screenWidth, uint32_t screenHeight)
+    {
+        m_ScenePositionID = scenePositionTexID;
+
+        // Piso em 1: o shader divide gl_FragCoord por isto, e um framebuffer de
+        // altura zero num frame de redimensionamento daria divisao por zero —
+        // que em GLSL nao e erro, e infinito que se espalha em silencio.
+        m_ScreenSize = glm::vec2(
+            (float)(screenWidth > 0 ? screenWidth : 1u),
+            (float)(screenHeight > 0 ? screenHeight : 1u));
     }
 
     void MeshRenderer::End()

@@ -834,7 +834,7 @@ namespace axe
                     ImGui::DragFloat("Radius##lr", &e.LightRadius, 0.2f, 0.f, 100.f);
                     ImGui::Checkbox("Scale by Particle Count", &e.LightScaleByParticles);
                     if (e.LightScaleByParticles)
-                        ImGui::TextDisabled("  Intensity ∝ alive/max particles.");
+                        ImGui::TextDisabled("  Intensity scales with alive/max particles.");
                     ImGui::Spacing();
                     ImGui::Checkbox("Flicker", &e.LightFlicker);
                     if (e.LightFlicker)
@@ -955,7 +955,7 @@ namespace axe
                 {
                     ImGui::DragFloat("Full Rate Dist", &e.LODDistanceFull, 1.f, 0.f, 500.f);
                     ImGui::DragFloat("Zero Rate Dist", &e.LODDistanceZero, 1.f, 0.f, 500.f);
-                    ImGui::TextDisabled("Rate: 100%%→0%% between distances.");
+                    ImGui::TextDisabled("Rate: 100%% -> 0%% between distances.");
                 }
                 ImGui::Unindent(8);
             }

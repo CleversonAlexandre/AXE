@@ -8,6 +8,7 @@
 #include "axe/graphics/renderer/line_renderer.hpp"
 #include "axe/graphics/renderer/mesh_renderer.hpp"
 #include "axe/graphics/renderer/shadow_map_pass.hpp"
+#include "axe/graphics/renderer/scene_height_pass.hpp"   // SCENE_HEIGHT_V1
 #include "axe/graphics/renderer/cascaded_shadow_pass.hpp"
 #include "axe/graphics/renderer/gbuffer.hpp"
 #include "axe/graphics/renderer/probe_bake_pass.hpp"
@@ -74,6 +75,7 @@ namespace axe
         }
 
         void SetSSAOSettings(const SSAOSettings& s) { m_SSAOSettings = s; }
+
         void SetFogSettings(const VolumetricFogSettings& s) { m_FogSettings = s; }
         void SetTAASettings(const TAASettings& s) { m_TAASettings = s; }
 
@@ -322,6 +324,30 @@ namespace axe
         std::shared_ptr<TAAPass> m_TAAPass;
         TAASettings              m_TAASettings;
 
+        // ── SCENE_HEIGHT_V1 ──────────────────────────────────────────────
+        //
+        //  Roda uma vez por frame, ao lado do passe de sombra e pelo mesmo
+        //  motivo: e uma render auxiliar da cena inteira, que os dois caminhos
+        //  (deferred e forward) consomem depois.
+        //
+        //  A extensao e a resolucao ficam aqui, e nao numa struct de settings
+        //  do editor, porque nesta rodada nada ainda os edita — quando forem
+        //  expostos, o lugar natural e o PostProcessComponent, junto de SSAO e
+        //  Fog, que e por onde o Inspector ja conversa com o renderer.
+        std::shared_ptr<SceneHeightPass> m_SceneHeightPass;
+
+        // ── SCENE_HEIGHT_V6 — qualidade do mapa, e nao ajuste de cena ────────
+        //
+        //  Os dois juntos dao o TAMANHO DO TEXEL, que e a granulacao da linha
+        //  da praia: 24 m a 1024 da 2,3 cm. Os 60 m antigos davam 5,9 cm, e uma
+        //  faixa de espuma de meio metro cabia em nove texels — dai o serrilhado.
+        //
+        //  Ficam aqui, e nao num painel, pelo mesmo motivo que a resolucao da
+        //  shadow map fica: e escolha de renderer, nao de cena. Quando a engine
+        //  tiver um lugar de Qualidade de Render, os dois vao junto com ela.
+        static constexpr float    k_SceneHeightExtent = 24.0f;
+        static constexpr uint32_t k_SceneHeightResolution = 1024;
+
         std::shared_ptr<ShadowMapPass> m_ShadowPass;
         std::shared_ptr<CascadedShadowPass> m_CSMPass;
         bool m_UseCSM = true; // usa CSM ao invés do shadow map simples
@@ -361,6 +387,10 @@ namespace axe
             const glm::vec3& cameraPosition,
             const glm::mat4& view,
             const glm::mat4& projection);
+
+        // SCENE_HEIGHT_V1 — a render ortografica de topo.
+        void RenderSceneHeightPass(const RenderQueue& queue,
+            const glm::vec3& cameraPosition);
         void RenderForward(const RenderQueue& queue,
             const glm::mat4& viewProjection,
             const glm::mat4& view,

@@ -5,6 +5,8 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
+#include <algorithm>
+#include "axe/asset/asset_database.hpp"   // MATFUNC_V1
 
 #include "axe/graphics/texture.hpp"
 #include "axe/graphics/shader.hpp"
@@ -13,9 +15,372 @@
 
 namespace axe
 {
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SCENE_DEPTH_SURFACE_V1 — os nodes de TELA num material de superficie
+    //
+    //  ── O PROBLEMA ─────────────────────────────────────────────────────────
+    //
+    //  `Scene Depth` e `Screen UV` so funcionavam no dominio Post Process.
+    //  Fora dele emitiam constante (0.0 / vec2(0.0)) — o node aparecia no
+    //  menu, ligava, compilava, e nao fazia nada.
+    //
+    //  E exatamente o que falta para agua estilizada: a cor pela profundidade
+    //  da lamina e a espuma na linha da praia sao, as duas, a distancia entre
+    //  a superficie da agua e o fundo atras dela.
+    //
+    //  ── POR QUE HELPER, E NAO UM `if` NA EMISSAO DO NODE ───────────────────
+    //
+    //  O codigo dos nodes e gerado UMA VEZ (`m_FragmentCode`) e colado em SEIS
+    //  shaders — inclusive nos DOIS do dominio Surface: o forward (`fs`) e o
+    //  do G-Buffer (`gs`). Um `if` na emissao teria de escolher um texto so
+    //  para os dois.
+    //
+    //  E os dois PRECISAM diferir: no caminho opaco o shader ESCREVE no
+    //  attachment de posicao do G-Buffer, e ler de uma textura anexada ao FBO
+    //  corrente e comportamento indefinido em GL. O opaco tem de receber zero.
+    //
+    //  Entao o texto gerado e sempre o mesmo — `axeSceneDepth(axeScreenUV())` —
+    //  e o que muda e a DEFINICAO das funcoes, colada em cada shader.
+    // ═════════════════════════════════════════════════════════════════════════
+    namespace
+    {
+        // =====================================================================
+        //  NOISE_SMOOTH_V1 — ruido CONTINUO
+        //
+        //  O node "Noise" emitia a receita de uma linha que circula em todo
+        //  tutorial de shader:
+        //
+        //      fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453)
+        //
+        //  Isso NAO e ruido no sentido util: e um HASH. Dois pixels vizinhos
+        //  recebem valores completamente independentes, entao o que aparece na
+        //  tela e CHUVISCO DE TELEVISAO. Nao ha escala espacial, nao ha nada
+        //  para ajustar, e nenhum valor que o autor digite muda esse fato — o
+        //  defeito esta no node, nao no grafo de quem o usou.
+        //
+        //  O que faltava e INTERPOLACAO. O ruido de valor amostra o hash nos
+        //  quatro cantos de uma celula da grade e mistura entre eles com a
+        //  curva de Hermite (3t^2 - 2t^3), cuja derivada e zero nas bordas —
+        //  e por isso que a celula vizinha continua de forma suave em vez de
+        //  a grade aparecer. axeFbm empilha oitavas: cada uma com o dobro da
+        //  frequencia e metade da amplitude, que e o que da ondulacao em vez
+        //  de bolhas do mesmo tamanho.
+        //
+        //  Sao funcoes PURAS: nao leem uniform nem sampler. Por isso valem
+        //  para os seis shaders sem variante por dominio, ao contrario de
+        //  SceneHelpersGLSL logo abaixo.
+        // =====================================================================
+        std::string NoiseHelpersGLSL()
+        {
+            return
+                "// NOISE_SMOOTH_V1\n"
+                "float axeHash21(vec2 p) {\n"
+                "    p = fract(p * vec2(123.34, 456.21));\n"
+                "    p += dot(p, p + 45.32);\n"
+                "    return fract(p.x * p.y);\n"
+                "}\n"
+                "float axeValueNoise(vec2 p) {\n"
+                "    vec2 i = floor(p);\n"
+                "    vec2 f = fract(p);\n"
+                "    vec2 u = f * f * (3.0 - 2.0 * f);\n"
+                "    float a = axeHash21(i);\n"
+                "    float b = axeHash21(i + vec2(1.0, 0.0));\n"
+                "    float c = axeHash21(i + vec2(0.0, 1.0));\n"
+                "    float d = axeHash21(i + vec2(1.0, 1.0));\n"
+                "    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n"
+                "}\n"
+                "float axeFbm(vec2 p, int octaves) {\n"
+                "    float sum = 0.0;\n"
+                "    float amp = 0.5;\n"
+                "    float norm = 0.0;\n"
+                "    for (int o = 0; o < 8; ++o) {\n"
+                "        if (o >= octaves) break;\n"
+                "        sum  += amp * axeValueNoise(p);\n"
+                "        norm += amp;\n"
+                "        p    *= 2.02;\n"
+                "        amp  *= 0.5;\n"
+                "    }\n"
+                "    return sum / max(norm, 0.0001);\n"
+                "}\n\n";
+        }
+
+        enum class SceneHelperMode
+        {
+            Stub,          // dominio sem acesso a tela: devolve neutro
+            Surface,       // forward de superficie: le o G-Buffer ja resolvido
+            PostProcess,   // quad de tela cheia: v_TexCoord JA e a UV da tela
+        };
+
+        std::string SceneHelpersGLSL(SceneHelperMode mode)
+        {
+            switch (mode)
+            {
+            case SceneHelperMode::PostProcess:
+                // u_ScenePosition, u_ScreenSize e u_CameraPosition ja estao
+                // declarados no cabecalho deste dominio — redeclarar e erro
+                // de compilacao em GLSL.
+                return
+                    "// SCENE_DEPTH_SURFACE_V1\n"
+                    "vec2  axeScreenUV()    { return v_TexCoord; }\n"
+                    "vec2  axeScreenTexel() { return 1.0 / max(u_ScreenSize, vec2(1.0)); }\n"
+                    "float axeSceneDepth(vec2 uv) {\n"
+                    "    return length(texture(u_ScenePosition, uv).rgb - u_CameraPosition);\n"
+                    "}\n"
+                    // PRIMITIVES_V1 — a posicao de mundo do que esta atras, crua. Este
+                    // dominio nao trata o fundo, pela mesma razao ja escrita acima:
+                    // aqui existe o node `Scene Is Background` para decidir isso.
+                    "vec3 axeSceneWorldPos(vec2 uv) {\n"
+                    "    return texture(u_ScenePosition, uv).rgb;\n"
+                    "}\n"
+                    // SCENE_BG_V1 — aqui o teste continua sendo o da NORMAL,
+                    // que e o que este dominio ja usava. Trocar mudaria o
+                    // resultado de material de post process ja escrito.
+                    "float axeSceneIsBackground(vec2 uv) {\n"
+                    "    return step(length(texture(u_SceneNormal, uv).rgb), 0.1);\n"
+                    "}\n"
+                    // SCENE_HEIGHT_V1 — o mapa de topo so e ligado no passe
+                    // de superficie. Aqui as funcoes existem para o mesmo grafo
+                    // compilar nos dois dominios, devolvendo "nada aqui".
+                    "float axeSceneHeight(vec3 worldPos) { return -1e9; }\n"
+                    "float axeSceneDistance(vec3 worldPos) { return 1e6; }\n"
+                    "float axeSceneNearestBase(vec3 worldPos) { return 1e9; }\n"
+                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n\n";
+
+            case SceneHelperMode::Surface:
+                // u_CameraPosition ja vem do cabecalho do Surface; os outros
+                // tres sao daqui. Declarados SEMPRE, mesmo que o grafo nao use
+                // node de tela nenhum: uniform nao referenciada e removida pelo
+                // proprio compilador de GLSL, e a alternativa seria varrer o
+                // grafo antes de montar o cabecalho.
+                //
+                // u_HasSceneDepth e o interruptor: este mesmo shader roda no
+                // PREVIEW do Material Editor e no passe opaco, onde nao ha
+                // textura ligada. Sem ele, esses caminhos amostrariam a unidade
+                // de textura 9 com o que estivesse la.
+                //
+                // ── O FUNDO DEVOLVE INFINITO, E ISSO NAO E DETALHE ─────────
+                //
+                // Onde nao ha geometria opaca atras, o attachment de posicao
+                // esta no valor de limpeza: (0,0,0). A conta ingenua daria
+                // `length(vec3(0) - u_CameraPosition)` — a distancia ate a
+                // ORIGEM DO MUNDO, um numero pequeno e sem relacao nenhuma com
+                // a cena.
+                //
+                // Numa agua isso e visivel e absurdo: MAR ABERTO (nada atras)
+                // leria profundidade rasa e ficaria COBERTO DE ESPUMA, que e
+                // exatamente o oposto do certo. "Nada atras" significa
+                // profundidade infinita.
+                //
+                // O dominio Post Process NAO recebe este tratamento de
+                // proposito: la ja existe o node `Scene Is Background` para
+                // decidir isso explicitamente, e mudar o valor mudaria
+                // materiais de post process ja escritos.
+                return
+                    "// SCENE_DEPTH_SURFACE_V1\n"
+                    "uniform sampler2D u_ScenePosition;\n"
+                    "uniform vec2      u_ScreenSize;\n"
+                    "uniform int       u_HasSceneDepth;\n"
+                    "vec2  axeScreenUV()    { return gl_FragCoord.xy / max(u_ScreenSize, vec2(1.0)); }\n"
+                    "vec2  axeScreenTexel() { return 1.0 / max(u_ScreenSize, vec2(1.0)); }\n"
+                    "float axeSceneDepth(vec2 uv) {\n"
+                    "    if (u_HasSceneDepth == 0) return 0.0;\n"
+                    "    vec3 p = texture(u_ScenePosition, uv).rgb;\n"
+                    "    if (dot(p, p) < 1e-8) return 1e6;\n"
+                    "    return length(p - u_CameraPosition);\n"
+                    "}\n"
+                    // PRIMITIVES_V1 — a posicao de mundo do que esta atras, crua.
+                    // Fonte de dado, como o axeSceneDepth logo acima: expoe o
+                    // attachment de posicao do G-Buffer, que o grafo nao alcanca
+                    // sozinho. A composicao (profundidade vertical, distancia
+                    // horizontal, o que for) se monta no grafo, com Subtract,
+                    // Append e Length.
+                    //
+                    // Devolve o valor de limpeza (0,0,0) onde nao ha nada atras.
+                    // Quem usar isto para medir distancia tem de tratar esse caso
+                    // — e por isso o node avisa no painel de detalhes.
+                    "vec3 axeSceneWorldPos(vec2 uv) {\n"
+                    "    if (u_HasSceneDepth == 0) return vec3(0.0);\n"
+                    "    return texture(u_ScenePosition, uv).rgb;\n"
+                    "}\n"
+                    // ── SCENE_BG_V1 — "ha geometria atras deste pixel?" ────
+                    //
+                    //  Esta pergunta SEMPRE foi respondivel no Surface: o
+                    //  attachment de posicao fica no valor de limpeza onde nao
+                    //  ha nada atras, e e o mesmo teste que o axeSceneDepth ja
+                    //  usava para devolver infinito. O node "Scene Is
+                    //  Background" e que emitia `0.0` fixo fora do Post
+                    //  Process — ou seja, mentia dizendo "sempre ha geometria".
+                    //
+                    //  E e uma mentira cara. Quem mede distancia com o
+                    //  axeSceneWorldPos recebe (0,0,0) no ceu, e `length(W.xz -
+                    //  0)` vira a DISTANCIA ATE A ORIGEM DO MUNDO: aneis
+                    //  concentricos centrados no ponto (0,0,0) da cena, em vez
+                    //  de espuma em volta de cada objeto.
+                    //
+                    //  Continua sendo pergunta de DADO, e nao receita: o
+                    //  tratamento do fundo se monta no grafo, com um Lerp.
+                    "float axeSceneIsBackground(vec2 uv) {\n"
+                    "    if (u_HasSceneDepth == 0) return 0.0;\n"
+                    "    vec3 p = texture(u_ScenePosition, uv).rgb;\n"
+                    "    return dot(p, p) < 1e-8 ? 1.0 : 0.0;\n"
+                    "}\n"
+                    // ── SCENE_HEIGHT_V1 — o mapa de topo ──────────────────
+                    //
+                    //  Estas duas sao as unicas fontes de dado do grafo que NAO
+                    //  dependem de onde a camera esta. Todo o resto — Scene
+                    //  Depth, Scene Normal, Scene World Position — le o
+                    //  G-Buffer, que so conhece o que a camera enxerga, e por
+                    //  isso qualquer distancia medida com eles muda quando a
+                    //  camera gira.
+                    //
+                    //  Aqui a fonte e uma render ortografica de cima. A mesma
+                    //  de qualquer angulo. Ver scene_height_pass.hpp.
+                    //
+                    //  axeSceneHeight  — o Y de mundo do que esta EMBAIXO deste
+                    //                    ponto. Da coluna d'agua de verdade.
+                    //  axeSceneDistance— a distancia HORIZONTAL, em metros, ate
+                    //                    a geometria mais proxima. E a
+                    //                    distancia ate a margem, e ela existe
+                    //                    mesmo do lado que a camera nao ve.
+                    //
+                    //  Fora do quadrado coberto pelo mapa os dois devolvem o
+                    //  valor de "nada aqui", em vez de repetir a borda: repetir
+                    //  faria a espuma se esticar em faixas ate o horizonte.
+                    "uniform sampler2D u_SceneHeightMap;\n"
+                    "uniform sampler2D u_SceneSeedMap;\n"
+                    "uniform mat4      u_SceneHeightMatrix;\n"
+                    "uniform int       u_HasSceneHeight;\n"
+                    "vec2 axeSceneHeightUV(vec3 worldPos) {\n"
+                    "    vec4 p = u_SceneHeightMatrix * vec4(worldPos, 1.0);\n"
+                    "    return (p.xy / p.w) * 0.5 + 0.5;\n"
+                    "}\n"
+                    "bool axeSceneHeightInside(vec2 uv) {\n"
+                    "    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;\n"
+                    "}\n"
+                    "float axeSceneHeight(vec3 worldPos) {\n"
+                    "    if (u_HasSceneHeight == 0) return -1e9;\n"
+                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                    "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
+                    "    return texture(u_SceneHeightMap, uv).r;\n"
+                    "}\n"
+                    "float axeSceneDistance(vec3 worldPos) {\n"
+                    "    if (u_HasSceneHeight == 0) return 1e6;\n"
+                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                    "    if (!axeSceneHeightInside(uv)) return 1e6;\n"
+                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                    "    if (seed.x > 1e8) return 1e6;\n"
+                    "    return length(worldPos.xz - seed.xy);\n"
+                    "}\n"
+                    // ── SCENE_HEIGHT_V3 — a BASE da geometria mais proxima ─
+                    //
+                    //  O V2 devolvia a altura do TOPO, e o topo nao separa as
+                    //  duas coisas que precisam ser separadas: uma pedra que
+                    //  sai da agua e um cubo que paira sobre ela tem, os dois,
+                    //  o topo acima da lamina. Filtrar por topo jogava fora a
+                    //  margem de verdade junto com o objeto suspenso — e era
+                    //  isso que apagava a espuma quando dois cubos ficavam na
+                    //  mesma coluna: o de cima escondia o que estava na agua.
+                    //
+                    //  A BASE separa: a pedra desce ate abaixo da superficie, o
+                    //  cubo suspenso nao. O teste no grafo vira uma comparacao
+                    //  direta — base <= altura da agua e margem.
+                    //
+                    //  1e9 e a resposta para "nao ha nada": absurdamente alto,
+                    //  logo nada encosta, logo sem espuma. O contrario do -1e9
+                    //  do V2, e de proposito — o sentinela tem que cair no lado
+                    //  SEGURO do teste.
+                    "float axeSceneNearestBase(vec3 worldPos) {\n"
+                    "    if (u_HasSceneHeight == 0) return 1e9;\n"
+                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                    "    if (!axeSceneHeightInside(uv)) return 1e9;\n"
+                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                    "    if (seed.x > 1e8) return 1e9;\n"
+                    "    return seed.z;\n"
+                    "}\n"
+                    // ── SCENE_HEIGHT_V4 — o TOPO da geometria mais proxima ──
+                    //
+                    //  A companheira obrigatoria do Nearest Base. Sozinha, a
+                    //  base diz "isto desce ate a agua" — e isso e verdade na
+                    //  pegada inteira de uma malha afundada, nao so onde ela
+                    //  ainda sai da lamina.
+                    //
+                    //  Com as duas, o grafo pergunta o que interessa: a coluna
+                    //  ATRAVESSA esta altura? base abaixo E topo acima. Quem
+                    //  define "esta altura" continua sendo o material — o
+                    //  passe nao sabe o que e agua.
+                    "float axeSceneNearestTop(vec3 worldPos) {\n"
+                    "    if (u_HasSceneHeight == 0) return -1e9;\n"
+                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                    "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
+                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                    "    if (seed.x > 1e8) return -1e9;\n"
+                    "    return seed.w;\n"
+                    "}\n\n";
+
+            default:
+                return
+                    "// SCENE_DEPTH_SURFACE_V1 — dominio sem leitura de tela\n"
+                    "vec2  axeScreenUV()    { return vec2(0.0); }\n"
+                    "vec2  axeScreenTexel() { return vec2(0.0); }\n"
+                    "float axeSceneDepth(vec2 uv) { return 0.0; }\n"
+                    "vec3  axeSceneWorldPos(vec2 uv) { return vec3(0.0); }\n"
+                    // SCENE_BG_V1 — dominio que nao le a tela nao sabe
+                    // responder. Devolve 0.0, que e o valor que o node ja dava
+                    // fora do Post Process: nao muda material nenhum existente.
+                    "float axeSceneIsBackground(vec2 uv) { return 0.0; }\n"
+                    // SCENE_HEIGHT_V1 — o mapa de topo so e ligado no passe
+                    // de superficie. Aqui as funcoes existem para o mesmo grafo
+                    // compilar nos dois dominios, devolvendo "nada aqui".
+                    "float axeSceneHeight(vec3 worldPos) { return -1e9; }\n"
+                    "float axeSceneDistance(vec3 worldPos) { return 1e6; }\n"
+                    "float axeSceneNearestBase(vec3 worldPos) { return 1e9; }\n"
+                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n\n";
+            }
+        }
+
+        // true se o grafo tem ao menos um node que le a tela. Usado SO para
+        // avisar quem ligou Scene Depth num material Opaque, onde ele sempre
+        // devolvera zero — o node compila, e o silencio seria pior.
+        bool GraphReadsScene(MaterialGraph* graph)
+        {
+            if (!graph) return false;
+
+            for (auto& node : graph->GetNodes())
+                if (node->Name == "Scene Depth" || node->Name == "Screen UV")
+                    return true;
+
+            return false;
+        }
+    }
+
+    // ── MATFUNC_V1 ───────────────────────────────────────────────────────────
+    //
+    // Estatico porque as entradas do MaterialCompiler sao TODAS metodos
+    // estaticos que criam a instancia, compilam e a destroem — e a janela do
+    // Material Editor precisa dos erros DEPOIS que ela ja morreu.
+    //
+    // Erro de GRAFO nao aparece no log do driver: um asset de funcao sumido
+    // gera GLSL que compila limpo, so que fazendo a conta errada. Sem este
+    // canal, o unico sintoma seria o material ficar visualmente errado sem
+    // nenhuma mensagem — a pior forma de defeito que esta engine ja teve.
+    //
+    // O preco de ser estatico e um so material compilando por vez, que e
+    // exatamente o que o MaterialEditorWindow faz (um unico m_Asset).
+    std::string MaterialCompiler::s_LastFunctionErrors;
+
+    const std::string& MaterialCompiler::LastFunctionErrors()
+    {
+        return s_LastFunctionErrors;
+    }
+
     MaterialCompiler::MaterialCompiler(MaterialGraph* graph)
         : m_Graph(graph)
-    {}
+    {
+        // Zera por COMPILACAO. Sem isso o log acumularia o erro de uma
+        // compilacao anterior ja corrigida, e o autor iria atras de um
+        // problema que nao existe mais.
+        s_LastFunctionErrors.clear();
+    }
 
     // ── PKG9 — samplers por UUID, para o `.axeshader` ────────────────────────
     //
@@ -255,10 +620,25 @@ namespace axe
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
         // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
         // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << SceneHelpersGLSL(SceneHelperMode::Surface);
+        fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
-        fs << "    // Normal da superfície\n";
-        fs << "    vec3 N = normalize(v_Normal);\n\n";
+        // ── TWO_SIDED_V1 ─────────────────────────────────────────────────
+        //
+        //  A normal interpolada e a da FACE, e a face de tras tem a normal
+        //  apontando para longe de quem olha. Sem virar, tudo que depende de N
+        //  responde ao contrario ali: o Fresnel acende no meio em vez da borda,
+        //  a luz difusa da zero, e o autor acaba pondo um One Minus no grafo
+        //  para compensar — o que quebra o material assim que ele e visto do
+        //  outro lado.
+        //
+        //  gl_FrontFacing e a mesma resposta que a Unreal da nos materiais Two
+        //  Sided. Custa uma instrucao e vale para toda malha aberta: plano de
+        //  agua, folhagem, pano, cartaz.
+        fs << "    // Normal da superfície (TWO_SIDED_V1: virada na face de tras)\n";
+        fs << "    vec3 N = normalize(v_Normal);\n";
+        fs << "    if (!gl_FrontFacing) N = -N;\n\n";
 
         // Código gerado pelo percurso do grafo
         fs << compiler.m_FragmentCode;
@@ -310,6 +690,17 @@ namespace axe
 
         // Blend Mode Masked (alpha test): recorta via discard e continua
         // OPACO (deferred) — não entra no forward translúcido.
+        result.TwoSided = graph->TwoSided;   // TWO_SIDED_V1
+
+        // SCENE_HEIGHT_V6 — o codigo gerado ja tem as chamadas inlinadas das
+        // Material Functions, entao procurar AQUI acha o uso venha ele de onde
+        // vier. Uma varredura de nodes do grafo de fora nao acharia.
+        result.UsesSceneHeight =
+            compiler.m_FragmentCode.find("axeSceneHeight(") != std::string::npos ||
+            compiler.m_FragmentCode.find("axeSceneDistance(") != std::string::npos ||
+            compiler.m_FragmentCode.find("axeSceneNearestBase(") != std::string::npos ||
+            compiler.m_FragmentCode.find("axeSceneNearestTop(") != std::string::npos;
+
         bool isMasked = (graph->BlendMode == MaterialBlendMode::Masked);
         result.IsMasked = isMasked;
         result.AlphaCutoff = 0.5f;
@@ -318,6 +709,34 @@ namespace axe
         // pass de transparência (vidro, etc.) — ver SceneRenderer.
         // Exceção: Masked vai pelo deferred (o discard faz o recorte).
         result.IsTransparent = (opacitySrc != nullptr) && !isMasked;
+
+        // ── SCENE_DEPTH_SURFACE_V1 — o aviso que evita a tarde perdida ──────
+        //
+        // Scene Depth so tem valor no passe FORWARD, e um material so entra
+        // nele quando e transparente: pino Opacity conectado e Blend Mode fora
+        // de Masked.
+        //
+        // Sem este aviso, ligar Scene Depth num material Opaque compila limpo,
+        // desenha, e devolve zero para sempre. O autor ve a agua chapada e nao
+        // tem o que investigar — o pior formato de defeito que existe, e que
+        // esta engine ja teve com uniform declarada e nunca enviada.
+        // Carimbo de versao: o Clever confere isto no log ANTES de investigar
+        // qualquer coisa no material. Se a linha nao aparecer ao compilar um
+        // material, o binario e antigo e nao adianta olhar o grafo.
+        AXE_CORE_INFO("[SCENE_HEIGHT_V6] material compilado — usa o mapa de altura: {}. "
+            "A fatia vem do Y deste mesh; nada a configurar fora do grafo.",
+            result.UsesSceneHeight ? "sim" : "nao");
+        AXE_CORE_INFO("[TWO_SIDED_V1] normal virada nas faces de tras; "
+            "Two Sided deste material = {}.", graph->TwoSided ? "sim" : "nao");
+
+        if (GraphReadsScene(graph) && !result.IsTransparent)
+        {
+            AXE_CORE_WARN("[SCENE_DEPTH_SURFACE_V1] Este material usa Scene Depth ou "
+                "Screen UV, mas NAO e translucido — os dois vao devolver zero. "
+                "Ligue algo no pino Opacity e ponha o Blend Mode em Translucent "
+                "para ele entrar no passe forward, o unico que enxerga a cena "
+                "atras da superficie.");
+        }
 
         Pin* aoSrc = (outputNode->Inputs.size() > 6)
             ? compiler.GetSourcePin(&outputNode->Inputs[6]) : nullptr;
@@ -364,7 +783,12 @@ namespace axe
         if (normalSrc)
         {
             fs << "    // Normal Map conectado\n";
-            fs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n\n";
+            fs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n";
+            // TWO_SIDED_V1 — o pin Normal SUBSTITUI N, entao a virada tem de
+            // ser refeita sobre o valor novo. A de cima continua valendo: e ela
+            // que faz o grafo LER a normal certa (um Fresnel montado com nodes
+            // usa N antes desta linha).
+            fs << "    if (!gl_FrontFacing) N = -N;\n\n";
         }
 
         // Propriedades do material
@@ -528,16 +952,22 @@ namespace axe
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
         // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
         // este e o unico ponto do shader gerado onde isso e verdade.
+        gs << SceneHelpersGLSL(SceneHelperMode::Stub);
+        gs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         gs << compiler.m_CustomFunctions;
         gs << "void main()\n{\n";
-        gs << "    vec3 N = normalize(v_Normal);\n\n";
+        gs << "    vec3 N = normalize(v_Normal);\n";
+        gs << "    if (!gl_FrontFacing) N = -N;\n\n";   // TWO_SIDED_V1
 
         // Reutiliza o código dos nodes gerado pelo grafo
         gs << compiler.m_FragmentCode;
 
         // Normal Map
         if (normalSrc)
-            gs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n\n";
+        {
+            gs << "    N = normalize(" << compiler.GetPinVariable(normalSrc->ID) << ");\n";
+            gs << "    if (!gl_FrontFacing) N = -N;\n\n";   // TWO_SIDED_V1
+        }
 
         // Propriedades do material
         gs << "    vec3  matBaseColor = " << baseColor << ";\n";
@@ -697,6 +1127,8 @@ namespace axe
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
         // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
         // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << SceneHelpersGLSL(SceneHelperMode::Stub);
+        fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         fs << "    // Valores neutros — não há uma superfície real sendo avaliada,\n";
@@ -847,6 +1279,8 @@ namespace axe
         fs << "\n";
 
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom, antes do main().
+        fs << SceneHelpersGLSL(SceneHelperMode::PostProcess);
+        fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         fs << compiler.m_CustomFunctions;
 
         fs << "void main()\n{\n";
@@ -950,6 +1384,8 @@ namespace axe
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
         // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
         // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << SceneHelpersGLSL(SceneHelperMode::Stub);
+        fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         fs << "    vec3 v_FragPos = vec3(0.0);\n";
@@ -1286,6 +1722,8 @@ void main()
         // CUSTOM_NODE_V1 — as funcoes dos nodes Custom entram AQUI, entre as
         // declaracoes e o main(). GLSL exige a funcao declarada antes do uso, e
         // este e o unico ponto do shader gerado onde isso e verdade.
+        fs << SceneHelpersGLSL(SceneHelperMode::Stub);
+        fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
         fs << compiler.m_CustomFunctions;
         fs << "\nvoid main()\n{\n";
         fs << "    vec3 v_FragPos    = vec3(0.0);\n";
@@ -1379,6 +1817,208 @@ void main()
     // =========================================================================
 
 
+    // =========================================================================
+    //  MATFUNC_V1 — inlining de uma Material Function
+    //
+    //  Chamada de funcao nao vira funcao GLSL: o grafo dela e PERCORRIDO aqui
+    //  dentro, no mesmo compilador, emitindo no mesmo m_FragmentCode, com
+    //  m_Graph trocado por baixo. E o que o GenerateFunctionBody do compilador
+    //  de Script faz, e pela mesma razao: o gerador emite comandos em sequencia
+    //  num unico fluxo, e embrulhar isso numa funcao de verdade pediria um
+    //  parametro de saida para cada Function Output.
+    //
+    //  Em tres tempos:
+    //
+    //   1. AMARRA AS ENTRADAS — ainda no grafo do CHAMADOR, porque e la que
+    //      moram os links que chegam no node de chamada. Cada Function Input
+    //      da funcao recebe uma variavel propria com a expressao que chegou.
+    //   2. PERCORRE O CORPO — agora com m_Graph = grafo da funcao, partindo de
+    //      cada Function Output para tras.
+    //   3. PUBLICA AS SAIDAS — uma variavel de apelido por pino de saida do
+    //      node de chamada.
+    //
+    //  Entradas e saidas casam por NOME, nunca por posicao. Reordenar os
+    //  parametros da funcao, ou inserir um no meio, nao pode trocar o
+    //  significado de um material que ja estava certo.
+    // =========================================================================
+    void MaterialCompiler::InlineMaterialFunction(Node* callNode)
+    {
+        auto fail = [&](const std::string& msg)
+            {
+                AXE_CORE_WARN("[MATFUNC_V1] {}", msg);
+                s_LastFunctionErrors += msg + "\n";
+
+                // Toda saida da chamada vira valor neutro. O material continua
+                // compilando: um asset fora do lugar nao pode derrubar o shader
+                // inteiro, e o autor precisa do resto do grafo funcionando para
+                // conseguir consertar.
+                for (auto& out : callNode->Outputs)
+                {
+                    std::string var = MakeVar("mfnerr");
+                    m_FragmentCode += GetGLSLType(out.Type) + " " + var + " = "
+                        + AdaptToType("0.0", PinType::Float, out.Type) + ";\n";
+                    RegisterPin(out.ID, var, out.Type);
+                }
+            };
+
+        const std::string uuid = callNode->StringValue;
+
+        if (uuid.empty())
+        {
+            fail("um node Material Function esta sem asset escolhido.");
+            return;
+        }
+
+        // Ciclo. Sem esta checagem uma funcao que chama a si mesma inlinaria
+        // para sempre: nao ha erro, nao ha mensagem — o editor simplesmente
+        // congela e come a memoria.
+        if (std::find(m_FunctionStack.begin(), m_FunctionStack.end(), uuid)
+            != m_FunctionStack.end())
+        {
+            fail("ciclo de Material Function: a funcao de UUID " + uuid
+                + " chama a si mesma, direta ou indiretamente.");
+            return;
+        }
+
+        if (m_FunctionStack.size() >= 16)
+        {
+            fail("Material Function aninhada demais (limite de 16 niveis).");
+            return;
+        }
+
+        const AssetRecord* rec = AssetDatabase::Get().GetByUUID(uuid);
+        if (!rec || !std::filesystem::exists(rec->FilePath))
+        {
+            fail("o asset da Material Function (UUID " + uuid + ") nao foi "
+                "encontrado. Os pinos do node vem do cache salvo no material, "
+                "entao as ligacoes estao intactas — e so reapontar o asset.");
+            return;
+        }
+
+        // Faixa de ID exclusiva para este grafo. Ver MaterialGraph::SeedNextID.
+        const int idBase = m_NextFunctionIDBase;
+        m_NextFunctionIDBase += 1000000;
+
+        auto fn = MaterialFunction::LoadFromFile(rec->FilePath, idBase);
+        if (!fn || !fn->GetGraph())
+        {
+            fail("nao consegui ler a Material Function '" + rec->FilePath.string() + "'.");
+            return;
+        }
+
+        // O grafo tem que sobreviver ao fim desta funcao: as variaveis
+        // registradas em m_PinVariables sao de pinos que moram dentro dele.
+        m_InlinedFunctions.push_back(fn);
+        MaterialGraph* fnGraph = fn->GetGraph();
+
+        m_FragmentCode += "\n// --- Material Function: " + fn->GetName() + " ---\n";
+
+        // ── 1. ENTRADAS ──────────────────────────────────────────────────────
+        // Ainda com m_Graph no CHAMADOR: GetSourcePin tem que enxergar os links
+        // que chegam no node de chamada.
+        for (auto& n : fnGraph->GetNodes())
+        {
+            if (n->Name != "Function Input" || n->Outputs.empty()) continue;
+
+            const PinType type = n->CustomOutputType;
+
+            Pin* callPin = nullptr;
+            for (auto& p : callNode->Inputs)
+                if (p.Name == n->StringValue) { callPin = &p; break; }
+
+            std::string expr;
+            if (!callPin)
+            {
+                // A funcao ganhou um parametro depois que este material foi
+                // salvo: os pinos do node de chamada vieram do cache antigo.
+                expr = AdaptToType("0.0", PinType::Float, type);
+                const std::string msg = "a funcao '" + fn->GetName() + "' tem a entrada '"
+                    + n->StringValue + "' que o node de chamada nao tem. Abra o node e "
+                    "clique em Recarregar assinatura.";
+                AXE_CORE_WARN("[MATFUNC_V1] {}", msg);
+                s_LastFunctionErrors += msg + "\n";
+            }
+            else if (Pin* src = GetSourcePin(callPin))
+            {
+                expr = AdaptToType(GetPinVariable(src->ID), GetPinType(src->ID), type);
+            }
+            else
+            {
+                // Pino solto usa o valor digitado nele, igual a qualquer outro
+                // node do grafo.
+                expr = AdaptToType(std::to_string(callPin->DefaultFloat), PinType::Float, type);
+            }
+
+            const std::string var = MakeVar("fnin");
+            m_FragmentCode += GetGLSLType(type) + " " + var + " = " + expr + ";\n";
+
+            RegisterPin(n->Outputs[0].ID, var, type);
+
+            // Ja resolvido: marcar como visitado impede que o percurso do corpo
+            // tente gerar codigo para ele.
+            m_VisitedNodes.insert(n->ID.Get());
+        }
+
+        // ── 2. CORPO ─────────────────────────────────────────────────────────
+        MaterialGraph* savedGraph = m_Graph;
+        m_Graph = fnGraph;
+        m_FunctionStack.push_back(uuid);
+
+        struct Resolved { std::string Var; PinType Type; };
+        std::unordered_map<std::string, Resolved> resolved;
+
+        for (auto& n : fnGraph->GetNodes())
+        {
+            if (n->Name != "Function Output" || n->Inputs.empty()) continue;
+
+            VisitNode(n.get());
+
+            Resolved r{ AdaptToType("0.0", PinType::Float, n->CustomOutputType),
+                        n->CustomOutputType };
+
+            if (Pin* src = GetSourcePin(&n->Inputs[0]))
+                r.Var = AdaptToType(GetPinVariable(src->ID), GetPinType(src->ID),
+                    n->CustomOutputType);
+
+            resolved[n->StringValue] = r;
+        }
+
+        m_FunctionStack.pop_back();
+        m_Graph = savedGraph;
+
+        // ── 3. SAIDAS ────────────────────────────────────────────────────────
+        // Uma variavel de apelido por pino, em vez de apontar direto para a
+        // variavel interna da funcao. Custa nada (o compilador de GLSL some com
+        // ela) e deixa o codigo gerado legivel quando alguem for ler o
+        // .axeshader para depurar.
+        for (auto& out : callNode->Outputs)
+        {
+            const std::string var = MakeVar("mfn");
+
+            auto it = resolved.find(out.Name);
+            std::string expr;
+
+            if (it != resolved.end())
+            {
+                expr = AdaptToType(it->second.Var, it->second.Type, out.Type);
+            }
+            else
+            {
+                expr = AdaptToType("0.0", PinType::Float, out.Type);
+                const std::string msg = "a funcao '" + fn->GetName() + "' nao tem a saida '"
+                    + out.Name + "' que o node de chamada espera. Abra o node e clique em "
+                    "Recarregar assinatura.";
+                AXE_CORE_WARN("[MATFUNC_V1] {}", msg);
+                s_LastFunctionErrors += msg + "\n";
+            }
+
+            m_FragmentCode += GetGLSLType(out.Type) + " " + var + " = " + expr + ";\n";
+            RegisterPin(out.ID, var, out.Type);
+        }
+
+        m_FragmentCode += "// --- fim: " + fn->GetName() + " ---\n";
+    }
+
     void MaterialCompiler::VisitNode(Node* node)
     {
         if (!node) return;
@@ -1419,6 +2059,65 @@ void main()
 
         std::stringstream code;
 
+        // ═════════════════════════════════════════════════════════════════════
+        //  PRIMITIVES_V1 — o tipo de um pino, em numero de componentes
+        //
+        //  A auditoria que originou esta rodada varreu os ~60 ramos abaixo
+        //  perguntando "este node respeita o tipo do que esta ligado nele?".
+        //  Vinte e um respondiam NAO — emitiam um tipo fixo no GLSL,
+        //  independentemente da entrada.
+        //
+        //  Para a maioria isso e correto: um node Color E vec4, um World
+        //  Position E vec3. Mas em Append e Vector Split — as duas unicas
+        //  ferramentas do grafo para MONTAR e DESMONTAR vetores — era um
+        //  defeito, e um defeito grave: sem elas o autor nao consegue trocar
+        //  componentes de lugar, e toda conta que precise disso vira um pedido
+        //  de node novo. Foi assim que apareceram Water Depth e Shore
+        //  Distance, e por isso os dois foram embora nesta mesma rodada.
+        // ═════════════════════════════════════════════════════════════════════
+        auto compsOf = [](PinType t) -> int
+            {
+                switch (t)
+                {
+                case PinType::Float: return 1;
+                case PinType::Vec2:  return 2;
+                case PinType::Vec3:  return 3;
+                case PinType::Vec4:  return 4;
+                default:             return 1;
+                }
+            };
+        auto typeOfComps = [](int n) -> PinType
+            {
+                switch (n)
+                {
+                case 2:  return PinType::Vec2;
+                case 3:  return PinType::Vec3;
+                case 4:  return PinType::Vec4;
+                default: return PinType::Float;
+                }
+            };
+
+        // Builtin unaria que PRESERVA o tipo: abs, floor, fract, sin...
+        // Escrita uma vez porque cada copia dela era uma chance a mais de
+        // alguem fixar `float` na saida sem perceber — que e exatamente o que
+        // aconteceu com Sine e Cosine.
+        auto emitUnary = [&](const char* fn, const char* prefix) -> void
+            {
+                std::string var = MakeVar(prefix);
+                std::string val = std::to_string(node->Inputs[0].DefaultFloat);
+                PinType     type = PinType::Float;
+
+                if (Pin* src = GetSourcePin(&node->Inputs[0]))
+                {
+                    val = GetPinVariable(src->ID);
+                    type = GetPinType(src->ID);
+                }
+
+                RegisterPin(node->Outputs[0].ID, var, type);
+                code << GetGLSLType(type) << " " << var << " = "
+                    << fn << "(" << val << ");";
+            };
+
         // -----------------------------------------------------------------
         // Float — constante escalar
         // -----------------------------------------------------------------
@@ -1426,7 +2125,13 @@ void main()
         {
             std::string var = MakeVar("float");
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
-            code << "float " << var << " = " << node->Value.FloatVal << ";";
+            // NOISE_SMOOTH_V1 — `<<` num float 3.0f imprime "3", e "float x = 3;"
+            // so passa porque GLSL promove int para float na atribuicao. Onde a
+            // expressao entra num argumento com sobrecarga (step, mix, um dos
+            // helpers), esse mesmo literal vira "no matching overloaded
+            // function". std::to_string sempre poe a casa decimal.
+            code << "float " << var << " = "
+                << std::to_string(node->Value.FloatVal) << ";";
         }
 
         // -----------------------------------------------------------------
@@ -1535,9 +2240,12 @@ void main()
             RegisterPin(node->Outputs[0].ID, uvVar, PinType::Vec2);
             RegisterPin(node->Outputs[1].ID, pxVar, PinType::Vec2);
 
-            code << "vec2 " << uvVar << " = v_TexCoord;";
-            code << "\n    vec2 " << pxVar << " = "
-                << (m_PostProcessTarget ? "1.0 / max(u_ScreenSize, vec2(1.0))" : "vec2(0.0)") << ";";
+            // SCENE_DEPTH_SURFACE_V1 — passou a sair dos helpers, que sabem
+            // o que "UV de tela" significa em cada dominio: no Post Process e
+            // o v_TexCoord do quad; num material de superficie e o
+            // gl_FragCoord dividido pelo tamanho da tela; nos demais, zero.
+            code << "vec2 " << uvVar << " = axeScreenUV();";
+            code << "\n    vec2 " << pxVar << " = axeScreenTexel();";
         }
 
         // -----------------------------------------------------------------
@@ -1566,11 +2274,11 @@ void main()
 
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
 
-            if (m_PostProcessTarget)
-                code << "float " << var << " = step(length(texture(u_SceneNormal, "
-                << uv << ").rgb), 0.1);";
-            else
-                code << "float " << var << " = 0.0;  // so existe em Post Process";
+            // SCENE_BG_V1 — o `if (m_PostProcessTarget)` sumiu daqui: qual e o
+            // teste certo passou a ser propriedade do PROLOGO de cada dominio,
+            // como ja acontece com axeSceneDepth e axeSceneWorldPos. Um lugar
+            // so decide, e o node apenas pergunta.
+            code << "float " << var << " = axeSceneIsBackground(" << uv << ");";
         }
 
         // -----------------------------------------------------------------
@@ -1682,7 +2390,15 @@ void main()
         {
             std::string var = MakeVar("sdepth");
 
-            std::string uv = "v_TexCoord";
+            // SCENE_DEPTH_SURFACE_V1 — o default do pino UV deixou de ser
+            // v_TexCoord e virou axeScreenUV().
+            //
+            // Num quad de tela cheia os dois sao a mesma coisa, entao o Post
+            // Process nao muda. Numa MALHA sao coisas diferentes: v_TexCoord e
+            // a UV do modelo, e amostrar o G-Buffer com ela leria um pixel
+            // arbitrario da tela. O que a agua quer e "o que esta atras DESTE
+            // pixel", que e gl_FragCoord.
+            std::string uv = "axeScreenUV()";
             if (!node->Inputs.empty())
             {
                 Pin* uvSrc = GetSourcePin(&node->Inputs[0]);
@@ -1693,11 +2409,7 @@ void main()
 
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
 
-            if (m_PostProcessTarget)
-                code << "float " << var << " = length(texture(u_ScenePosition, "
-                << uv << ").rgb - u_CameraPosition);";
-            else
-                code << "float " << var << " = 0.0;  // Scene Depth so existe em Post Process";
+            code << "float " << var << " = axeSceneDepth(" << uv << ");";
         }
 
         // -----------------------------------------------------------------
@@ -1985,24 +2697,22 @@ void main()
             Pin* srcA = GetSourcePin(&node->Inputs[0]);
             if (srcA) { valA = GetPinVariable(srcA->ID); typeA = GetPinType(srcA->ID); }
 
+            // PRIMITIVES_V2 — o expoente vira escalar COM AVISO, e nao em
+            // silencio: mandar uma cor para o expoente e engano de ligacao, e o
+            // autor precisa saber. Ver a nota no Lerp.
             Pin* srcB = GetSourcePin(&node->Inputs[1]);
             if (srcB)
-            {
-                PinType typeB = GetPinType(srcB->ID);
-                valB = GetPinVariable(srcB->ID);
-                // B deve ser float — se for vec, converte para luminância
-                if (typeB == PinType::Vec3 || typeB == PinType::Vec4)
-                    valB = "dot(" + valB + ", vec3(0.299, 0.587, 0.114))";
-            }
+                valB = ForceFloat(node->Name, "B",
+                    GetPinVariable(srcB->ID), GetPinType(srcB->ID));
 
-            // pow(vec3, float) não existe em GLSL — usa vec3(float) para o expoente
+            // pow(genX, genX): o expoente TEM de ter o mesmo numero de
+            // componentes da base. `pow(vec2, float)` nao existe — e era mais
+            // um lugar em que Vec2 caia fora dos dois ifs escritos a mao.
             RegisterPin(node->Outputs[0].ID, var, typeA);
-            if (typeA == PinType::Vec3 || typeA == PinType::Vec4)
-                code << GetGLSLType(typeA) << " " << var
-                << " = pow(max(" << valA << ", vec3(0.0)), vec3(" << valB << "));";
-            else
-                code << GetGLSLType(typeA) << " " << var
-                << " = pow(max(" << valA << ", 0.0), " << valB << ");";
+            const std::string zero = AdaptToType("0.0", PinType::Float, typeA);
+            const std::string expo = AdaptToType(valB, PinType::Float, typeA);
+            code << GetGLSLType(typeA) << " " << var
+                << " = pow(max(" << valA << ", " << zero << "), " << expo << ");";
         }
 
         // -----------------------------------------------------------------
@@ -2023,21 +2733,31 @@ void main()
             Pin* srcB = GetSourcePin(&node->Inputs[1]);
             if (srcB) { valB = GetPinVariable(srcB->ID); typeB = GetPinType(srcB->ID); }
 
+            // ── PRIMITIVES_V2 ────────────────────────────────────────────
+            //
+            //  As conversoes daqui eram escritas a mao e so enxergavam Vec3 e
+            //  Vec4. Vec2 nao aparecia em nenhuma linha — e por isso, no
+            //  instante em que o Append passou a produzir Vec2 de verdade,
+            //  este node comecou a gerar `mix(vec3, vec3, vec2)`.
+            //
+            //  Nao e caso isolado: Clamp e Power tinham a mesma cegueira, cada
+            //  um com a sua copia da conversao. Agora os tres chamam o
+            //  AdaptToType, que ja trata os quatro tipos — e a correcao apaga
+            //  codigo em vez de acrescentar.
+            //
+            //  O Alpha e o caso separado: `mix` aceita escalar ou o mesmo tipo
+            //  de A e B, nunca um terceiro. Forcar escalar e a escolha
+            //  previsivel, e o ForceFloat AVISA nomeando node e pino — que e a
+            //  diferenca entre "use um Length aqui" e um erro de GLSL numa
+            //  linha que o autor nunca escreveu.
             Pin* srcAlpha = GetSourcePin(&node->Inputs[2]);
-            if (srcAlpha) alpha = GetPinVariable(srcAlpha->ID);
+            if (srcAlpha)
+                alpha = ForceFloat(node->Name, "Alpha",
+                    GetPinVariable(srcAlpha->ID), GetPinType(srcAlpha->ID));
 
-            // Tipo resultado: o maior entre A e B
-            PinType resultType = (typeA >= typeB) ? typeA : typeB;
-
-            // Converte A e B para o mesmo tipo
-            if (resultType == PinType::Vec3 && typeA == PinType::Float)
-                valA = "vec3(" + valA + ")";
-            if (resultType == PinType::Vec3 && typeB == PinType::Float)
-                valB = "vec3(" + valB + ")";
-            if (resultType == PinType::Vec4 && typeA != PinType::Vec4)
-                valA = "vec4(" + valA + ", 1.0)";
-            if (resultType == PinType::Vec4 && typeB != PinType::Vec4)
-                valB = "vec4(" + valB + ", 1.0)";
+            PinType resultType = (compsOf(typeA) >= compsOf(typeB)) ? typeA : typeB;
+            valA = AdaptToType(valA, typeA, resultType);
+            valB = AdaptToType(valB, typeB, resultType);
 
             RegisterPin(node->Outputs[0].ID, var, resultType);
             code << GetGLSLType(resultType) << " " << var
@@ -2057,29 +2777,17 @@ void main()
             Pin* srcVal = GetSourcePin(&node->Inputs[0]);
             if (srcVal) { val = GetPinVariable(srcVal->ID); typeV = GetPinType(srcVal->ID); }
 
+            // PRIMITIVES_V2 — era conversao a mao, cega para Vec2. Ver a nota
+            // no Lerp.
             Pin* srcMin = GetSourcePin(&node->Inputs[1]);
             if (srcMin)
-            {
-                minVal = GetPinVariable(srcMin->ID);
-                // Converte min para o mesmo tipo de val
-                PinType typeMin = GetPinType(srcMin->ID);
-                if (typeV == PinType::Vec3 && typeMin == PinType::Float)
-                    minVal = "vec3(" + minVal + ")";
-                else if (typeV == PinType::Float && typeMin == PinType::Vec3)
-                    minVal = "dot(" + minVal + ", vec3(0.299, 0.587, 0.114))";
-            }
+                minVal = AdaptToType(GetPinVariable(srcMin->ID),
+                    GetPinType(srcMin->ID), typeV);
 
             Pin* srcMax = GetSourcePin(&node->Inputs[2]);
             if (srcMax)
-            {
-                maxVal = GetPinVariable(srcMax->ID);
-                // Converte max para o mesmo tipo de val
-                PinType typeMax = GetPinType(srcMax->ID);
-                if (typeV == PinType::Vec3 && typeMax == PinType::Float)
-                    maxVal = "vec3(" + maxVal + ")";
-                else if (typeV == PinType::Float && typeMax == PinType::Vec3)
-                    maxVal = "dot(" + maxVal + ", vec3(0.299, 0.587, 0.114))";
-            }
+                maxVal = AdaptToType(GetPinVariable(srcMax->ID),
+                    GetPinType(srcMax->ID), typeV);
 
             RegisterPin(node->Outputs[0].ID, var, typeV);
             code << GetGLSLType(typeV) << " " << var
@@ -2197,13 +2905,7 @@ void main()
         // -----------------------------------------------------------------
         else if (node->Name == "Sine")
         {
-            std::string var = MakeVar("sine");
-            std::string val = std::to_string(node->Inputs[0].DefaultFloat);
-            Pin* src = GetSourcePin(&node->Inputs[0]);
-            if (src) val = GetPinVariable(src->ID);
-
-            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
-            code << "float " << var << " = sin(" << val << ");";
+            emitUnary("sin", "sine");   // PRIMITIVES_V1 — componente a componente
         }
 
         // -----------------------------------------------------------------
@@ -2211,13 +2913,7 @@ void main()
         // -----------------------------------------------------------------
         else if (node->Name == "Cosine")
         {
-            std::string var = MakeVar("cosine");
-            std::string val = std::to_string(node->Inputs[0].DefaultFloat);
-            Pin* src = GetSourcePin(&node->Inputs[0]);
-            if (src) val = GetPinVariable(src->ID);
-
-            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
-            code << "float " << var << " = cos(" << val << ");";
+            emitUnary("cos", "cosine");   // PRIMITIVES_V1
         }
 
         // -----------------------------------------------------------------
@@ -2229,10 +2925,18 @@ void main()
             std::string edge = std::to_string(node->Inputs[0].DefaultFloat);
             std::string val = std::to_string(node->Inputs[1].DefaultFloat);
 
+            // STEP_TYPES_V1 — ver a nota no SmoothStep logo abaixo. Os dois
+            // pinos sao Float declarados e a saida e Float; um vetor ligado
+            // aqui tem de virar escalar ANTES de entrar no step(), senao o
+            // erro sai como "no matching overloaded function found" numa linha
+            // de GLSL que o autor nao escreveu.
             Pin* srcEdge = GetSourcePin(&node->Inputs[0]);
-            if (srcEdge) edge = GetPinVariable(srcEdge->ID);
+            if (srcEdge) edge = ForceFloat(node->Name, "Edge",
+                GetPinVariable(srcEdge->ID), GetPinType(srcEdge->ID));
+
             Pin* srcVal = GetSourcePin(&node->Inputs[1]);
-            if (srcVal) val = GetPinVariable(srcVal->ID);
+            if (srcVal) val = ForceFloat(node->Name, "Value",
+                GetPinVariable(srcVal->ID), GetPinType(srcVal->ID));
 
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
             code << "float " << var << " = step(" << edge << ", " << val << ");";
@@ -2248,12 +2952,30 @@ void main()
             std::string maxVal = std::to_string(node->Inputs[1].DefaultFloat);
             std::string val = std::to_string(node->Inputs[2].DefaultFloat);
 
+            // ── STEP_TYPES_V1 ────────────────────────────────────────────
+            //
+            // Os tres pinos sao declarados Float e a saida e Float, mas o
+            // codigo pegava a variavel da origem CRUA. Ligar um Vec3 (uma cor,
+            // uma posicao) em qualquer um deles gerava
+            // `smoothstep(vec3, float, float)`, que nao casa com nenhuma
+            // sobrecarga do GLSL — e o driver responde
+            // "'smoothstep' : no matching overloaded function found" apontando
+            // uma linha de um fonte gerado que ninguem escreveu.
+            //
+            // Nao ha erro de GRAFO nesse caso: os pinos dizem Float e o editor
+            // aceita a ligacao. Entao o conserto e aqui: converter, e AVISAR
+            // qual pino precisou de conversao.
             Pin* srcMin = GetSourcePin(&node->Inputs[0]);
-            if (srcMin) minVal = GetPinVariable(srcMin->ID);
+            if (srcMin) minVal = ForceFloat(node->Name, "Min",
+                GetPinVariable(srcMin->ID), GetPinType(srcMin->ID));
+
             Pin* srcMax = GetSourcePin(&node->Inputs[1]);
-            if (srcMax) maxVal = GetPinVariable(srcMax->ID);
+            if (srcMax) maxVal = ForceFloat(node->Name, "Max",
+                GetPinVariable(srcMax->ID), GetPinType(srcMax->ID));
+
             Pin* srcVal = GetSourcePin(&node->Inputs[2]);
-            if (srcVal) val = GetPinVariable(srcVal->ID);
+            if (srcVal) val = ForceFloat(node->Name, "Value",
+                GetPinVariable(srcVal->ID), GetPinType(srcVal->ID));
 
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
             code << "float " << var << " = smoothstep(" << minVal << ", " << maxVal << ", " << val << ");";
@@ -2264,13 +2986,24 @@ void main()
         // -----------------------------------------------------------------
         else if (node->Name == "Normalize")
         {
+            // PRIMITIVES_V1 — normalize vale para vec2/3/4; so nao vale para
+            // escalar, e ai o vetor para cima continua sendo o fallback.
             std::string var = MakeVar("normalize");
             std::string val = "vec3(0.0, 1.0, 0.0)";
-            Pin* src = GetSourcePin(&node->Inputs[0]);
-            if (src) val = GetPinVariable(src->ID);
+            PinType     type = PinType::Vec3;
 
-            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
-            code << "vec3 " << var << " = normalize(" << val << ");";
+            if (Pin* src = GetSourcePin(&node->Inputs[0]))
+            {
+                val = GetPinVariable(src->ID);
+                PinType t = GetPinType(src->ID);
+                if (t == PinType::Vec2 || t == PinType::Vec3 || t == PinType::Vec4)
+                    type = t;
+                else
+                    val = "vec3(" + val + ")";
+            }
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var << " = normalize(" << val << ");";
         }
 
         // -----------------------------------------------------------------
@@ -2331,35 +3064,94 @@ void main()
         // Append — combina um Vec3 e um Float num Vec4 (ex: RGB + Alpha,
         // ou qualquer empacotamento de canais)
         // -----------------------------------------------------------------
+        // ── PRIMITIVES_V1 — Append vira um CONSTRUTOR ────────────────────────
+        //
+        //  Antes: `vec4 v = vec4(A, B);`, com A declarado Vec3 e B Float. Era
+        //  um "Vec3 mais W", e nao um Append.
+        //
+        //  Ligar dois Floats gerava `vec4(f, f)` — GLSL invalido, com erro numa
+        //  linha que o autor nunca escreveu. E como nao havia outro jeito de
+        //  MONTAR um vec2 no grafo, uma conta tao banal quanto
+        //  `length(vec2(dx, dz))` era simplesmente impossivel de desenhar.
+        //
+        //  Agora o tipo da saida e a SOMA dos componentes das entradas:
+        //  Float+Float da Vec2, Vec2+Float da Vec3, Vec2+Vec2 da Vec4. Passou
+        //  de quatro, satura em vec4 e avisa — inventar um vec5 nao existe.
         else if (node->Name == "Append")
         {
             std::string var = MakeVar("append");
-            std::string valA = "vec3(0.0)";
+
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            PinType     typeA = PinType::Float;
+            if (Pin* srcA = GetSourcePin(&node->Inputs[0]))
+            {
+                valA = GetPinVariable(srcA->ID);
+                typeA = GetPinType(srcA->ID);
+            }
+
             std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
+            PinType     typeB = PinType::Float;
+            if (Pin* srcB = GetSourcePin(&node->Inputs[1]))
+            {
+                valB = GetPinVariable(srcB->ID);
+                typeB = GetPinType(srcB->ID);
+            }
 
-            Pin* srcA = GetSourcePin(&node->Inputs[0]);
-            if (srcA) valA = GetPinVariable(srcA->ID);
-            Pin* srcB = GetSourcePin(&node->Inputs[1]);
-            if (srcB) valB = GetPinVariable(srcB->ID);
+            int total = compsOf(typeA) + compsOf(typeB);
+            if (total > 4)
+            {
+                AXE_CORE_WARN("[PRIMITIVES_V1] Append: {} + {} componentes passam de 4 — "
+                    "o resultado foi cortado em vec4.", compsOf(typeA), compsOf(typeB));
+                total = 4;
+            }
 
-            RegisterPin(node->Outputs[0].ID, var, PinType::Vec4);
-            code << "vec4 " << var << " = vec4(" << valA << ", " << valB << ");";
+            PinType outType = typeOfComps(total);
+            RegisterPin(node->Outputs[0].ID, var, outType);
+            code << GetGLSLType(outType) << " " << var << " = "
+                << GetGLSLType(outType) << "(" << valA << ", " << valB << ");";
         }
 
         // -----------------------------------------------------------------
         // Vector Split — separa um Vec3 em X, Y, Z
         // -----------------------------------------------------------------
+        // ── PRIMITIVES_V1 — Vector Split aceita qualquer vetor ───────────────
+        //
+        //  Antes emitia `vec3 split = <origem>;` sempre. Um Vec4 ligado aqui
+        //  virava `vec3 x = algumVec4;`, que e GLSL invalido; um Vec2, idem.
+        //  Na pratica so funcionava com Vec3 — e o par dele, o Append, so
+        //  funcionava com Vec3+Float. Os dois juntos fechavam a porta.
+        //
+        //  O pino W e NOVO e entra no fim da lista: Load() remapeia pino por
+        //  posicao parando no menor dos dois tamanhos, entao material salvo
+        //  antes disto abre sem deslocar fio nenhum.
+        //
+        //  Componente que nao existe na origem devolve 0.0 em vez de swizzle
+        //  invalido — pedir .w de um vec2 e engano do autor, e o certo e ele
+        //  ver zero e um aviso, nao um erro de GLSL sem linha correspondente.
         else if (node->Name == "Vector Split")
         {
             std::string var = MakeVar("split");
             std::string val = "vec3(0.0)";
-            Pin* src = GetSourcePin(&node->Inputs[0]);
-            if (src) val = GetPinVariable(src->ID);
+            PinType     type = PinType::Vec3;
 
-            code << "vec3 " << var << " = " << val << ";";
-            RegisterPin(node->Outputs[0].ID, var + ".x", PinType::Float);
-            RegisterPin(node->Outputs[1].ID, var + ".y", PinType::Float);
-            RegisterPin(node->Outputs[2].ID, var + ".z", PinType::Float);
+            if (Pin* src = GetSourcePin(&node->Inputs[0]))
+            {
+                val = GetPinVariable(src->ID);
+                type = GetPinType(src->ID);
+            }
+
+            const int n = compsOf(type);
+            code << GetGLSLType(type) << " " << var << " = " << val << ";";
+
+            static const char* kSwz[4] = { ".x", ".y", ".z", ".w" };
+            for (int i = 0; i < (int)node->Outputs.size(); i++)
+            {
+                if (i < n)
+                    RegisterPin(node->Outputs[i].ID,
+                        n == 1 ? var : var + kSwz[i], PinType::Float);
+                else
+                    RegisterPin(node->Outputs[i].ID, "0.0", PinType::Float);
+            }
         }
 
         // -----------------------------------------------------------------
@@ -2370,6 +3162,107 @@ void main()
             std::string var = MakeVar("camvec");
             RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
             code << "vec3 " << var << " = normalize(u_CameraPosition - v_FragPos);";
+        }
+
+        // -----------------------------------------------------------------
+        // WATER_NODES_V1 — Camera Position
+        //
+        // u_CameraPosition ja e declarada em TODOS os shaders de superficie
+        // (forward e G-Buffer) desde a correcao do Camera Vector, entao este
+        // node nao precisa de encanamento nenhum: e so expor o que ja chega.
+        //
+        // Sai em variavel local, e nao referenciando a uniform direto, pela
+        // razao que ja mordeu no `u_SunIntensity`: fora do dominio certo a
+        // uniform pode nao existir, e a copia local mantem o resto do grafo
+        // compilando.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Camera Position")
+        {
+            std::string var = MakeVar("campos");
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            RegisterPin(node->Outputs[1].ID, var + ".x", PinType::Float);
+            RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float);
+            RegisterPin(node->Outputs[3].ID, var + ".z", PinType::Float);
+            code << "vec3 " << var << " = u_CameraPosition;";
+        }
+
+        // -----------------------------------------------------------------
+        // WATER_NODES_V1 — Pixel Depth
+        //
+        // Distancia da camera ate ESTE fragmento, em metros. Mesma unidade e
+        // mesma definicao do Scene Depth (que mede ate o que esta ATRAS), de
+        // proposito: subtrair um do outro tem de dar espessura em metros, e
+        // nao um numero sem sentido fisico.
+        // -----------------------------------------------------------------
+
+        // ── SCENE_HEIGHT_V1 — Scene Height ───────────────────────────────────
+        //
+        //  A UNICA fonte do grafo que nao depende de onde a camera esta. Vem da
+        //  render ortografica de topo, e nao do G-Buffer.
+        //
+        //   Height   — o Y de mundo do que esta EMBAIXO deste ponto. Subtrair
+        //              da altura da superficie da a coluna d'agua real.
+        //   Distance — a distancia HORIZONTAL, em metros, ate a geometria mais
+        //              proxima. E a distancia ate a margem, e existe tambem do
+        //              lado que a camera nao enxerga.
+        //
+        //  Continua sendo node de DADO, e nao receita: como isso vira espuma,
+        //  cor ou transparencia se monta no grafo.
+        else if (node->Name == "Scene Height")
+        {
+            std::string worldPos = "v_FragPos";
+            if (Pin* src = GetSourcePin(&node->Inputs[0]))
+                worldPos = AdaptToType(GetPinVariable(src->ID),
+                    GetPinType(src->ID), PinType::Vec3);
+
+            std::string hVar = MakeVar("sheight");
+            std::string dVar = MakeVar("sdist");
+            std::string nVar = MakeVar("snear");
+            std::string tVar = MakeVar("sntop");
+
+            RegisterPin(node->Outputs[0].ID, hVar, PinType::Float);
+            RegisterPin(node->Outputs[1].ID, dVar, PinType::Float);
+            if (node->Outputs.size() > 2)
+                RegisterPin(node->Outputs[2].ID, nVar, PinType::Float);
+            // SCENE_HEIGHT_V4 — o pino novo entra no FIM da lista, e um grafo
+            // salvo antes desta versao simplesmente nao o tem. O `if` e o que
+            // deixa os dois casos compilarem sem migracao de arquivo.
+            if (node->Outputs.size() > 3)
+                RegisterPin(node->Outputs[3].ID, tVar, PinType::Float);
+
+            code << "float " << hVar << " = axeSceneHeight(" << worldPos << ");\n"
+                << "float " << dVar << " = axeSceneDistance(" << worldPos << ");\n"
+                << "float " << nVar << " = axeSceneNearestBase(" << worldPos << ");\n"
+                << "float " << tVar << " = axeSceneNearestTop(" << worldPos << ");";
+        }
+
+        //  Scene World Position: a posicao de mundo do que esta atras, crua.
+        //
+        //  Cuidado que o Water Depth ja resolve por dentro: onde nao ha nada
+        //  atras, o attachment esta no valor de limpeza e isto devolve
+        //  (0,0,0) — nao a posicao de um ponto real. Quem usar este node para
+        //  medir profundidade tem que tratar esse caso.
+        else if (node->Name == "Scene World Position")
+        {
+            std::string var = MakeVar("swpos");
+            std::string uv = "axeScreenUV()";
+
+            if (Pin* src = GetSourcePin(&node->Inputs[0]))
+                if (GetPinType(src->ID) == PinType::Vec2)
+                    uv = GetPinVariable(src->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            RegisterPin(node->Outputs[1].ID, var + ".x", PinType::Float);
+            RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float);
+            RegisterPin(node->Outputs[3].ID, var + ".z", PinType::Float);
+            code << "vec3 " << var << " = axeSceneWorldPos(" << uv << ");";
+        }
+
+        else if (node->Name == "Pixel Depth")
+        {
+            std::string var = MakeVar("pdepth");
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = length(u_CameraPosition - v_FragPos);";
         }
 
         // -----------------------------------------------------------------
@@ -2578,6 +3471,88 @@ void main()
         // Noise — ruído pseudo-aleatório baseado em UV (hash determinístico,
         // sem necessidade de textura). Útil pra quebrar padrões repetitivos.
         // -----------------------------------------------------------------
+        // ── MATFUNC_V1 — os tres nodes de Material Function ──────────────────
+        //
+        // A chamada escreve direto em m_FragmentCode (ver InlineMaterialFunction)
+        // e por isso devolve string vazia aqui.
+        else if (node->Name == "Material Function")
+        {
+            InlineMaterialFunction(node);
+        }
+
+        // Dentro de uma funcao, este node nunca chega aqui: o inlining registra
+        // a variavel dele e o marca como visitado antes de percorrer o corpo.
+        // Chegar aqui significa um Function Input solto num material comum.
+        else if (node->Name == "Function Input")
+        {
+            const PinType type = node->CustomOutputType;
+            std::string var = MakeVar("fnin_solto");
+
+            AXE_CORE_WARN("[MATFUNC_V1] o node Function Input '{}' esta num grafo que "
+                "nao e uma Material Function — nao ha chamador para alimenta-lo, entao "
+                "ele vale zero. Function Input so faz sentido dentro de um .axematfunc.",
+                node->StringValue);
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var << " = "
+                << AdaptToType("0.0", PinType::Float, type) << ";";
+        }
+
+        // Terminal, como o Material Output: quem le o valor dele e o inlining,
+        // pelo link que chega no pino de entrada. Nao emite linha nenhuma.
+        else if (node->Name == "Function Output")
+        {
+        }
+
+        // ── PRIMITIVES_V1 — as builtins de GLSL que faltavam ─────────────────
+        //
+        //  Todas sao 1:1 com uma funcao da linguagem e preservam o tipo. Um
+        //  node assim NAO e composicao disfarcada: e a linguagem exposta no
+        //  grafo, que e o contrario de embutir uma receita pronta. Sem elas,
+        //  arredondar, quantizar ou tirar raiz obrigava a cair no node Custom.
+        else if (node->Name == "Floor") { emitUnary("floor", "floor"); }
+        else if (node->Name == "Ceil") { emitUnary("ceil", "ceil"); }
+        else if (node->Name == "Round") { emitUnary("round", "round"); }
+        else if (node->Name == "Sqrt") { emitUnary("sqrt", "sqrt"); }
+        else if (node->Name == "Sign") { emitUnary("sign", "sign"); }
+
+        //  mod e binaria: o tipo vem de A, e B pode ser escalar (GLSL aceita
+        //  mod(vec3, float)) ou do mesmo tipo.
+        else if (node->Name == "Mod")
+        {
+            std::string var = MakeVar("mod");
+
+            std::string valA = std::to_string(node->Inputs[0].DefaultFloat);
+            PinType     type = PinType::Float;
+            if (Pin* srcA = GetSourcePin(&node->Inputs[0]))
+            {
+                valA = GetPinVariable(srcA->ID);
+                type = GetPinType(srcA->ID);
+            }
+
+            std::string valB = std::to_string(node->Inputs[1].DefaultFloat);
+            if (Pin* srcB = GetSourcePin(&node->Inputs[1]))
+                valB = GetPinVariable(srcB->ID);
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var
+                << " = mod(" << valA << ", " << valB << ");";
+        }
+
+        // MATFUNC_V1 — fract() em qualquer tipo, como o Abs logo acima.
+        else if (node->Name == "Fract")
+        {
+            std::string var = MakeVar("fract");
+            std::string val = "0.0";
+            PinType     type = PinType::Float;
+
+            Pin* src = GetSourcePin(&node->Inputs[0]);
+            if (src) { val = GetPinVariable(src->ID); type = GetPinType(src->ID); }
+
+            RegisterPin(node->Outputs[0].ID, var, type);
+            code << GetGLSLType(type) << " " << var << " = fract(" << val << ");";
+        }
+
         else if (node->Name == "Noise")
         {
             std::string var = MakeVar("noise");
@@ -2590,9 +3565,31 @@ void main()
                 if (t == PinType::Vec2) uv = GetPinVariable(srcUV->ID);
             }
 
+            // NOISE_SMOOTH_V1 — Scale e Detail sao pinos NOVOS. Um .axegraph
+            // salvo antes desta versao tem so o pino UV, entao os guardas de
+            // tamanho abaixo nao sao decoracao: sem eles, abrir um material
+            // antigo indexaria fora do vetor.
+            std::string scale = "8.0";
+            if (node->Inputs.size() > 1)
+            {
+                scale = std::to_string(node->Inputs[1].DefaultFloat);
+                if (Pin* srcScale = GetSourcePin(&node->Inputs[1]))
+                    scale = ForceFloat(node->Name, "Scale",
+                        GetPinVariable(srcScale->ID), GetPinType(srcScale->ID));
+            }
+
+            std::string detail = "3.0";
+            if (node->Inputs.size() > 2)
+            {
+                detail = std::to_string(node->Inputs[2].DefaultFloat);
+                if (Pin* srcDetail = GetSourcePin(&node->Inputs[2]))
+                    detail = ForceFloat(node->Name, "Detail",
+                        GetPinVariable(srcDetail->ID), GetPinType(srcDetail->ID));
+            }
+
             RegisterPin(node->Outputs[0].ID, var, PinType::Float);
-            code << "float " << var << " = fract(sin(dot(" << uv
-                << ", vec2(12.9898, 78.233))) * 43758.5453);";
+            code << "float " << var << " = axeFbm((" << uv << ") * " << scale
+                << ", int(clamp(" << detail << ", 1.0, 8.0)));";
         }
 
         // -----------------------------------------------------------------
@@ -2740,6 +3737,29 @@ void main()
     //   vec3   -> vec4   : alpha 1.0 (opaco), que e o default util
     //
     // Tipo igual devolve a expressao intacta — o caso comum nao paga nada.
+    // ── STEP_TYPES_V1 ────────────────────────────────────────────────────────
+    //
+    // AdaptToType com um aviso. Existe porque a conversao silenciosa resolve o
+    // erro de compilacao e ESCONDE o engano: o autor ligou uma cor num pino que
+    // pede um numero, e o material passa a funcionar com o canal .x da cor —
+    // que quase nunca e o que ele queria.
+    //
+    // O aviso vai para o console do engine com o nome do node e do pino, entao
+    // ele sabe ONDE, e nao so que aconteceu.
+    std::string MaterialCompiler::ForceFloat(const std::string& nodeName,
+        const char* pinName,
+        const std::string& expr,
+        PinType from)
+    {
+        if (from == PinType::Float) return expr;
+
+        AXE_CORE_WARN("[STEP_TYPES_V1] '{}': o pino '{}' pede um numero e recebeu um "
+            "vetor — usando o primeiro componente. Se voce queria o brilho, ponha um "
+            "Desaturate ou um Vector Split antes.", nodeName, pinName);
+
+        return AdaptToType(expr, from, PinType::Float);
+    }
+
     std::string MaterialCompiler::AdaptToType(const std::string& expr,
         PinType from, PinType to)
     {
@@ -2806,6 +3826,8 @@ void main()
         data.AlbedoSamplerName = result.AlbedoSamplerName;
         data.NormalSamplerName = result.NormalSamplerName;
         data.IsTransparent = result.IsTransparent;
+        data.TwoSided = result.TwoSided;      // TWO_SIDED_V1
+        data.UsesSceneHeight = result.UsesSceneHeight;   // SCENE_HEIGHT_V6
         data.IsMasked = result.IsMasked;
         data.AlphaCutoff = result.AlphaCutoff;
         data.BakedEmissive = bakedEmissive;
@@ -2833,6 +3855,8 @@ void main()
         data.FragmentShader = result.FragmentShader;
         data.SamplerTextureUUIDs = result.SamplerTextureUUIDs;
         data.IsTransparent = result.IsTransparent;
+        data.TwoSided = result.TwoSided;      // TWO_SIDED_V1
+        data.UsesSceneHeight = result.UsesSceneHeight;   // SCENE_HEIGHT_V6
 
         return CookedMaterial::Save(CookedMaterial::PathFor(materialFilePath), data);
     }

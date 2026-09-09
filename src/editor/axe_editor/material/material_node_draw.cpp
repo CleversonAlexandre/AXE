@@ -34,6 +34,69 @@ namespace axe
 
         const float NODE_WIDTH = 180.0f;
 
+        const float PIN_FIELD_WIDTH = 54.0f;
+
+        // ═════════════════════════════════════════════════════════════════════
+        //  PIN_LABEL_V2 — a largura do node sai do TEXTO, nao de um palpite
+        //
+        //  O V1 tinha duas larguras: 180px, e 264px quando o node tinha algum
+        //  pino Float solto (o campo de numero inline nao cabia em 90px de
+        //  coluna). Funcionava para Multiply e para chamada de Material
+        //  Function, e cortava tudo que caisse fora dessa regra — um node com
+        //  nomes longos e nenhum campo inline ficava em 180px com "World
+        //  Position" e "Nearest Base" transbordando pela borda.
+        //
+        //  A regra era um proxy: "tem campo inline" tentava adivinhar "o texto
+        //  e largo". Aqui se mede o texto de verdade, com a fonte que esta em
+        //  uso, e a largura vira consequencia — nome mais largo da entrada +
+        //  nome mais largo da saida + icones + o titulo. NODE_WIDTH continua,
+        //  agora como PISO: um Multiply nao encolhe para 90px so porque os
+        //  pinos dele se chamam "A" e "B".
+        //
+        //  A folga que sobra acima do piso e dividida entre as colunas, senao
+        //  os pinos ficariam amontoados a esquerda de um node largo.
+        // ═════════════════════════════════════════════════════════════════════
+        const float iconW = (float)m_PinIconSize + 8.0f;
+        const bool  allowInline = (node.Name != "Material Output");
+
+        float inputTextMax = 0.0f;
+        float outputTextMax = 0.0f;
+
+        for (auto& p : node.Inputs)
+        {
+            float w = ImGui::CalcTextSize(p.Name.c_str()).x;
+            if (allowInline && p.Type == PinType::Float && !m_Graph->IsPinLinked(p.ID))
+                w += 6.0f + PIN_FIELD_WIDTH;   // nome + respiro + caixa de numero
+            inputTextMax = std::max(inputTextMax, w);
+        }
+        for (auto& p : node.Outputs)
+            outputTextMax = std::max(outputTextMax, ImGui::CalcTextSize(p.Name.c_str()).x);
+
+        float inputColumnWidth = node.Inputs.empty() ? 0.0f : inputTextMax + iconW;
+        float outputColumnWidth = node.Outputs.empty() ? 0.0f : outputTextMax + iconW;
+
+        // O titulo tambem manda: "Scene World Position" e mais largo que os
+        // pinos de varios nodes que o tem.
+        const float titleWidth = ImGui::CalcTextSize(node.Name.c_str()).x + 16.0f;
+
+        float nodeWidth = inputColumnWidth + outputColumnWidth + 8.0f;
+        nodeWidth = std::max(nodeWidth, titleWidth);
+        nodeWidth = std::max(nodeWidth, NODE_WIDTH);
+
+        // Devolve a sobra as colunas: metade para cada lado quando ha os dois,
+        // tudo para o unico lado quando so ha um.
+        const float slack = nodeWidth - 8.0f - inputColumnWidth - outputColumnWidth;
+        if (slack > 0.0f)
+        {
+            if (!node.Inputs.empty() && !node.Outputs.empty())
+            {
+                inputColumnWidth += slack * 0.5f;
+                outputColumnWidth += slack * 0.5f;
+            }
+            else if (!node.Inputs.empty())  inputColumnWidth += slack;
+            else if (!node.Outputs.empty()) outputColumnWidth += slack;
+        }
+
         auto drawPin = [&](Pin& pin, bool isInput)
             {
                 auto col = GetPinColor(pin.Type);
@@ -60,6 +123,11 @@ namespace axe
 
                 if (isInput)
                 {
+                    // Guardado ANTES do icone: e a borda esquerda da coluna de
+                    // entrada, e e dela que sai o alinhamento a direita do
+                    // campo numerico mais abaixo.
+                    const float rowX0 = ImGui::GetCursorPosX();
+
                     bool connected = m_Graph->IsPinLinked(pin.ID);
                     DrawPinIcon(pin, connected, dimmedByDomain ? 90 : 255);
                     ImGui::SameLine();
@@ -78,7 +146,24 @@ namespace axe
                     if (allowInlineEdit && !connected && pin.Type == PinType::Float)
                     {
                         ImGui::PushID(&pin);
-                        ImGui::SetNextItemWidth(60.0f);
+
+                        // PIN_LABEL_V1 — o nome vem SEMPRE, e o campo vai
+                        // encostado na borda direita da coluna. Alinhar pela
+                        // direita e o que mantem a pilha de caixinhas alinhada
+                        // quando os nomes tem tamanhos diferentes; alinhar pela
+                        // esquerda faria cada uma comecar num lugar.
+                        const float baseY = ImGui::GetCursorPosY();
+
+                        ImGui::SetCursorPosY(baseY + verticalOffset);
+                        ImGui::TextColored(imcol, "%s", pin.Name.c_str());
+                        ImGui::SameLine();
+
+                        const float fieldX = rowX0 + inputColumnWidth - PIN_FIELD_WIDTH;
+                        if (fieldX > ImGui::GetCursorPosX())
+                            ImGui::SetCursorPosX(fieldX);
+
+                        ImGui::SetCursorPosY(baseY);
+                        ImGui::SetNextItemWidth(PIN_FIELD_WIDTH);
                         ImGui::DragFloat("##pindef", &pin.DefaultFloat, 0.01f, 0.0f, 0.0f, "%.2f");
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("%s", pin.Name.c_str());
@@ -93,7 +178,7 @@ namespace axe
                 else
                 {
                     float contentWidth = ImGui::CalcTextSize(pin.Name.c_str()).x + iconSize + 8;
-                    float availWidth = NODE_WIDTH * 0.5f - 8;
+                    float availWidth = outputColumnWidth;   // PIN_LABEL_V1
                     float offset = availWidth - contentWidth;
                     if (offset > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset);
 
@@ -119,7 +204,7 @@ namespace axe
         {
             ImVec2 titlePos = ImGui::GetCursorScreenPos();
             float  titleH = ImGui::GetTextLineHeightWithSpacing() + 8.0f;
-            ImVec2 titleEnd = ImVec2(titlePos.x + NODE_WIDTH, titlePos.y + titleH);
+            ImVec2 titleEnd = ImVec2(titlePos.x + nodeWidth, titlePos.y + titleH);
 
             ImGui::GetWindowDrawList()->AddRectFilled(
                 titlePos, titleEnd,
@@ -128,12 +213,12 @@ namespace axe
 
             ImVec2 textSize = ImGui::CalcTextSize(node.Name.c_str());
             ImGui::SetCursorScreenPos(ImVec2(
-                titlePos.x + (NODE_WIDTH - textSize.x) * 0.5f,
+                titlePos.x + (nodeWidth - textSize.x) * 0.5f,
                 titlePos.y + 4.0f));
             ImGui::TextUnformatted(node.Name.c_str());
 
             ImGui::SetCursorScreenPos(ImVec2(titlePos.x, titlePos.y + titleH));
-            ImGui::Dummy(ImVec2(NODE_WIDTH, 4));
+            ImGui::Dummy(ImVec2(nodeWidth, 4));
         }
 
         // Conteúdo do node
@@ -144,22 +229,22 @@ namespace axe
 
             if (node.Value.Type == PinType::Float && node.Outputs.size() == 1)
             {
-                ImGui::SetNextItemWidth(NODE_WIDTH - 16);
+                ImGui::SetNextItemWidth(nodeWidth - 16);
                 ImGui::DragFloat("##val", &node.Value.FloatVal, 0.01f, 0.0f, 1.0f);
             }
             else if (node.Value.Type == PinType::Vec2 && node.Outputs.size() == 1)
             {
-                ImGui::SetNextItemWidth(NODE_WIDTH - 16);
+                ImGui::SetNextItemWidth(nodeWidth - 16);
                 ImGui::DragFloat2("##val2", &node.Value.Vec2Val.x, 0.01f);
             }
             else if (node.Value.Type == PinType::Vec3 && node.Outputs.size() == 1)
             {
-                ImGui::SetNextItemWidth(NODE_WIDTH - 16);
+                ImGui::SetNextItemWidth(nodeWidth - 16);
                 ImGui::DragFloat3("##val3", &node.Value.Vec3Val.x, 0.01f);
             }
             else if (node.Value.Type == PinType::Vec4 && !node.Outputs.empty())
             {
-                ImGui::SetNextItemWidth(NODE_WIDTH - 16);
+                ImGui::SetNextItemWidth(nodeWidth - 16);
                 ImGui::ColorEdit4("##col", &node.Value.Vec4Val.x,
                     ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
             }
@@ -169,7 +254,7 @@ namespace axe
         {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8);
             ImGui::PushID(node.ID.AsPointer());
-            float imgSize = NODE_WIDTH - 16;
+            float imgSize = nodeWidth - 16;
 
             if (node.Value.TextureVal && node.Value.TextureVal->IsLoaded())
                 ImGui::Image(
@@ -197,13 +282,13 @@ namespace axe
                 ImGui::EndDragDropTarget();
             }
             ImGui::PopID();
-            ImGui::Dummy(ImVec2(NODE_WIDTH, 4));
+            ImGui::Dummy(ImVec2(nodeWidth, 4));
         }
 
         // Pins
         int maxPins = (int)std::max(node.Inputs.size(), node.Outputs.size());
-        const float inputColumnWidth = NODE_WIDTH * 0.5f - 8;
-        const float outputColumnWidth = NODE_WIDTH * 0.5f - 8;
+        // PIN_LABEL_V1 — inputColumnWidth e outputColumnWidth agora sao
+        // calculados no topo do DrawNode, porque a lambda drawPin precisa deles.
 
         for (int i = 0; i < maxPins; i++)
         {

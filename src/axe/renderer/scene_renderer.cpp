@@ -171,6 +171,10 @@ namespace axe
 
         RenderShadowPass(queue, cameraPosition, view, projection);
 
+        // SCENE_HEIGHT_V1 — aqui, e nao dentro do RenderDeferred: e uma render
+        // auxiliar da cena inteira, e os dois caminhos abaixo a consomem.
+        RenderSceneHeightPass(queue, cameraPosition);
+
         if (m_DeferredEnabled && m_DeferredSupported && m_TargetFBO != 0)
             RenderDeferred(queue, viewProjection, view, projection, cameraPosition, width, height);
         else
@@ -180,6 +184,89 @@ namespace axe
     // =============================================================================
     // Shadow pass — opera sobre RenderQueue
     // =============================================================================
+
+    // =============================================================================
+    // SCENE_HEIGHT_V1 — mapa de topo da cena
+    //
+    //  Uma render ortografica de cima para baixo, centrada na camera, gravando
+    //  a altura da geometria; depois um jump flood transforma isso em "onde
+    //  esta a geometria mais proxima". Ver scene_height_pass.hpp para o porque.
+    //
+    //  Transparentes ficam de fora, pela mesma razao do bake de probe: agua nao
+    //  e margem de si mesma, e vidro nao e chao.
+    // =============================================================================
+    void SceneRenderer::RenderSceneHeightPass(const RenderQueue& queue,
+        const glm::vec3& cameraPosition)
+    {
+        // ── SCENE_HEIGHT_V6 — quem pede o mapa e a propria superficie ────────
+        //
+        //  Varre a fila atras dos draw calls cujo material usa o node Scene
+        //  Height. Se nao ha nenhum, o passe NAO RODA — nao ha o que medir, e
+        //  uma cena sem agua nao paga por isto.
+        //
+        //  A altura da fatia sai do transform desses draw calls: e a altura da
+        //  propria superficie que vai ler o mapa. Nao ha nada para configurar,
+        //  e nao ha campo de "agua" em painel nenhum.
+        //
+        //  Com mais de uma superficie em alturas diferentes fica valendo a mais
+        //  BAIXA, e as outras leem um mapa fatiado no lugar errado. Um mapa por
+        //  altura distinta e a evolucao natural daqui — mas custa um jump flood
+        //  por altura, entao so quando alguma cena precisar de verdade.
+        bool  wantsHeight = false;
+        float sliceY = 0.0f;
+
+        for (const auto& dc : queue.Meshes)
+        {
+            if (!dc.Material || !dc.Material->UsesSceneHeight) continue;
+
+            const float y = dc.Transform[3].y;
+            if (!wantsHeight || y < sliceY) sliceY = y;
+            wantsHeight = true;
+        }
+
+        if (!wantsHeight)
+        {
+            // Sem zerar as fontes, o MeshRenderer continuaria mandando a
+            // textura do ultimo frame em que o passe rodou.
+            m_MeshRenderer.SetSceneHeightSource(0, 0, glm::mat4(1.0f));
+            return;
+        }
+
+        if (!m_SceneHeightPass) m_SceneHeightPass = SceneHeightPass::Create();
+        if (!m_SceneHeightPass) return;
+
+        if (!m_SceneHeightPass->IsInitialized())
+            m_SceneHeightPass->Initialize(k_SceneHeightResolution);
+
+        if (!m_SceneHeightPass->IsInitialized())
+        {
+            m_MeshRenderer.SetSceneHeightSource(0, 0, glm::mat4(1.0f));
+            return;
+        }
+
+        const glm::mat4 topDown = SceneHeightPass::CalcTopDownMatrix(
+            cameraPosition, k_SceneHeightExtent, k_SceneHeightResolution);
+
+        // Antes do Begin: a fatia e lida ja no desenho, para contar as
+        // superficies que ficam acima dela.
+        m_SceneHeightPass->SetSlice(sliceY);
+
+        m_SceneHeightPass->Begin(topDown);
+
+        for (const auto& dc : queue.Meshes)
+        {
+            if (!dc.Mesh) continue;
+            if (dc.Material && dc.Material->IsTransparent) continue;
+            m_SceneHeightPass->DrawMesh(*dc.Mesh, dc.Transform);
+        }
+
+        m_SceneHeightPass->End();
+
+        m_MeshRenderer.SetSceneHeightSource(
+            m_SceneHeightPass->GetHeightMapID(),
+            m_SceneHeightPass->GetSeedMapID(),
+            m_SceneHeightPass->GetMatrix());
+    }
 
     void SceneRenderer::RenderShadowPass(const RenderQueue& queue,
         const glm::vec3& cameraPosition,
@@ -245,6 +332,19 @@ namespace axe
             m_MeshRenderer.SetShadowMap(
                 m_ShadowPass->GetDepthMapID(),
                 m_ShadowPass->GetLightSpaceMatrix());
+
+        // ── SCENE_DEPTH_SURFACE_V1 — DESLIGA explicitamente aqui ────────────
+        //
+        // Este e o caminho FORWARD PURO (deferred desligado): os previews do
+        // Material Editor, do Script Editor e do Anim Graph. Nao ha G-Buffer
+        // preenchido, entao nao ha "cena atras" para ler.
+        //
+        // O zero e explicito e nao redundante: o m_ScenePositionID e membro e
+        // sobrevive entre frames. Sem esta linha, um SceneRenderer que rodasse
+        // os dois caminhos ficaria com o id da ULTIMA vez que o deferred rodou
+        // e amostraria uma textura velha — que aparece como sujeira que muda
+        // sozinha, o tipo de defeito que nao se liga a causa.
+        m_MeshRenderer.SetSceneDepthSource(0, 1, 1);
 
         if (m_SkyboxRenderer)
         {
@@ -525,6 +625,21 @@ namespace axe
                     m_MeshRenderer.SetShadowMap(
                         m_ShadowPass->GetDepthMapID(),
                         m_ShadowPass->GetLightSpaceMatrix());
+
+                // ── SCENE_DEPTH_SURFACE_V1 ──────────────────────────────
+                //
+                // Neste ponto o G-Buffer ja foi resolvido (passo 4) e NAO
+                // esta mais ligado para escrita — o alvo agora e o
+                // m_TargetFBO. Entao o attachment de posicao pode ser lido
+                // como textura comum, sem o ciclo leitura/escrita que
+                // impede a mesma coisa no caminho opaco.
+                //
+                // E isto que da profundidade de lamina d'agua: o material le
+                // a distancia ate o fundo e decide cor e espuma a partir dela.
+                m_MeshRenderer.SetSceneDepthSource(
+                    m_GBuffer.GetPositionID(),
+                    m_GBuffer.GetWidth(),
+                    m_GBuffer.GetHeight());
 
                 m_MeshRenderer.Begin(viewProjection, cameraPosition);
                 for (auto* dc : transparent)

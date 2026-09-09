@@ -12,6 +12,7 @@
 #include "axe/project/project_manager.hpp"
 #include "axe/script/script_paths.hpp"
 #include "axe/material/material_asset.hpp"
+#include "editor/axe_editor/material/material_function.hpp"   // MATFUNC_V1
 #include "axe/particles/particle_system_asset.hpp"
 #include "editor/axe_editor/script/script_asset.hpp"
 
@@ -38,7 +39,8 @@ namespace axe
         ".axemat", ".axescene", ".axeskel", ".axeanim",  // .axeskel: personagem | .axeanim: state machine
         ".axerig",                                       // .axerig: control rig
         ".wav", ".mp3", ".flac",                         // audio
-        ".axecue"                                        // sound cue
+        ".axecue",                                       // sound cue
+        ".axematfunc"                                    // MATFUNC_V1 — Material Function
     };
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1960,6 +1962,36 @@ namespace axe
                     AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
             }
 
+            // MATFUNC_V1 — mesmos cinco passos do Material logo acima: caminho
+            // unico, Create, Save, Register, VirtualFolder + Save do banco.
+            //
+            // Diferenca de um so ponto: o Material nasce SEM `.axegraph` (ele
+            // so aparece no primeiro save do grafo), enquanto a funcao nasce
+            // com o grafo dentro do proprio arquivo, ja com um Function Input
+            // ligado num Function Output. Uma funcao vazia abriria numa tela em
+            // branco sem nenhuma pista do que a torna uma funcao.
+            if (ImGui::MenuItem("Material Function"))
+            {
+                auto fnPath = ProjectManager::Get().GetCurrent().AssetsPath
+                    / "Materials" / "NewMaterialFunction.axematfunc";
+                int k = 1;
+                while (std::filesystem::exists(fnPath))
+                    fnPath = ProjectManager::Get().GetCurrent().AssetsPath
+                    / "Materials" / ("NewMaterialFunction_" + std::to_string(k++) + ".axematfunc");
+
+                auto fnAsset = MaterialFunction::Create(fnPath.stem().string());
+                if (fnAsset && fnAsset->GetGraph())
+                    fnAsset->Save(fnPath, *fnAsset->GetGraph());
+
+                auto fnUuid = AssetDatabase::Get().Register(fnPath.string());
+
+                auto* fnRec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(fnUuid));
+                if (fnRec) fnRec->VirtualFolder = m_SelectedFolder;
+
+                if (ProjectManager::Get().HasProject())
+                    AssetDatabase::Get().Save(ProjectManager::Get().GetCurrent().RootPath);
+            }
+
             if (ImGui::MenuItem("Particle System"))
             {
                 auto partPath = ProjectManager::Get().GetCurrent().AssetsPath
@@ -2368,8 +2400,19 @@ namespace axe
         std::shared_ptr<Texture2D> icon;
         uint32_t overrideTextureID = 0;
 
-        if (record.Type == AssetType::Material && m_ThumbnailRenderer &&
-            record.FilePath.extension() == ".axemat")
+        // MATFUNC_V2 — a funcao entra pela MESMA porta do material. O
+        // ThumbnailRenderer e quem sabe que uma delas precisa de um envelope
+        // para virar shader; daqui as duas sao "um asset que rende esfera".
+        //
+        // O icone de fallback continua sendo o de material: enquanto a esfera
+        // nao ficou pronta (o render acontece no OnRender, nao aqui), e ele que
+        // aparece — e um `.axematfunc` com icone generico de arquivo era
+        // exatamente a queixa.
+        if (m_ThumbnailRenderer &&
+            ((record.Type == AssetType::Material &&
+                record.FilePath.extension() == ".axemat") ||
+                (record.Type == AssetType::MaterialFunction &&
+                    record.FilePath.extension() == ".axematfunc")))
         {
             m_ThumbnailRenderer->Register(record.UUID, record.FilePath);
             overrideTextureID = m_ThumbnailRenderer->GetThumbnail(record.UUID);
@@ -2591,6 +2634,15 @@ namespace axe
             // clipe certo. Instanciar uma curva na cena nao quer dizer nada —
             // mesma razao do .axeskel e do .axeseq.
             else if (record.Type == AssetType::AnimationClip)
+            {
+                if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            }
+            // MATFUNC_V1 — mesma razao do .axeskel, do .axeseq e do clipe
+            // assado: o ramo generico chama os DOIS callbacks, e instanciar uma
+            // Material Function na cena nao quer dizer nada. Ela nao e um
+            // material — nao tem shader, nao tem dominio e nao se aplica a
+            // malha nenhuma. O unico gesto util e abrir o editor nela.
+            else if (record.Type == AssetType::MaterialFunction)
             {
                 if (m_AssetOpenCallback) m_AssetOpenCallback(record);
             }

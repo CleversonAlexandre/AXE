@@ -60,6 +60,7 @@ namespace axe
         config.SettingsFile = nullptr;
         m_NodeEditorContext = ed::CreateEditor(&config);
 
+        m_FunctionAsset = nullptr;   // MATFUNC_V1 — sai do modo funcao
         m_Asset = asset;
         m_Material = asset->GetMaterial();
         m_Open = true;
@@ -113,10 +114,56 @@ namespace axe
     // -------------------------------------------------------------------------
 
 
+    // ── MATFUNC_V1 ───────────────────────────────────────────────────────────
+    //
+    // Espelha OpenMaterial passo a passo, e de proposito: contexto do node
+    // editor recriado do zero (senao as posicoes do grafo anterior vazam para
+    // este, que e exatamente o defeito que os grafos de funcao do Script
+    // Editor ja tiveram), historico de undo limpo, contador de frame zerado.
+    //
+    // A diferenca esta em quem e o dono do grafo: a janela TOMA o grafo da
+    // funcao. Depois disto m_Graph e a unica autoridade sobre ele, e e o que
+    // o Save regrava.
+    void MaterialEditorWindow::OpenMaterialFunction(std::shared_ptr<MaterialFunction> fn)
+    {
+        if (!fn) return;
+
+        if (m_NodeEditorContext)
+        {
+            ed::DestroyEditor(m_NodeEditorContext);
+            m_NodeEditorContext = nullptr;
+        }
+
+        ed::Config config;
+        config.SettingsFile = nullptr;
+        m_NodeEditorContext = ed::CreateEditor(&config);
+
+        // Modo funcao: sem material, sem preview, sem dominio.
+        m_Asset = nullptr;
+        m_Material = nullptr;
+        m_FunctionAsset = fn;
+        m_Open = true;
+        m_FrameCount = 0;
+
+        m_Graph = fn->TakeGraph();
+        if (!m_Graph) m_Graph = std::make_unique<MaterialGraph>();
+
+        m_History.Clear();
+        ClearLog();
+
+        // MATFUNC_V2 — a esfera ja aparece ao abrir, sem precisar compilar.
+        RefreshFunctionPreview();
+
+        LogInfo("[MATFUNC_V1] Material Function '" + fn->GetName() + "' aberta.");
+    }
+
     void MaterialEditorWindow::Draw()
     {
-        if (!m_Open || !m_Asset || !m_Material) return;
-        
+        // MATFUNC_V1 — em modo funcao nao existe MaterialAsset nem Material, e
+        // a janela e a mesma. A guarda antiga fechava a janela nesse caso.
+        if (!m_Open) return;
+        if (!IsFunctionMode() && (!m_Asset || !m_Material)) return;
+
 
         if (s_NeedsReload && m_Open)
         {
@@ -127,9 +174,12 @@ namespace axe
         // Sempre chama Begin/End para o ImGui salvar a posição no imgui.ini
         ImGui::SetNextWindowSize(ImVec2(1200, 700), ImGuiCond_FirstUseEver);
 
-        std::string title = m_Asset
-            ? "Material Editor — " + m_Asset->GetName() + "###MaterialEditor"
-            : "Material Editor###MaterialEditor";
+        std::string title =
+            IsFunctionMode()
+            ? "Material Function — " + m_FunctionAsset->GetName() + "###MaterialEditor"
+            : (m_Asset
+                ? "Material Editor — " + m_Asset->GetName() + "###MaterialEditor"
+                : "Material Editor###MaterialEditor");
 
         if (!ImGui::Begin(title.c_str(), &m_Open))
         {
@@ -191,7 +241,11 @@ namespace axe
 
         DrawMaterialParamsWindow();
         DrawNodeGraphWindow();
-        DrawPreviewWindow();
+        // MATFUNC_V1 — funcao nao tem esfera de preview: ela nao vira shader.
+        // MATFUNC_V2 — condicao por MATERIAL, e nao por modo: agora a funcao
+        // tambem tem esfera, montada a partir de um envelope. Onde nao ha
+        // material (funcao sem saida ligada) a janela simplesmente nao aparece.
+        if (m_Material) DrawPreviewWindow();
         DrawShaderLog();
         m_IsAnyWindowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
 

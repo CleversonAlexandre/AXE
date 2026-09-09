@@ -4,6 +4,7 @@
 // undo/redo de deleção de node (DeleteNodeWithHistory).
 
 #include "material_editor_window.hpp"
+#include "material_function.hpp"   // MATFUNC_V2 — drop de funcao no canvas
 
 // MATERIAL_EDITOR_STYLE_V1 — widgets e icones compartilhados do editor.
 // Ver a nota em editor_widgets.hpp sobre por que eles existem.
@@ -42,6 +43,10 @@ namespace axe
         {"Min","Min"}, {"Max","Max"}, {"Saturate","Saturate"}, {"Sine","Sine"},
         {"Cosine","Cosine"}, {"Step","Step"}, {"SmoothStep","SmoothStep"}, {"Lerp","Lerp"},
         {"If","If"},
+        {"Fract","Fract"},                       // MATFUNC_V1
+        // PRIMITIVES_V1 — builtins de GLSL, 1:1 com a linguagem.
+        {"Floor","Floor"}, {"Ceil","Ceil"}, {"Round","Round"},
+        {"Sqrt","Sqrt"}, {"Sign","Sign"}, {"Mod","Mod"},
     };
     static const MatNE s_MatVector[] = {
         {"Normalize","Normalize"}, {"Distance","Distance"}, {"Dot Product","DotProduct"},
@@ -51,6 +56,7 @@ namespace axe
     static const MatNE s_MatUtility[] = {
         {"World Position","World Position"}, {"Fresnel","Fresnel"}, {"Normal Map","Normal Map"},
         {"Camera Vector","Camera Vector"}, {"Reflection Vector","Reflection Vector"},
+        {"Camera Position","Camera Position"},   // WATER_NODES_V1
         {"Desaturate","Desaturate"}, {"Noise","Noise"},
     };
     static const MatNE s_MatAnimation[] = {
@@ -68,6 +74,17 @@ namespace axe
         {"Custom (GLSL)", "Custom"},
     };
 
+    // MATFUNC_V1 — categoria propria pelo mesmo motivo do Custom: nao sao mais
+    // uma operacao, sao a fronteira do grafo. Function Input/Output so tem
+    // efeito dentro de um `.axematfunc` e Material Function so fora dele, mas
+    // os tres aparecem sempre — node que some conforme o contexto esconde do
+    // autor que ele existe (a mesma decisao ja tomada nos nodes de Screen).
+    static const MatNE s_MatFunction[] = {
+        {"Material Function", "Material Function"},
+        {"Function Input",    "Function Input"},
+        {"Function Output",   "Function Output"},
+    };
+
     // POSTPROCESS_DOMAIN_V1 — so tem efeito no dominio Post Process; fora dele
     // compilam para valor neutro (ver GenerateNodeCode). Ficam no menu de
     // qualquer jeito: node que some conforme o dominio esconde do usuario que
@@ -77,6 +94,13 @@ namespace axe
         {"Screen UV",           "Screen UV"},
         // POSTPROCESS_GBUFFER_V1 — a GEOMETRIA da cena, nao so a cor.
         {"Scene Depth",         "Scene Depth"},
+        // WATER_NODES_V1 — o par do Scene Depth: a distancia ate ESTE pixel.
+        {"Pixel Depth",         "Pixel Depth"},
+        // do Scene Depth (aquele mede ao longo do raio de visao).
+        {"Scene World Position","Scene World Position"},
+        // SCENE_HEIGHT_V1 — a unica fonte independente de camera: vem da render
+        // ortografica de topo, e nao do G-Buffer.
+        {"Scene Height",        "Scene Height"},
         {"Scene Normal",        "Scene Normal"},
         {"Scene Shading Model", "Scene Shading Model"},
         // POSTPROCESS_SKY_V1 — o ceu nao esta no G-Buffer; estes tres sao o
@@ -101,6 +125,7 @@ namespace axe
         {"Animation", s_MatAnimation, IM_ARRAYSIZE(s_MatAnimation), {0.95f, 0.35f, 0.6f,  1}},
         {"Particle",  s_MatParticle,  IM_ARRAYSIZE(s_MatParticle),  {0.1f,  0.75f, 0.55f, 1}},
         {"Custom",    s_MatCustom,    IM_ARRAYSIZE(s_MatCustom),    {0.75f, 0.45f, 0.15f, 1}},
+        {"Function",  s_MatFunction,  IM_ARRAYSIZE(s_MatFunction),  {0.35f, 0.55f, 0.85f, 1}},  // MATFUNC_V1
         {"Screen",    s_MatScreen,    IM_ARRAYSIZE(s_MatScreen),    {0.2f,  0.6f,  0.8f,  1}},
     };
 
@@ -207,6 +232,40 @@ namespace axe
                         node->Value.TextureUUID = record->UUID;
                         m_Graph->BuildNodes();
                         ed::SetNodePosition(node->ID, dropScreenPos);
+                    }
+                }
+                // ── MATFUNC_V2 — arrastar uma Material Function pro canvas ──
+                //
+                // Mesmo gesto da textura, e pela mesma razao: montar a chamada
+                // pelo menu era criar o node, achar o Asset Picker no painel de
+                // detalhes e procurar a funcao numa lista. Arrastar do browser
+                // resolve os tres passos de uma vez, e ja com a assinatura
+                // lida — o node cai no canvas com os pinos certos.
+                else if (record && record->Type == AssetType::MaterialFunction)
+                {
+                    ImVec2 dropScreenPos = ImGui::GetMousePos();
+
+                    std::string fnName;
+                    std::vector<MaterialFunctionParam> fnIn, fnOut;
+
+                    if (MaterialFunction::ReadSignature(record->FilePath,
+                        fnName, fnIn, fnOut))
+                    {
+                        if (Node* node = m_Graph->AddMaterialFunctionNode())
+                        {
+                            node->StringValue = record->UUID;
+
+                            // Ja monta os pinos e chama BuildNodes por dentro:
+                            // sem ParentNode preenchido, CanCreateLink recusa
+                            // qualquer fio no node recem-criado.
+                            m_Graph->RebuildFunctionCallPins(node, fnIn, fnOut);
+                            ed::SetNodePosition(node->ID, dropScreenPos);
+                        }
+                    }
+                    else
+                    {
+                        LogWarning("[MATFUNC_V2] nao consegui ler a assinatura de '"
+                            + record->FilePath.filename().string() + "'.");
                     }
                 }
             }
@@ -506,7 +565,7 @@ if (r)
                 // Custom somando 8, o `7` teria feito ela nunca aparecer no
                 // menu — e o node existiria, compilaria e seria inalcancavel.
                 // Exatamente o bug que ja aconteceu no menu do Script Editor.
-                static_assert(IM_ARRAYSIZE(s_MatCats) <= 9,
+                static_assert(IM_ARRAYSIZE(s_MatCats) <= 10,   // MATFUNC_V1
                     "m_NodeCatOpen menor que a tabela de categorias");
                 for (int ci = 0; ci < IM_ARRAYSIZE(s_MatCats); ci++)
                 {

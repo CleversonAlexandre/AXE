@@ -21,6 +21,7 @@
 #include "editor/axe_editor/asset/asset_picker.hpp"
 #include "editor/axe_editor/node_graph/material_graph.hpp"
 #include "editor/axe_editor/editor_icon_library.hpp"
+#include "editor/axe_editor/ui/editor_widgets.hpp"   // SCRIPT_STYLE_V1
 #include <imgui.h>
 #include <imgui_node_editor.h>
 #include <fstream>
@@ -124,7 +125,7 @@ namespace axe
             if (!def.AnimGraphUUID.empty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled("Parametros do grafo");
+                ImGui::TextDisabled("Graph parameters");
                 ImGui::Separator();
 
                 const AssetRecord* grec = AssetDatabase::Get().GetByUUID(def.AnimGraphUUID);
@@ -268,7 +269,7 @@ namespace axe
                 {
                     ImGui::DragFloat("Metallic", &mc->Data->Metallic, 0.01f, 0.f, 1.f);
                     ImGui::DragFloat("Roughness", &mc->Data->Roughness, 0.01f, 0.f, 1.f);
-                    ImGui::ColorEdit3("Cor Base", glm::value_ptr(mc->Data->Color));
+                    ImGui::ColorEdit3("Base Color", glm::value_ptr(mc->Data->Color));
                 }
             }
         }
@@ -276,7 +277,7 @@ namespace axe
         {
             static const char* types[] = { "Static","Dynamic","Kinematic" };
             int typeIdx = (def.BodyType == "Dynamic") ? 1 : (def.BodyType == "Kinematic") ? 2 : 0;
-            if (ImGui::Combo("Tipo", &typeIdx, types, 3)) def.BodyType = types[typeIdx];
+            if (ImGui::Combo("Type", &typeIdx, types, 3)) def.BodyType = types[typeIdx];
             if (def.BodyType != "Static")
             {
                 ImGui::DragFloat("Mass", &def.Mass, 0.1f, 0.01f, 1000.f);
@@ -310,7 +311,7 @@ namespace axe
             }
             else if (def.ColliderShape == "Mesh") {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.1f, 1));
-                ImGui::TextWrapped("Mesh exato. Use apenas com Rigidbody Static.");
+                ImGui::TextWrapped("Exact mesh. Use only with a Static Rigidbody.");
                 ImGui::PopStyleColor();
             }
         }
@@ -446,7 +447,7 @@ namespace axe
             ImGui::DragFloat("FOV##cam", &def.CamFov, 0.5f, 10.f, 170.f, "%.1f°");
             ImGui::DragFloat("Near Clip##cam", &def.CamNearClip, 0.01f, 0.001f, 10.f);
             ImGui::DragFloat("Far Clip##cam", &def.CamFarClip, 1.f, 10.f, 10000.f);
-            ImGui::DragFloat("Sensibilidade##cam", &def.CamSensitivity, 0.005f, 0.01f, 5.f);
+            ImGui::DragFloat("Sensitivity##cam", &def.CamSensitivity, 0.005f, 0.01f, 5.f);
             ImGui::Checkbox("Primary Camera##cam", &def.CamIsPrimary);
 
             auto& pr = m_PreviewScene->GetRegistry();
@@ -758,7 +759,7 @@ namespace axe
         // (diferente de Float/Vec3/etc.); mostram só o tamanho inicial.
         if (IsArrayType(v.Type))
         {
-            ImGui::TextDisabled("Tamanho inicial:");
+            ImGui::TextDisabled("Initial size:");
             ImGui::SetNextItemWidth(-1);
             if (v.DefaultArraySize < 0) v.DefaultArraySize = 0;
             ImGui::DragInt("##nd_arrsize", &v.DefaultArraySize, 1, 0, 256);
@@ -916,18 +917,16 @@ namespace axe
                 if (!current.empty())
                 {
                     ImGui::SameLine(0, 2);
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x##clrent")) v.Default.Str.clear();
-                    ImGui::PopStyleColor(3);
+                    // SCRIPT_STYLE_V1
+                    if (ui::CloseButton("clrent", "Clear the entity reference"))
+                        v.Default.Str.clear();
                 }
 
                 // Aviso se entity não encontrada na cena
                 if (!current.empty() && !entityExists)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.1f, 1));
-                    ImGui::TextWrapped("'%s' nao encontrada na cena.", current.c_str());
+                    ImGui::TextWrapped("'%s' was not found in the scene.", current.c_str());
                     ImGui::PopStyleColor();
                 }
 
@@ -943,7 +942,7 @@ namespace axe
                 ImGui::SetNextWindowSize(ImVec2(220, 280), ImGuiCond_Always);
                 if (ImGui::BeginPopup("##entity_picker"))
                 {
-                    ImGui::TextDisabled("Selecione uma entity:");
+                    ImGui::TextDisabled("Select an entity:");
                     ImGui::Separator();
 
                     // Campo de busca
@@ -1212,11 +1211,10 @@ namespace axe
                         ImGui::PopStyleColor(2);
 
                         ImGui::SameLine(available - 18.f);
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.4f, 0.4f, 1));
-                        bool doRemove = ImGui::SmallButton(("x##x_" + std::to_string(i)).c_str());
-                        ImGui::PopStyleColor(3);
+                        // SCRIPT_STYLE_V1 — o PushID(i) logo acima ja torna o
+                        // id unico, entao o sufixo "_i" que existia no rotulo
+                        // deixou de ser necessario.
+                        const bool doRemove = ui::CloseButton("rmentry", "Remove");
 
                         if (doRemove)
                         {
@@ -1437,7 +1435,7 @@ namespace axe
                                 int wantType = 0;
                                 if (ScriptPin* paramPin = FindAnimParamPin(node, &wantType))
                                 {
-                                    ImGui::TextDisabled("Parametro do AnimGraph:");
+                                    ImGui::TextDisabled("AnimGraph parameter:");
                                     ImGui::SetNextItemWidth(-1);
 
                                     const std::string prev = paramPin->Default.Str.empty()
@@ -1457,7 +1455,7 @@ namespace axe
 
                                         if (!known)
                                             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.35f, 1.f),
-                                                "nao existe no grafo");
+                                                "does not exist in the graph");
                                     }
 
                                     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
@@ -1628,15 +1626,15 @@ namespace axe
 
                 struct CE { const char* name; const char* type; const char* desc; ImVec4 col; };
                 static const CE comps[] = {
-                    {"Mesh",           "Mesh",                "Malha 3D do objeto",        {0.6f,0.9f,1.f,1}},
-                    {"Skeletal Mesh",  "SkeletalMesh",        "Personagem animado (.axeskel + .axeanim)", {0.5f,0.85f,0.7f,1}},
+                    {"Mesh",           "Mesh",                "3D mesh of the object",        {0.6f,0.9f,1.f,1}},
+                    {"Skeletal Mesh",  "SkeletalMesh",        "Animated character (.axeskel + .axeanim)", {0.5f,0.85f,0.7f,1}},
                     {"Material",       "Material",            "Material PBR",               {1.f,0.7f,0.4f,1}},
-                    {"Rigidbody",      "Rigidbody",           "Fisica dinamica",            {0.3f,0.7f,1.f,1}},
-                    {"Collider",       "Collider",            "Colisao (Box/Sphere/Capsule)",{0.3f,1.f,0.5f,1}},
+                    {"Rigidbody",      "Rigidbody",           "Dynamic physics",            {0.3f,0.7f,1.f,1}},
+                    {"Collider",       "Collider",            "Collision (Box/Sphere/Capsule)",{0.3f,1.f,0.5f,1}},
                     {"Character Ctrl", "CharacterController", "Character controller",       {1.f,0.7f,0.2f,1}},
-                    {"Point Light",    "PointLight",          "Luz pontual",                {1.f,0.9f,0.3f,1}},
+                    {"Point Light",    "PointLight",          "Point light",                {1.f,0.9f,0.3f,1}},
                     {"Spring Arm",     "SpringArm",           "Camera boom arm",            {0.9f,0.6f,1.f,1}},
-                    {"Camera",         "Camera",              "Camera de jogo",             {0.7f,0.5f,1.f,1}},
+                    {"Camera",         "Camera",              "Game camera",             {0.7f,0.5f,1.f,1}},
                 };
                 for (auto& c : comps)
                 {
@@ -1676,7 +1674,7 @@ namespace axe
                 {
                     std::string payload = "GetTransform";
                     ImGui::SetDragDropPayload("COMP_NODE", payload.c_str(), payload.size() + 1);
-                    ImGui::TextUnformatted("Transform → Graph");
+                    ImGui::TextUnformatted("Transform -> Graph");
                     ImGui::EndDragDropSource();
                 }
 
@@ -1842,13 +1840,13 @@ namespace axe
                     ImGui::BeginGroup();
                     ImGui::Dummy(ImVec2(0, (cardHeight - 20.f) * 0.5f)); // centraliza verticalmente
 
-                    // Collapse
+                    // Collapse — SCRIPT_STYLE_V1: eram as LETRAS "v" e ">"
+                    // num SmallButton. Agora e um triangulo de verdade, o
+                    // mesmo widget que o Script Members usa.
                     bool& collapsed = m_CompCollapsed[i < 32 ? i : 0];
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 0.5f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1));
-                    if (ImGui::SmallButton(collapsed ? ">" : "v")) collapsed = !collapsed;
-                    ImGui::PopStyleColor(3);
+                    if (ui::CaretButton("comp", !collapsed,
+                        collapsed ? "Show children" : "Hide children"))
+                        collapsed = !collapsed;
                     ImGui::SameLine(0, 6);
 
                     // Ícone: textura quando existe, glifo Font Awesome quando não.
@@ -1914,7 +1912,7 @@ namespace axe
                         if (node.empty())
                             ImGui::Text("Mover %s", def.Type.c_str());
                         else
-                            ImGui::Text("%s → grafo ou para dentro de outro", def.Type.c_str());
+                            ImGui::Text("%s -> graph, or onto another component", def.Type.c_str());
 
                         ImGui::PopStyleColor();
                         ImGui::EndDragDropSource();
@@ -1947,26 +1945,29 @@ namespace axe
                         const char* parentName = parentOk
                             ? comps[def.ParentIndex].Type.c_str() : "?";
 
-                        if (ImGui::SmallButton("^"))
+                        // SCRIPT_STYLE_V1 — era a letra "^". O tooltip precisa
+                        // do nome do pai, entao ele fica no IsItemHovered em
+                        // vez de ir pelo parametro do IconButton (que so aceita
+                        // string pronta).
+                        char unparentTip[160];
+                        std::snprintf(unparentTip, sizeof(unparentTip),
+                            "Move out of '%s' (becomes root again)", parentName);
+
+                        if (ui::IconButton(ICON_ARROW_UP, unparentTip))
                         {
                             def.ParentIndex = -1;
                             SyncComponentsToPreview();
                         }
-
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Move out of '%s' (becomes root again)", parentName);
                     }
 
                     ImGui::EndGroup();
                     ImGui::SameLine();
 
-                    // X — alinhado à direita do card, mesma centralização vertical
+                    // Remover — alinhado à direita do card, mesma centralização
+                    // vertical. SCRIPT_STYLE_V1: era a letra "x".
                     ImGui::SetCursorScreenPos(ImVec2(cardMax.x - 26.f, cardMin.y + (cardHeight - 20.f) * 0.5f));
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 0.7f));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.3f, 0.3f, 1));
-                    if (ImGui::SmallButton("x")) removeIdx = i;
-                    ImGui::PopStyleColor(3);
+                    if (ui::CloseButton("rmcomp", "Remove this component"))
+                        removeIdx = i;
 
                     ImGui::SetCursorScreenPos(ImVec2(cardMin.x, cardMax.y + 3.f)); // espaçamento entre cards
 

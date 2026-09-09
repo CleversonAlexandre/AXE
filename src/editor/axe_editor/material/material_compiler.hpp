@@ -2,11 +2,14 @@
 #include "axe/core/types.hpp"
 #include "axe/material/material_cooked.hpp"   // PKG9 — CookedMaterialDomain
 #include "editor/axe_editor/node_graph/material_graph.hpp"
+#include "editor/axe_editor/material/material_function.hpp"   // MATFUNC_V1
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
 #include <map>
 #include <filesystem>
+#include <sstream>
+#include <vector>
 namespace axe
 {
     class Shader;
@@ -41,6 +44,16 @@ namespace axe
         // algo — sinaliza que este material precisa do forward pass de
         // transparência (ver Material::IsTransparent).
         bool IsTransparent = false;
+
+        // TWO_SIDED_V1 — copia do flag do grafo, para chegar ao Material e a
+        // pipeline translucida sem culling.
+        bool TwoSided = false;
+
+        // SCENE_HEIGHT_V6 — o grafo (ou uma Material Function inlinada nele)
+        // chamou alguma funcao do mapa de altura. Detectado no CODIGO GERADO, e
+        // nao varrendo os nodes: a chamada pode ter vindo de dentro de uma
+        // funcao, e uma varredura de nodes do grafo de fora nao a enxergaria.
+        bool UsesSceneHeight = false;
 
         // Masked (alpha test): recorta o pixel via discard quando a máscara
         // de opacidade fica abaixo do cutoff. Renderiza no passe OPACO
@@ -203,6 +216,12 @@ namespace axe
         // diferenca entre um aviso claro e uma caca ao tesouro.
         std::string AdaptToType(const std::string& expr, PinType from, PinType to);
 
+        // STEP_TYPES_V1 — AdaptToType para Float, com aviso nomeando o node e
+        // o pino. Ver a nota na definicao: converter em silencio conserta o
+        // shader e esconde o engano de quem ligou o fio.
+        std::string ForceFloat(const std::string& nodeName, const char* pinName,
+            const std::string& expr, PinType from);
+
         // -- Navegação de links --
         Node* GetSourceNode(Pin* inputPin); // node conectado ao input
         Pin* GetSourcePin(Pin* inputPin);  // pin de output conectado ao input
@@ -261,6 +280,55 @@ namespace axe
         // visitado). Um Custom solto no canvas com codigo pela metade nao pode
         // impedir o material inteiro de compilar.
         std::string                 m_CustomFunctions;
+
+        // ── MATFUNC_V1 — estado do inlining de Material Function ─────────────
+        //
+        // Uma chamada de funcao NAO vira funcao GLSL: o grafo dela e percorrido
+        // dentro deste mesmo compilador, emitindo no mesmo m_FragmentCode, com
+        // m_Graph trocado temporariamente. E o que o compilador de Script ja faz
+        // no GenerateFunctionBody, e pela mesma razao: o gerador emite comandos
+        // em sequencia num unico fluxo, e enrolar isso numa funcao exigiria
+        // parametro de saida para cada Function Output.
+        //
+        // Os grafos carregados ficam VIVOS aqui ate o fim da compilacao. Nao e
+        // cache: as variaveis GLSL registradas em m_PinVariables apontam para
+        // pinos que moram dentro deles, e o proprio percurso volta a esses
+        // ponteiros. Soltar o grafo ao fim da chamada deixaria tudo pendurado.
+        std::vector<std::shared_ptr<MaterialFunction>> m_InlinedFunctions;
+
+        // Pilha de UUID das funcoes sendo inlinadas AGORA. E a deteccao de
+        // ciclo: uma funcao que chama a si mesma, direta ou indiretamente,
+        // inlinaria para sempre e travaria o editor sem mensagem nenhuma.
+        std::vector<std::string> m_FunctionStack;
+
+        // Proxima faixa de ID para o grafo de uma funcao. Cada chamada
+        // inlinada leva uma faixa exclusiva — ver MaterialGraph::SeedNextID
+        // para o defeito que isso evita.
+        int m_NextFunctionIDBase = 1000000;
+
+        // Erro acumulado durante o inlining, para o Shader Log.
+        std::string m_FunctionErrors;
+
+    public:
+        // Lido pelo MaterialEditorWindow depois de compilar, para escrever no
+        // Shader Log o que deu errado numa chamada de funcao. Erro de GRAFO
+        // (asset sumido, ciclo, pino sem par) nao aparece no log do driver:
+        // o GLSL gerado compila limpo, so que fazendo a conta errada.
+        static const std::string& LastFunctionErrors();
+
+    private:
+        static std::string s_LastFunctionErrors;
+
+        // Percorre o grafo da funcao e emite o corpo dela em m_FragmentCode,
+        // ligando os Function Input as expressoes que chegaram no node de
+        // chamada e registrando as saidas nos pinos dele.
+        // Escreve DIRETO em m_FragmentCode, e nao no stream local do
+        // GenerateNodeCode. Tem que ser assim: o corpo da funcao e emitido
+        // pelo VisitNode, que ja escreve em m_FragmentCode na hora, enquanto
+        // o retorno do GenerateNodeCode so e concatenado DEPOIS. Misturar os
+        // dois poria as linhas que amarram as entradas embaixo do corpo que
+        // as usa — GLSL usando variavel antes de declarar.
+        void InlineMaterialFunction(Node* callNode);
 
         std::string                 m_FragmentCode;  // código acumulado
         int                         m_VariableCounter = 0; // contador para nomes únicos

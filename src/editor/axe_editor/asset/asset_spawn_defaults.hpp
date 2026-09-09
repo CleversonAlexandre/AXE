@@ -72,6 +72,28 @@ namespace axe
         // bug que estamos caçando na build empacotada.
         static std::shared_ptr<Material> ResolveMaterial(const std::string& materialUUID);
 
+        // ── MATFUNC_V2 — a esfera de uma Material Function ───────────────
+        //
+        // Uma funcao nao tem Material Output, nao tem dominio e nao vira
+        // shader — entao, tomada ao pe da letra, ela nao teria o que
+        // desenhar numa esfera de preview.
+        //
+        // O que esta funcao faz e montar um material ENVELOPE em memoria:
+        // um node Material Function apontando para ela, com a PRIMEIRA
+        // saida ligada no Base Color de um Material Output. Isso vira um
+        // grafo comum, que o MaterialCompiler ja sabe compilar — e todo o
+        // inlining acontece igual ao de um material de verdade.
+        //
+        // Nao existe em disco e nao e registrado em lugar nenhum: nasce,
+        // compila e morre dentro da chamada. E o mesmo truque que a Unreal
+        // usa para a miniatura de Material Function.
+        //
+        // As entradas da funcao ficam nos defaults dos pinos (zero). A
+        // miniatura mostra a funcao avaliada com entrada neutra, que e o
+        // honesto — nao ha valor de cena para alimentar ali.
+        static std::shared_ptr<Material> ResolveMaterialFunctionPreview(
+            const std::string& functionUUID);
+
         // Monta um collider a partir dos bounds da malha.
         //
         // Separada do Apply para o Asset Viewer poder MOSTRAR o collider no

@@ -97,6 +97,13 @@ namespace axe
 
             N = normalize(TBN * normalTex);
         }
+
+        // TWO_SIDED_V1 — a pipeline opaca desta engine desenha as duas faces
+        // (CullMode::None). Sem esta linha, a face de tras de qualquer malha
+        // aberta ia para o G-Buffer com a normal apontando para o lado errado,
+        // e a luz respondia ao contrario nela.
+        if (!gl_FrontFacing) N = -N;
+
         g_Normal = N;
 
         // SRGB_TEXTURES_V1 — decodifica sRGB -> linear, igual ao caminho

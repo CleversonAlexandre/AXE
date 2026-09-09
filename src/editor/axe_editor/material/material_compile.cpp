@@ -9,17 +9,156 @@
 #include "axe/graphics/shader.hpp"
 #include "axe/log/log.hpp"
 #include "editor/axe_editor/inspector_window.hpp"
+#include "editor/axe_editor/asset/asset_spawn_defaults.hpp"   // MATFUNC_V2
+#include "editor/axe_editor/material_thumbnail_renderer.hpp"   // MATFUNC_V2
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <sstream>    // SHADER_SOURCE_ECHO_V1
+#include <algorithm>  // SHADER_SOURCE_ECHO_V1 — std::find
+#include <cctype>     // SHADER_SOURCE_ECHO_V1 — isdigit
+#include <cstdlib>    // SHADER_SOURCE_ECHO_V1 — atoi
 
 namespace ed = ax::NodeEditor;
 
 namespace axe
 {
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SHADER_SOURCE_ECHO_V1 — mostrar a linha que o driver reclamou
+    //
+    //  Ver a nota na declaracao (material_editor_window.hpp). Em resumo: o
+    //  GLSL nunca chega ao disco quando a compilacao FALHA, entao um
+    //  "ERROR: 0:57" apontava para um texto que o autor nao tinha como abrir.
+    // ═════════════════════════════════════════════════════════════════════════
+    void MaterialEditorWindow::LogShaderSource(const std::string& source,
+        const std::string& driverError,
+        const char* label)
+    {
+        if (source.empty()) return;
+
+        // ── 1. quais linhas o driver citou ───────────────────────────────
+        //
+        // Formato do GLSL: "ERROR: <arquivo>:<linha>:". O <arquivo> e sempre 0
+        // aqui (fonte unico), entao o numero util e o SEGUNDO de cada par
+        // separado por ':'. Varrido a mao em vez de regex para nao depender do
+        // texto exato do driver — AMD, NVIDIA e Intel divergem na frase, mas
+        // os dois numeros com dois-pontos no meio sao universais.
+        std::vector<int> lines;
+
+        for (std::size_t i = 0; i < driverError.size(); )
+        {
+            if (!std::isdigit((unsigned char)driverError[i])) { ++i; continue; }
+
+            std::size_t a = i;
+            while (a < driverError.size() && std::isdigit((unsigned char)driverError[a])) ++a;
+
+            // Dois formatos no mercado: "0:57:" (AMD/Intel/Mesa) e "0(57)"
+            // (NVIDIA). Aceitar os dois custa um caractere a mais no teste e
+            // evita que a ferramenta minta numa maquina diferente.
+            if (a >= driverError.size() ||
+                (driverError[a] != ':' && driverError[a] != '(')) {
+                i = a; continue;
+            }
+
+            std::size_t b = a + 1, c = b;
+            while (c < driverError.size() && std::isdigit((unsigned char)driverError[c])) ++c;
+
+            if (c > b)
+            {
+                const int ln = std::atoi(driverError.substr(b, c - b).c_str());
+                if (ln > 0 && std::find(lines.begin(), lines.end(), ln) == lines.end())
+                    lines.push_back(ln);
+                i = c;
+            }
+            else i = b;
+        }
+
+        // ── 2. quebra o fonte gerado em linhas ───────────────────────────
+        std::vector<std::string> src;
+        {
+            std::istringstream in(source);
+            std::string l;
+            while (std::getline(in, l)) src.push_back(l);
+        }
+
+        if (lines.empty())
+        {
+            // Driver que nao cita linha. Melhor dizer isso do que despejar o
+            // shader inteiro no painel.
+            LogWarning(std::string("[") + label + "] o driver nao informou a linha. "
+                "O fonte gerado tem " + std::to_string(src.size()) + " linhas.");
+            return;
+        }
+
+        LogWarning(std::string("[") + label + "] fonte gerado, nas linhas citadas:");
+
+        for (int ln : lines)
+        {
+            const int from = (ln - 2 < 1) ? 1 : ln - 2;
+            const int to = (ln + 2 > (int)src.size()) ? (int)src.size() : ln + 2;
+
+            for (int i = from; i <= to; ++i)
+            {
+                // A linha culpada leva seta; as de contexto, espaco. Sem isso o
+                // olho tem de contar linhas dentro do painel.
+                const std::string num = std::to_string(i);
+                const std::string pad(num.size() < 4 ? 4 - num.size() : 0, ' ');
+
+                LogError((i == ln ? "  >>" : "    ") + pad + num + " | " + src[(std::size_t)i - 1]);
+            }
+        }
+    }
 
     void MaterialEditorWindow::CompileAndApply()
     {
         ClearLog();
+
+        // ── MATFUNC_V1 ───────────────────────────────────────────────────────
+        //
+        // Compilar uma FUNCAO nao gera shader: ela nao tem Material Output, nao
+        // tem dominio e nao vira `.axeshader`. O que este botao faz aqui e
+        // VALIDAR e SALVAR — e a validacao que importa e a que so da para fazer
+        // olhando o grafo, nao o GLSL.
+        if (IsFunctionMode())
+        {
+            LogInfo("Validando Material Function...");
+
+            int inputs = 0, outputs = 0, unbound = 0;
+            for (auto& node : m_Graph->GetNodes())
+            {
+                if (node->Name == "Function Input") inputs++;
+                else if (node->Name == "Function Output")
+                {
+                    outputs++;
+
+                    // Saida sem nada ligado devolve zero em todo material que
+                    // chamar esta funcao, e compila limpo — exatamente o tipo
+                    // de defeito silencioso que so um aviso aqui pega.
+                    if (node->Inputs.empty() || !m_Graph->IsPinLinked(node->Inputs[0].ID))
+                        unbound++;
+                }
+            }
+
+            if (outputs == 0)
+                LogWarning("Nenhum Function Output: esta funcao nao devolve nada.");
+            if (unbound > 0)
+                LogWarning("Ha " + std::to_string(unbound) + " Function Output sem nada "
+                    "ligado — cada um deles vale zero em quem chamar.");
+
+            SaveGraph();
+
+            // ── MATFUNC_V2 — a esfera de preview da funcao ───────────────
+            //
+            // Depois do Save, e nao antes: o envelope de preview e montado a
+            // partir do ARQUIVO em disco (o inlining le o `.axematfunc`), e
+            // nao do grafo em memoria. Compilar antes de salvar mostraria a
+            // versao anterior e faria o autor achar que a mudanca nao pegou.
+            RefreshFunctionPreview();
+
+            LogInfo("Funcao validada: " + std::to_string(inputs) + " entrada(s), "
+                + std::to_string(outputs) + " saida(s).");
+            return;
+        }
+
         LogInfo("Compilando shader...");
 
         if (!m_Material || !m_Graph) return;
@@ -91,9 +230,34 @@ namespace axe
         auto result = MaterialCompiler::Compile(m_Graph.get());
         if (!result.Success) { LogError("Compilação falhou: " + result.ErrorMessage); return; }
 
+        // ── MATFUNC_V1 ───────────────────────────────────────────────────────
+        //
+        // Erro de GRAFO nao passa pelo log do driver. Um asset de funcao que
+        // sumiu, um ciclo, um pino que a assinatura nao tem mais: em todos
+        // esses casos o GLSL gerado compila LIMPO, so que com zero no lugar do
+        // valor. Sem despejar isso aqui, o unico sintoma seria o material ficar
+        // visualmente errado sem uma linha de aviso em lugar nenhum — que e a
+        // forma mais cara de defeito que existe para depurar.
+        {
+            const std::string& fnErrors = MaterialCompiler::LastFunctionErrors();
+            if (!fnErrors.empty())
+            {
+                std::stringstream ss(fnErrors);
+                std::string line;
+                while (std::getline(ss, line))
+                    if (!line.empty()) LogWarning(line);
+            }
+        }
+
         std::shared_ptr<Shader> compiledShader;
         try { compiledShader = Shader::Create(result.VertexShader, result.FragmentShader); }
-        catch (const std::exception& e) { LogError(std::string("Shader creation failed: ") + e.what()); return; }
+        catch (const std::exception& e)
+        {
+            LogError(std::string("Shader creation failed: ") + e.what());
+            // SHADER_SOURCE_ECHO_V1 — a linha citada, do fonte que o driver leu.
+            LogShaderSource(result.FragmentShader, e.what(), "forward");
+            return;
+        }
         if (!compiledShader) { LogError("Shader::Create retornou null"); return; }
 
         m_Material->SetShader(compiledShader);
@@ -116,6 +280,9 @@ namespace axe
             }
             catch (const std::exception& e)
             {
+                // SHADER_SOURCE_ECHO_V1 — o Surface gera DOIS shaders; sem o
+                // rotulo, uma falha so no G-Buffer parecia falha do forward.
+                LogShaderSource(result.GeometryFragShader, e.what(), "G-Buffer");
                 const std::string msg = std::string("GeometryShader: ") + e.what();
                 AXE_CORE_WARN("{}", msg);
                 LogError(msg);
@@ -137,6 +304,8 @@ namespace axe
         m_Material->AlbedoMap = result.AlbedoTexture;
         m_Material->NormalMap = result.NormalTexture;
         m_Material->IsTransparent = result.IsTransparent;
+        m_Material->TwoSided = result.TwoSided;   // TWO_SIDED_V1
+        m_Material->UsesSceneHeight = result.UsesSceneHeight;   // SCENE_HEIGHT_V6
 
         if (m_Asset) m_Asset->SetMaterial(m_Material);
         if (!m_Asset->GetFilePath().empty()) m_Asset->Save(m_Asset->GetFilePath());
@@ -295,9 +464,66 @@ namespace axe
     }
 
 
+    // ── MATFUNC_V2 ───────────────────────────────────────────────────────────
+    //
+    // Monta o material envelope da funcao aberta e poe em m_Material, que e o
+    // que a janela de preview desenha. Em modo funcao m_Material e nulo por
+    // padrao — e quando ele deixa de ser, a esfera aparece sozinha, porque o
+    // DrawPreviewWindow passou a ser chamado por "existe material", e nao por
+    // "nao e funcao".
+    //
+    // Falhar aqui e normal e nao e erro: funcao sem Function Output, ou com a
+    // saida solta, nao tem o que desenhar. Nesse caso m_Material fica nulo, a
+    // janela de preview some, e quem explica o motivo sao os avisos que a
+    // validacao ja escreveu no Shader Log.
+    void MaterialEditorWindow::RefreshFunctionPreview()
+    {
+        if (!IsFunctionMode()) return;
+
+        const auto& path = m_FunctionAsset->GetFilePath();
+        if (path.empty()) { m_Material = nullptr; return; }
+
+        const AssetRecord* rec = AssetDatabase::Get().GetByPath(path);
+        if (!rec) { m_Material = nullptr; return; }
+
+        m_Material = AssetSpawnDefaults::ResolveMaterialFunctionPreview(rec->UUID);
+
+        // A miniatura no Asset Browser tem que acompanhar: e o mesmo envelope,
+        // e sem invalidar ela ficaria congelada na versao de antes da edicao.
+        if (m_ThumbnailRenderer)
+            m_ThumbnailRenderer->Invalidate(rec->UUID);
+    }
+
     void MaterialEditorWindow::SaveGraph()
     {
-        if (!m_Asset || !m_Graph) return;
+        if (!m_Graph) return;
+
+        // ── MATFUNC_V1 ───────────────────────────────────────────────────────
+        //
+        // Um `.axematfunc` e UM arquivo so: cabecalho (nome, descricao,
+        // assinatura) e o grafo aninhado dentro dele. Nao ha `.axegraph` irmao
+        // como no material, e nao ha `.axeshader` — funcao nao cozinha nada.
+        //
+        // A assinatura e refeita dentro do Save, a partir dos nodes Function
+        // Input/Output do grafo que esta na tela.
+        if (IsFunctionMode())
+        {
+            auto path = m_FunctionAsset->GetFilePath();
+            if (path.empty())
+            {
+                LogError("[MATFUNC_V1] esta funcao nao tem caminho em disco.");
+                return;
+            }
+
+            if (m_FunctionAsset->Save(path, *m_Graph))
+            {
+                LogInfo("[MATFUNC_V1] funcao salva em '" + path.string() + "'.");
+                AXE_EDITOR_INFO("MaterialEditorWindow: funcao salva em '{}'", path.string());
+            }
+            return;
+        }
+
+        if (!m_Asset) return;
 
         auto graphPath = m_Asset->GetFilePath();
         graphPath.replace_extension(".axegraph");
@@ -317,6 +543,11 @@ namespace axe
 
     void MaterialEditorWindow::LoadGraph()
     {
+        // MATFUNC_V1 — em modo funcao o grafo ja veio junto com o asset
+        // (OpenMaterialFunction tomou a posse dele). Nao ha `.axegraph` irmao
+        // para ler, e cair no caminho de baixo apagaria o que esta na tela.
+        if (IsFunctionMode()) return;
+
         if (!m_Asset || !m_Graph) return;
 
         auto graphPath = m_Asset->GetFilePath();
@@ -375,6 +606,8 @@ namespace axe
             m_Material->NormalMap = result.NormalTexture;
             m_Material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(m_Graph.get());
             m_Material->IsTransparent = result.IsTransparent;
+            m_Material->TwoSided = result.TwoSided;   // TWO_SIDED_V1
+            m_Material->UsesSceneHeight = result.UsesSceneHeight;   // SCENE_HEIGHT_V6
         }
 
         AXE_CORE_INFO("MaterialEditorWindow: grafo carregado.");

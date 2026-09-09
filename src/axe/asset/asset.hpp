@@ -46,7 +46,17 @@ namespace axe
 		// UUID e nao podia ser aberto por duplo clique — na pratica so havia
 		// UMA sequence por projeto, no caminho fixo que os dois botoes da
 		// janela usavam.
-		Sequence
+		Sequence,
+
+		// .axematfunc — MATFUNC_V1. Um subgrafo de material reutilizavel: mesma
+		// classe MaterialGraph do .axegraph, mas terminando em Function Output
+		// em vez de Material Output, e sem dominio/blend proprios.
+		//
+		// Nao gera shader nenhum: e INLINADO no material que o chama, na hora
+		// de compilar. Por isso o runtime nao conhece este tipo — o .axeshader
+		// cozido sai igual ao de um material que tivesse os mesmos nodes
+		// desenhados a mao.
+		MaterialFunction
 	};
 
 	// Converte extensão para tipo
@@ -71,6 +81,7 @@ namespace axe
 			ext == ".flac")                                  return AssetType::Audio;
 		if (ext == ".lua" || ext == ".axescript")           return AssetType::Script;
 		if (ext == ".axemat")                                return AssetType::Material;
+		if (ext == ".axematfunc")                            return AssetType::MaterialFunction;  // MATFUNC_V1
 		if (ext == ".axegamemode")                           return AssetType::GameMode;
 		if (ext == ".axepart")                                return AssetType::ParticleSystem;
 		if (ext == ".axeskel")                                return AssetType::SkeletalMesh;
@@ -99,6 +110,7 @@ namespace axe
 		case AssetType::SoundCue:       return "SoundCue";
 		case AssetType::Sequence:       return "Sequence";
 		case AssetType::AnimationClip:  return "AnimationClip";
+		case AssetType::MaterialFunction: return "MaterialFunction";  // MATFUNC_V1
 
 		default:					return "Unknown";
 		}
@@ -130,6 +142,7 @@ namespace axe
 		if (str == "SoundCue")       return AssetType::SoundCue;
 		if (str == "Sequence")       return AssetType::Sequence;
 		if (str == "AnimationClip")  return AssetType::AnimationClip;
+		if (str == "MaterialFunction") return AssetType::MaterialFunction;  // MATFUNC_V1
 
 		return AssetType::Unknown;
 	}

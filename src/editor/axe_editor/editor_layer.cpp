@@ -1,6 +1,7 @@
 #include "axe_editor/asset/asset_viewer_window.hpp"   // ASSET_VIEWER_V1
 #include <functional>   // FRAME_SELECTED_V1
 #include "axe_editor/ui/view_gizmo.hpp"   // VIEW_GIZMO_V1
+#include "editor/axe_editor/ui/editor_icons.hpp"   // SCRIPT_STYLE_V1
 #include "editor_layer.hpp"
 #include "axe/animation/skeletal_mesh_asset.hpp"
 #include "axe/animation/anim_graph_asset.hpp"
@@ -439,6 +440,15 @@ namespace axe
                     auto matAsset = MaterialAsset::LoadFromFile(record.FilePath);
                     if (matAsset)
                         m_EditorUI->m_MaterialEditorWindow.OpenMaterial(matAsset);
+                }
+                // MATFUNC_V1 — a MESMA janela. Uma Material Function e um
+                // MaterialGraph com os mesmos nodes e o mesmo canvas; o que
+                // muda e nao ter dominio, nem preview, nem cozimento.
+                else if (record.Type == AssetType::MaterialFunction)
+                {
+                    auto fnAsset = MaterialFunction::LoadFromFile(record.FilePath);
+                    if (fnAsset)
+                        m_EditorUI->m_MaterialEditorWindow.OpenMaterialFunction(fnAsset);
                 }
                 else if (record.Type == AssetType::ParticleSystem)
                 {
@@ -1067,6 +1077,8 @@ namespace axe
                     material->AlbedoMap = result.AlbedoTexture;
                     material->NormalMap = result.NormalTexture;
                     material->IsTransparent = result.IsTransparent;
+                    material->TwoSided = result.TwoSided;   // TWO_SIDED_V1
+                    material->UsesSceneHeight = result.UsesSceneHeight;   // SCENE_HEIGHT_V6
                     material->BakedEmissive = MaterialCompiler::ComputeBakedEmissive(&graph);
 
                     // B4 — aproveita a compilacao que acabou de acontecer e
@@ -1670,7 +1682,7 @@ namespace axe
         bool isPause = m_EditorState == EditorState::Pause;
 
         if (isPlay) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-        if (ImGui::Button("▶ Play", ImVec2(50, 26)))
+        if (ImGui::Button(ICON_PLAY "  Play", ImVec2(64, 26)))
         {
             if (isEdit)        EnterPlay();
             else if (isPause) { m_Runtime.GetGameCamera().MouseCaptured = true; m_EditorState = EditorState::Play; }
@@ -1680,11 +1692,11 @@ namespace axe
         ImGui::SameLine();
 
         if (isPause) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
-        if (ImGui::Button("⏸", ImVec2(26, 26)) && isPlay) EnterPause();
+        if (ImGui::Button(ICON_PAUSE, ImVec2(26, 26)) && isPlay) EnterPause();
         if (isPause) ImGui::PopStyleColor();
 
         ImGui::SameLine();
-        if (ImGui::Button("⏹", ImVec2(26, 26)) && !isEdit) EnterEdit();
+        if (ImGui::Button(ICON_STOP, ImVec2(26, 26)) && !isEdit) EnterEdit();
 
         ImGui::End();
     }

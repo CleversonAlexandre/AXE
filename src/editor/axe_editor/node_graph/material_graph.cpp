@@ -1,5 +1,6 @@
 #include "material_graph.hpp"
 #include "axe/log/log.hpp"
+#include <algorithm>   // MATFUNC_V1 — find_if no RebuildFunctionCallPins
 #include <nlohmann/json.hpp>
 #include "axe/asset/asset_database.hpp"
 namespace axe
@@ -302,6 +303,25 @@ namespace axe
         return ptr;
     }
 
+    // MATFUNC_V1 — a peca que faltava para QUALQUER padrao repetido.
+    // fract() e o que transforma uma rampa continua (profundidade, distancia,
+    // tempo) numa serie de faixas: cada vez que a rampa passa de um inteiro,
+    // o valor volta a zero. Sem ele nao ha listra, anel, degrau nem faixa
+    // periodica nenhuma no grafo — so gradiente.
+    Node* MaterialGraph::AddFractNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Fract");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Node* MaterialGraph::AddAbsNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "Abs");
@@ -354,6 +374,102 @@ namespace axe
         node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // ── WATER_NODES_V1 ──────────────────────────────────────────────────
+    //
+    // A posicao da CAMERA no mundo. Irmao do World Position, e o par que
+    // faltava: com os dois, `Distance` da qualquer efeito por distancia.
+    Node* MaterialGraph::AddCameraPositionNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Camera Position");
+        node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f); // mesma familia do World Position
+
+        node->Outputs.emplace_back(GetNextID(), "XYZ", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // Distancia da camera ate ESTE pixel, em metros — o par exato do
+    // Scene Depth, que da a distancia ate o que esta ATRAS dele.
+    //
+    // Existe como node proprio, e nao como Distance(World Position, Camera
+    // Position), porque e a conta mais repetida de todo material que reage a
+    // profundidade: a subtracao `Scene Depth - Pixel Depth` e a espessura de
+    // agua, a borda de intersecao e o comeco de qualquer nevoa.
+    // ── SCENE_HEIGHT_V1 ──────────────────────────────────────────────────────
+    //
+    //  Le o mapa de topo da cena — a render ortografica de cima que o
+    //  SceneHeightPass produz. E a unica fonte do grafo independente de camera.
+    //
+    //  A entrada e uma POSICAO DE MUNDO, e nao uma UV de tela, e a diferenca e
+    //  o ponto todo: com ela da para perguntar "o que ha embaixo DAQUELE ponto
+    //  ali", inclusive de um lugar que a camera nao enxerga. Solta, vale a
+    //  posicao do proprio pixel.
+    Node* MaterialGraph::AddSceneHeightNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene Height");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "World Position", PinType::Vec3, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Height", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Distance", PinType::Float, ed::PinKind::Output);
+
+        // SCENE_HEIGHT_V2 — a altura da geometria MAIS PROXIMA, e nao a deste
+        // ponto. E o que separa uma margem de um objeto pairando sobre a agua.
+        // Entra no FIM da lista: o Load remapeia pino por posicao parando no
+        // menor dos dois tamanhos, entao material salvo antes disto abre sem
+        // deslocar ligacao nenhuma.
+        // SCENE_HEIGHT_V3 — a BASE, nao o topo. Ver axeSceneNearestBase.
+        node->Outputs.emplace_back(GetNextID(), "Nearest Base", PinType::Float, ed::PinKind::Output);
+
+        // SCENE_HEIGHT_V4 — o topo DA MESMA geometria vizinha. Com a base,
+        // permite ao grafo perguntar se aquela coluna atravessa a lamina, em
+        // vez de so "desce ate ela".
+        //
+        // No FIM da lista: Deserialize remapeia pino por posicao, entao um
+        // .axegraph salvo antes disto continua abrindo com as tres primeiras
+        // saidas intactas.
+        node->Outputs.emplace_back(GetNextID(), "Nearest Top", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddSceneWorldPositionNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Scene World Position");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f);
+
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+
+        node->Outputs.emplace_back(GetNextID(), "Position", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddPixelDepthNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Pixel Depth");
+        node->Color = ImVec4(0.2f, 0.6f, 0.8f, 1.0f); // familia dos nodes de tela
+
+        node->Outputs.emplace_back(GetNextID(), "Dist", PinType::Float, ed::PinKind::Output);
 
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
@@ -477,9 +593,13 @@ namespace axe
     {
         auto node = std::make_unique<Node>(GetNextID(), "Append");
         node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f);
-        node->Inputs.emplace_back(GetNextID(), "A (Vec3)", PinType::Vec3, ed::PinKind::Input);
-        node->Inputs.emplace_back(GetNextID(), "B (Float)", PinType::Float, ed::PinKind::Input);
-        node->Outputs.emplace_back(GetNextID(), "Result (Vec4)", PinType::Vec4, ed::PinKind::Output);
+        // PRIMITIVES_V1 — os pinos eram "A (Vec3)" + "B (Float)" -> "Result
+        // (Vec4)". O nome dizia a verdade: era um "Vec3 mais W", nao um
+        // Append. Agora e Any/Any -> Any, e o tipo real sai da conta de
+        // componentes no compilador.
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Any, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Any, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
         return ptr;
@@ -489,10 +609,16 @@ namespace axe
     {
         auto node = std::make_unique<Node>(GetNextID(), "Vector Split");
         node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f);
-        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Vec3, ed::PinKind::Input);
+        // PRIMITIVES_V1 — aceita qualquer vetor, e ganha o W.
+        //
+        // O W entra no FIM da lista de saidas: Load() remapeia pino por
+        // posicao parando no menor dos dois tamanhos, entao um material salvo
+        // antes disto abre sem deslocar ligacao nenhuma.
+        node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
         node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "W", PinType::Float, ed::PinKind::Output);
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
         return ptr;
@@ -655,7 +781,174 @@ namespace axe
         auto node = std::make_unique<Node>(GetNextID(), "Noise");
         node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f);
         node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
+
+        // NOISE_SMOOTH_V1 — pinos NOVOS, e eles entram no FIM da lista.
+        //
+        // Load() remapeia pino por POSICAO, com o laco parando no menor dos
+        // dois tamanhos (`i < ids.size() && i < node->Inputs.size()`). Um
+        // .axegraph salvo antes desta versao guarda um unico input_id (UV): o
+        // laco para nele e Scale/Detail ficam com o default daqui, sem que
+        // nenhuma ligacao existente se desloque. Inserir no MEIO empurraria
+        // todas as posicoes seguintes e reconectaria fios sozinho — por isso
+        // pino novo em node que ja foi salvo em disco vai sempre no fim.
+        //
+        // Scale existe porque a UV de uma malha vai de 0 a 1: sem multiplicar,
+        // o ruido cabe uma celula inteira dentro do objeto e sai quase liso.
+        node->Inputs.emplace_back(GetNextID(), "Scale", PinType::Float, ed::PinKind::Input).DefaultFloat = 8.0f;
+        node->Inputs.emplace_back(GetNextID(), "Detail", PinType::Float, ed::PinKind::Input).DefaultFloat = 3.0f;
+
         node->Outputs.emplace_back(GetNextID(), "Result", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // =========================================================================
+    //  MATFUNC_V1 — os tres nodes de Material Function
+    // =========================================================================
+
+    Node* MaterialGraph::AddFunctionInputNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Function Input");
+        node->Color = ImVec4(0.30f, 0.70f, 0.45f, 1.0f);
+        node->StringValue = "In";
+        node->CustomOutputType = PinType::Float;
+
+        node->Outputs.emplace_back(GetNextID(), "In", PinType::Float, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddFunctionOutputNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Function Output");
+        node->Color = ImVec4(0.70f, 0.30f, 0.35f, 1.0f);
+        node->StringValue = "Out";
+        node->CustomOutputType = PinType::Float;
+
+        node->Inputs.emplace_back(GetNextID(), "Out", PinType::Float, ed::PinKind::Input);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddMaterialFunctionNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Material Function");
+        node->Color = ImVec4(0.35f, 0.55f, 0.85f, 1.0f);
+
+        // Nasce SEM asset e SEM pino nenhum. Os pinos so existem depois que o
+        // autor escolhe o `.axematfunc` no painel de detalhes — sao a
+        // assinatura da funcao escolhida, e nao ha pino generico que faca
+        // sentido antes disso.
+        node->StringValue.clear();
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    void MaterialGraph::SyncFunctionIONode(Node* node)
+    {
+        if (!node) return;
+
+        if (node->Name == "Function Input" && !node->Outputs.empty())
+        {
+            node->Outputs[0].Name = node->StringValue;
+            node->Outputs[0].Type = node->CustomOutputType;
+        }
+        else if (node->Name == "Function Output" && !node->Inputs.empty())
+        {
+            node->Inputs[0].Name = node->StringValue;
+            node->Inputs[0].Type = node->CustomOutputType;
+        }
+    }
+
+    void MaterialGraph::RebuildFunctionCallPins(Node* node,
+        const std::vector<MaterialFunctionParam>& inputs,
+        const std::vector<MaterialFunctionParam>& outputs)
+    {
+        if (!node) return;
+
+        auto sync = [&](std::vector<Pin>& pins,
+            const std::vector<MaterialFunctionParam>& want,
+            ed::PinKind kind)
+            {
+                std::vector<Pin> rebuilt;
+                rebuilt.reserve(want.size());
+
+                for (const auto& w : want)
+                {
+                    auto it = std::find_if(pins.begin(), pins.end(),
+                        [&](const Pin& p) { return p.Name == w.Name; });
+
+                    if (it != pins.end())
+                    {
+                        // Mesmo ID -> o link ligado nele sobrevive. So o tipo
+                        // acompanha a assinatura nova.
+                        Pin kept = *it;
+                        kept.Type = w.Type;
+                        rebuilt.push_back(kept);
+                        pins.erase(it);
+                    }
+                    else
+                    {
+                        rebuilt.push_back(Pin(GetNextID(), w.Name.c_str(), w.Type, kind));
+                    }
+                }
+
+                // O que sobrou nao existe mais na assinatura. O link tem que
+                // ir junto, ANTES do pino sumir.
+                for (auto& dead : pins)
+                    RemoveLinksForPin(dead.ID);
+
+                pins = std::move(rebuilt);
+            };
+
+        sync(node->Inputs, inputs, ed::PinKind::Input);
+        sync(node->Outputs, outputs, ed::PinKind::Output);
+
+        // Sem isto o pino novo fica com ParentNode nulo e CanCreateLink recusa
+        // a ligacao — a mesma pegadinha ja documentada no node Custom.
+        BuildNodes();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  PRIMITIVES_V1 — builtins de GLSL que faltavam no grafo
+    //
+    //  Cada uma e 1:1 com uma funcao da linguagem e preserva o tipo do que
+    //  entra. Node assim nao e receita embutida: e a linguagem exposta no
+    //  grafo. Sem elas, arredondar, quantizar ou tirar raiz obrigava a cair no
+    //  node Custom e escrever GLSL a mao.
+    // ═════════════════════════════════════════════════════════════════════════
+    static Node* MakeUnaryMathNode(std::vector<std::unique_ptr<Node>>& nodes,
+        MaterialGraph& graph, const char* name)
+    {
+        auto node = std::make_unique<Node>(graph.GetNextID(), name);
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+        node->Inputs.emplace_back(graph.GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
+        node->Outputs.emplace_back(graph.GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+        auto* ptr = node.get();
+        nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    Node* MaterialGraph::AddFloorNode() { return MakeUnaryMathNode(m_Nodes, *this, "Floor"); }
+    Node* MaterialGraph::AddCeilNode() { return MakeUnaryMathNode(m_Nodes, *this, "Ceil"); }
+    Node* MaterialGraph::AddRoundNode() { return MakeUnaryMathNode(m_Nodes, *this, "Round"); }
+    Node* MaterialGraph::AddSqrtNode() { return MakeUnaryMathNode(m_Nodes, *this, "Sqrt"); }
+    Node* MaterialGraph::AddSignNode() { return MakeUnaryMathNode(m_Nodes, *this, "Sign"); }
+
+    Node* MaterialGraph::AddModNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Mod");
+        node->Color = ImVec4(0.2f, 0.4f, 0.2f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "A", PinType::Any, ed::PinKind::Input);
+        node->Inputs.emplace_back(GetNextID(), "B", PinType::Any, ed::PinKind::Input).DefaultFloat = 1.0f;
+        node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
         return ptr;
@@ -967,6 +1260,42 @@ namespace axe
                 inputIds.push_back(pin.ID.Get());
                 inputDefaults.push_back(pin.DefaultFloat);
             }
+            // ── MATFUNC_V1 ───────────────────────────────────────────────
+            //
+            // Function Input/Output: nome e tipo do parametro. Sao os campos
+            // livres do Node (StringValue, CustomOutputType) e, como o
+            // comment_text e o custom_code, so vao ao JSON para os nodes que
+            // os usam — gravar incondicionalmente encheria de chave morta
+            // todo node do arquivo.
+            if (node->Name == "Function Input" || node->Name == "Function Output")
+            {
+                nodeJson["func_param_name"] = node->StringValue;
+                nodeJson["func_param_type"] = PinTypeToString(node->CustomOutputType);
+            }
+            // Material Function: o UUID do asset E a assinatura em cache.
+            //
+            // A assinatura vai junto de proposito, mesmo sendo copia do que
+            // esta no `.axematfunc`. Sem ela, abrir um material cujo asset de
+            // funcao foi movido, renomeado ou ainda nao indexado faria o node
+            // voltar SEM PINO NENHUM — e todos os links dele sumiriam no
+            // Deserialize, em silencio, destruindo o grafo do autor por causa
+            // de um arquivo temporariamente ausente. Com o cache, o node volta
+            // inteiro, os fios ficam, e o que aparece e um aviso.
+            else if (node->Name == "Material Function")
+            {
+                nodeJson["func_uuid"] = node->StringValue;
+
+                nlohmann::json fnIn = nlohmann::json::array();
+                for (auto& pin : node->Inputs)
+                    fnIn.push_back({ {"name", pin.Name}, {"type", PinTypeToString(pin.Type)} });
+                nodeJson["func_inputs"] = fnIn;
+
+                nlohmann::json fnOut = nlohmann::json::array();
+                for (auto& pin : node->Outputs)
+                    fnOut.push_back({ {"name", pin.Name}, {"type", PinTypeToString(pin.Type)} });
+                nodeJson["func_outputs"] = fnOut;
+            }
+
             for (auto& pin : node->Outputs) outputIds.push_back(pin.ID.Get());
             nodeJson["input_ids"] = inputIds;
             nodeJson["output_ids"] = outputIds;
@@ -991,6 +1320,7 @@ namespace axe
         // um grafo Light Function virava Surface ao reabrir o motor.
         j["domain"] = (int)Domain;
         j["blend_mode"] = (int)BlendMode;
+        j["two_sided"] = TwoSided;                     // TWO_SIDED_V1
         j["shading_model"] = (int)ShadingModel;
         j["toon_steps"] = ToonSteps;   // SHADING_MODEL_V1
 
@@ -1029,6 +1359,10 @@ namespace axe
         if (name == "Append")          return AddAppendNode();
         if (name == "Vector Split")    return AddVectorSplitNode();
         if (name == "Camera Vector")   return AddCameraVectorNode();
+        if (name == "Camera Position") return AddCameraPositionNode();   // WATER_NODES_V1
+        if (name == "Pixel Depth")     return AddPixelDepthNode();       // WATER_NODES_V1
+        if (name == "Scene World Position") return AddSceneWorldPositionNode(); // WATER_DEPTH_V1
+        if (name == "Scene Height")    return AddSceneHeightNode();          // SCENE_HEIGHT_V1
         if (name == "Reflection Vector") return AddReflectionVectorNode();
         if (name == "Time")            return AddTimeNode();
         if (name == "Particle Age")    return AddParticleAgeNode();
@@ -1040,6 +1374,16 @@ namespace axe
         if (name == "Length")          return AddLengthNode();
         if (name == "CrossProduct")    return AddCrossProductNode();
         if (name == "If")              return AddIfNode();
+        if (name == "Fract")           return AddFractNode();       // MATFUNC_V1
+        if (name == "Floor")           return AddFloorNode();       // PRIMITIVES_V1
+        if (name == "Ceil")            return AddCeilNode();        // PRIMITIVES_V1
+        if (name == "Round")           return AddRoundNode();       // PRIMITIVES_V1
+        if (name == "Sqrt")            return AddSqrtNode();        // PRIMITIVES_V1
+        if (name == "Sign")            return AddSignNode();        // PRIMITIVES_V1
+        if (name == "Mod")             return AddModNode();         // PRIMITIVES_V1
+        if (name == "Function Input")   return AddFunctionInputNode();     // MATFUNC_V1
+        if (name == "Function Output")  return AddFunctionOutputNode();    // MATFUNC_V1
+        if (name == "Material Function") return AddMaterialFunctionNode(); // MATFUNC_V1
         if (name == "Noise")           return AddNoiseNode();
         if (name == "Vec2")            return AddVec2Node();
         if (name == "Vec3")            return AddVec3Node();
@@ -1053,6 +1397,21 @@ namespace axe
         if (name == "Scene Is Background")  return AddSceneIsBackgroundNode();  // POSTPROCESS_SKY_V1
         if (name == "Screen Ray Direction") return AddScreenRayDirectionNode(); // POSTPROCESS_SKY_V1
         if (name == "Sun")                  return AddSunNode();                // POSTPROCESS_SKY_V1
+
+        // ── PRIMITIVES_V1 — nome desconhecido nao pode ser silencioso ────────
+        //
+        // Quem chama isto no Deserialize faz `if (!node) continue;`. Ou seja:
+        // um node cujo nome nao existe mais SOME do grafo, e todos os fios
+        // dele vao junto — sem uma linha de log.
+        //
+        // Isso acontece de verdade quando um node e removido da engine, como
+        // Water Depth e Shore Distance foram nesta mesma rodada. Sem este
+        // aviso, o autor abriria o material, veria a cadeia quebrada num lugar
+        // qualquer e nao teria como saber que faltou um node.
+        AXE_EDITOR_WARN("[PRIMITIVES_V1] node '{}' nao existe nesta versao da engine: "
+            "ele foi descartado do grafo e as ligacoes dele foram perdidas. "
+            "Se o material veio de uma versao anterior, refaca esse trecho.", name);
+
         return nullptr;
     }
 
@@ -1068,6 +1427,7 @@ namespace axe
         // normalmente (caem em Surface/Opaque/DefaultLit, comportamento antigo).
         Domain = (MaterialDomain)j.value("domain", (int)MaterialDomain::Surface);
         BlendMode = (MaterialBlendMode)j.value("blend_mode", (int)MaterialBlendMode::Opaque);
+        TwoSided = j.value("two_sided", false);        // TWO_SIDED_V1
         ShadingModel = (MaterialShadingModel)j.value("shading_model", (int)MaterialShadingModel::DefaultLit);
         ToonSteps = j.value("toon_steps", 3);   // SHADING_MODEL_V1
 
@@ -1167,6 +1527,45 @@ namespace axe
                 // A saida existe sempre (uma so), mas o TIPO dela e do usuario.
                 if (!node->Outputs.empty())
                     node->Outputs[0].Type = node->CustomOutputType;
+            }
+
+            // ── MATFUNC_V1 ───────────────────────────────────────────────
+            //
+            // Tem que vir AQUI, antes do remapeamento logo abaixo, pela mesma
+            // razao ja documentada no bloco do Custom: o remapeamento casa
+            // pino por POSICAO no vetor, entao os pinos precisam existir na
+            // quantidade final antes dele rodar. Um node Material Function sai
+            // da fabrica com ZERO pinos.
+            if (node->Name == "Function Input" || node->Name == "Function Output")
+            {
+                node->StringValue = nodeJson.value("func_param_name", std::string("In"));
+                node->CustomOutputType =
+                    PinTypeFromString(nodeJson.value("func_param_type", std::string("Float")));
+                SyncFunctionIONode(node);
+            }
+            else if (node->Name == "Material Function")
+            {
+                node->StringValue = nodeJson.value("func_uuid", std::string());
+
+                auto readParams = [](const nlohmann::json& arr,
+                    std::vector<MaterialFunctionParam>& out)
+                    {
+                        out.clear();
+                        if (!arr.is_array()) return;
+                        for (const auto& e : arr)
+                        {
+                            MaterialFunctionParam p;
+                            p.Name = e.value("name", std::string("In"));
+                            p.Type = PinTypeFromString(e.value("type", std::string("Float")));
+                            out.push_back(p);
+                        }
+                    };
+
+                std::vector<MaterialFunctionParam> fnIn, fnOut;
+                if (nodeJson.contains("func_inputs"))  readParams(nodeJson["func_inputs"], fnIn);
+                if (nodeJson.contains("func_outputs")) readParams(nodeJson["func_outputs"], fnOut);
+
+                RebuildFunctionCallPins(node, fnIn, fnOut);
             }
 
             // Remapeia IDs dos pins: salvo → atual (por posição)

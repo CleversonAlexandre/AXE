@@ -113,6 +113,8 @@ namespace axe
         root["albedo_sampler"] = data.AlbedoSamplerName;
         root["normal_sampler"] = data.NormalSamplerName;
         root["is_transparent"] = data.IsTransparent;
+        root["two_sided"] = data.TwoSided;              // TWO_SIDED_V1
+        root["uses_scene_height"] = data.UsesSceneHeight;   // SCENE_HEIGHT_V6
         root["is_masked"] = data.IsMasked;
         root["alpha_cutoff"] = data.AlphaCutoff;
         root["baked_emissive"] = { data.BakedEmissive.r, data.BakedEmissive.g, data.BakedEmissive.b };
@@ -177,6 +179,8 @@ namespace axe
         outData.AlbedoSamplerName = root.value("albedo_sampler", std::string());
         outData.NormalSamplerName = root.value("normal_sampler", std::string());
         outData.IsTransparent = root.value("is_transparent", false);
+        outData.TwoSided = root.value("two_sided", false);   // TWO_SIDED_V1
+        outData.UsesSceneHeight = root.value("uses_scene_height", false);   // SCENE_HEIGHT_V6
         outData.IsMasked = root.value("is_masked", false);
         outData.AlphaCutoff = root.value("alpha_cutoff", 0.5f);
 
@@ -256,6 +260,8 @@ namespace axe
         }
 
         material.IsTransparent = data.IsTransparent;
+        material.TwoSided = data.TwoSided;                   // TWO_SIDED_V1
+        material.UsesSceneHeight = data.UsesSceneHeight;     // SCENE_HEIGHT_V6
         material.BakedEmissive = data.BakedEmissive;
 
         return true;

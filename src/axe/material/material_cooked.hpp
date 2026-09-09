@@ -174,6 +174,8 @@ namespace axe
         std::string NormalSamplerName;
 
         bool  IsTransparent = false;
+        bool  TwoSided = false;          // TWO_SIDED_V1
+        bool  UsesSceneHeight = false;   // SCENE_HEIGHT_V6
         bool  IsMasked = false;
         float AlphaCutoff = 0.5f;
 

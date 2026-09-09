@@ -58,6 +58,7 @@ namespace axe
         // Volumetric Fog
         VolumetricFogSettings Fog;
 
+
         // ── POSTPROCESS_DOMAIN_V1 — material de efeito do usuario ────────────
         //
         // UUID de um `.axemat` com Material Domain = Post Process. Vazio = a

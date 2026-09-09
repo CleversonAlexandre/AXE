@@ -4,6 +4,7 @@
 // slot de textura usado pelos parâmetros legados (não-PBR).
 
 #include "material_editor_window.hpp"
+#include "material_function.hpp"   // MATFUNC_V1
 
 // MATERIAL_EDITOR_STYLE_V1 — os mesmos ui::SectionHeader/IconButton e glifos
 // que o Script Editor, o Control Rig e o Anim Graph ja usam.
@@ -14,6 +15,8 @@
 #include "editor/axe_editor/asset/asset_picker.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
+#include <filesystem>
+#include <cstdio>
 #include <imgui-node-editor/imgui_node_editor.h>
 
 namespace ed = ax::NodeEditor;
@@ -26,14 +29,14 @@ namespace axe
         ed::SetCurrentEditor(m_NodeEditorContext);
 
         if (ImGui::Begin("Material Params"))
-            DrawMaterialParams(*m_Material);
+            DrawMaterialParams(m_Material.get());   // MATFUNC_V1 — nulo em modo funcao
         ImGui::End();
 
         ed::SetCurrentEditor(nullptr);
     }
 
 
-    void MaterialEditorWindow::DrawMaterialParams(Material& mat)
+    void MaterialEditorWindow::DrawMaterialParams(Material* matPtr)
     {
         // Verifica se há um node selecionado no graph
         int selectedCount = ed::GetSelectedObjectCount();
@@ -65,6 +68,9 @@ namespace axe
                     node->Name == "Screen UV" ? ICON_BORDER_ALL :
                     node->Name == "Color" ? ICON_PALETTE :
                     node->Name == "Time" ? ICON_CLOCK :
+                    node->Name == "Material Function" ? ICON_CODE :        // MATFUNC_V1
+                    node->Name == "Function Input" ? ICON_CIRCLE_NODES :   // MATFUNC_V1
+                    node->Name == "Function Output" ? ICON_CIRCLE_NODES :  // MATFUNC_V1
                     ICON_CIRCLE_NODES;
 
                 ui::SectionHeader(nodeIcon, node->Name.c_str(), ui::Accent::Primary);
@@ -103,6 +109,118 @@ namespace axe
                             node->Value.TextureVal = Texture2D::Create(record.FilePath.string());
                             node->Value.TextureUUID = record.UUID;
                         });
+                }
+                // ═══════════════════════════════════════════════════════════
+                //  MATFUNC_V1 — Function Input / Function Output
+                //
+                //  Duas coisas so: o NOME do parametro e o TIPO. O nome e o que
+                //  casa este node com o pino no node de chamada — a ligacao e
+                //  por nome, nunca por posicao, para reordenar os parametros da
+                //  funcao nao trocar o significado de um material ja pronto.
+                // ═══════════════════════════════════════════════════════════
+                else if (node->Name == "Function Input" || node->Name == "Function Output")
+                {
+                    ImGui::TextDisabled("Nome do parametro");
+                    ImGui::SetNextItemWidth(-1);
+
+                    char nameBuf[64];
+                    std::snprintf(nameBuf, sizeof(nameBuf), "%s", node->StringValue.c_str());
+                    if (ImGui::InputText("##fnparamname", nameBuf, sizeof(nameBuf)))
+                    {
+                        node->StringValue = nameBuf;
+                        m_Graph->SyncFunctionIONode(node);
+                    }
+
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "E por este nome que o pino aparece no node de chamada,\n"
+                            "e e por ele que a ligacao e mantida quando a assinatura\n"
+                            "da funcao muda. Renomear DESFAZ o fio ligado nele nos\n"
+                            "materiais que ja chamam esta funcao.");
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Tipo");
+                    ImGui::SetNextItemWidth(-1);
+
+                    static const char* kFnTypes[] = { "Float", "Vec2", "Vec3", "Vec4" };
+                    int typeIdx = (int)node->CustomOutputType;
+                    if (typeIdx < 0 || typeIdx > 3) typeIdx = 0;
+
+                    if (ImGui::Combo("##fnparamtype", &typeIdx, kFnTypes, IM_ARRAYSIZE(kFnTypes)))
+                    {
+                        node->CustomOutputType = (PinType)typeIdx;
+                        m_Graph->SyncFunctionIONode(node);
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled(
+                        "A assinatura da funcao e refeita a partir destes nodes\n"
+                        "toda vez que o asset e salvo. A ORDEM dos pinos e a\n"
+                        "ordem VERTICAL deles no canvas.");
+                }
+                // ═══════════════════════════════════════════════════════════
+                //  MATFUNC_V1 — o node de chamada
+                //
+                //  Um Asset Picker e um botao. Os pinos NAO sao editaveis aqui:
+                //  eles sao a assinatura da funcao escolhida, e o unico lugar
+                //  de mexer neles e dentro do `.axematfunc`.
+                // ═══════════════════════════════════════════════════════════
+                else if (node->Name == "Material Function")
+                {
+                    ImGui::TextDisabled("Funcao");
+                    ImGui::Spacing();
+
+                    AssetPicker::Draw("##matfunc",
+                        node->StringValue,
+                        { AssetType::MaterialFunction },
+                        [&](const AssetRecord& record)
+                        {
+                            node->StringValue = record.UUID;
+
+                            std::string fnName;
+                            std::vector<MaterialFunctionParam> ins, outs;
+                            if (MaterialFunction::ReadSignature(record.FilePath, fnName, ins, outs))
+                                m_Graph->RebuildFunctionCallPins(node, ins, outs);
+                        });
+
+                    ImGui::Spacing();
+
+                    // Recarregar a assinatura e uma acao MANUAL de proposito.
+                    // Reler o asset a cada frame poria I/O de disco no laco de
+                    // desenho; e reler sozinho ao abrir o material faria os
+                    // pinos mudarem debaixo do autor sem ele pedir — inclusive
+                    // levando fios embora, se alguem tiver renomeado um
+                    // parametro do outro lado.
+                    if (ImGui::Button("Recarregar assinatura", ImVec2(-1, 0)))
+                    {
+                        const AssetRecord* rec =
+                            AssetDatabase::Get().GetByUUID(node->StringValue);
+
+                        if (rec && std::filesystem::exists(rec->FilePath))
+                        {
+                            std::string fnName;
+                            std::vector<MaterialFunctionParam> ins, outs;
+                            if (MaterialFunction::ReadSignature(rec->FilePath, fnName, ins, outs))
+                            {
+                                m_Graph->RebuildFunctionCallPins(node, ins, outs);
+                                LogInfo("[MATFUNC_V1] assinatura de '" + fnName + "' recarregada.");
+                            }
+                        }
+                        else
+                        {
+                            LogWarning("[MATFUNC_V1] o asset desta funcao nao foi encontrado.");
+                        }
+                    }
+
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Le de novo as entradas e saidas do .axematfunc e poe os\n"
+                            "pinos deste node em dia. Os fios sao mantidos pelos pinos\n"
+                            "de mesmo NOME; pino que sumiu da funcao perde o fio.");
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Entradas: %d   Saidas: %d",
+                        (int)node->Inputs.size(), (int)node->Outputs.size());
                 }
                 // ═══════════════════════════════════════════════════════════
                 //  CUSTOM_NODE_V1 — o editor do node Custom
@@ -251,6 +369,65 @@ namespace axe
         ImGui::TextDisabled(ICON_CIRCLE_INFO "  Selecione um node para editar.");
         ImGui::Spacing();
 
+        // ── MATFUNC_V1 ───────────────────────────────────────────────────────
+        //
+        // Uma Material Function nao tem Domain, Blend Mode nem Shading Model, e
+        // isso nao e economia de trabalho: ela nao vira shader nenhum. Quem
+        // decide como o pixel e sombreado e o MATERIAL que a chama. Mostrar
+        // esses combos aqui prometeria um controle que nao existe — e a mesma
+        // funcao chamada de dois materiais com blend diferente obedeceria os
+        // dois, o que so faz sentido se a escolha nao morar nela.
+        if (IsFunctionMode())
+        {
+            ui::SectionHeader(ICON_CODE, "Material Function", ui::Accent::Primary);
+
+            char nameBuf[128];
+            std::snprintf(nameBuf, sizeof(nameBuf), "%s", m_FunctionAsset->GetName().c_str());
+            ImGui::TextDisabled("Nome");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##fnname", nameBuf, sizeof(nameBuf)))
+                m_FunctionAsset->SetName(nameBuf);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Descricao");
+
+            char descBuf[256];
+            std::snprintf(descBuf, sizeof(descBuf), "%s",
+                m_FunctionAsset->GetDescription().c_str());
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##fndesc", descBuf, sizeof(descBuf)))
+                m_FunctionAsset->SetDescription(descBuf);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ui::SectionHeader(ICON_CIRCLE_NODES, "Assinatura", ui::Accent::Neutral);
+            ImGui::TextDisabled(
+                "Derivada dos nodes Function Input e Function Output do canvas,\n"
+                "toda vez que a funcao e salva. A ordem dos pinos e a ordem\n"
+                "VERTICAL dos nodes.");
+            ImGui::Spacing();
+
+            for (const auto& in : m_FunctionAsset->GetInputs())
+                ImGui::BulletText("entrada  %s : %s", in.Name.c_str(), PinTypeToString(in.Type));
+            for (const auto& out : m_FunctionAsset->GetOutputs())
+                ImGui::BulletText("saida    %s : %s", out.Name.c_str(), PinTypeToString(out.Type));
+
+            if (m_FunctionAsset->GetOutputs().empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f),
+                    "Sem nenhum Function Output, esta funcao nao devolve nada\n"
+                    "e o node de chamada aparece sem pino de saida.");
+            }
+
+            return;
+        }
+
+        if (!matPtr) return;
+        Material& mat = *matPtr;
+
         ui::SectionHeader(ICON_SLIDERS, "Material", ui::Accent::Primary);
 
         // --- Material Domain / Blend Mode / Shading Model ---
@@ -307,6 +484,24 @@ namespace axe
         drawDomainCombo("Blend Mode", s_BlendNames, s_BlendAvailable,
             IM_ARRAYSIZE(s_BlendNames), blend);
         m_Graph->BlendMode = (MaterialBlendMode)blend;
+
+        // ── TWO_SIDED_V1 ─────────────────────────────────────────────────────
+        //
+        // Mesmo lugar em que a Unreal poe: ao lado do Blend Mode, porque e
+        // disso que ele e vizinho — decide como a superficie e RASTERIZADA, e
+        // nao o que o grafo calcula.
+        //
+        // So muda algo no translucido: a pipeline opaca desta engine ja
+        // desenha as duas faces. A dica embaixo diz isso, para ninguem marcar
+        // a caixa num material Opaque esperando mudanca.
+        ImGui::Checkbox("Two Sided", &m_Graph->TwoSided);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Desenha as duas faces do triangulo, com a normal virada na de tras.\n"
+                "Para plano de agua, folhagem, pano — malha de uma folha so.\n"
+                "Deixe desligado no vidro: um volume fechado fica manchado sem o\n"
+                "descarte da face de tras.\n\n"
+                "Sem efeito em Blend Mode Opaque/Masked (ja desenham as duas).");
 
         // SHADING_MODEL_V1 — "Toon" e novo e REAL. A ordem aqui espelha o
         // enum MaterialShadingModel (node_types.hpp), incluindo o Toon no fim.
