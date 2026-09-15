@@ -237,6 +237,10 @@ namespace axe
         float       m_PickerColor[4] = { 1,1,1,1 };
 
         // Confirmação de exclusão
+        // SCENE_ASSET_V1 — UUID da cena aguardando confirmação para abrir.
+        // Vazio = nenhum modal. Mesma forma dos três abaixo.
+        std::string m_OpenSceneConfirmUUID = "";
+
         std::string m_DeleteConfirmUUID = "";
         std::string m_DeleteConfirmFolder = "";
         std::string m_DeleteConfirmFolderDiskPath = "";

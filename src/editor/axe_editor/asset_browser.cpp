@@ -1022,6 +1022,59 @@ namespace axe
             }
         }
 
+        // SCENE_ASSET_V1 — confirmação de ABRIR CENA (ver a nota no duplo
+        // clique). Mesma forma do modal de exclusão logo acima: o membro
+        // guarda o pendente, e o modal existe enquanto ele não está vazio.
+        //
+        // Estas duas variaveis carregam a decisão até DEPOIS do `ImGui::End()`
+        // — a troca de cena não pode acontecer no meio da pilha da janela.
+        AssetRecord openScene;
+        bool        openSceneRequested = false;
+
+        if (!m_OpenSceneConfirmUUID.empty())
+        {
+            // O record pode ter sumido entre o clique e este frame (exclusão
+            // pelo menu de contexto). Testado ANTES do OpenPopup: perguntar
+            // "abrir a cena '?'" é pior que não perguntar nada.
+            auto* rec = AssetDatabase::Get().GetByUUID(m_OpenSceneConfirmUUID);
+            if (!rec)
+                m_OpenSceneConfirmUUID.clear();
+            else
+                ImGui::OpenPopup("##confirm_open_scene");
+
+            if (rec && ImGui::BeginPopupModal("##confirm_open_scene", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("Abrir a cena '%s'?", rec->Name.c_str());
+                ImGui::TextDisabled("A cena atual sera fechada. Alteracoes nao");
+                ImGui::TextDisabled("salvas serao perdidas.");
+                ImGui::Separator();
+
+                if (ImGui::Button("Abrir", ImVec2(100, 0)))
+                {
+                    // ADIADO de proposito, e por uma razao concreta: este
+                    // ponto esta ANTES do `ImGui::End()` da janela (linha do
+                    // End mais abaixo). Chamar o callback aqui dentro e sair
+                    // por um `return` deixaria a pilha do ImGui aberta —
+                    // assert no frame seguinte. A copia tambem e necessaria:
+                    // o callback recarrega a cena e pode mexer no banco, e
+                    // `rec` aponta para dentro dele.
+                    openScene = *rec;
+                    openSceneRequested = true;
+
+                    m_OpenSceneConfirmUUID.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancelar", ImVec2(100, 0)))
+                {
+                    m_OpenSceneConfirmUUID.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
+
         // Modal de confirmação de exclusão de PASTA
         if (!m_DeleteConfirmFolder.empty())
         {
@@ -1111,6 +1164,12 @@ namespace axe
         DrawShadingModelModals();
 
         ImGui::End();
+
+        // SCENE_ASSET_V1 — DEPOIS do End, de proposito: e o unico ponto do
+        // Draw fora da pilha do ImGui, e trocar a cena aberta reconstroi
+        // meio editor. Ver a nota no botao "Abrir" do modal.
+        if (openSceneRequested && m_AssetOpenCallback)
+            m_AssetOpenCallback(openScene);
     }
 
     void AssetBrowser::DrawToolbar()
@@ -2645,6 +2704,30 @@ namespace axe
             else if (record.Type == AssetType::MaterialFunction)
             {
                 if (m_AssetOpenCallback) m_AssetOpenCallback(record);
+            }
+            // ── SCENE_ASSET_V1 — cena ABRE, e PERGUNTA antes ─────────────
+            //
+            // Duas coisas aqui, e a segunda e a que importa.
+            //
+            // 1) O ramo generico abaixo chama `m_InstantiateCallback` com o
+            //    UUID. Instanciar uma CENA na cena nao quer dizer nada — e a
+            //    mesma familia do .axeskel e do .axeseq. Enquanto o
+            //    `.axescene` nao aparecia na grade (o bug que este V1
+            //    conserta), ninguem tropecou nisso; agora tropecaria.
+            //
+            // 2) Abrir uma cena TROCA a cena aberta, e o editor nao tem hoje
+            //    marca de "modificado" — nao ha como saber se ha trabalho nao
+            //    salvo. Sem a pergunta, um duplo clique acidental na grade
+            //    apagaria uma sessao inteira de edicao sem uma tela sequer.
+            //
+            //    Inventar aqui um rastreio de "cena suja" seria um sistema
+            //    novo escondido dentro de um conserto de icone. A pergunta
+            //    resolve o risco AGORA e continua correta no dia em que a
+            //    marca existir — ela so passa a poder se calar quando a cena
+            //    estiver limpa.
+            else if (record.Type == AssetType::Scene)
+            {
+                m_OpenSceneConfirmUUID = record.UUID;
             }
             else
             {

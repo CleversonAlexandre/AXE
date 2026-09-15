@@ -39,6 +39,7 @@ namespace axe
 		Node* AddModNode();
 		Node* AddOneMinusNode();
 		Node* AddWorldPositionNode();
+		Node* AddVertexNormalNode();   // WPO_V1
 		Node* FindNodeByID(int id);
 		Node* AddFresnelNode();
 		Node* AddNormalMapNode();
@@ -124,6 +125,8 @@ namespace axe
 		Node* AddSceneIsBackgroundNode();
 		Node* AddScreenRayDirectionNode();
 		Node* AddSunNode();
+		Node* AddSunLightNode();      // VOLUME_SUN_V2
+		Node* AddFogSettingsNode();   // VOLUME_SUN_V2b
 
 		// Dispatcher genérico por nome — usado por Deserialize(), pelo menu
 		// de criação (busca) e pelo undo de deleção, eliminando a antiga
@@ -242,6 +245,46 @@ namespace axe
 		// resultado ja e indistinguivel de sombreamento continuo, que e
 		// exatamente o que o Toon nao quer — dai o teto de 16.
 		int ToonSteps = 3;
+
+		// ═══════════════════════════════════════════════════════════════════
+		//  WPO_V1 — recalculo da NORMAL a partir do World Position Offset
+		//
+		//  Deslocar o vertice move a superficie, mas NAO muda a normal: ela
+		//  continua sendo a do triangulo original. Uma onda alta desenhada com
+		//  WPO e normal intacta se move e continua respondendo a luz como um
+		//  plano — o que e exatamente a queixa de "a agua esta chapada mesmo
+		//  com o plano subdividido".
+		//
+		//  Ligado, o vertex shader avalia o WPO em mais DOIS pontos vizinhos
+		//  (deslocados por Delta ao longo da tangente e da bitangente) e tira
+		//  a normal do produto vetorial entre as duas arestas resultantes. E o
+		//  mesmo que a Unreal chama de "Recompute Normals" no material de
+		//  agua, e custa 3 avaliacoes do subgrafo por vertice em vez de 1.
+		//
+		//  ── POR QUE NAO E SEMPRE LIGADO ────────────────────────────────────
+		//
+		//  Nem todo WPO deforma a superficie de um jeito que a normal deva
+		//  seguir. Vento em folhagem desloca a folha quase inteira junto: a
+		//  diferenca entre dois pontos vizinhos ali e ruido, e recalcular
+		//  daria normal errada num caso que hoje funciona. Por isso o padrao e
+		//  DESLIGADO — nenhum material existente muda de aparencia.
+		//
+		//  ── A ARMADILHA QUE O COMPILADOR AVISA ─────────────────────────────
+		//
+		//  A inclinacao e medida deslocando a POSICAO DE MUNDO. Uma onda
+		//  montada a partir de `UV Coordinate` nao muda quando a posicao muda,
+		//  entao as tres avaliacoes dao o mesmo valor e a normal sai plana —
+		//  sem erro, sem aviso do driver, so o efeito faltando. O
+		//  MaterialCompiler detecta isso no codigo gerado e diz no log.
+		// ═══════════════════════════════════════════════════════════════════
+		bool  RecomputeNormalFromWPO = false;
+
+		// Distancia, em unidades de MUNDO, usada para medir a inclinacao.
+		// Tem de ser pequena em relacao ao comprimento da onda (senao a
+		// medida atravessa a crista e suaviza tudo) e grande em relacao a
+		// precisao do float (senao vira ruido). 0.05 serve para agua em
+		// escala de metros; onda de 20 cm pede algo perto de 0.01.
+		float WPONormalDelta = 0.05f;
 
 
 		// Posições salvas durante o Draw — válidas para Serialize()

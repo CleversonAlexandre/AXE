@@ -38,6 +38,20 @@ namespace axe
         node->Inputs.emplace_back(GetNextID(), "Ambient Occlusion", PinType::Float, ed::PinKind::Input);
         node->Inputs.emplace_back(GetNextID(), "Specular", PinType::Float, ed::PinKind::Input);
 
+        // ── WPO_V1 — indice 8, World Position Offset ─────────────────────────
+        //
+        //  O UNICO pin do Material Output que NAO e resolvido no fragmento:
+        //  ele alimenta o estagio de VERTICE. Deslocamento em ESPACO DE MUNDO,
+        //  somado a posicao ja transformada pelo u_Model — mesma semantica do
+        //  pin homonimo da Unreal, e a razao pela qual escalar ou girar o
+        //  objeto nao distorce a onda.
+        //
+        //  Continua valendo a regra dos indices: pin novo SEMPRE no fim. O
+        //  Deserialize casa os `input_ids` salvos por POSICAO e para no menor
+        //  dos dois tamanhos, entao um `.axegraph` gravado com 8 pins abre
+        //  aqui com este nono simplesmente desconectado.
+        node->Inputs.emplace_back(GetNextID(), "World Position Offset", PinType::Vec3, ed::PinKind::Input);
+
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
         return ptr;
@@ -48,7 +62,29 @@ namespace axe
         auto node = std::make_unique<Node>(GetNextID(), "Texture Sample");
         node->Color = ImVec4(0.35f, 0.18f, 0.18f, 1.0f); // vermelho escuro
 
-        node->Inputs.emplace_back(GetNextID(), "Texture", PinType::Texture2D, ed::PinKind::Input);
+        // ── TEXSAMPLE_UV_V1 — este pino sempre foi a UV, com o nome errado ──
+        //
+        //  Ele nascia "Texture" e tipado Texture2D, mas o compilador SEMPRE o
+        //  leu como fonte de UV (ver a emissao do Texture Sample: pega
+        //  GetSourcePin(&node->Inputs[0]) e usa como coordenada). A textura em
+        //  si nunca passou por aqui — ela vem do painel, por
+        //  node->Value.TextureUUID.
+        //
+        //  E o tipo errado nao era cosmetico: a validacao de link recusa
+        //  ligacao entre tipos diferentes (com excecao so para Any e Vec3), e
+        //  NENHUM node produz saida Texture2D. Ou seja, o pino era
+        //  impossivel de conectar — a UV do Texture Sample ficava presa em
+        //  v_TexCoord para sempre.
+        //
+        //  Isso bloqueava o caso mais comum de textura em material: UV com
+        //  tiling e rolagem (Texture Coordinate / Panner). Sem ele nao ha
+        //  normal map de agua, que precisa de duas camadas rolando em
+        //  velocidades diferentes.
+        //
+        //  Trocar tipo e nome nao quebra grafo salvo: como nada podia estar
+        //  ligado nele, nao ha link a remapear, e a CONTAGEM de pinos nao
+        //  muda — o Deserialize casa `input_ids` por posicao.
+        node->Inputs.emplace_back(GetNextID(), "UV", PinType::Vec2, ed::PinKind::Input);
         node->Outputs.emplace_back(GetNextID(), "RGBA", PinType::Vec4, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "RGB", PinType::Vec3, ed::PinKind::Output);
         node->Outputs.emplace_back(GetNextID(), "R", PinType::Float, ed::PinKind::Output);
@@ -358,6 +394,44 @@ namespace axe
         node->Inputs.emplace_back(GetNextID(), "Value", PinType::Any, ed::PinKind::Input);
 
         node->Outputs.emplace_back(GetNextID(), "Result", PinType::Any, ed::PinKind::Output);
+
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // ── WPO_V1 — Vertex Normal ───────────────────────────────────────────────
+    //
+    //  A normal GEOMETRICA da superficie, em espaco de mundo.
+    //
+    //  ── POR QUE ESTE NODE PRECISA EXISTIR ──────────────────────────────────
+    //
+    //  Nao havia como LER a normal no grafo. `Fresnel` a consome por dentro,
+    //  `Normal Map` a usa para montar o espaco tangente — mas nenhum node a
+    //  devolvia como valor, entao nao dava para fazer conta com ela.
+    //
+    //  E o companheiro obrigatorio do World Position Offset: "empurre a
+    //  superficie ao longo da propria normal" e a forma mais comum de
+    //  deslocamento (onda, inflar, extrudar casca de contorno), e sem este
+    //  node ela so era possivel para malha cuja normal o autor ja sabe de cor.
+    //  E o `VertexNormalWS` da Unreal.
+    //
+    //  ── O QUE ELE NAO E ────────────────────────────────────────────────────
+    //
+    //  Nao e a normal DEPOIS do Normal Map, e nem a virada do Two Sided: e a
+    //  interpolada da malha, a mesma nos dois estagios. No vertice ela e a
+    //  unica que existe (nao ha mapa de normal antes do fragmento), e essa
+    //  igualdade e o que faz um mesmo subgrafo dar o mesmo resultado ligado no
+    //  WPO ou no Base Color.
+    Node* MaterialGraph::AddVertexNormalNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Vertex Normal");
+        node->Color = ImVec4(0.5f, 0.3f, 0.1f, 1.0f); // mesma familia do World Position
+
+        node->Outputs.emplace_back(GetNextID(), "XYZ", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "X", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Y", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Z", PinType::Float, ed::PinKind::Output);
 
         auto* ptr = node.get();
         m_Nodes.push_back(std::move(node));
@@ -1090,6 +1164,69 @@ namespace axe
         return ptr;
     }
 
+    // ── VOLUME_SUN_V2b — Fog Settings ────────────────────────────────────────
+    //
+    //  Os valores que o autor ajusta no Inspector, como VALORES DO GRAFO.
+    //
+    //  Por que ele existe, e por que ele nao e um node "de tapar buraco": ao
+    //  ligar Opacity e Base Color num material de Volume, QUATRO controles do
+    //  Inspector — Densidade, Cor do Fog, Height Base e Height Falloff — param
+    //  de fazer efeito. Nao e bug: pino ligado e o grafo que manda, e o driver
+    //  ate remove as uniforms que ninguem le. Mas o resultado pratico e um
+    //  painel com quatro botoes mortos, e quem os gira nao tem como saber.
+    //
+    //  Havia dois consertos possiveis. Esconder os campos seria tirar do
+    //  artista o ajuste fino que ele quer ter em cena, e obrigaria o Inspector
+    //  a saber quais pinos do grafo estao ligados — que ele nao sabe e nao
+    //  deveria saber. O outro e este: devolver os valores AO GRAFO, e deixar o
+    //  autor escrever `Fog Settings > Density * ruido -> Opacity`. Ai o slider
+    //  volta a funcionar porque ELE decidiu que funciona, e o painel deixa de
+    //  competir com o grafo pela mesma decisao.
+    //
+    //  Sem entradas: e dado do frame, como o node Sun.
+    Node* MaterialGraph::AddFogSettingsNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Fog Settings");
+        node->Color = ImVec4(0.55f, 0.70f, 0.85f, 1.0f);
+        node->Outputs.emplace_back(GetNextID(), "Density", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Fog Color", PinType::Vec3, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Height Base", PinType::Float, ed::PinKind::Output);
+        node->Outputs.emplace_back(GetNextID(), "Height Falloff", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
+    // ── VOLUME_SUN_V2 — Sun Light ────────────────────────────────────────────
+    //
+    //  "Quanto do sol chega a ESTE ponto?" — 0 na sombra, 1 no sol.
+    //
+    //  Justificativa sob a regra de nao criar node redundante: NAO ha como o
+    //  grafo responder isso hoje. O node Sun devolve a direcao, a cor e a
+    //  intensidade da luz, mas nenhum deles sabe se ha uma pedra no caminho; o
+    //  mapa de sombra nunca esteve exposto ao grafo em dominio nenhum. E
+    //  informacao nova, e nao uma combinacao de nodes que ja existem.
+    //
+    //  O que ela abre: nevoa mais densa na sombra (a bruma fria embaixo da
+    //  arvore), poeira que so brilha dentro do raio de luz, cor mais fria fora
+    //  do sol. Todos casos em que o AUTOR decide o que a sombra faz — que e o
+    //  oposto do contorno toon embutido que ele recusou.
+    //
+    //  Entrada de posicao OPCIONAL: solta usa o ponto que esta sendo avaliado
+    //  (a amostra do ray march). Ligada, permite perguntar por outro ponto —
+    //  por exemplo, amostrar um metro acima para saber se o topo da coluna de
+    //  ar pega sol.
+    Node* MaterialGraph::AddSunLightNode()
+    {
+        auto node = std::make_unique<Node>(GetNextID(), "Sun Light");
+        node->Color = ImVec4(0.95f, 0.75f, 0.25f, 1.0f);
+        node->Inputs.emplace_back(GetNextID(), "World Position", PinType::Vec3, ed::PinKind::Input);
+        node->Outputs.emplace_back(GetNextID(), "Lit", PinType::Float, ed::PinKind::Output);
+        auto* ptr = node.get();
+        m_Nodes.push_back(std::move(node));
+        return ptr;
+    }
+
     Node* MaterialGraph::AddSceneUVNode()
     {
         auto node = std::make_unique<Node>(GetNextID(), "Screen UV");
@@ -1324,6 +1461,11 @@ namespace axe
         j["shading_model"] = (int)ShadingModel;
         j["toon_steps"] = ToonSteps;   // SHADING_MODEL_V1
 
+        // WPO_V1 — chaves NOMEADAS, entao a ordem nao importa e grafo antigo
+        // (sem elas) cai no default de sempre no Deserialize.
+        j["wpo_recompute_normal"] = RecomputeNormalFromWPO;
+        j["wpo_normal_delta"] = WPONormalDelta;
+
         return j;
     }
 
@@ -1346,6 +1488,7 @@ namespace axe
         if (name == "Abs")             return AddAbsNode();
         if (name == "OneMinus")        return AddOneMinusNode();
         if (name == "World Position")  return AddWorldPositionNode();
+        if (name == "Vertex Normal")   return AddVertexNormalNode();   // WPO_V1
         if (name == "Fresnel")         return AddFresnelNode();
         if (name == "Normal Map")      return AddNormalMapNode();
         if (name == "Sine")            return AddSineNode();
@@ -1397,6 +1540,8 @@ namespace axe
         if (name == "Scene Is Background")  return AddSceneIsBackgroundNode();  // POSTPROCESS_SKY_V1
         if (name == "Screen Ray Direction") return AddScreenRayDirectionNode(); // POSTPROCESS_SKY_V1
         if (name == "Sun")                  return AddSunNode();                // POSTPROCESS_SKY_V1
+        if (name == "Sun Light")            return AddSunLightNode();           // VOLUME_SUN_V2
+        if (name == "Fog Settings")         return AddFogSettingsNode();        // VOLUME_SUN_V2b
 
         // ── PRIMITIVES_V1 — nome desconhecido nao pode ser silencioso ────────
         //
@@ -1430,6 +1575,11 @@ namespace axe
         TwoSided = j.value("two_sided", false);        // TWO_SIDED_V1
         ShadingModel = (MaterialShadingModel)j.value("shading_model", (int)MaterialShadingModel::DefaultLit);
         ToonSteps = j.value("toon_steps", 3);   // SHADING_MODEL_V1
+
+        // WPO_V1 — false/0.05 reproduzem o comportamento anterior a esta
+        // rodada, entao todo `.axegraph` ja salvo abre identico.
+        RecomputeNormalFromWPO = j.value("wpo_recompute_normal", false);
+        WPONormalDelta = j.value("wpo_normal_delta", 0.05f);
 
         // Reconstrói cada node pelo nome — dispatch centralizado em
         // AddNodeByName() (mesma função usada pelo menu de criação e pelo

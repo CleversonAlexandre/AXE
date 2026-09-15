@@ -60,7 +60,21 @@ namespace axe
         // (deferred), com sombra e luz normais — não é o forward translúcido.
         bool  IsMasked = false;
         float AlphaCutoff = 0.5f;
+
+        // WPO_V1 — o pin World Position Offset esta ligado a alguma coisa, ou
+        // seja: o VertexShader deste material nao e mais o padrao da engine.
+        // Usado so para diagnostico no Shader Log; nada no runtime depende
+        // disto, porque o vertex shader ja viaja inteiro no `.axeshader`.
+        bool UsesWPO = false;
     };
+
+    // ── WPO_V1 — o indice do pin World Position Offset ───────────────────────
+    //
+    // Vive aqui, e nao digitado em cada uso, porque TRES lugares precisam
+    // concordar: a fabrica do Material Output (que o cria no fim da lista), o
+    // percurso do fragmento (que precisa PULAR este pin — ele nao pertence ao
+    // fragmento) e o gerador do vertex shader (que so olha para ele).
+    inline constexpr int kMaterialOutputWPOPin = 8;
 
     // -------------------------------------------------------------------------
     // MaterialCompiler
@@ -151,6 +165,24 @@ namespace axe
             std::shared_ptr<Shader>& outShader,
             std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
 
+        // ── VOLUME_DOMAIN_V1 ─────────────────────────────────────────────────
+        //
+        // O MEIO participante: o grafo descreve do que o AR e feito, e o corpo
+        // dele e avaliado a cada passo do ray march do fog, e nao uma vez por
+        // pixel. Base Color = albedo de espalhamento, Emissive = emissao,
+        // Opacity = densidade. Ver a nota longa na implementacao.
+        //
+        // O shader gerado substitui o embutido do OpenGLVolumetricFogPass e
+        // obedece ao MESMO contrato de uniforms — trocar so o shader e o que
+        // mantem o passe, as luzes, os interiores e as probes de pe.
+        static CompiledMaterial CompileVolume(MaterialGraph* graph);
+
+        // VOLUME_DOMAIN_V1 — para o callback que o EditorLayer registra no
+        // SceneSerializer. Recusa (false) material que nao seja deste dominio.
+        static bool CompileVolumeFromFile(const std::filesystem::path& materialFilePath,
+            std::shared_ptr<Shader>& outShader,
+            std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
+
         static bool CompileParticleFunctionFromFile(const std::filesystem::path& materialFilePath,
             std::shared_ptr<Shader>& outShader,
             std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers);
@@ -168,6 +200,52 @@ namespace axe
         // -- Percurso do grafo --
         void VisitNode(Node* node);  // DFS — processa node e seus inputs
         void VisitPin(Pin* pin);     // navega até o node fonte de um input
+
+        // WPO_V1 — o percurso a partir do Material Output, PULANDO o pin de
+        // World Position Offset.
+        //
+        // Existe porque `VisitNode(outputNode)` varre todos os inputs, e o pin
+        // 8 alimenta o estagio de VERTICE: emiti-lo no fragmento geraria uma
+        // segunda copia do subgrafo da onda dentro do fragment shader, viva no
+        // Shader Log e paga em tempo de compilacao, para nada. Marca o proprio
+        // Material Output como visitado (ele nao gera codigo) para que uma
+        // chegada por outro caminho nao o processe de novo.
+        //
+        // So o dominio Surface precisa disto: os outros quatro (Light
+        // Function, Particle, Post Process, Emissive Average) nunca varreram o
+        // Material Output inteiro — eles visitam por INDICE o pin de que
+        // precisam (Emissive, Base Color, Opacity), entao nao alcancam o pin 8
+        // nem antes nem depois desta rodada.
+        void VisitMaterialOutput(Node* outputNode);
+
+        // ── WPO_V1 — o vertex shader do dominio Surface ──────────────────────
+        //
+        // Devolve o vertex shader FIXO de sempre quando o pin de World Position
+        // Offset esta solto — nenhum material existente muda uma letra.
+        //
+        // Com o pin ligado, percorre o subgrafo dele num compilador PROPRIO
+        // (m_PinVariables e m_FragmentCode separados, porque as variaveis do
+        // fragmento nao existem aqui) e embrulha o resultado numa FUNCAO:
+        //
+        //     vec3 axeWorldPositionOffset(vec3 v_FragPos, vec2 v_TexCoord, ...)
+        //
+        // Os PARAMETROS tem os nomes das varyings de proposito. E isso que faz
+        // os ~60 nodes existentes compilarem no estagio de vertice sem uma
+        // linha de mudanca em GenerateNodeCode: um node que emite `v_FragPos`
+        // passa a ler o parametro. Sem esse truque, cada node que referencia
+        // uma varying precisaria de um caso especial.
+        //
+        // Ser FUNCAO, e nao codigo solto no main, e o que permite avaliar o
+        // mesmo deslocamento em pontos vizinhos para tirar a normal.
+        //
+        // `samplers` e o mapa node->uniform ja montado pelo Compile: uma
+        // textura usada nos dois estagios tem de ter O MESMO nome de uniform,
+        // senao o runtime liga a unidade de textura em um e o outro le lixo.
+        static std::string GenerateVertexShader(MaterialGraph* graph,
+            Node* outputNode,
+            const std::unordered_map<int, std::string>& samplers,
+            bool& outUsesWPO,
+            bool& outUsesSceneHeight);
 
         // -- Geração de código --
         std::string GenerateNodeCode(Node* node); // gera a linha GLSL do node
@@ -263,6 +341,32 @@ namespace axe
         // Flag de INSTANCIA do compilador, e nao consulta ao grafo: cada
         // compilacao sabe o que ela propria emitiu.
         bool m_PostProcessTarget = false;
+
+        // ── VOLUME_SUN_V2 ────────────────────────────────────────────────────
+        //
+        // true quando o shader QUE ESTA SENDO GERADO declara u_SunDirection,
+        // u_SunColor e u_SunIntensity. Ligada no CompilePostProcess E no
+        // CompileVolume.
+        //
+        // Flag SEPARADA do m_PostProcessTarget, e nao um segundo uso dele: o
+        // m_PostProcessTarget guarda CINCO emissoes diferentes (Screen Ray,
+        // Sun, Scene Normal, Scene Shading Model, Scene Color) cujas uniforms
+        // sao conjuntos distintos. O shader de Volume declara as do SOL e nao
+        // declara u_SceneNormal, u_ScenePBR nem u_InvViewProjection — reusar a
+        // flag faria o node Scene Normal emitir referencia a identificador nao
+        // declarado e derrubar o material inteiro por causa de um node vizinho.
+        //
+        // A regra que isto respeita e a mesma da nota acima: guardar emissao de
+        // codigo por "qual uniform ESTE shader declara", nunca por "qual e o
+        // dominio do grafo".
+        bool m_HasSunUniforms = false;
+
+        // VOLUME_SUN_V2b — true quando o shader gerado declara as uniforms de
+        // AJUSTE do fog (u_Density, u_FogColor, u_HeightBase, u_HeightFalloff).
+        // So o CompileVolume. Terceira flag, e nao um terceiro uso das outras
+        // duas, pela mesma razao ja escrita acima: cada flag responde por UM
+        // conjunto de uniforms, e e por isso que elas nao se confundem.
+        bool m_HasFogUniforms = false;
 
         // ── CUSTOM_NODE_V1 ───────────────────────────────────────────────────
         //

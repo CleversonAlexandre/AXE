@@ -18,6 +18,44 @@ namespace axe
 		// Retorna o UUID gerado ou existente
 		std::string Register(const std::filesystem::path& filepath);
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  SCENE_ASSET_V1 — REGISTRAR NAO BASTA PARA O ASSET APARECER
+		//
+		//  Esta funcao existia, palavra por palavra, dentro do
+		//  SequencerWindow (`RegisterProjectAsset`). Ela sobe para ca porque
+		//  agora tem DOIS usos reais — a sequence e a CENA — e porque as tres
+		//  coisas que ela faz juntas sao justamente as que se esquece uma a
+		//  uma quando cada janela reescreve o seu:
+		//
+		//   1. `Register` cria o record e grava o `.axemeta`. So isso NAO poe
+		//      o arquivo na grade do Asset Browser: a grade filtra por
+		//      `record.VirtualFolder == pasta selecionada`, e VirtualFolder
+		//      NAO e o caminho em disco — e escrituracao do editor,
+		//      preenchida so quando alguem importa ou arrasta o asset para
+		//      uma pasta. Um record novo nasce com ela vazia, e o asset
+		//      aparece apenas em "/ All".
+		//
+		//   2. Por isso a pasta virtual e DERIVADA do caminho em disco, uma
+		//      unica vez. A convencao ja existe no sentido inverso — o
+		//      `RelocateAssets` MOVE o arquivo para
+		//      `<AssetsPath>/<VirtualFolder>` —, entao isto so fecha o ciclo
+		//      no sentido que faltava. Ela so e preenchida quando esta VAZIA:
+		//      se o usuario arrastou o asset para outra pasta do browser, a
+		//      escolha dele vale mais que o disco, e regravar o arquivo nao
+		//      pode desfaze-la.
+		//
+		//   3. `Save` grava o indice. Sem isso o record vive so nesta sessao
+		//      — fechar e reabrir o editor perdia o registro, que e o pior
+		//      sintoma possivel: funciona enquanto se olha e some depois.
+		//
+		//  `typeOverride` existe para o clipe assado, cuja extensao
+		//  (`.axeclipbin`) NAO mapeia para tipo nenhum de proposito (ver
+		//  AssetType::AnimationClip): ali o tipo tem de ser dito pelo
+		//  chamador. Para uma cena `.axescene` a extensao ja basta.
+		// ═══════════════════════════════════════════════════════════════════
+		std::string RegisterInProject(const std::filesystem::path& filepath,
+			AssetType typeOverride = AssetType::Unknown);
+
 		// Varre uma pasta recursivamente e registra todos os assets
 		void Scan(const std::filesystem::path& directory);
 

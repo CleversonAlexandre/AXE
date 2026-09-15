@@ -1,5 +1,6 @@
 #include "asset_database.hpp"
 #include "axe/log/log.hpp"
+#include "axe/project/project_manager.hpp"   // SCENE_ASSET_V1 — AssetsPath/RootPath
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -287,6 +288,61 @@ namespace axe
 		m_PathIndex[absPath] = record.UUID;
 
 		return record.UUID;
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+	//  SCENE_ASSET_V1 — ver a nota longa no .hpp
+	// ─────────────────────────────────────────────────────────────────────────
+	std::string AssetDatabase::RegisterInProject(const std::filesystem::path& filepath,
+		AssetType typeOverride)
+	{
+		if (filepath.empty())
+			return {};
+
+		std::error_code exists_ec;
+		if (!std::filesystem::exists(filepath, exists_ec) || exists_ec)
+			return {};
+
+		const std::string uuid = Register(filepath);
+		if (uuid.empty())
+			return {};
+
+		auto it = m_Records.find(uuid);
+		if (it == m_Records.end())
+			return uuid;
+
+		AssetRecord& record = it->second;
+
+		if (typeOverride != AssetType::Unknown)
+			record.Type = typeOverride;
+
+		if (!ProjectManager::Get().HasProject())
+			return uuid;
+
+		const auto& project = ProjectManager::Get().GetCurrent();
+
+		// SO quando esta vazia: a pasta escolhida a mao no browser vence o
+		// disco. Ver o ponto 2 da nota no .hpp.
+		if (record.VirtualFolder.empty())
+		{
+			std::error_code ec;
+			const auto rel = std::filesystem::relative(
+				std::filesystem::absolute(filepath).parent_path(),
+				project.AssetsPath, ec);
+
+			// Fora da pasta Assets (ou erro): deixa a pasta virtual VAZIA, e o
+			// asset aparece em "/ All". Inventar uma pasta com ".." dentro
+			// faria o RelocateAssets tentar mover o arquivo para fora do
+			// projeto na proxima vez que alguem clicasse nele.
+			//
+			// Um arquivo na RAIZ de Assets da `rel == "."` e cai aqui tambem,
+			// pelo mesmo teste — e correto: a raiz nao e uma pasta do browser.
+			if (!ec && !rel.empty() && rel.native()[0] != '.')
+				record.VirtualFolder = rel.generic_string();
+		}
+
+		Save(project.RootPath);
+		return uuid;
 	}
 
 	bool AssetDatabase::UpdatePath(const std::string& uuid, const std::filesystem::path& newPath,

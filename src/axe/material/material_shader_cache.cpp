@@ -102,6 +102,9 @@ namespace axe
         case CookedMaterialDomain::PostProcess:
             cb = SceneSerializer::GetPostProcessMaterialRecompileCallback();
             break;
+        case CookedMaterialDomain::Volume:
+            cb = SceneSerializer::GetVolumeMaterialRecompileCallback();
+            break;
         default:
             cb = nullptr;
             break;

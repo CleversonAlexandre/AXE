@@ -95,7 +95,7 @@ namespace axe
         LightFunction,  // controla Color/Intensity de uma luz, via Emissive
         Particle,
         DeferredDecal,  // [indisponível] decal projetado num superfície
-        Volume,         // [indisponível] material volumétrico
+        Volume,         // VOLUME_DOMAIN_V1 — o MEIO participante (fog) (real)
         PostProcess,    // POSTPROCESS_DOMAIN_V1 — efeito de tela inteira (real)
         UserInterface,  // [indisponível] material pra UI/widgets
     };

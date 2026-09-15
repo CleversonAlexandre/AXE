@@ -160,57 +160,26 @@ namespace axe {
 
     // ── POR QUE REGISTRAR NAO BASTAVA ────────────────────────────────────────
     //
-    // `AssetDatabase::Register` cria o record e escreve o `.axemeta`, e eu achei
-    // que isso fosse suficiente para o arquivo aparecer no Asset Browser. Nao e,
-    // por DUAS razoes que so aparecem juntas:
+    // O corpo que morava aqui subiu inteiro para
+    // `AssetDatabase::RegisterInProject` (SCENE_ASSET_V1). A explicacao longa
+    // — por que `Register` sozinho nao poe o arquivo na grade, e por que o
+    // indice tem de ser gravado na mesma chamada — mora agora no
+    // asset_database.hpp, junto do codigo.
     //
-    //  1. O browser filtra por `record.VirtualFolder == pasta selecionada`, e
-    //     VirtualFolder NAO e o caminho em disco: e escriturario do editor,
-    //     preenchido so quando alguem importa ou arrasta o asset para uma pasta.
-    //     Um record novo nasce com ela vazia — o arquivo existe, tem UUID, e
-    //     aparece apenas em "/ All". Salvar dentro de `Assets/Meshes/Sequencer`
-    //     nao o poe na pasta "Meshes/Sequencer" do browser.
+    // O metodo continua existindo com este nome porque ele e o vocabulario
+    // DESTA janela (ha varias chamadas dele aqui, incluindo a do clipe assado
+    // com typeOverride) e porque a cena precisou do mesmo comportamento: um
+    // segundo copia-e-cola seria a terceira versao da mesma regra, com a
+    // garantia de que uma delas envelheceria sozinha.
     //
-    //     A convencao existe e e a inversa: o `RelocateAssets` MOVE o arquivo
-    //     para `<AssetsPath>/<VirtualFolder>`. Ou seja, a pasta virtual e a
-    //     verdade e o disco a segue. Derivar uma da outra aqui e so fechar o
-    //     ciclo no sentido que faltava.
-    //
-    //  2. O indice nao era gravado. Sem `AssetDatabase::Save`, o record vive so
-    //     nesta sessao — fechar e reabrir o editor perdia o registro.
-    //
-    // `typeOverride` existe para o clipe assado: a extensao dele
-    // (`.axeclipbin`) NAO mapeia para tipo nenhum, de proposito (ver
-    // AssetType::AnimationClip), entao o tipo tem de ser dito aqui.
+    // UMA MUDANCA DE COMPORTAMENTO veio junto, e ela e conserto: a versao
+    // antiga sobrescrevia `VirtualFolder` a CADA regravacao. Quem arrastasse
+    // uma sequence para outra pasta do browser a via voltar para a pasta do
+    // disco no Ctrl+S seguinte. A versao compartilhada so preenche quando
+    // esta vazia.
     std::string SequencerWindow::RegisterProjectAsset(const std::filesystem::path& file,
         AssetType typeOverride) {
-        const std::string uuid = AssetDatabase::Get().Register(file);
-        if (uuid.empty()) return {};
-
-        auto* rec = const_cast<AssetRecord*>(AssetDatabase::Get().GetByUUID(uuid));
-        if (!rec) return uuid;
-
-        if (typeOverride != AssetType::Unknown)
-            rec->Type = typeOverride;
-
-        if (ProjectManager::Get().HasProject()) {
-            const auto& proj = ProjectManager::Get().GetCurrent();
-
-            std::error_code ec;
-            const auto rel = std::filesystem::relative(
-                file.parent_path(), proj.AssetsPath, ec);
-
-            // Fora da pasta Assets (ou erro): deixa a pasta virtual VAZIA, e o
-            // asset aparece em "/ All". Inventar uma pasta com ".." dentro
-            // faria o RelocateAssets tentar mover o arquivo para fora do
-            // projeto na proxima vez que alguem clicasse nele.
-            if (!ec && !rel.empty() && rel.native()[0] != '.')
-                rec->VirtualFolder = rel.generic_string();
-
-            AssetDatabase::Get().Save(proj.RootPath);
-        }
-
-        return uuid;
+        return AssetDatabase::Get().RegisterInProject(file, typeOverride);
     }
 
     bool SequencerWindow::SaveToPath(const std::string& path) {

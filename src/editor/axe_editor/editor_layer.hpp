@@ -133,7 +133,21 @@ namespace axe
         void DrawPlayToolbar();
         void HandleSceneInput();
         void HandleViewportCameraInput();
-        void EnsureEnvironmentComponent();
+        // ── ENV_RESPECT_DELETE_V1 ────────────────────────────────────────
+        //
+        //  `createIfMissing` false = so NORMALIZA o que ja existe (tira o
+        //  FolderComponent, devolve o EnvironmentComponent a uma entidade
+        //  "Enviroment" que o perdeu) e nunca cria do zero.
+        //
+        //  Existe porque esta funcao era chamada em quatro pontos com dois
+        //  significados diferentes espremidos num so. Nos dois pontos onde a
+        //  cena esta NASCENDO (cena nova, bootstrap do projeto) criar e o
+        //  certo. Nos outros dois — ao CARREGAR do disco e ao voltar do Play —
+        //  a cena ja e a intencao do autor, e criar ali fazia apagar a
+        //  entidade "Enviroment" nunca pegar: ela voltava no proximo reload, e
+        //  voltava tambem em todo Stop, desfazendo o snapshot que a tinha
+        //  removido corretamente.
+        void EnsureEnvironmentComponent(bool createIfMissing = true);
 
         // Cria a entidade do personagem a partir de um asset .axeskel.
         //

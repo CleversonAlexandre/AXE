@@ -54,7 +54,8 @@ namespace axe
         {"Vector Split","Vector Split"},
     };
     static const MatNE s_MatUtility[] = {
-        {"World Position","World Position"}, {"Fresnel","Fresnel"}, {"Normal Map","Normal Map"},
+        {"World Position","World Position"}, {"Vertex Normal","Vertex Normal"},   // WPO_V1
+        {"Fresnel","Fresnel"}, {"Normal Map","Normal Map"},
         {"Camera Vector","Camera Vector"}, {"Reflection Vector","Reflection Vector"},
         {"Camera Position","Camera Position"},   // WATER_NODES_V1
         {"Desaturate","Desaturate"}, {"Noise","Noise"},
@@ -108,6 +109,12 @@ namespace axe
         {"Scene Is Background",  "Scene Is Background"},
         {"Screen Ray Direction", "Screen Ray Direction"},
         {"Sun",                  "Sun"},
+        // VOLUME_SUN_V2 — quanto do sol chega a este ponto (0 sombra, 1 sol).
+        // So o dominio Volume responde; nos outros devolve 1.0.
+        {"Sun Light",            "Sun Light"},
+        // VOLUME_SUN_V2b — os valores do Inspector como valores do grafo, para
+        // os controles nao morrerem quando o grafo assume os pinos.
+        {"Fog Settings",         "Fog Settings"},
     };
 
     struct MatCatDef { const char* name; const MatNE* e; int n; ImVec4 col; };
@@ -192,6 +199,7 @@ namespace axe
                     m_Graph->Domain == MaterialDomain::LightFunction ? ICON_BOLT "  Light Function" :
                     m_Graph->Domain == MaterialDomain::Particle ? ICON_WAND "  Particle" :
                     m_Graph->Domain == MaterialDomain::PostProcess ? ICON_IMAGE "  Post Process" :
+                    m_Graph->Domain == MaterialDomain::Volume ? ICON_CLOUD "  Volume" :
                     ICON_CUBE "  Surface";
 
                 ImGui::TextDisabled("%s", domainLabel);

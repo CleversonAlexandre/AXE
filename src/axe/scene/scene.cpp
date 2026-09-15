@@ -69,10 +69,59 @@ namespace axe
 		return entity;
 	}
 
+	// ── ENTITY_DETACH_V1 — a raiz de tres defeitos diferentes ────────────────
+	//
+	//  Isto era `if (valid) m_Registry.destroy(entity);` e mais nada. Faltavam
+	//  as DUAS metades da hierarquia, e cada uma cobrava o seu preco:
+	//
+	//  ── 1. NAO DESLIGAVA DO PAI ──────────────────────────────────────────
+	//
+	//  O `RelationshipComponent::Children` do pai ficava com um handle MORTO.
+	//  Isso vazava por tres caminhos ao mesmo tempo:
+	//
+	//   a) A arvore do Hierarchy percorre `rel->Children` — e desenhava uma
+	//      linha para o handle morto. Sao as "entidades vazias" que apareciam
+	//      sozinhas depois de cada delete.
+	//
+	//   b) O entt RECICLA handles. Uma entidade criada depois pode receber o
+	//      mesmo indice — e a partir dai ela e filha, de verdade, de um pai que
+	//      nunca a adotou. Como o transform de filho e multiplicado pelo do
+	//      pai, o objeto some ou aparece pela metade, deslocado para dentro de
+	//      outra geometria. Era o "cubo igual aos outros que renderiza so um
+	//      pedaco". Deletar e desfazer consertava porque o undo o devolvia sem
+	//      pai — nao porque a malha estivesse errada.
+	//
+	//   c) O SceneCollector percorre a mesma lista, entao uma entidade nessa
+	//      situacao era coletada DUAS vezes.
+	//
+	//  ── 2. NAO LEVAVA OS FILHOS ──────────────────────────────────────────
+	//
+	//  Quem chamava isto direto (editor_layer, sequencer) deixava os filhos
+	//  vivos apontando para um pai morto. A HierarchyWindow ja fazia a
+	//  recursao por fora, mas ninguem mais fazia — e uma regra de integridade
+	//  que so vale quando o chamador lembra nao e uma regra.
+	//
+	//  As duas metades moram AQUI, e nao em cada call site, para que nao exista
+	//  jeito de destruir uma entidade e deixar a hierarquia inconsistente.
 	void Scene::DestroyEntity(entt::entity entity)
 	{
-		if (m_Registry.valid(entity))
-			m_Registry.destroy(entity);
+		if (!m_Registry.valid(entity)) return;
+
+		// Desliga do pai ANTES de qualquer coisa: e o que apaga o handle morto
+		// da lista de filhos dele.
+		RemoveParent(entity);
+
+		// Copia obrigatoria: cada DestroyEntity(child) chama RemoveParent, que
+		// remove daquele mesmo vetor. Iterar o original seria invalidar o
+		// iterador no meio do laco.
+		if (auto* rel = m_Registry.try_get<RelationshipComponent>(entity))
+		{
+			auto children = rel->Children;
+			for (auto child : children)
+				DestroyEntity(child);
+		}
+
+		m_Registry.destroy(entity);
 	}
 
 	entt::entity Scene::FindByName(const std::string& name) const

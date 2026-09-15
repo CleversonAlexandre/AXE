@@ -63,7 +63,7 @@ namespace axe
 
 		void SetCommandHistory(CommandHistory* history) { m_CommandHistory = history; }
 
-		bool  ShowGrid = true;
+		bool  ShowGrid = false;
 		bool  ShowColliders = true; // wireframe dos colliders no editor
 		bool  ShowLights = true;    // wireframe do raio das Point Lights no editor
 

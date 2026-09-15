@@ -174,33 +174,51 @@ namespace axe
         // callback no load de cena) por um shader de superfície. O runtime
         // recusa pelo campo `domain`, mas o arquivo bom já teria ido embora.
         //
-        // Os dois booleanos são explícitos de propósito: `MaterialDomain` tem
-        // sete valores, e quatro deles (DeferredDecal, Volume, PostProcess,
-        // UserInterface) ainda não têm compilador. Um `!= Surface` trataria
-        // esses quatro como partícula e gravaria um cozido que não tem nada a
-        // ver com o material. Eles não cozinham nada — que é o certo enquanto
-        // não existir um compilador para eles.
-        const bool isLightDomain = (m_Graph->Domain == MaterialDomain::LightFunction);
-        const bool isParticleDomain = (m_Graph->Domain == MaterialDomain::Particle);
+        // ── VOLUME_DOMAIN_V1 — a cadeia de ternarios virou SWITCH ────────────
+        //
+        // Ate a rodada passada isto eram tres booleanos e dois ternarios
+        // aninhados, com um comentario avisando que `!= Surface` trataria os
+        // dominios sem compilador como particula. O aviso estava certo e a
+        // forma estava errada: cada dominio novo obrigava a mexer em DUAS
+        // cadeias (a do resultado e a do dominio cozido) e a manter as duas na
+        // mesma ordem. Um descompasso entre elas cozinharia o shader de um
+        // dominio com o carimbo de outro — que o runtime recusaria no load,
+        // depois de o arquivo bom ja ter ido embora.
+        //
+        // Com o switch, o par (compilador, carimbo) fica numa linha so, e o
+        // `default` deixa DeferredDecal e UserInterface sem cozimento, que
+        // continua sendo o certo enquanto nao existir compilador para eles.
+        bool hasDomainCompiler = true;
+        CookedMaterialDomain cookedDomain = CookedMaterialDomain::Surface;
+        CompiledMaterial(*domainCompile)(MaterialGraph*) = nullptr;
 
-        // POSTPROCESS_DOMAIN_V1 — terceiro dominio com compilador proprio.
-        // Continua na forma explicita (e nao `!= Surface`) pela razao descrita
-        // acima: DeferredDecal, Volume e UserInterface seguem sem compilador, e
-        // um `else` os coziria como se fossem outra coisa.
-        const bool isPostProcessDomain = (m_Graph->Domain == MaterialDomain::PostProcess);
+        switch (m_Graph->Domain)
+        {
+        case MaterialDomain::LightFunction:
+            cookedDomain = CookedMaterialDomain::LightFunction;
+            domainCompile = &MaterialCompiler::CompileLightFunction;
+            break;
+        case MaterialDomain::Particle:
+            cookedDomain = CookedMaterialDomain::Particle;
+            domainCompile = &MaterialCompiler::CompileParticleFunction;
+            break;
+        case MaterialDomain::PostProcess:
+            cookedDomain = CookedMaterialDomain::PostProcess;
+            domainCompile = &MaterialCompiler::CompilePostProcess;
+            break;
+        case MaterialDomain::Volume:
+            cookedDomain = CookedMaterialDomain::Volume;
+            domainCompile = &MaterialCompiler::CompileVolume;
+            break;
+        default:
+            hasDomainCompiler = false;
+            break;
+        }
 
-        if ((isLightDomain || isParticleDomain || isPostProcessDomain) && m_Asset
+        if (hasDomainCompiler && domainCompile && m_Asset
             && !m_Asset->GetFilePath().empty())
         {
-            auto domainResult =
-                isLightDomain ? MaterialCompiler::CompileLightFunction(m_Graph.get()) :
-                isParticleDomain ? MaterialCompiler::CompileParticleFunction(m_Graph.get()) :
-                MaterialCompiler::CompilePostProcess(m_Graph.get());
-
-            const auto cookedDomain =
-                isLightDomain ? CookedMaterialDomain::LightFunction :
-                isParticleDomain ? CookedMaterialDomain::Particle :
-                CookedMaterialDomain::PostProcess;
+            auto domainResult = domainCompile(m_Graph.get());
 
             if (!domainResult.Success)
                 LogError("Compilação (" + std::string(CookedMaterial::DomainName(cookedDomain))

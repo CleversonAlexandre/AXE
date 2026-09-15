@@ -16,6 +16,58 @@
 
 namespace axe
 {
+    namespace
+    {
+        // ═════════════════════════════════════════════════════════════════════
+        //  TRANSLUCENT_NOCAST_V1 — translucido nao entra no shadow map
+        //
+        //  ── O DEFEITO ───────────────────────────────────────────────────────
+        //
+        //  Os dois passes de sombra desenhavam a fila INTEIRA, sem olhar o
+        //  material — ao contrario do scene height pass e do geometry pass, que
+        //  sempre filtraram translucido. A agua ia para o shadow map junto com
+        //  o resto.
+        //
+        //  Isso passou despercebido enquanto o passe forward nao LIA sombra
+        //  nenhuma (ver FORWARD_SHADOW_V1). No instante em que passou a ler, o
+        //  defeito virou a coisa mais visivel da tela:
+        //
+        //    o CASTER e a malha SEM deslocamento — o shadow pass tem vertex
+        //    shader proprio, fixo, que nao conhece World Position Offset;
+        //    o RECEIVER e a mesma malha COM deslocamento.
+        //
+        //  Entao toda crista que sobe fica na frente do plano chapado do mapa,
+        //  e todo vale que desce fica ATRAS dele — em sombra de si mesmo. O
+        //  resultado sao manchas escuras grandes, de borda poligonal e
+        //  pontilhada, que mudam de forma quando o sol gira. Exatamente o que o
+        //  Clever fotografou.
+        //
+        //  ── POR QUE FILTRAR E A RESPOSTA CERTA, E NAO UM REMENDO ────────────
+        //
+        //  Superficie translucida nao projeta sombra opaca: seria errado a agua
+        //  escurecer o fundo do mar como se fosse pedra. Sombra de translucido
+        //  e um recurso separado e mais caro (mapa colorido), e nenhuma engine
+        //  o liga por padrao. Filtrar aqui alinha os tres passes que consomem a
+        //  fila com o mesmo criterio que os outros dois ja usavam.
+        //
+        //  Masked continua projetando: `IsTransparent` e false para ele (ver
+        //  MaterialCompiler), e recorte de folhagem PRECISA de sombra.
+        //
+        //  ── CORRECAO DE UMA AFIRMACAO MINHA ────────────────────────────────
+        //
+        //  Na entrega do WPO_V1 ficou escrito que a sombra nao acompanhar o
+        //  deslocamento era "irrelevante para agua, porque translucido nao
+        //  projeta sombra". A premissa estava errada: projetava sim, porque
+        //  ninguem filtrava. A limitacao documentada la continua valendo para
+        //  malha OPACA com WPO (folhagem com vento), que segue projetando a
+        //  silhueta parada.
+        // ═════════════════════════════════════════════════════════════════════
+        bool ShadowCasterSkipped(const MeshDrawCall& dc)
+        {
+            return dc.Material && dc.Material->IsTransparent;
+        }
+    }
+
     SceneRenderer::SceneRenderer() {}
 
     glm::mat4 SceneRenderer::BeginTAAFrame(const glm::mat4& projection,
@@ -298,7 +350,11 @@ namespace axe
             {
                 m_CSMPass->Begin(c);
                 for (auto& dc : queue.Meshes)
-                    if (dc.Mesh) m_CSMPass->DrawMesh(*dc.Mesh, dc.Transform);
+                {
+                    if (!dc.Mesh) continue;
+                    if (ShadowCasterSkipped(dc)) continue;   // TRANSLUCENT_NOCAST_V1
+                    m_CSMPass->DrawMesh(*dc.Mesh, dc.Transform);
+                }
                 m_CSMPass->End();
             }
         }
@@ -313,7 +369,11 @@ namespace axe
 
             m_ShadowPass->Begin(lsm);
             for (auto& dc : queue.Meshes)
-                if (dc.Mesh) m_ShadowPass->DrawMesh(*dc.Mesh, dc.Transform);
+            {
+                if (!dc.Mesh) continue;
+                if (ShadowCasterSkipped(dc)) continue;   // TRANSLUCENT_NOCAST_V1
+                m_ShadowPass->DrawMesh(*dc.Mesh, dc.Transform);
+            }
             m_ShadowPass->End();
         }
     }
@@ -332,6 +392,12 @@ namespace axe
             m_MeshRenderer.SetShadowMap(
                 m_ShadowPass->GetDepthMapID(),
                 m_ShadowPass->GetLightSpaceMatrix());
+
+        // FORWARD_SHADOW_V1 — DESLIGA, pela mesma razao do bloco logo abaixo:
+        // este e o forward puro dos previews, sem passe de sombra rodando. Sem
+        // o zero explicito, o id de membro sobreviveria entre frames e o
+        // preview amostraria a cascata do frame anterior do viewport.
+        m_MeshRenderer.SetCascadedShadow(nullptr, glm::mat4(1.0f));
 
         // ── SCENE_DEPTH_SURFACE_V1 — DESLIGA explicitamente aqui ────────────
         //
@@ -626,6 +692,18 @@ namespace axe
                         m_ShadowPass->GetDepthMapID(),
                         m_ShadowPass->GetLightSpaceMatrix());
 
+                // ── FORWARD_SHADOW_V1 ───────────────────────────────────
+                //
+                // O `csm` logo acima ja e nulo quando as cascatas estao
+                // desligadas, entao esta chamada cobre os dois casos.
+                //
+                // Repare no contraste com a linha de cima: o SetShadowMap
+                // esta atras de `if (m_ShadowPass)`, e com m_UseCSM ligado
+                // (o padrao) esse passe NUNCA e criado — era por isso que o
+                // translucido nao tinha sombra nenhuma. Aqui a chamada e
+                // incondicional de proposito.
+                m_MeshRenderer.SetCascadedShadow(csm, view);
+
                 // ── SCENE_DEPTH_SURFACE_V1 ──────────────────────────────
                 //
                 // Neste ponto o G-Buffer ja foi resolvido (passo 4) e NAO
@@ -666,6 +744,31 @@ namespace axe
                 m_FogPass->Initialize();
             if (m_FogPass && m_FogPass->IsInitialized())
             {
+                // ── VOLUME_SUN_V2 ────────────────────────────────────────
+                //
+                // As duas informacoes ja estavam AQUI, a poucas linhas de
+                // distancia: `queue.Light` e a direcional que o lighting
+                // pass usa, e `csm` e a mesma cascata que o passe 4.5
+                // acabou de publicar no MeshRenderer para a agua ter
+                // sombra. O fog so nunca as tinha pedido.
+                //
+                // Sem luz direcional na cena, SetSun com intensidade 0
+                // desliga o termo — e nao um `if` em volta da chamada, que
+                // deixaria o estado ANTERIOR vivo no passe entre frames.
+                if (queue.Light)
+                    m_FogPass->SetSun(queue.Light->Direction,
+                        queue.Light->Color,
+                        queue.Light->Intensity);
+                else
+                    m_FogPass->SetSun(glm::vec3(0.0f, -1.0f, 0.0f),
+                        glm::vec3(1.0f), 0.0f);
+
+                // Idem: chamada INCONDICIONAL. csm nulo zera a contagem
+                // dentro do passe. Foi exatamente o `if` em volta do
+                // SetShadowMap que deixou o translucido sem sombra por
+                // rodadas.
+                m_FogPass->SetCascadedShadow(csm, view);
+
                 glm::mat4 invViewProj = glm::inverse(viewProjection);
                 m_FogPass->Execute(m_GBuffer, m_FogSettings, invViewProj,
                     cameraPosition, lightsSel, Time::Elapsed(), width, height,

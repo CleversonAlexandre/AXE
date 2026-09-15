@@ -90,6 +90,7 @@
 #define ICON_FILTER            "\xef\x82\xb0"   // U+F0B0
 #define ICON_PALETTE           "\xef\x94\xbf"   // U+F53F
 #define ICON_IMAGE             "\xef\x80\xbe"   // U+F03E
+#define ICON_CLOUD             "\xef\x83\x82"   // U+F0C2  (VOLUME_DOMAIN_V1)
 #define ICON_WAND              "\xef\x9c\xab"   // U+F72B
 #define ICON_BOLT              "\xef\x83\xa7"   // U+F0E7
 #define ICON_CLOCK             "\xef\x80\x97"   // U+F017

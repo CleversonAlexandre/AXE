@@ -1,10 +1,12 @@
 #pragma once
 #include "axe/core/types.hpp"
 #include <memory>
+#include <array>
 #include <glm/glm.hpp>
 #include "axe/lighting/directional_light.hpp"
 
 #include "axe/scene/scene_environment.hpp"
+#include "cascaded_shadow_pass.hpp"   // FORWARD_SHADOW_V1 — AXE_SHADOW_CASCADES
 
 namespace axe
 {
@@ -60,6 +62,37 @@ namespace axe
 		void SetSceneHeightSource(uint32_t heightMapID, uint32_t seedMapID,
 			const glm::mat4& topDownMatrix);
 
+		// ═══════════════════════════════════════════════════════════════════
+		//  FORWARD_SHADOW_V1 — as cascatas, para o passe TRANSLUCIDO
+		//
+		//  ── O DEFEITO QUE ISTO CONSERTA ────────────────────────────────────
+		//
+		//  Material translucido nao recebia sombra NENHUMA, e por dois motivos
+		//  empilhados:
+		//
+		//    1. O shader gerado pelo MaterialCompiler nunca teve termo de
+		//       sombra — nem uma linha. O shader FIXO daqui tem
+		//       ShadowCalculation com PCF; o gerado a partir do grafo, nao.
+		//
+		//    2. E mesmo o fixo ficava sem dado: `SetShadowMap` so e chamado
+		//       atras de `if (m_ShadowPass)`, e com `m_UseCSM = true` (o
+		//       padrao) o RenderShadowPass entra no ramo das cascatas e o
+		//       m_ShadowPass legado NUNCA e criado. u_HasShadowMap ficava 0.
+		//
+		//  Nao aparecia no opaco porque la a sombra vem do lighting pass
+		//  deferred. So o forward — ou seja, exatamente a agua — ficava sem.
+		//
+		//  ── POR QUE COPIA, E NAO PONTEIRO GUARDADO ────────────────────────
+		//
+		//  Mesmo precedente do SetShadowMap e do SetSkyLight: guardar o
+		//  ponteiro do passe entre frames e guardar algo que pode morrer. O
+		//  que este renderer precisa sao seis valores pequenos; copia-los na
+		//  hora custa nada e nao cria tempo de vida novo.
+		//
+		//  `csm` nulo (ou nao inicializado) desliga: o shader compila igual e
+		//  le sombra zero, que e o comportamento anterior a esta rodada.
+		void SetCascadedShadow(const CascadedShadowPass* csm, const glm::mat4& view);
+
 	private:
 		std::shared_ptr<Shader> m_Shader;
 		std::shared_ptr<Pipeline> m_Pipeline;
@@ -84,5 +117,14 @@ namespace axe
 		uint32_t  m_SceneSeedID = 0;   // SCENE_HEIGHT_V1
 		glm::mat4 m_SceneHeightMatrix{ 1.0f };
 		glm::vec2 m_ScreenSize{ 1.0f, 1.0f };
+
+		// FORWARD_SHADOW_V1 — copia do que o CascadedShadowPass produziu.
+		// Count = 0 significa "sem cascatas neste frame".
+		int       m_CascadeCount = 0;
+		uint32_t  m_CascadeArrayID = 0;
+		glm::mat4 m_CascadeView{ 1.0f };
+		std::array<glm::mat4, AXE_SHADOW_CASCADES> m_CascadeMatrices{};
+		std::array<float, AXE_SHADOW_CASCADES>     m_CascadeSplits{};
+		std::array<float, AXE_SHADOW_CASCADES>     m_CascadeTexelWorld{};
 	};
 }

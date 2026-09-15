@@ -220,6 +220,24 @@ namespace axe
         m_Time += deltaTime;
 
         auto& reg = scene.GetRegistry();
+
+        // ── ENTITY_DETACH_V1 — destruicao ADIADA ─────────────────────────────
+        //
+        // O AutoDestroy chamava `reg.destroy` DENTRO do `each`, e por duas
+        // razoes isso estava errado:
+        //
+        // 1. Passava por fora do Scene::DestroyEntity, entao a entidade morria
+        //    sem se desligar do pai. Um sistema de particulas costuma estar
+        //    anexado a um personagem — e o handle morto ficava na lista de
+        //    filhos dele, virando linha fantasma no Hierarchy e, quando o entt
+        //    reciclasse o indice, pai falso de outra entidade.
+        //
+        // 2. Destruir dentro do `each` invalida o iterador. Este mesmo arquivo
+        //    ja adia o spawn de sub-emissores "pra nao invalidar o view
+        //    iterator" — a destruicao seguia a regra oposta a que o autor
+        //    escreveu tres linhas abaixo.
+        std::vector<entt::entity> pendingDestroy;
+
         reg.view<ParticleSystemComponent, TransformComponent>().each(
             [&](entt::entity entt_entity, ParticleSystemComponent& ps, TransformComponent& tr)
             {
@@ -474,9 +492,14 @@ namespace axe
                     for (auto& def : ps.Data->Emitters)
                         if (def.AutoDestroy) { shouldDestroy = true; break; }
                     if (shouldDestroy)
-                        reg.destroy(entt_entity);
+                        pendingDestroy.push_back(entt_entity);
                 }
             }); // fim de reg.view().each()
+
+        // Fora do laco, e pelo caminho canonico: o Scene::DestroyEntity desliga
+        // do pai e leva os filhos junto.
+        for (auto e : pendingDestroy)
+            scene.DestroyEntity(e);
 
         // ── Spawn de sub-emissores ─────────────────────────────────────────────
         // Processados APÓS o loop principal pra não invalidar o view iterator.

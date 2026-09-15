@@ -31,6 +31,76 @@ namespace axe
 {
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  SCENE_ASSET_V1 — A CENA TAMBEM E UM ASSET
+    //
+    //  ── O SINTOMA ─────────────────────────────────────────────────────────
+    //
+    //  A pasta "Scenes" do Asset Browser abria vazia, com o `.axescene` la
+    //  dentro no disco. A leitura natural e "falta o icone do tipo cena" —
+    //  mas o icone existe desde sempre (`EditorIconLibrary::GetScene`, e o
+    //  `case AssetType::Scene` que o usa no DrawAssetItem).
+    //
+    //  ── A CAUSA ───────────────────────────────────────────────────────────
+    //
+    //  A grade nao percorre o disco: ela percorre o AssetDatabase. E o
+    //  `.axescene` era o UNICO arquivo que o editor cria sem registrar.
+    //
+    //  Nao e coincidencia. Material, particula, sound cue e material function
+    //  nascem pelo Asset Browser, e la o registro e a pasta virtual sao
+    //  preenchidos no mesmo gesto (asset_browser.cpp, os varios
+    //  `rec->VirtualFolder = m_SelectedFolder`). A cena nasce por um
+    //  FileDialog no menu File — longe do browser, sem ninguem para faze-lo.
+    //
+    //  O `Scan` do boot pegaria o arquivo, mas ele so roda quando NAO existe
+    //  indice; num projeto com indice gravado, a cena nunca entrava.
+    //
+    //  ── ONDE ISTO ENTRA ───────────────────────────────────────────────────
+    //
+    //  Nos quatro pontos em que uma cena passa a existir ou a ser aberta:
+    //  o Serialize das duas pernas do OnSaveScene, o de EditorLayer::SaveScene,
+    //  o Deserialize do OnOpenScene, e a cena de abertura no primeiro frame.
+    //  Todos passam por aqui, e nao cada um pelo seu — foi assim que os dois
+    //  caminhos de criar o Post Process Volume divergiram.
+    // ═══════════════════════════════════════════════════════════════════════
+    namespace
+    {
+        void RegisterSceneAsset(const std::filesystem::path& path)
+        {
+            if (path.empty()) return;
+
+            // O tipo vem da extensao de qualquer jeito; dizer AssetType::Scene
+            // aqui protege o caso do arquivo gravado com outra extensao pelo
+            // FileDialog (o filtro sugere, nao obriga).
+            AssetDatabase::Get().RegisterInProject(path, AssetType::Scene);
+        }
+
+        // As cenas gravadas ANTES desta correcao existem no disco e nao no
+        // indice. Sem esta varredura elas so apareceriam depois de serem
+        // salvas de novo — que e pedir ao usuario que conserte o dado a mao.
+        //
+        // Restrita a `.axescene` DE PROPOSITO. Varrer tudo aqui traria de
+        // volta, de carona, todo asset que alguem removeu do indice de
+        // proposito — uma mudanca de comportamento que ninguem pediu, escondida
+        // dentro de um conserto de cena.
+        void AdoptProjectScenes()
+        {
+            if (!ProjectManager::Get().HasProject()) return;
+
+            const auto assetsPath = ProjectManager::Get().GetCurrent().AssetsPath;
+            if (!std::filesystem::exists(assetsPath)) return;
+
+            for (const auto& entry :
+                std::filesystem::recursive_directory_iterator(assetsPath))
+            {
+                if (!entry.is_regular_file()) continue;
+                if (entry.path().extension() != ".axescene") continue;
+
+                RegisterSceneAsset(entry.path());
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  EDITOR_CAM_PERSIST_V1 — a camera do editor viaja com a cena
     //
     //  Ele pedia: "guardar a ultima posicao da camera do editor para que nao
@@ -275,11 +345,23 @@ namespace axe
                 SceneSerializer::Deserialize(path, *m_Scene, &m_Environment);
                 RestoreEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
                 m_CurrentScenePath = path;
-                EnsureEnvironmentComponent();
+
+                // ENV_RESPECT_DELETE_V1 — o Ensure saiu daqui tambem. Uma cena
+                // vinda do disco E a intencao do autor: se ela nao tem
+                // "Enviroment", e porque ele apagou e salvou. Recriar aqui
+                // fazia a delecao nunca sobreviver a um reload.
+                //
+                // O ceu procedural e o Sky Light sao independentes desta
+                // entidade (ver SKY_PERSIST_V1), entao a cena continua tendo
+                // luz de ambiente — o que ela perde e o HDRI de arquivo, que e
+                // exatamente o que se pede ao apagar.
+                EnsureEnvironmentComponent(/*createIfMissing*/ false);
 
                 // A ultima cena aberta passa a ser a cena de abertura do
                 // projeto — no proximo boot ela sobe sozinha, sem file dialog.
                 ProjectManager::Get().SetStartScene(path);
+
+                RegisterSceneAsset(path);   // SCENE_ASSET_V1
 
                 AXE_EDITOR_INFO("Cena aberta: {}", path);
             };
@@ -311,6 +393,7 @@ namespace axe
                     CaptureEditorCamera(m_ViewportRenderer.get());   // EDITOR_CAM_PERSIST_V1
                     SceneSerializer::Serialize(*m_Scene, chosen.string(), &m_Environment);
                     m_CurrentScenePath = chosen.string();
+                    RegisterSceneAsset(chosen);   // SCENE_ASSET_V1
                     AXE_EDITOR_INFO("Cena salva em: {}", m_CurrentScenePath);
                     return;
                 }
@@ -321,6 +404,9 @@ namespace axe
                 // Salvou = e nela que voce esta trabalhando. Vira a cena de
                 // abertura do projeto.
                 ProjectManager::Get().SetStartScene(savePath);
+
+                RegisterSceneAsset(savePath);   // SCENE_ASSET_V1
+
                 AXE_EDITOR_INFO("Cena salva em: {}", savePath);
             };
 
@@ -516,6 +602,22 @@ namespace axe
                         AXE_EDITOR_WARN("'{}': nenhum .axeskel do projeto referencia "
                             "este clipe. Ele foi assado para outro personagem?",
                             record.Name);
+                }
+                // ── SCENE_ASSET_V1 — abrir cena pela grade ───────────────────
+                //
+                // Reaproveita `OnSaveScene`/`OnOpenScene`, o MESMO caminho do
+                // menu File e do Ctrl+O: ele troca a cena, restaura a camera
+                // do editor, respeita a regra de nao carregar durante o Play e
+                // grava a cena de abertura do projeto. Uma segunda
+                // implementacao aqui comecaria certa e perderia um desses
+                // quatro no primeiro conserto.
+                //
+                // A pergunta "tem certeza?" ja foi feita pelo Asset Browser,
+                // antes de chamar — ver a nota no duplo clique dele.
+                else if (record.Type == AssetType::Scene)
+                {
+                    if (m_EditorUI->OnOpenScene)
+                        m_EditorUI->OnOpenScene(record.FilePath.string());
                 }
             });
 
@@ -728,10 +830,13 @@ namespace axe
 
                 if (record->Type == AssetType::Material)
                 {
+                    // PICK_ID_V1 — o passe grava (entidade + 1) para que zero
+                    // possa significar "vazio" sem colidir com a entidade de
+                    // indice 0. Desfaz o deslocamento aqui.
                     uint32_t pickID = m_ViewportRenderer->PickObject(mouseX, mouseY);
                     if (pickID != 0)
                     {
-                        entt::entity picked = (entt::entity)pickID;
+                        entt::entity picked = (entt::entity)(pickID - 1u);
                         if (registry.valid(picked)) m_Context.Select(picked);
                     }
                 }
@@ -1147,6 +1252,19 @@ namespace axe
                     record->FilePath, outShader, outSamplers);
             });
 
+        // VOLUME_DOMAIN_V1 — mesma razao do slot acima: no editor a fonte da
+        // verdade e o GRAFO, e nao o `.axeshader` da ultima compilacao.
+        SceneSerializer::SetVolumeMaterialRecompileCallback(
+            [](const std::string& assetUUID,
+                std::shared_ptr<Shader>& outShader,
+                std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers) -> bool
+            {
+                const AssetRecord* record = AssetDatabase::Get().GetByUUID(assetUUID);
+                if (!record) return false;
+                return MaterialCompiler::CompileVolumeFromFile(
+                    record->FilePath, outShader, outSamplers);
+            });
+
         m_Environment.LoadHDRI("resources/quarry_04_puresky_2k.hdr");
         EditorIconLibrary::Get().Load("resources");
 
@@ -1381,6 +1499,12 @@ namespace axe
         if (!m_SceneLoaded)
         {
             m_SceneLoaded = true;
+
+            // SCENE_ASSET_V1 — antes de abrir a cena, adota as que ja estao no
+            // disco. Aqui e o primeiro frame COM projeto carregado; no
+            // OnAttach o ProjectManager ainda pode nao ter projeto nenhum.
+            AdoptProjectScenes();
+
             if (ProjectManager::Get().HasStartScene())
             {
                 // &m_Environment estava FALTANDO aqui (o caminho da cena
@@ -1792,6 +1916,26 @@ namespace axe
             if (ImGui::IsKeyPressed(ImGuiKey_R)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::ROTATE;
             if (ImGui::IsKeyPressed(ImGuiKey_S)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::SCALE;
             if (ImGui::IsKeyPressed(ImGuiKey_T)) m_ViewportRenderer->m_GuizmoOperation = ImGuizmo::TRANSLATE;
+
+            // ── VIEWPORT_DELETE_V1 ───────────────────────────────────────────
+            //
+            //  Delete apaga a selecao tambem daqui, e nao so pelo Hierarchy.
+            //
+            //  Chama o MESMO metodo da HierarchyWindow de proposito: e ele que
+            //  guarda o snapshot para o undo, desce nos filhos e religa o pai
+            //  ao desfazer. Uma segunda implementacao nasceria correta e
+            //  divergiria no primeiro conserto.
+            //
+            //  Dentro do `IsFocused` do viewport porque um Delete solto
+            //  apagaria a entidade enquanto o usuario digita num campo de
+            //  texto de outro painel. O ImGui ja nao entrega a tecla a quem
+            //  nao tem foco, e esta guarda deixa isso explicito no codigo.
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete) && m_Context.HasSelection())
+            {
+                if (m_EditorUI)
+                    if (auto* hierarchy = m_EditorUI->GetHierarchy())
+                        hierarchy->DeleteSelected();
+            }
         }
 
         // `OverlayConsumedClick`: um desenho de ferramenta externa (as formas
@@ -1815,12 +1959,14 @@ namespace axe
             if (localX >= 0 && localY >= 0 &&
                 localX < viewport->GetWidth() && localY < viewport->GetHeight())
             {
+                // PICK_ID_V1 — ver a nota no viewport_renderer: o id gravado
+                // e (entidade + 1), para zero poder significar "vazio".
                 std::uint32_t pickID = m_ViewportRenderer->PickObject(localX, localY);
                 if (pickID == 0)
                     m_Context.ClearSelection();
                 else
                 {
-                    entt::entity picked = (entt::entity)pickID;
+                    entt::entity picked = (entt::entity)(pickID - 1u);
                     if (m_Scene->GetRegistry().valid(picked))
                         m_Context.Select(picked);
                     else
@@ -1994,7 +2140,7 @@ namespace axe
             asset->GetClips().size());
     }
 
-    void EditorLayer::EnsureEnvironmentComponent()
+    void EditorLayer::EnsureEnvironmentComponent(bool createIfMissing)
     {
         if (!m_Scene) return;
         auto& registry = m_Scene->GetRegistry();
@@ -2021,6 +2167,10 @@ namespace axe
             }
         }
 
+        // ENV_RESPECT_DELETE_V1 — daqui para baixo e CRIACAO, e ela so vale
+        // onde a cena esta nascendo. Ver a nota na declaracao.
+        if (!createIfMissing) return;
+
         auto envEntity = m_Scene->CreateEntity("Enviroment");
         auto& ec = registry.emplace<EnvironmentComponent>(envEntity);
         ec.HDRIPath = m_Environment.SkyboxPath.empty() ? "resources/quarry_04_puresky_2k.hdr" : m_Environment.SkyboxPath;
@@ -2043,6 +2193,9 @@ namespace axe
         auto& project = ProjectManager::Get().GetCurrent();
         project.StartScene = "Assets/Scenes/main.axescene";
         ProjectManager::Get().SaveProject();
+
+        RegisterSceneAsset(scenePath);   // SCENE_ASSET_V1
+
         AXE_EDITOR_INFO("Cena salva e definida como padrão.");
     }
 
@@ -2179,7 +2332,21 @@ namespace axe
                 ? previouslySelected
                 : entt::null;
 
-            EnsureEnvironmentComponent();
+            // ── ENV_RESPECT_DELETE_V1 ────────────────────────────────────
+            //
+            //  Aqui havia um EnsureEnvironmentComponent(), e ele DESFAZIA o
+            //  trabalho do snapshot: apagar a entidade "Enviroment", dar Play e
+            //  dar Stop a trazia de volta. O snapshot estava certo — ele clona
+            //  o registry fielmente, sem a entidade. Quem ressuscitava era esta
+            //  linha, rodando logo depois do Restore.
+            //
+            //  Ensure so faz sentido onde a cena esta NASCENDO (cena nova,
+            //  bootstrap do projeto). Voltar do Play e restaurar o que o autor
+            //  tinha, e o que ele tinha era uma cena sem HDRI.
+            //
+            //  Continua sendo chamado, mas sem criar: o reparo de uma entidade
+            //  "Enviroment" que perdeu o componente ainda vale.
+            EnsureEnvironmentComponent(/*createIfMissing*/ false);
             m_CommandHistory.Clear();
             if (m_EditorUI) m_EditorUI->GetHierarchy()->SetContext(&m_Context);
         }

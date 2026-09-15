@@ -31,6 +31,8 @@ namespace axe
 	SceneSerializer::ParticleMaterialRecompileCallback SceneSerializer::s_ParticleMaterialRecompileCallback = nullptr;
 	// POSTPROCESS_DOMAIN_V1
 	SceneSerializer::PostProcessMaterialRecompileCallback SceneSerializer::s_PostProcessMaterialRecompileCallback = nullptr;
+	// VOLUME_DOMAIN_V1
+	SceneSerializer::VolumeMaterialRecompileCallback      SceneSerializer::s_VolumeMaterialRecompileCallback = nullptr;
 
 	// ══════════════════════════════════════════════════════════════════════
 	//  Serialização CANÔNICA de uma entity — fonte ÚNICA da verdade.
@@ -315,6 +317,8 @@ namespace axe
 				components["PostProcess"]["fog_end"] = fog.FogEnd;
 				components["PostProcess"]["fog_steps"] = fog.Steps;
 				components["PostProcess"]["fog_jitter"] = fog.StepJitter;
+				// VOLUME_DOMAIN_V1
+				components["PostProcess"]["fog_material"] = fog.MaterialUUID;
 				// TAA
 				auto& taa = c->Settings.TAA;
 				components["PostProcess"]["taa_enabled"] = taa.Enabled;
@@ -1081,6 +1085,9 @@ namespace axe
 				fog.FogEnd = t.value("fog_end", 80.0f);
 				fog.Steps = t.value("fog_steps", 12);
 				fog.StepJitter = t.value("fog_jitter", 0.5f);
+				// VOLUME_DOMAIN_V1 — ausente em cena antiga = sem material =
+				// fog embutido, que e exatamente o que a cena antiga tinha.
+				fog.MaterialUUID = t.value("fog_material", std::string());
 				if (t.contains("fog_color") && t["fog_color"].size() == 3)
 					fog.FogColor = { t["fog_color"][0], t["fog_color"][1], t["fog_color"][2] };
 				// TAA
@@ -1648,6 +1655,31 @@ namespace axe
 			const auto& e = *it;
 			uint32_t oldID = e["id"];
 			const auto& components = e["components"];
+
+			// ── GHOST_ENTITY_V1 — cenas ja contaminadas se curam sozinhas ────
+			//
+			// Uma entrada sem componente NENHUM (`"components": null`) nao
+			// descreve entidade alguma: nem nome, nem transform, nem pasta.
+			// Recria-la produzia a linha "Entity" vazia da Hierarchy — e como
+			// ela era recriada a cada load e regravada a cada save, apagar a
+			// mao nunca resolvia.
+			//
+			// A causa esta consertada no scene_snapshot.cpp (ver a nota longa
+			// la). Este pulo e para os arquivos que ja foram gravados: sem ele
+			// o usuario teria de limpar a cena a mao, uma linha por vez, e as
+			// suas cenas antigas continuariam sujas para sempre.
+			//
+			// O pulo tambem tira o id do `idMap`, o que e o certo: um
+			// Relationship que apontasse para um fantasma simplesmente nao
+			// encontra o pai e a entidade fica na raiz — que e onde ela ja
+			// estaria de qualquer forma.
+			if (components.is_null() || components.empty())
+			{
+				AXE_CORE_WARN("SceneSerializer [GHOST_ENTITY_V1]: entidade {} sem componente "
+					"nenhum no arquivo — ignorada. Salve a cena para limpar o registro.",
+					oldID);
+				continue;
+			}
 
 			entt::entity entity;
 			if (components.contains("Folder"))

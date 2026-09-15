@@ -399,13 +399,47 @@ namespace axe
 				{
 					if (registry.any_of<LightComponent>(entity)) continue;
 					auto& tc = registry.get<TransformComponent>(entity);
-					glm::mat4 model = tc.Data.GetMatrix();
+
+					// ── PICK_ID_V1 — o +1 nao e estilo, e correcao ───────────
+					//
+					// O buffer de picking e limpo em ZERO, e o editor le zero
+					// como "clicou no vazio". Mas `(uint32_t)entt::entity` da
+					// entidade de indice 0 e versao 0 vale EXATAMENTE zero —
+					// entao a primeira entidade da cena era IMPOSSIVEL de
+					// selecionar no viewport.
+					//
+					// E o sintoma tinha uma segunda metade que explica o "as
+					// vezes": assim que essa entidade era destruida e o handle
+					// reciclado, a versao subia, o id deixava de ser zero e ela
+					// passava a ser selecionavel. Clicar e nao selecionar, e
+					// depois de um tempo selecionar, era isto.
+					//
+					// Deslocar por 1 separa os dois significados de vez. O
+					// editor desfaz o +1 ao ler (ver editor_layer).
+					std::uint32_t pickID = (std::uint32_t)entity + 1u;
+
 					auto* mc = registry.try_get<MeshComponent>(entity);
-					std::uint32_t pickID = (std::uint32_t)entity;
 					if (mc && mc->Data)
-						m_PickingRenderer.DrawMesh(*mc->Data, model, pickID);
-					else
-						m_PickingRenderer.DrawCube(model, pickID);
+					{
+						m_PickingRenderer.DrawMesh(*mc->Data, tc.Data.GetMatrix(), pickID);
+						continue;
+					}
+
+					// ── PICK_PROXY_V1 — entidade SEM malha ───────────────────
+					//
+					// Antes o proxy usava a matriz completa, ESCALA INCLUSA. Um
+					// Post Process Volume com escala 19x8x1 virava uma laje
+					// invisivel de 19 metros: qualquer clique dentro dela
+					// selecionava o volume em vez do que estava atras. E como
+					// esses volumes costumam envolver a cena, o efeito pratico
+					// era "clico no objeto e nao seleciona".
+					//
+					// Cubo pequeno e FIXO na posicao da entidade: continua
+					// clicavel, deixa de ser parede. Sem rotacao de proposito —
+					// e um alvo de clique, nao geometria.
+					glm::mat4 proxy = glm::translate(glm::mat4(1.0f), tc.Data.Position)
+						* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+					m_PickingRenderer.DrawCube(proxy, pickID);
 				}
 				m_PickingRenderer.End();
 			}

@@ -2233,6 +2233,53 @@ namespace axe
 			ImGui::SliderInt("Ray Steps", &pp.Settings.Fog.Steps, 4, 32);
 			ImGui::DragFloat("Jitter", &pp.Settings.Fog.StepJitter, 0.01f, 0.0f, 1.0f);
 			ImGui::TextDisabled("Ponto de luz ilumina o volume (scatter).");
+
+			// ── VOLUME_DOMAIN_V1 ──────────────────────────────────────────
+			//
+			// DENTRO do `if (Enabled)` de proposito: o material nao liga o
+			// fog, ele descreve o meio que o fog ja ligado atravessa. Um
+			// picker visivel com o fog desligado prometeria o contrario.
+			ImGui::Spacing();
+			AssetPicker::Draw("Volume Material", pp.Settings.Fog.MaterialUUID,
+				{ AssetType::Material },
+				[&](const AssetRecord& record)
+				{
+					pp.Settings.Fog.MaterialUUID = record.UUID;
+				});
+
+			if (pp.Settings.Fog.MaterialUUID.empty())
+			{
+				ImGui::TextDisabled("Sem material: fog embutido (altura + densidade).");
+			}
+			else
+			{
+				// ── VOLUME_SUN_V2b ────────────────────────────────────────
+				//
+				// Este texto foi REESCRITO porque o anterior estava incompleto
+				// e custou ajuste perdido: ele avisava sobre Cor do Fog e
+				// Densidade, mas nao sobre Height Base e Height Falloff — que
+				// tambem morrem com o Opacity ligado, porque so existem dentro
+				// da queda por altura, que e o FALLBACK daquele pino. Com ele
+				// ligado o driver remove a funcao inteira e as duas uniforms
+				// junto. Sao QUATRO campos, nao dois.
+				ImGui::TextDisabled("O material precisa ter Domain = Volume.");
+				ImGui::Spacing();
+				ImGui::TextDisabled("Pino LIGADO no grafo -> o campo aqui em cima");
+				ImGui::TextDisabled("para de ter efeito:");
+				ImGui::BulletText("Base Color -> apaga Cor do Fog");
+				ImGui::BulletText("Opacity    -> apaga Densidade,");
+				ImGui::BulletText("              Height Base e Height Falloff");
+				ImGui::BulletText("Emissive   -> nao apaga nada");
+				ImGui::Spacing();
+				ImGui::TextDisabled("Sempre valem: Scatter, Ambient, Fog");
+				ImGui::TextDisabled("Start/End, Ray Steps e Jitter.");
+				ImGui::Spacing();
+				ImGui::TextDisabled("Para os quatro voltarem a funcionar, use o");
+				ImGui::TextDisabled("node 'Fog Settings' no grafo e multiplique");
+				ImGui::TextDisabled("por eles - ai quem manda continua sendo voce.");
+				if (ImGui::SmallButton("Remover material do volume"))
+					pp.Settings.Fog.MaterialUUID.clear();
+			}
 		}
 	}
 

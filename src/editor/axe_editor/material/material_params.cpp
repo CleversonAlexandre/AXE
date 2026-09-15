@@ -466,7 +466,8 @@ namespace axe
         static const char* s_DomainNames[] = {
             "Surface", "Light Function", "Particle", "Deferred Decal", "Volume", "Post Process", "User Interface" };
         // POSTPROCESS_DOMAIN_V1 — "Post Process" (indice 5) passou a ser REAL.
-        static const bool s_DomainAvailable[] = { true, true, true, false, false, true, false };
+        // VOLUME_DOMAIN_V1    — "Volume" (indice 4) passou a ser REAL.
+        static const bool s_DomainAvailable[] = { true, true, true, false, true, true, false };
         static_assert(IM_ARRAYSIZE(s_DomainNames) == IM_ARRAYSIZE(s_DomainAvailable),
             "Material Domain: nomes e disponibilidade fora de sincronia");
         int domain = (int)m_Graph->Domain;
@@ -541,12 +542,97 @@ namespace axe
             ImGui::TextDisabled("Recompile para aplicar (Compile/Save).");
         }
 
+        // ── WPO_V1 — recalculo da normal a partir do deslocamento ────────────
+        //
+        // So no dominio Surface: os outros nao tem estagio de vertice com
+        // geometria real. Aparece SEMPRE que o dominio e Surface, e nao so
+        // quando o pin esta ligado — o painel de parametros nao sabe o estado
+        // das ligacoes, e um controle que some sem explicacao e pior que um
+        // controle sem efeito.
+        if (m_Graph->Domain == MaterialDomain::Surface)
+        {
+            ImGui::Spacing();
+            ImGui::Checkbox("Recalcular Normal (WPO)", &m_Graph->RecomputeNormalFromWPO);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "So tem efeito com o pin 'World Position Offset' ligado.\n\n"
+                    "Deslocar o vertice move a superficie mas NAO muda a normal:\n"
+                    "a onda se mexe e continua recebendo luz como um plano.\n"
+                    "Ligado, o vertex shader avalia o deslocamento em dois pontos\n"
+                    "vizinhos e tira a normal da superficie deformada.\n\n"
+                    "Custa 3 avaliacoes do subgrafo por vertice em vez de 1.\n\n"
+                    "IMPORTANTE: a inclinacao e medida deslocando a POSICAO DE\n"
+                    "MUNDO. Uma onda montada a partir de UV Coordinate da o mesmo\n"
+                    "valor nos tres pontos e a normal sai plana — use o node\n"
+                    "'World Position'. O Compile avisa no log quando isso acontece.\n\n"
+                    "Deixe DESLIGADO em vento de folhagem: ali o deslocamento e\n"
+                    "quase uma translacao, e a normal recalculada sairia errada.");
+
+            if (m_Graph->RecomputeNormalFromWPO)
+            {
+                ImGui::SetNextItemWidth(-1);
+                ImGui::DragFloat("##wpodelta", &m_Graph->WPONormalDelta,
+                    0.005f, 0.001f, 2.0f, "Delta: %.3f m");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Distancia, em unidades de mundo, entre os pontos de amostra.\n\n"
+                        "Pequeno demais vira ruido de precisao; grande demais\n"
+                        "atravessa a crista e achata a onda.\n"
+                        "0.05 serve para agua em escala de metros;\n"
+                        "onda de 20 cm pede algo perto de 0.01.");
+            }
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Recompile para aplicar (Compile/Save).");
+        }
+
         if (m_Graph->Domain == MaterialDomain::LightFunction)
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.2f, 1.0f),
                 "Light Function: só o pin Emissive do Material Output\n"
                 "é usado — os outros pins ficam acinzentados no grafo.");
+        }
+
+        // ── VOLUME_DOMAIN_V1 ─────────────────────────────────────────────────
+        //
+        // O texto e mais longo que o dos outros dominios de proposito: este e o
+        // unico em que o corpo do grafo NAO e avaliado uma vez por pixel, e
+        // quem nao souber disso vai montar contas caras sem perceber.
+        if (m_Graph->Domain == MaterialDomain::Volume)
+        {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+                "Volume: o grafo descreve o MEIO, e nao uma superfície.");
+            ImGui::Spacing();
+            ImGui::BulletText("Base Color -> cor que a névoa espalha");
+            ImGui::BulletText("Opacity    -> densidade por metro");
+            ImGui::BulletText("Emissive   -> luz que o próprio meio emite");
+            ImGui::Spacing();
+            ImGui::TextDisabled(
+                "World Position é a posição da AMOSTRA no ar,\n"
+                "avaliada uma vez por passo do raio (Ray Steps).\n"
+                "Pixel Depth é a distância dessa amostra à câmera.\n\n"
+                "Pino solto = o valor do Inspector (Cor do Fog,\n"
+                "Densidade + queda por altura). Grafo vazio dá\n"
+                "exatamente o fog de sempre.\n\n"
+                "O contrário também vale: pino LIGADO apaga o\n"
+                "campo do Inspector. Base Color apaga Cor do Fog;\n"
+                "Opacity apaga Densidade, Height Base e Height\n"
+                "Falloff (os três só vivem no fallback dele).\n"
+                "Use o node 'Fog Settings' e multiplique por ele\n"
+                "para os quatro voltarem a ter efeito.\n\n"
+                "Sem mapa de altura aqui: Scene Height/Distance\n"
+                "devolvem 'nada aqui'. É o passe de superfície que\n"
+                "os liga, e ele já terminou quando o fog roda.\n\n"
+                "O raio de luz atravessando a sombra é do passe,\n"
+                "não do grafo — não precisa montar nada para ter.\n"
+                "O node 'Sun Light' devolve quanto do sol chega a\n"
+                "ESTE ponto do ar (0 sombra, 1 sol), para você usar\n"
+                "no que quiser: névoa mais densa na sombra, poeira\n"
+                "que só brilha dentro do feixe, cor mais fria fora.\n\n"
+                "Precisa de 'Fog Ativo' marcado no Post Process,\n"
+                "e do material escolhido em Volume Material.");
         }
 
         if (m_Graph->Domain == MaterialDomain::Particle)
@@ -560,24 +646,60 @@ namespace axe
         ImGui::Spacing();
         ui::SectionHeader(ICON_PALETTE, "Surface", ui::Accent::Neutral);
 
+        // ═══════════════════════════════════════════════════════════════════
+        //  GRAPH_OWNS_SURFACE_V1 — este bloco inteiro nao tem fio ligado
+        //
+        //  ── O SINTOMA QUE O CLEVER RELATOU ──────────────────────────────
+        //
+        //  Desmarcar "PBR", compilar, e ver a caixa voltar sozinha para
+        //  marcada — sem aviso e sem jeito de manter desmarcada.
+        //
+        //  ── E O SINTOMA ESTAVA CERTO ────────────────────────────────────
+        //
+        //  `UsePBR = true` e forcado em DOIS pontos (CompileAndApply e ao
+        //  abrir o editor), e forcar esta CORRETO: o shader que o
+        //  MaterialCompiler gera e sempre o caminho PBR. O Blinn-Phong mora
+        //  no shader FIXO do MeshRenderer, que um material de grafo nunca usa.
+        //
+        //  O defeito nao era o valor voltar — era a caixa existir. E com ela
+        //  os seis campos abaixo: Color, Specular, Shininess, Metallic,
+        //  Roughness e AO viram uniforms (u_Color, u_Metallic, ...) que o
+        //  shader gerado NAO DECLARA. Mexer neles nunca mudou um pixel de um
+        //  material de grafo.
+        //
+        //  Mesma familia do Shading Model antes do SHADING_MODEL_V1: menu sem
+        //  fio ligado. A correcao ali foi ligar o fio; aqui nao ha fio a
+        //  ligar, porque quem decide estes valores E O GRAFO — sao os pinos
+        //  Base Color, Metallic, Roughness e AO do Material Output.
+        //
+        //  Ficam VISIVEIS e desabilitados, e nao escondidos: sumir sem
+        //  explicacao mandaria o autor procurar onde o controle foi parar.
+        // ═══════════════════════════════════════════════════════════════════
+        ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f),
+            "Quem manda aqui e o grafo.");
+        ImGui::TextWrapped(
+            "Os pinos Base Color, Metallic, Roughness e Ambient Occlusion do "
+            "Material Output substituem estes campos. O shader gerado nem "
+            "declara as uniforms deles.");
+        ImGui::Spacing();
+
+        ImGui::BeginDisabled(true);
         bool usePBR = mat.UsePBR;
-        if (ImGui::Checkbox("PBR", &usePBR))
-            mat.UsePBR = usePBR;
-
+        ImGui::Checkbox("PBR", &usePBR);
         ImGui::Separator();
+        ImGui::DragFloat("Metallic", &mat.Metallic, 0.01f, 0.0f, 1.0f);
+        ImGui::DragFloat("Roughness", &mat.Roughness, 0.01f, 0.0f, 1.0f);
+        ImGui::DragFloat("AO", &mat.AO, 0.01f, 0.0f, 1.0f);
+        ImGui::EndDisabled();
 
-        if (!mat.UsePBR)
-        {
-            ImGui::ColorEdit4("Cor", glm::value_ptr(mat.Color));
-            ImGui::DragFloat("Specular", &mat.SpecularStrength, 0.01f, 0.0f, 1.0f);
-            ImGui::DragFloat("Shininess", &mat.Shininess, 1.0f, 1.0f, 256.0f);
-        }
-        else
-        {
-            ImGui::DragFloat("Metallic", &mat.Metallic, 0.01f, 0.0f, 1.0f);
-            ImGui::DragFloat("Roughness", &mat.Roughness, 0.01f, 0.0f, 1.0f);
-            ImGui::DragFloat("AO", &mat.AO, 0.01f, 0.0f, 1.0f);
-        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(
+                "Desabilitado de proposito.\n\n"
+                "Um material do Material Editor e sempre PBR: o shader gerado\n"
+                "a partir do grafo nao tem o caminho Blinn-Phong, que vive no\n"
+                "shader fixo do MeshRenderer.\n\n"
+                "Estes campos so valem para material SEM grafo, aplicado\n"
+                "direto num mesh pelo Inspector.");
     }
 
     // -------------------------------------------------------------------------

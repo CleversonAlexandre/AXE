@@ -110,9 +110,23 @@ namespace axe
                 // pins (Base Color, Metallic, Roughness, etc.) ficam
                 // acinzentados pra deixar claro que são ignorados, igual a
                 // Unreal faz quando troca o Material Domain.
-                bool dimmedByDomain = (node.Name == "Material Output")
-                    && (m_Graph->Domain == MaterialDomain::LightFunction)
-                    && (pin.Name != "Emissive");
+                //
+                // VOLUME_DOMAIN_V1 — o Volume usa TRES pinos, e nao um:
+                // Base Color (albedo de espalhamento), Emissive (emissao) e
+                // Opacity (densidade). Os outros seis descrevem uma
+                // SUPERFICIE, e um ponto no ar nao tem normal, rugosidade nem
+                // deslocamento de vertice — ficam acinzentados pela mesma
+                // razao que os do Light Function.
+                bool dimmedByDomain = false;
+                if (node.Name == "Material Output")
+                {
+                    if (m_Graph->Domain == MaterialDomain::LightFunction)
+                        dimmedByDomain = (pin.Name != "Emissive");
+                    else if (m_Graph->Domain == MaterialDomain::Volume)
+                        dimmedByDomain = (pin.Name != "Base Color")
+                        && (pin.Name != "Emissive")
+                        && (pin.Name != "Opacity");
+                }
                 if (dimmedByDomain)
                     imcol = ImVec4(0.45f, 0.45f, 0.45f, 1.0f);
 

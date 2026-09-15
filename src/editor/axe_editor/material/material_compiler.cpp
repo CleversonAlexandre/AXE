@@ -104,12 +104,186 @@ namespace axe
                 "}\n\n";
         }
 
+        // ═════════════════════════════════════════════════════════════════════
+        //  FORWARD_SHADOW_V1 — sombra no material TRANSLUCIDO
+        //
+        //  ── POR QUE ISTO NAO EXISTIA ──────────────────────────────────────
+        //
+        //  Uma busca por "shadow" neste arquivo inteiro dava ZERO. O shader
+        //  gerado a partir do grafo nunca teve termo de sombra: o Lo saia da
+        //  Cook-Torrance direto para a soma final. Material OPACO nao sofria
+        //  porque a sombra dele vem do lighting pass deferred — so o forward,
+        //  ou seja exatamente a agua, ficava sem.
+        //
+        //  ── PCF, E NAO O PCSS DO LIGHTING PASS ────────────────────────────
+        //
+        //  O deferred faz busca de bloqueador com disco de Poisson e penumbra
+        //  que cresce com a distancia. Copiar aquilo para ca exigiria trazer
+        //  junto u_ShadowMapRaw, o raio angular do sol, o teto de penumbra e o
+        //  DepthRange por cascata — quatro uniforms novas no MeshRenderer para
+        //  um ganho que nao se ve numa lamina d'agua quase plana. Um PCF 3x3
+        //  entrega a sombra, que era o que faltava.
+        //
+        //  ── AMOSTRAGEM CRUA, SEM SAMPLER OBJECT ───────────────────────────
+        //
+        //  `sampler2DArray` e nao `sampler2DArrayShadow`: a comparacao por
+        //  hardware exige um sampler object com GL_TEXTURE_COMPARE_MODE, e
+        //  amarrar sampler object pediria uma primitiva nova no RendererAPI.
+        //  A textura das cascatas ja tem parametros proprios completos
+        //  (NEAREST, CLAMP_TO_BORDER, sem comparacao), entao a unidade 13 —
+        //  que nenhum passe toca — devolve profundidade crua e a comparacao
+        //  se faz aqui, a mao.
+        //
+        //  ── O BIAS E POR DESLOCAMENTO DE NORMAL ───────────────────────────
+        //
+        //  Empurrar a posicao ao longo da normal por ~1.5 texel da cascata,
+        //  em vez de subtrair da profundidade. Bias de profundidade em
+        //  superficie quase horizontal — e agua e exatamente isso — precisa
+        //  ser grande, e grande demais descola a sombra do objeto que a
+        //  projeta. O texel em metros ja vem do CascadeData.
+        // ═════════════════════════════════════════════════════════════════════
+        std::string ForwardShadowGLSL()
+        {
+            return
+                "// FORWARD_SHADOW_V1\n"
+                "uniform sampler2DArray u_ForwardShadowArray;\n"
+                "uniform mat4  u_ForwardShadowView;\n"
+                "uniform mat4  u_ForwardCascadeMatrix[4];\n"
+                "uniform float u_ForwardCascadeSplit[4];\n"
+                "uniform float u_ForwardCascadeTexel[4];\n"
+                "uniform int   u_ForwardCascadeCount;\n"
+                "float axeForwardShadow(vec3 worldPos, vec3 N, vec3 L) {\n"
+                "    if (u_ForwardCascadeCount <= 0) return 0.0;\n"
+                // Profundidade em ESPACO DE VISTA, que e a unidade em que os
+                // splits foram calculados. Distancia radial ate a camera daria
+                // a cascata errada nas bordas da tela, justo onde a emenda
+                // aparece.
+                "    float depth = abs((u_ForwardShadowView * vec4(worldPos, 1.0)).z);\n"
+                "    int cascade = u_ForwardCascadeCount - 1;\n"
+                "    for (int i = 0; i < 4; ++i) {\n"
+                "        if (i >= u_ForwardCascadeCount) break;\n"
+                "        if (depth < u_ForwardCascadeSplit[i]) { cascade = i; break; }\n"
+                "    }\n"
+                "    vec3 biased = worldPos + N * (u_ForwardCascadeTexel[cascade] * 1.5);\n"
+                "    vec4 lp = u_ForwardCascadeMatrix[cascade] * vec4(biased, 1.0);\n"
+                "    vec3 proj = (lp.xyz / lp.w) * 0.5 + 0.5;\n"
+                // Fora do tronco da cascata nao ha informacao: devolver 0
+                // (iluminado) e o unico valor que nao inventa sombra onde o
+                // mapa acaba.
+                "    if (proj.z > 1.0) return 0.0;\n"
+                "    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) return 0.0;\n"
+                "    float bias = max(0.0015 * (1.0 - dot(N, L)), 0.0004);\n"
+                "    vec2 texel = 1.0 / vec2(textureSize(u_ForwardShadowArray, 0).xy);\n"
+                "    float sh = 0.0;\n"
+                "    for (int x = -1; x <= 1; ++x)\n"
+                "    for (int y = -1; y <= 1; ++y) {\n"
+                "        float d = texture(u_ForwardShadowArray,\n"
+                "                          vec3(proj.xy + vec2(x, y) * texel, float(cascade))).r;\n"
+                "        sh += (proj.z - bias > d) ? 1.0 : 0.0;\n"
+                "    }\n"
+                "    return sh / 9.0;\n"
+                "}\n\n";
+        }
+
         enum class SceneHelperMode
         {
             Stub,          // dominio sem acesso a tela: devolve neutro
             Surface,       // forward de superficie: le o G-Buffer ja resolvido
             PostProcess,   // quad de tela cheia: v_TexCoord JA e a UV da tela
+
+            // WPO_V1 — estagio de VERTICE do dominio Surface.
+            //
+            // Nao ha tela aqui (nao existe fragmento, nao existe gl_FragCoord),
+            // mas o MAPA DE ALTURA continua valendo: ele e o alvo de um passe
+            // que ja terminou, e amostrar textura no vertex shader e legal
+            // desde o GL 3.0. E essa assimetria que torna possivel a onda que
+            // ACHATA perto da margem — a informacao de "quao longe estou da
+            // praia" existe por vertice, antes de qualquer pixel.
+            Vertex,
+
+            // VOLUME_DOMAIN_V1 — dentro do ray march do fog.
+            //
+            // A tela existe (e um quad de tela cheia, como o Post Process),
+            // mas o G-Buffer NAO esta ligado neste passe: o fog recebe a
+            // textura de PROFUNDIDADE (`u_Depth`) e a inversa da view-proj,
+            // porque ele ja precisa das duas para reconstruir o fim do raio.
+            //
+            // Entao os nodes de tela sao servidos por RECONSTRUCAO, e nao por
+            // leitura do attachment de posicao. O valor e o mesmo; a fonte e
+            // outra. Isso e o que permite `Scene Depth` funcionar num material
+            // de fog sem uma unica uniform nova no passe.
+            Volume,
         };
+
+        // ── SCENE_HEIGHT_V1 — o mapa de topo, compartilhado ──────────────────
+        //
+        // O MESMO texto para o fragmento de superficie e para o vertice. Estava
+        // escrito duas vezes na primeira versao desta funcao e a segunda copia
+        // divergiria no primeiro campo novo do seed map — o tipo de divergencia
+        // que so aparece como "funciona no fragmento e nao no vertice".
+        //
+        // As duas unicas fontes de dado do grafo que NAO dependem de onde a
+        // camera esta. Todo o resto (Scene Depth, Scene Normal, Scene World
+        // Position) le o G-Buffer, que so conhece o que a camera enxerga.
+        //
+        //  axeSceneHeight   — o Y de mundo do que esta EMBAIXO deste ponto.
+        //  axeSceneDistance — a distancia HORIZONTAL, em metros, ate a
+        //                     geometria mais proxima: a distancia ate a margem,
+        //                     que existe mesmo do lado que a camera nao ve.
+        //  axeSceneNearestBase/Top — a base e o topo dessa geometria. Com as
+        //                     duas o grafo pergunta se a coluna ATRAVESSA a
+        //                     altura da lamina, que e o que separa uma pedra
+        //                     afundada de um cubo pairando.
+        //
+        // Fora do quadrado coberto pelo mapa os quatro devolvem "nada aqui" em
+        // vez de repetir a borda: repetir esticaria a espuma em faixas ate o
+        // horizonte. Os sentinelas caem cada um no lado SEGURO do seu teste
+        // (-1e9 para altura, 1e6 para distancia, 1e9 para a base).
+        std::string SceneHeightGLSL()
+        {
+            return
+                "uniform sampler2D u_SceneHeightMap;\n"
+                "uniform sampler2D u_SceneSeedMap;\n"
+                "uniform mat4      u_SceneHeightMatrix;\n"
+                "uniform int       u_HasSceneHeight;\n"
+                "vec2 axeSceneHeightUV(vec3 worldPos) {\n"
+                "    vec4 p = u_SceneHeightMatrix * vec4(worldPos, 1.0);\n"
+                "    return (p.xy / p.w) * 0.5 + 0.5;\n"
+                "}\n"
+                "bool axeSceneHeightInside(vec2 uv) {\n"
+                "    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;\n"
+                "}\n"
+                "float axeSceneHeight(vec3 worldPos) {\n"
+                "    if (u_HasSceneHeight == 0) return -1e9;\n"
+                "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
+                "    return texture(u_SceneHeightMap, uv).r;\n"
+                "}\n"
+                "float axeSceneDistance(vec3 worldPos) {\n"
+                "    if (u_HasSceneHeight == 0) return 1e6;\n"
+                "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                "    if (!axeSceneHeightInside(uv)) return 1e6;\n"
+                "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                "    if (seed.x > 1e8) return 1e6;\n"
+                "    return length(worldPos.xz - seed.xy);\n"
+                "}\n"
+                "float axeSceneNearestBase(vec3 worldPos) {\n"
+                "    if (u_HasSceneHeight == 0) return 1e9;\n"
+                "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                "    if (!axeSceneHeightInside(uv)) return 1e9;\n"
+                "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                "    if (seed.x > 1e8) return 1e9;\n"
+                "    return seed.z;\n"
+                "}\n"
+                "float axeSceneNearestTop(vec3 worldPos) {\n"
+                "    if (u_HasSceneHeight == 0) return -1e9;\n"
+                "    vec2 uv = axeSceneHeightUV(worldPos);\n"
+                "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
+                "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                "    if (seed.x > 1e8) return -1e9;\n"
+                "    return seed.w;\n"
+                "}\n\n";
+        }
 
         std::string SceneHelpersGLSL(SceneHelperMode mode)
         {
@@ -144,7 +318,11 @@ namespace axe
                     "float axeSceneHeight(vec3 worldPos) { return -1e9; }\n"
                     "float axeSceneDistance(vec3 worldPos) { return 1e6; }\n"
                     "float axeSceneNearestBase(vec3 worldPos) { return 1e9; }\n"
-                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n\n";
+                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n"
+                    // VOLUME_SUN_V2 — so o dominio Volume amostra a cascata por ponto
+                    // do AR. 1.0 = totalmente iluminado: o valor que nao inventa
+                    // sombra onde nao ha informacao.
+                    "float axeSunLight(vec3 worldPos) { return 1.0; }\n\n";
 
             case SceneHelperMode::Surface:
                 // u_CameraPosition ja vem do cabecalho do Surface; os outros
@@ -224,99 +402,209 @@ namespace axe
                     "    vec3 p = texture(u_ScenePosition, uv).rgb;\n"
                     "    return dot(p, p) < 1e-8 ? 1.0 : 0.0;\n"
                     "}\n"
-                    // ── SCENE_HEIGHT_V1 — o mapa de topo ──────────────────
-                    //
-                    //  Estas duas sao as unicas fontes de dado do grafo que NAO
-                    //  dependem de onde a camera esta. Todo o resto — Scene
-                    //  Depth, Scene Normal, Scene World Position — le o
-                    //  G-Buffer, que so conhece o que a camera enxerga, e por
-                    //  isso qualquer distancia medida com eles muda quando a
-                    //  camera gira.
-                    //
-                    //  Aqui a fonte e uma render ortografica de cima. A mesma
-                    //  de qualquer angulo. Ver scene_height_pass.hpp.
-                    //
-                    //  axeSceneHeight  — o Y de mundo do que esta EMBAIXO deste
-                    //                    ponto. Da coluna d'agua de verdade.
-                    //  axeSceneDistance— a distancia HORIZONTAL, em metros, ate
-                    //                    a geometria mais proxima. E a
-                    //                    distancia ate a margem, e ela existe
-                    //                    mesmo do lado que a camera nao ve.
-                    //
-                    //  Fora do quadrado coberto pelo mapa os dois devolvem o
-                    //  valor de "nada aqui", em vez de repetir a borda: repetir
-                    //  faria a espuma se esticar em faixas ate o horizonte.
-                    "uniform sampler2D u_SceneHeightMap;\n"
-                    "uniform sampler2D u_SceneSeedMap;\n"
-                    "uniform mat4      u_SceneHeightMatrix;\n"
-                    "uniform int       u_HasSceneHeight;\n"
-                    "vec2 axeSceneHeightUV(vec3 worldPos) {\n"
-                    "    vec4 p = u_SceneHeightMatrix * vec4(worldPos, 1.0);\n"
-                    "    return (p.xy / p.w) * 0.5 + 0.5;\n"
+                    + SceneHeightGLSL()
+                    // VOLUME_SUN_V2 — a sombra do forward existe aqui
+                    // (axeForwardShadow), mas ela NAO e emitida no shader do
+                    // G-Buffer, e este mesmo bloco serve os dois. Definir
+                    // axeSunLight em cima dela quebraria o caminho opaco.
+                    +"float axeSunLight(vec3 worldPos) { return 1.0; }\n\n";
+
+            case SceneHelperMode::Volume:
+                // ── VOLUME_DOMAIN_V1 ─────────────────────────────────────────
+                //
+                //  `axeVolumeReconstruct` e `u_Depth`/`u_InvViewProj` ja estao
+                //  declarados no cabecalho deste dominio — o passe de fog usa
+                //  os dois para achar o fim do raio. Redeclarar seria erro de
+                //  compilacao em GLSL, e por isso o bloco so define as funcoes.
+                //
+                //  A UV DE TELA e a do RAIO, nao a do ponto amostrado: um passo
+                //  no meio do volume nao tem pixel proprio. Por isso
+                //  `axeScreenUV()` devolve o parametro `v_TexCoord` da funcao
+                //  do meio — o mesmo truque de nomear parametro com nome de
+                //  varying que o WPO usa no vertice.
+                //
+                //  O MAPA DE ALTURA fica em "nada aqui": ele e ligado no passe
+                //  de superficie, que ja terminou quando o fog roda, e trazer
+                //  as quatro uniforms dele para ca mudaria a assinatura do
+                //  Execute. Fog que se deita sobre o terreno e a V2 — dito no
+                //  painel de parametros, para ninguem montar um grafo em cima
+                //  de um valor que sempre devolve -1e9.
+                return
+                    "// VOLUME_DOMAIN_V1 — tela por reconstrucao de profundidade\n"
+                    "vec2  axeScreenUV()    { return v_TexCoord; }\n"
+                    "vec2  axeScreenTexel() { return 1.0 / max(u_ScreenSize, vec2(1.0)); }\n"
+                    "vec3  axeSceneWorldPos(vec2 uv) {\n"
+                    "    float d = texture(u_Depth, uv).r;\n"
+                    "    if (d >= 0.9999) return vec3(0.0);\n"
+                    "    return axeVolumeReconstruct(uv, d);\n"
                     "}\n"
-                    "bool axeSceneHeightInside(vec2 uv) {\n"
-                    "    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;\n"
+                    // Mesma convencao do Surface: "nada atras" e profundidade
+                    // INFINITA, e nao a distancia ate a origem do mundo. Foi o
+                    // defeito que cobria o mar aberto de espuma; repeti-lo aqui
+                    // encheria o ceu de fog denso.
+                    "float axeSceneDepth(vec2 uv) {\n"
+                    "    float d = texture(u_Depth, uv).r;\n"
+                    "    if (d >= 0.9999) return 1e6;\n"
+                    "    return length(axeVolumeReconstruct(uv, d) - u_CameraPos);\n"
                     "}\n"
-                    "float axeSceneHeight(vec3 worldPos) {\n"
-                    "    if (u_HasSceneHeight == 0) return -1e9;\n"
-                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
-                    "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
-                    "    return texture(u_SceneHeightMap, uv).r;\n"
+                    "float axeSceneIsBackground(vec2 uv) {\n"
+                    "    return texture(u_Depth, uv).r >= 0.9999 ? 1.0 : 0.0;\n"
                     "}\n"
-                    "float axeSceneDistance(vec3 worldPos) {\n"
-                    "    if (u_HasSceneHeight == 0) return 1e6;\n"
-                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
-                    "    if (!axeSceneHeightInside(uv)) return 1e6;\n"
-                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
-                    "    if (seed.x > 1e8) return 1e6;\n"
-                    "    return length(worldPos.xz - seed.xy);\n"
+                    "float axeSceneHeight(vec3 worldPos) { return -1e9; }\n"
+                    "float axeSceneDistance(vec3 worldPos) { return 1e6; }\n"
+                    "float axeSceneNearestBase(vec3 worldPos) { return 1e9; }\n"
+                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n\n"
+
+                    // ── VOLUME_SUN_V2 — quanto do sol chega a ESTE ponto do ar ──
+                    //
+                    //  O UNICO dominio em que esta pergunta tem resposta. Devolve
+                    //  1.0 no sol e 0.0 na sombra, e e ela que desenha o raio de
+                    //  luz: o que separa a coluna clara da escura nao e a nevoa, e
+                    //  o mapa de sombra amostrado ao longo do raio.
+                    //
+                    //  Corpo IDENTICO ao SunLightFactor do fog embutido. Nao e
+                    //  duplicacao por descuido: o embutido vive num raw string do
+                    //  backend GL e este texto e gerado pelo editor — nao ha como
+                    //  um incluir o outro sem o editor passar a depender do
+                    //  backend, que e a fronteira que esta engine nao cruza. O que
+                    //  os mantem juntos e o teste de paridade, que compara os dois
+                    //  ray marches linha a linha.
+                    //
+                    //  UMA amostra por passo, e nao o PCF 3x3 do forward: sao 12 a
+                    //  32 passos por pixel, cada raio com jitter proprio, entao a
+                    //  media ja acontece dentro da integral. Sem deslocamento por
+                    //  normal — um ponto no ar nao tem normal.
+                    //
+                    //  Fora do tronco da cascata devolve 1.0 (iluminado): e o unico
+                    //  valor que nao levanta uma parede de sombra onde o mapa acaba.
+                    "uniform sampler2DArray u_FogShadowArray;\n"
+                    "uniform mat4  u_FogShadowView;\n"
+                    "uniform mat4  u_FogCascadeMatrix[4];\n"
+                    "uniform float u_FogCascadeSplit[4];\n"
+                    "uniform int   u_FogCascadeCount;\n"
+                    "float axeSunLight(vec3 worldPos) {\n"
+                    "    if (u_FogCascadeCount <= 0) return 1.0;\n"
+                    "    float d0 = abs((u_FogShadowView * vec4(worldPos, 1.0)).z);\n"
+                    "    int cascade = u_FogCascadeCount - 1;\n"
+                    "    for (int i = 0; i < 4; ++i) {\n"
+                    "        if (i >= u_FogCascadeCount) break;\n"
+                    "        if (d0 < u_FogCascadeSplit[i]) { cascade = i; break; }\n"
+                    "    }\n"
+                    "    vec4 lp = u_FogCascadeMatrix[cascade] * vec4(worldPos, 1.0);\n"
+                    "    vec3 proj = (lp.xyz / lp.w) * 0.5 + 0.5;\n"
+                    "    if (proj.z > 1.0) return 1.0;\n"
+                    // VOLUME_SUN_V2b — sem degrau na borda. Ver a nota longa no
+                    // SunLightFactor do fog embutido: o `return 1.0` seco fora do
+                    // tronco nao inventava sombra, inventava uma PAREDE DE LUZ, e
+                    // como o tronco e uma caixa ela aparecia como uma RETA
+                    // atravessando o chao. A sombra some por rampa: na borda do
+                    // tronco (em UV) e na cauda da ultima cascata (em metros).
+                    "    vec2  b    = min(proj.xy, vec2(1.0) - proj.xy);\n"
+                    "    float edge = smoothstep(0.0, 0.06, min(b.x, b.y));\n"
+                    "    float far  = max(u_FogCascadeSplit[u_FogCascadeCount - 1], 0.001);\n"
+                    "    float tail = 1.0 - smoothstep(far * 0.8, far, d0);\n"
+                    "    float sd = texture(u_FogShadowArray, vec3(proj.xy, float(cascade))).r;\n"
+                    "    float lit = (proj.z - 0.0015 > sd) ? 0.0 : 1.0;\n"
+                    "    return mix(1.0, lit, edge * tail);\n"
                     "}\n"
-                    // ── SCENE_HEIGHT_V3 — a BASE da geometria mais proxima ─
+                    // Henyey-Greenstein, os MESMOS numeros do embutido. Acende a
+                    // nevoa olhando na direcao do sol e apaga de costas.
                     //
-                    //  O V2 devolvia a altura do TOPO, e o topo nao separa as
-                    //  duas coisas que precisam ser separadas: uma pedra que
-                    //  sai da agua e um cubo que paira sobre ela tem, os dois,
-                    //  o topo acima da lamina. Filtrar por topo jogava fora a
-                    //  margem de verdade junto com o objeto suspenso — e era
-                    //  isso que apagava a espuma quando dois cubos ficavam na
-                    //  mesma coluna: o de cima escondia o que estava na agua.
-                    //
-                    //  A BASE separa: a pedra desce ate abaixo da superficie, o
-                    //  cubo suspenso nao. O teste no grafo vira uma comparacao
-                    //  direta — base <= altura da agua e margem.
-                    //
-                    //  1e9 e a resposta para "nao ha nada": absurdamente alto,
-                    //  logo nada encosta, logo sem espuma. O contrario do -1e9
-                    //  do V2, e de proposito — o sentinela tem que cair no lado
-                    //  SEGURO do teste.
-                    "float axeSceneNearestBase(vec3 worldPos) {\n"
-                    "    if (u_HasSceneHeight == 0) return 1e9;\n"
-                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
-                    "    if (!axeSceneHeightInside(uv)) return 1e9;\n"
-                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
-                    "    if (seed.x > 1e8) return 1e9;\n"
-                    "    return seed.z;\n"
-                    "}\n"
-                    // ── SCENE_HEIGHT_V4 — o TOPO da geometria mais proxima ──
-                    //
-                    //  A companheira obrigatoria do Nearest Base. Sozinha, a
-                    //  base diz "isto desce ate a agua" — e isso e verdade na
-                    //  pegada inteira de uma malha afundada, nao so onde ela
-                    //  ainda sai da lamina.
-                    //
-                    //  Com as duas, o grafo pergunta o que interessa: a coluna
-                    //  ATRAVESSA esta altura? base abaixo E topo acima. Quem
-                    //  define "esta altura" continua sendo o material — o
-                    //  passe nao sabe o que e agua.
-                    "float axeSceneNearestTop(vec3 worldPos) {\n"
-                    "    if (u_HasSceneHeight == 0) return -1e9;\n"
-                    "    vec2 uv = axeSceneHeightUV(worldPos);\n"
-                    "    if (!axeSceneHeightInside(uv)) return -1e9;\n"
-                    "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
-                    "    if (seed.x > 1e8) return -1e9;\n"
-                    "    return seed.w;\n"
+                    // O 1/4pi nao e decoracao: sem ele a fase vale 10.0 no pico e,
+                    // multiplicada por uma intensidade de sol de exterior, estoura
+                    // a tela em branco. Com ele a fase e uma DISTRIBUICAO — integra
+                    // 1 sobre a esfera, redistribui a luz em vez de inventar luz.
+                    // g = 0.6 e nao 0.85 (o da Mie das point lights) porque 0.85
+                    // concentra 232:1 e a nevoa sumiria de costas para o sol; quem
+                    // a sustenta nessa direcao e o termo ambiente.
+                    "float axeSunPhase(float cosTheta) {\n"
+                    "    const float g = 0.6;\n"
+                    "    const float kInv4Pi = 0.07957747;\n"
+                    "    float den = 1.0 + g * g - 2.0 * g * cosTheta;\n"
+                    "    return kInv4Pi * (1.0 - g * g) / max(pow(max(den, 0.0001), 1.5), 0.0001);\n"
                     "}\n\n";
 
+            case SceneHelperMode::Vertex:
+                // ── WPO_V2 — o mapa de altura AMOSTRADO UMA VEZ POR VERTICE ──
+                //
+                //  Esta e a unica diferenca real entre este bloco e o do
+                //  fragmento, e ela existe por um defeito medido em tela.
+                //
+                //  ── O DEFEITO ───────────────────────────────────────────────
+                //
+                //  Com o recalculo de normal ligado, o vertex shader avalia o
+                //  WPO em TRES pontos separados por Delta (6,5 cm no material do
+                //  Clever). Se o subgrafo da onda consulta o mapa de altura —
+                //  e consulta, e para o uso mais natural que existe: achatar a
+                //  onda perto da margem — esses tres pontos caem em TEXELS
+                //  DIFERENTES de um campo que e constante por texel.
+                //
+                //  O passe cobre `k_SceneHeightExtent` (24) em 1024 texels: de 2
+                //  a 5 cm por texel, contra um Delta de 6,5 cm. A diferenca
+                //  finita entao nao mede a inclinacao da onda — mede o DEGRAU
+                //  entre texels vizinhos. Numa superficie com Roughness 0.02
+                //  isso vira pontinho branco especular espalhado pela agua.
+                //
+                //  Pior: o mapa e uma render ortografica CENTRADA NA CAMERA.
+                //  Dentro dele `axeSceneDistance` e finito; fora vale 1e6. Ao
+                //  diferenciar em cima dessa borda a derivada explode, e a borda
+                //  varre a agua conforme o jogador anda.
+                //
+                //  ── O CONSERTO ──────────────────────────────────────────────
+                //
+                //  Amostrar UMA VEZ, na posicao base do vertice, e devolver o
+                //  mesmo valor nas tres avaliacoes. Nao e aproximacao: estes
+                //  campos descrevem ONDE O VERTICE ESTA, nao a micro-perturbacao
+                //  de 6 cm usada para medir inclinacao. Diferencia-los nunca fez
+                //  sentido — a V1 so nao tinha percebido.
+                //
+                //  CONSEQUENCIA A CONHECER: no estagio de vertice o pino "World
+                //  Position" do node Scene Height passa a ser IGNORADO (a
+                //  amostra ja aconteceu, na posicao do vertice). No fragmento
+                //  ele continua valendo normalmente.
+                return
+                    std::string(
+                        "// WPO_V1 — estagio de vertice: nao ha tela aqui\n"
+                        "vec2  axeScreenUV()    { return vec2(0.0); }\n"
+                        "vec2  axeScreenTexel() { return vec2(0.0); }\n"
+                        "float axeSceneDepth(vec2 uv) { return 0.0; }\n"
+                        "vec3  axeSceneWorldPos(vec2 uv) { return vec3(0.0); }\n"
+                        "float axeSceneIsBackground(vec2 uv) { return 0.0; }\n"
+                        "\n"
+                        "// WPO_V2 — amostra unica por vertice (ver a nota no compilador)\n"
+                        "uniform sampler2D u_SceneHeightMap;\n"
+                        "uniform sampler2D u_SceneSeedMap;\n"
+                        "uniform mat4      u_SceneHeightMatrix;\n"
+                        "uniform int       u_HasSceneHeight;\n"
+                        // Os sentinelas de "nada aqui" sao os MESMOS do
+                        // fragmento, e sao o valor inicial: se por qualquer
+                        // motivo a amostra nao rodar, o grafo le exatamente o
+                        // que leria fora do mapa, em vez de lixo.
+                        "float axeVSceneHeight = -1e9;\n"
+                        "float axeVSceneDist   =  1e6;\n"
+                        "float axeVSceneBase   =  1e9;\n"
+                        "float axeVSceneTop    = -1e9;\n"
+                        "void axeSceneHeightSample(vec3 worldPos) {\n"
+                        "    if (u_HasSceneHeight == 0) return;\n"
+                        "    vec4 p  = u_SceneHeightMatrix * vec4(worldPos, 1.0);\n"
+                        "    vec2 uv = (p.xy / p.w) * 0.5 + 0.5;\n"
+                        "    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return;\n"
+                        "    axeVSceneHeight = texture(u_SceneHeightMap, uv).r;\n"
+                        "    vec4 seed = texture(u_SceneSeedMap, uv);\n"
+                        "    if (seed.x > 1e8) return;\n"
+                        "    axeVSceneDist = length(worldPos.xz - seed.xy);\n"
+                        "    axeVSceneBase = seed.z;\n"
+                        "    axeVSceneTop  = seed.w;\n"
+                        "}\n"
+                        // A assinatura e identica a do fragmento de proposito: e
+                        // isso que faz o MESMO texto emitido pelos nodes valer
+                        // nos dois estagios. O parametro e ignorado aqui.
+                        "float axeSceneHeight(vec3 worldPos)      { return axeVSceneHeight; }\n"
+                        "float axeSceneDistance(vec3 worldPos)    { return axeVSceneDist; }\n"
+                        "float axeSceneNearestBase(vec3 worldPos) { return axeVSceneBase; }\n"
+                        "float axeSceneNearestTop(vec3 worldPos)  { return axeVSceneTop; }\n"
+                        // VOLUME_SUN_V2 — nao ha cascata ligada no estagio de vertice
+                        "float axeSunLight(vec3 worldPos) { return 1.0; }\n\n");
             default:
                 return
                     "// SCENE_DEPTH_SURFACE_V1 — dominio sem leitura de tela\n"
@@ -334,7 +622,11 @@ namespace axe
                     "float axeSceneHeight(vec3 worldPos) { return -1e9; }\n"
                     "float axeSceneDistance(vec3 worldPos) { return 1e6; }\n"
                     "float axeSceneNearestBase(vec3 worldPos) { return 1e9; }\n"
-                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n\n";
+                    "float axeSceneNearestTop(vec3 worldPos) { return -1e9; }\n"
+                    // VOLUME_SUN_V2 — so o dominio Volume amostra a cascata por ponto
+                    // do AR. 1.0 = totalmente iluminado: o valor que nao inventa
+                    // sombra onde nao ha informacao.
+                    "float axeSunLight(vec3 worldPos) { return 1.0; }\n\n";
             }
         }
 
@@ -560,7 +852,7 @@ namespace axe
         }
 
         // 3. Percorre o grafo — agora m_NodeSamplers já está preenchido
-        compiler.VisitNode(outputNode);
+        compiler.VisitMaterialOutput(outputNode);   // WPO_V1 — pula o pin 8
 
         // 4. Monta o Fragment Shader
         std::stringstream fs;
@@ -622,6 +914,10 @@ namespace axe
         // este e o unico ponto do shader gerado onde isso e verdade.
         fs << SceneHelpersGLSL(SceneHelperMode::Surface);
         fs << NoiseHelpersGLSL();   // NOISE_SMOOTH_V1
+        // FORWARD_SHADOW_V1 — so no `fs`. O `gs` escreve no G-Buffer e quem
+        // sombreia aquele caminho e o lighting pass; emitir aqui tambem daria
+        // sombra DUAS VEZES no material opaco.
+        fs << ForwardShadowGLSL();
         fs << compiler.m_CustomFunctions;
         fs << "void main()\n{\n";
         // ── TWO_SIDED_V1 ─────────────────────────────────────────────────
@@ -809,6 +1105,9 @@ namespace axe
         fs << "    float NdotL = max(dot(N, L), 0.0);\n";
         fs << "    float NdotV = max(dot(N, V), 0.0);\n";
         fs << "    float NdotH = max(dot(N, H), 0.0);\n\n";
+        // FORWARD_SHADOW_V1 — 0 = iluminado, 1 = na sombra. Calculado UMA vez
+        // e reusado pelos tres modelos de sombreamento abaixo.
+        fs << "    float axeShadow = axeForwardShadow(v_FragPos, N, L);\n\n";
         fs << "    vec3 F0 = mix(vec3(0.04), matBaseColor, matMetallic);\n\n";
         fs << "    float alpha  = matRoughness * matRoughness;\n";
         fs << "    float alpha2 = alpha * alpha;\n";
@@ -826,7 +1125,10 @@ namespace axe
         fs << "    vec3 kD = (vec3(1.0) - F) * (1.0 - matMetallic);\n";
         fs << "    vec3 diffuse = kD * matBaseColor / 3.14159265;\n\n";
         fs << "    vec3 radiance = u_LightColor * u_LightIntensity;\n";
-        fs << "    vec3 Lo       = (diffuse + specular) * radiance * NdotL;\n\n";
+        // FORWARD_SHADOW_V1 — a sombra corta a luz DIRETA e so ela. O ambient
+        // (IBL) continua chegando: e ele que da cor a area sombreada, e
+        // multiplica-lo tambem deixaria a sombra preta.
+        fs << "    vec3 Lo       = (diffuse + specular) * radiance * NdotL * (1.0 - axeShadow);\n\n";
 
         // 8. Ambient IBL ou fallback
         fs << "    vec3 ambient;\n";
@@ -873,14 +1175,20 @@ namespace axe
             // Difusa em degraus. Sem /PI e sem kD: a celula quer a cor CHAPADA
             // do albedo em cada banda, e nao a resposta energeticamente
             // correta — a graca do estilo e justamente a superficie plana.
-            fs << "    float toonBand = floor(clamp(NdotL, 0.0, 1.0) * toonSteps + 0.5) / toonSteps;\n";
+            // FORWARD_SHADOW_V1 — a sombra entra ANTES do degrau, e nao depois.
+            // Quantizar a luz ja sombreada e o que faz a sombra cair NA MESMA
+            // banda do resto da cena; aplicada depois, ela viraria um degrau
+            // proprio por cima das celulas. Mesma escolha do lighting pass.
+            fs << "    float toonLit  = clamp(NdotL * (1.0 - axeShadow), 0.0, 1.0);\n";
+            fs << "    float toonBand = floor(toonLit * toonSteps + 0.5) / toonSteps;\n";
             fs << "    vec3  toonDiffuse = matBaseColor * toonBand * u_LightColor * u_LightIntensity;\n";
             // Especular de corte duro. O limiar vem do ROUGHNESS: liso = brilho
             // pequeno e concentrado, aspero = maior e mais espalhado. Reusar um
             // parametro que o artista ja mexe evita inventar um slider novo
             // (e evita gastar o unico canal que ainda sobrava no G-Buffer).
             fs << "    float toonSpecCut = mix(0.995, 0.75, matRoughness);\n";
-            fs << "    float toonSpec = step(toonSpecCut, pow(NdotH, 64.0)) * (1.0 - matRoughness);\n";
+            fs << "    float toonSpec = step(toonSpecCut, pow(NdotH, 64.0)) * (1.0 - matRoughness)\n";
+            fs << "                   * (1.0 - axeShadow);\n";
             // O ambient entra CHAPADO, sem quantizar: e ele que da cor a
             // banda de sombra. Quantizado tambem, a sombra ficaria preta e o
             // material perderia a leitura de volume por completo.
@@ -1001,37 +1309,73 @@ namespace axe
         result.FragmentShader = fs.str();
         result.GeometryFragShader = gs.str();
         //AXE_CORE_INFO("GeometryFragShader:\n{}", result.GeometryFragShader.substr(0, 500));
-        // 9. Vertex Shader
-        result.VertexShader = R"(
-        #version 460 core
-        layout(location = 0) in vec3 a_Position;
-        layout(location = 1) in vec3 a_Normal;
-        layout(location = 2) in vec2 a_TexCoord;
-        layout(location = 3) in vec3 a_Tangent;
-        layout(location = 4) in vec3 a_Bitangent;
 
-        uniform mat4 u_Model;
-        uniform mat4 u_ViewProjection;
-        uniform mat3 u_NormalMatrix;
-        
+        // ── 9. Vertex Shader — WPO_V1 ────────────────────────────────────────
+        //
+        // Com o pin World Position Offset solto isto devolve, byte a byte, o
+        // mesmo vertex shader fixo que a engine sempre gerou.
+        //
+        // O shader gerado aqui e UM SO e serve os DOIS caminhos: o forward
+        // (`fs`) e o do G-Buffer (`gs`) compartilham result.VertexShader. E
+        // essa a razao de a onda aparecer igual no viewport deferred e no
+        // preview do Material Editor sem nenhum trabalho extra.
+        bool vsUsesSceneHeight = false;
+        result.VertexShader = GenerateVertexShader(graph, outputNode,
+            compiler.m_NodeSamplers, result.UsesWPO, vsUsesSceneHeight);
 
-        out vec3 v_Normal;
-        out vec3 v_FragPos;
-        out vec2 v_TexCoord;
-        out vec3 v_Tangent;
-        out vec3 v_Bitangent;
+        // O mapa de altura pode ser lido SO no vertice (uma onda que achata
+        // perto da margem e exatamente esse caso). Sem este OR, o
+        // SceneRenderer nao geraria o mapa e a onda ficaria uniforme ate a
+        // areia — com o passe desligado por uma varredura que so olhou o
+        // fragmento.
+        result.UsesSceneHeight = result.UsesSceneHeight || vsUsesSceneHeight;
 
-        void main()
+        if (result.UsesWPO)
         {
-            vec4 worldPos  = u_Model * vec4(a_Position, 1.0);
-            v_FragPos      = worldPos.xyz;
-            v_Normal       = normalize(u_NormalMatrix * a_Normal);
-            v_Tangent      = normalize(u_NormalMatrix * a_Tangent);
-            v_Bitangent    = normalize(u_NormalMatrix * a_Bitangent);
-            v_TexCoord     = a_TexCoord;
-            gl_Position    = u_ViewProjection * worldPos;
+            AXE_CORE_INFO("[WPO_V1] World Position Offset ligado; recalculo de normal: {}.",
+                graph->RecomputeNormalFromWPO ? "sim" : "nao");
+
+            if (vsUsesSceneHeight)
+            {
+                AXE_CORE_INFO("[WPO_V2] O subgrafo do WPO le o mapa de altura. No "
+                    "vertice ele e amostrado UMA VEZ, na posicao do vertice, e o mesmo "
+                    "valor vale nas tres avaliacoes do recalculo de normal — sem isso o "
+                    "degrau entre texels do mapa viraria pontinho branco na agua. "
+                    "O pino 'World Position' do node Scene Height e ignorado neste "
+                    "estagio; no fragmento continua valendo.");
+            }
+
+            if (!graph->RecomputeNormalFromWPO)
+            {
+                AXE_CORE_WARN("[WPO_V1] A superficie vai se MOVER, mas continuara "
+                    "recebendo luz como a malha original — a normal nao muda com o "
+                    "deslocamento. Para a onda aparecer na iluminacao (e no Fresnel), "
+                    "ligue 'Recalcular Normal (WPO)' no painel do material.");
+            }
+            else
+            {
+                // A deteccao real: o CORPO da funcao le a posicao de mundo? Se
+                // nao le, os tres pontos de amostra devolvem o mesmo valor e a
+                // normal sai identica a original — sem erro, sem aviso do
+                // driver, so o efeito faltando. Procura no corpo e nao no
+                // shader inteiro, porque o main() cita v_FragPos de qualquer
+                // jeito.
+                const std::size_t bodyStart =
+                    result.VertexShader.find("vec3 v_Tangent, vec3 v_Bitangent)");
+                const std::size_t bodyEnd = result.VertexShader.find("void main()");
+
+                if (bodyStart != std::string::npos && bodyEnd != std::string::npos &&
+                    result.VertexShader.substr(bodyStart, bodyEnd - bodyStart)
+                    .find("v_FragPos") == std::string::npos)
+                {
+                    AXE_CORE_WARN("[WPO_V1] O recalculo de normal esta ligado, mas o "
+                        "subgrafo do World Position Offset NAO usa a posicao de mundo. "
+                        "A inclinacao e medida deslocando a posicao; uma onda montada "
+                        "a partir de UV Coordinate da o mesmo valor nos tres pontos e a "
+                        "normal sai plana. Troque a entrada por 'World Position'.");
+                }
+            }
         }
-    )";
 
         result.Success = true;
 
@@ -1186,6 +1530,7 @@ namespace axe
         // POSTPROCESS_DOMAIN_V1b — a partir daqui, os nodes de tela podem
         // emitir u_SceneColor/u_ScreenSize: e ESTE shader que os declara.
         compiler.m_PostProcessTarget = true;
+        compiler.m_HasSunUniforms = true;   // VOLUME_SUN_V2
 
         Node* outputNode = nullptr;
         for (auto& node : graph->GetNodes())
@@ -1312,6 +1657,493 @@ namespace axe
         CollectSamplerUUIDs(compiler, graph, samplerTextures, result);
         result.Success = true;
         return result;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  VOLUME_DOMAIN_V1 — CompileVolume
+    //
+    //  ── O QUE ESTE DOMINIO AUTORA ────────────────────────────────────────
+    //
+    //  Todos os dominios anteriores respondem "que cor tem ESTE ponto". O
+    //  Volume responde outra coisa: "do que e feito o AR neste ponto". Nao ha
+    //  superficie; ha um MEIO que o raio da camera atravessa.
+    //
+    //  Tres grandezas descrevem um meio participante, e sao as mesmas tres da
+    //  Unreal — que aqui entram em pinos que JA EXISTEM, sem inventar nenhum:
+    //
+    //      Base Color (pin 0)  -> albedo de espalhamento: a cor que a nevoa
+    //                             devolve quando a luz bate nela
+    //      Emissive   (pin 4)  -> luz que o proprio meio emite
+    //      Opacity    (pin 5)  -> DENSIDADE (extincao) por metro
+    //
+    //  Opacity como densidade nao e analogia forcada: no forward translucido
+    //  ele ja significa "quanto deste material o raio ve". Num volume a mesma
+    //  pergunta se responde por metro percorrido, e a conta e a mesma.
+    //
+    //  ── A DIFERENCA ESTRUTURAL: O CORPO VIRA FUNCAO ──────────────────────
+    //
+    //  Nos outros cinco shaders o corpo do grafo e avaliado UMA vez, no main.
+    //  Aqui ele e avaliado a cada passo do raio — 12 vezes por pixel no
+    //  default. Entao o corpo vai para dentro de:
+    //
+    //      void axeVolumeMedium(vec3 v_FragPos, out float, out vec3, out vec3)
+    //
+    //  com o parametro chamado `v_FragPos` DE PROPOSITO. E o mesmo truque do
+    //  WPO_V1: um node que emite `v_FragPos` passa a ler o parametro, e os
+    //  ~60 nodes existentes funcionam dentro do ray march sem uma linha de
+    //  mudanca no GenerateNodeCode. `World Position -> Noise -> Opacity` da
+    //  nevoa com forma no espaco, so ligando fio.
+    //
+    //  ── PINO SOLTO REPRODUZ O FOG EMBUTIDO ───────────────────────────────
+    //
+    //  Regra que vem do WPO e que e o que torna esta rodada segura: material
+    //  de Volume recem-criado, com o grafo VAZIO, gera exatamente a imagem que
+    //  o fog embutido gera hoje — densidade = u_Density * queda por altura,
+    //  cor = u_FogColor, emissao = 0. O autor liga UM pino de cada vez e ve o
+    //  que cada um faz, em vez de comecar de uma tela apagada.
+    //
+    //  ── O CONTRATO DE UNIFORMS E O DO PASSE, LETRA POR LETRA ─────────────
+    //
+    //  Este shader e desenhado no lugar do embutido do OpenGLVolumetricFogPass,
+    //  pelo MESMO Execute, que envia as MESMAS uniforms. Por isso o cabecalho
+    //  aqui repete os nomes do kFogFS: u_Depth, u_SceneColor, u_InvViewProj,
+    //  u_CameraPos, as luzes, os interiores, as probes. Divergir um nome nao
+    //  da erro — da uniform em zero, que e o defeito que se esconde por
+    //  rodadas (ja anotado na engine).
+    //
+    //  As tres uniforms que o passe passou a enviar por causa desta rodada
+    //  (u_CameraPosition, u_ScreenSize e os samplers do grafo) sao no-op no
+    //  shader embutido: uniform que nao existe devolve location -1.
+    // ═════════════════════════════════════════════════════════════════════════
+    CompiledMaterial MaterialCompiler::CompileVolume(MaterialGraph* graph)
+    {
+        MaterialCompiler compiler(graph);
+        CompiledMaterial result;
+
+        // VOLUME_SUN_V2 — este shader declara as uniforms do sol, entao o node
+        // Sun passa a valer aqui. NAO liga m_PostProcessTarget: as outras
+        // quatro emissoes que aquela flag guarda dependem de uniforms que este
+        // shader nao tem.
+        compiler.m_HasSunUniforms = true;
+        compiler.m_HasFogUniforms = true;   // VOLUME_SUN_V2b
+
+        Node* outputNode = nullptr;
+        for (auto& node : graph->GetNodes())
+            if (node->Name == "Material Output") { outputNode = node.get(); break; }
+
+        if (!outputNode || outputNode->Inputs.size() <= 5)
+        {
+            result.ErrorMessage = "Material Output sem os pins Base Color/Emissive/Opacity";
+            return result;
+        }
+
+        // Os tres percursos ANTES de qualquer geracao de texto: e o VisitPin
+        // que preenche m_FragmentCode e m_VisitedNodes, e a varredura de
+        // samplers logo abaixo depende de m_VisitedNodes ja estar completo.
+        compiler.VisitPin(&outputNode->Inputs[0]);   // Base Color -> albedo
+        compiler.VisitPin(&outputNode->Inputs[4]);   // Emissive
+        compiler.VisitPin(&outputNode->Inputs[5]);   // Opacity   -> densidade
+
+        Pin* albedoSrc = compiler.GetSourcePin(&outputNode->Inputs[0]);
+        Pin* emissiveSrc = compiler.GetSourcePin(&outputNode->Inputs[4]);
+        Pin* densitySrc = compiler.GetSourcePin(&outputNode->Inputs[5]);
+
+        // Os fallbacks SAO o fog embutido — ver a nota acima.
+        std::string albedo = "u_FogColor";
+        if (albedoSrc)
+        {
+            albedo = compiler.GetPinVariable(albedoSrc->ID);
+            if (compiler.GetPinType(albedoSrc->ID) == PinType::Float)
+                albedo = "vec3(" + albedo + ")";
+        }
+
+        // ── O TERMO DAS LUZES SO GANHA ALBEDO SE O PINO ESTIVER LIGADO ───────
+        //
+        //  Achado ao conferir a paridade contra o fog embutido, e vale ficar
+        //  escrito porque o certo aqui nao e obvio.
+        //
+        //  O embutido tem DOIS termos e so um deles conhece a cor do fog: o
+        //  ambiente e `u_FogColor * u_AmbientStrength` (a luz do ceu espalhada
+        //  pelo meio), e o de inscattering das point lights nao multiplica por
+        //  cor nenhuma — ou seja, assume meio BRANCO ao espalhar luz de
+        //  lampada.
+        //
+        //  Multiplicar sempre pelo albedo e o modelo correto e unifica os dois
+        //  termos. So que, com o pino solto, o albedo E `u_FogColor` — e ai a
+        //  conta deixaria de reproduzir o embutido: a luz espalhada nasceria
+        //  tingida e mais escura numa cena que hoje ja esta ajustada. Seria uma
+        //  mudanca de imagem entregue de contrabando dentro de uma rodada que
+        //  promete nao mudar nada enquanto o grafo estiver vazio.
+        //
+        //  Entao: pino SOLTO reproduz o embutido; pino LIGADO ativa o modelo
+        //  correto, porque conectar Base Color aqui e justamente dizer "este
+        //  meio TEM cor propria". Nao ha caso em que o autor liga a cor do meio
+        //  e espera que a lampada atravesse a nevoa sem se tingir.
+        const std::string scatterAlbedo = albedoSrc ? " * axeAlbedo" : "";
+
+        std::string emissive = "vec3(0.0)";
+        if (emissiveSrc)
+        {
+            emissive = compiler.GetPinVariable(emissiveSrc->ID);
+            if (compiler.GetPinType(emissiveSrc->ID) == PinType::Float)
+                emissive = "vec3(" + emissive + ")";
+        }
+
+        std::string density = "u_Density * axeHeightDensity(v_FragPos.y)";
+        if (densitySrc)
+        {
+            // ForceFloat, e nao a variavel crua: Opacity e um pino Float, mas o
+            // editor aceita ligar Vec3 nele (a validacao isenta Vec3). Sem
+            // adaptar, `max(vec3, 0.0)` nao casa sobrecarga nenhuma e o
+            // material inteiro deixa de compilar por causa de um fio.
+            density = compiler.ForceFloat("Material Output", "Opacity",
+                compiler.GetPinVariable(densitySrc->ID),
+                compiler.GetPinType(densitySrc->ID));
+
+            // Densidade negativa daria transmitancia MAIOR que 1: o fog
+            // clarearia a cena em vez de escurece-la, e a acumulacao explodiria
+            // ao longo do raio. Cortar aqui, e nao pedir ao autor que lembre.
+            density = "max(" + density + ", 0.0)";
+        }
+
+        // Samplers do grafo. Comecam na unidade 4: 0 = cena, 1 = profundidade,
+        // 2 e 3 = as SH0 das probes — ver OpenGLVolumetricFogPass::Execute.
+        std::map<std::string, std::shared_ptr<Texture2D>> samplerTextures;
+        {
+            int slot = 0;
+            for (auto& node : graph->GetNodes())
+            {
+                if (node->Name != "Texture Sample") continue;
+                if (!compiler.m_VisitedNodes.count(node->ID.Get())) continue;
+                if (!node->Value.TextureVal) continue;
+                std::string samplerName = "u_VolTex_" + std::to_string(slot++);
+                compiler.m_NodeSamplers[node->ID.Get()] = samplerName;
+                samplerTextures[samplerName] = node->Value.TextureVal;
+            }
+        }
+
+        // Vertex shader do quad. Layout identico ao do kFogVS do passe (posicao
+        // + uv), porque e o VAO dele que desenha. A varying se chama
+        // `v_TexCoord`, e nao `v_UV` como no embutido, porque e esse o nome que
+        // os nodes de tela emitem — e o shader gerado traz o proprio VS, entao
+        // renomear aqui nao afeta o embutido.
+        result.VertexShader = R"(
+        #version 460 core
+        layout(location = 0) in vec2 a_Position;
+        layout(location = 1) in vec2 a_TexCoord;
+        out vec2 v_TexCoord;
+        void main()
+        {
+            v_TexCoord  = a_TexCoord;
+            gl_Position = vec4(a_Position, 0.0, 1.0);
+        }
+    )";
+
+        std::ostringstream fs;
+        fs << "#version 460 core\n";
+        fs << "// VOLUME_DOMAIN_V1 — gerado a partir do grafo\n";
+        fs << "in  vec2 v_TexCoord;\n";
+        fs << "layout(location = 0) out vec4 FragColor;\n\n";
+
+        // ── Contrato com o OpenGLVolumetricFogPass ───────────────────────────
+        fs << "uniform sampler2D u_Depth;\n";
+        fs << "uniform sampler2D u_SceneColor;\n";
+        fs << "uniform mat4  u_InvViewProj;\n";
+        fs << "uniform vec3  u_CameraPos;\n";
+        fs << "uniform vec3  u_FogColor;\n";
+        fs << "uniform float u_Density;\n";
+        fs << "uniform float u_HeightBase;\n";
+        fs << "uniform float u_HeightFalloff;\n";
+        fs << "uniform float u_ScatterStrength;\n";
+        fs << "uniform float u_AmbientStrength;\n";
+        fs << "uniform float u_FogStart;\n";
+        fs << "uniform float u_FogEnd;\n";
+        fs << "uniform int   u_Steps;\n";
+        fs << "uniform float u_StepJitter;\n";
+        fs << "uniform float u_Time;\n";
+        fs << "uniform int   u_NumLights;\n";
+        fs << "uniform vec3  u_LightPos[8];\n";
+        fs << "uniform vec3  u_LightColor[8];\n";
+        fs << "uniform float u_LightIntensity[8];\n";
+        fs << "uniform float u_LightRadius[8];\n";
+        fs << "uniform int   u_LightIsSpot[8];\n";
+        fs << "uniform vec3  u_LightDir[8];\n";
+        fs << "uniform float u_LightOuterCut[8];\n";
+        fs << "uniform int   u_NumInteriorVolumes;\n";
+        fs << "uniform mat4  u_InteriorWorldToLocal[8];\n";
+        fs << "uniform vec3  u_InteriorHalfExtents[8];\n";
+        fs << "uniform float u_InteriorIntensity[8];\n";
+        fs << "uniform float u_InteriorBlend[8];\n";
+        fs << "uniform int   u_InteriorAffect[8];\n";
+        fs << "uniform int       u_NumProbeVolumes;\n";
+        fs << "uniform mat4      u_ProbeWorldToLocal[2];\n";
+        fs << "uniform vec3      u_ProbeHalfExtents[2];\n";
+        fs << "uniform float     u_ProbeFeather[2];\n";
+        fs << "uniform sampler3D u_ProbeSH0[2];\n\n";
+
+        // VOLUME_SUN_V2 — a direcional. As uniforms da CASCATA sao declaradas
+        // dentro do SceneHelpersGLSL(Volume), junto da funcao que as usa.
+        // u_SunDirection aponta PARA ONDE A LUZ VAI, mesma convencao do
+        // lighting pass e do dominio Post Process — os tres tem de concordar,
+        // senao o mesmo grafo daria sol de lados opostos em dominios
+        // diferentes, que e o engano mais comum de quem escreve ceu.
+        fs << "uniform vec3  u_SunDirection;\n";
+        fs << "uniform vec3  u_SunColor;\n";
+        fs << "uniform float u_SunIntensity;\n\n";
+
+        // As duas que o passe passou a enviar por causa desta rodada.
+        // u_CameraPosition e o nome que os nodes emitem (Camera Vector, Pixel
+        // Depth, Camera Position); u_CameraPos e o nome que o passe ja usava.
+        // As duas carregam o MESMO valor — renomear a do passe quebraria o
+        // shader embutido, e fazer o node emitir outro nome quebraria os outros
+        // cinco dominios.
+        fs << "uniform vec3  u_CameraPosition;\n";
+        fs << "uniform vec2  u_ScreenSize;\n\n";
+
+        for (auto& kv : samplerTextures)
+            fs << "uniform sampler2D " << kv.first << ";\n";
+        fs << "\n";
+
+        // Reconstrucao e queda por altura ANTES dos helpers de cena: o bloco
+        // SceneHelperMode::Volume chama axeVolumeReconstruct, e GLSL exige a
+        // funcao declarada antes do uso.
+        fs << "vec3 axeVolumeReconstruct(vec2 uv, float d)\n";
+        fs << "{\n";
+        fs << "    vec4 ndc   = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);\n";
+        fs << "    vec4 world = u_InvViewProj * ndc;\n";
+        fs << "    return world.xyz / world.w;\n";
+        fs << "}\n";
+        fs << "float axeHeightDensity(float y)\n";
+        fs << "{\n";
+        fs << "    return exp(-max(0.0, y - u_HeightBase) * u_HeightFalloff);\n";
+        fs << "}\n\n";
+
+        fs << SceneHelpersGLSL(SceneHelperMode::Volume);
+        fs << NoiseHelpersGLSL();
+        fs << compiler.m_CustomFunctions;
+
+        // ── A funcao do meio ─────────────────────────────────────────────────
+        fs << "void axeVolumeMedium(vec3 v_FragPos, out float axeDensity,\n";
+        fs << "                     out vec3 axeAlbedo, out vec3 axeEmissive)\n";
+        fs << "{\n";
+        // Valores neutros para os nodes que referenciam varyings de superficie.
+        // Nao ha malha aqui: um ponto no ar nao tem normal nem tangente.
+        fs << "    vec3  v_Normal    = vec3(0.0, 1.0, 0.0);\n";
+        fs << "    vec3  N           = v_Normal;\n";
+        fs << "    vec3  v_Tangent   = vec3(1.0, 0.0, 0.0);\n";
+        fs << "    vec3  v_Bitangent = vec3(0.0, 0.0, 1.0);\n";
+        fs << "    float v_Age01     = 0.0;\n";
+        fs << "    vec4  v_Color     = vec4(1.0);\n\n";
+        fs << compiler.m_FragmentCode;
+        fs << "\n    axeDensity  = " << density << ";\n";
+        fs << "    axeAlbedo   = " << albedo << ";\n";
+        fs << "    axeEmissive = " << emissive << ";\n";
+        fs << "}\n\n";
+
+        // ── ExternalLightFactor — copia fiel do embutido ─────────────────────
+        //
+        // Interiores e probes bloqueiam a luz do CEU dentro do volume. Nao ha
+        // nada de material nisto: e a mesma pergunta geometrica, e um fog
+        // autorado no grafo nao pode voltar a vazar luz externa dentro de uma
+        // sala fechada so por ser autorado.
+        fs << "float axeExternalLight(vec3 pos)\n";
+        fs << "{\n";
+        fs << "    float f = 1.0;\n";
+        fs << "    for (int i = 0; i < u_NumInteriorVolumes; ++i)\n";
+        fs << "    {\n";
+        fs << "        if ((u_InteriorAffect[i] & 2) == 0) continue;\n";
+        fs << "        vec3 local = (u_InteriorWorldToLocal[i] * vec4(pos, 1.0)).xyz;\n";
+        fs << "        vec3 d = abs(local) - u_InteriorHalfExtents[i];\n";
+        fs << "        float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n";
+        fs << "        float inside = 1.0 - smoothstep(-u_InteriorBlend[i], 0.0, dist);\n";
+        fs << "        f = min(f, 1.0 - inside * u_InteriorIntensity[i]);\n";
+        fs << "    }\n";
+        fs << "    for (int i = 0; i < u_NumProbeVolumes; ++i)\n";
+        fs << "    {\n";
+        fs << "        vec3 local = (u_ProbeWorldToLocal[i] * vec4(pos, 1.0)).xyz;\n";
+        fs << "        vec3 d = abs(local) - u_ProbeHalfExtents[i];\n";
+        fs << "        float dist = length(max(d, vec3(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n";
+        fs << "        float w = 1.0 - smoothstep(-u_ProbeFeather[i], 0.0, dist);\n";
+        fs << "        if (w > 0.0)\n";
+        fs << "        {\n";
+        fs << "            vec3 uvw = clamp(local / (2.0 * u_ProbeHalfExtents[i]) + 0.5, 0.0, 1.0);\n";
+        fs << "            float skyVis = texture(u_ProbeSH0[i], uvw).a;\n";
+        fs << "            f = min(f, mix(1.0, min(skyVis * 2.0, 1.0), w));\n";
+        fs << "        }\n";
+        fs << "    }\n";
+        fs << "    return f;\n";
+        fs << "}\n\n";
+
+        // ── O ray march ──────────────────────────────────────────────────────
+        //
+        // Mesma estrutura do embutido. As UNICAS tres linhas diferentes sao as
+        // que perguntam ao material o que ha neste ponto — e e por serem tres
+        // que este dominio cabe sem reescrever o passe.
+        fs << "void main()\n";
+        fs << "{\n";
+        fs << "    float depth      = texture(u_Depth, v_TexCoord).r;\n";
+        fs << "    vec3  sceneColor = texture(u_SceneColor, v_TexCoord).rgb;\n\n";
+        // ── VOLUME_SKY_V3 ────────────────────────────────────────────────────
+        //
+        // Ver a nota longa no main do fog embutido. Em resumo: aqui havia um
+        // `return` no pixel de fundo, e "fundo" nao e so o ceu — este passe le
+        // a profundidade do G-BUFFER, que so tem OPACO, e a pipeline
+        // translucida tem DepthWrite = false. Uma agua que ocupa a tela toda
+        // chegava com depth 1.0 e era pulada como se fosse ceu.
+        fs << "    bool  isBackground = depth >= 0.9999;\n\n";
+        fs << "    vec3  worldPos = axeVolumeReconstruct(v_TexCoord,\n";
+        fs << "                                          isBackground ? 0.9999 : depth);\n";
+        fs << "    vec3  rayDir   = worldPos - u_CameraPos;\n";
+        fs << "    float rayLen   = length(rayDir);\n";
+        fs << "    vec3  rayDirN  = rayDir / max(rayLen, 1e-6);\n\n";
+        fs << "    float startDist = u_FogStart;\n";
+        fs << "    float endDist   = isBackground ? u_FogEnd\n";
+        fs << "                                   : min(rayLen, u_FogEnd);\n";
+        fs << "    if (endDist <= startDist) { FragColor = vec4(sceneColor, 1.0); return; }\n\n";
+        fs << "    float stepSize = (endDist - startDist) / float(u_Steps);\n";
+        fs << "    float jitter   = fract(sin(dot(v_TexCoord, vec2(12.9898, 78.233))\n";
+        fs << "                     + u_Time * 0.07) * 43758.5453) * u_StepJitter;\n\n";
+        fs << "    vec3  fogAccum      = vec3(0.0);\n";
+        fs << "    float transmittance = 1.0;\n\n";
+        // Teto de passos CONSTANTE no `for` e `break` pelo uniform: o embutido
+        // usa u_Steps direto, e um driver que decida desenrolar o laco com
+        // limite variavel gera codigo pior. Mesmo padrao do axeFbm.
+        fs << "    for (int i = 0; i < 64; ++i)\n";
+        fs << "    {\n";
+        fs << "        if (i >= u_Steps) break;\n";
+        fs << "        float t   = startDist + (float(i) + jitter) * stepSize;\n";
+        fs << "        vec3  pos = u_CameraPos + rayDirN * t;\n\n";
+        fs << "        float axeDensity;\n";
+        fs << "        vec3  axeAlbedo;\n";
+        fs << "        vec3  axeEmissive;\n";
+        fs << "        axeVolumeMedium(pos, axeDensity, axeAlbedo, axeEmissive);\n\n";
+        fs << "        float stepTrans  = exp(-axeDensity * stepSize);\n";
+        fs << "        float stepWeight = transmittance * (1.0 - stepTrans);\n\n";
+        // O albedo do material entra AQUI, no lugar de u_FogColor: e a cor do
+        // meio que decide o que ele devolve, tanto do ceu quanto das luzes.
+        fs << "        fogAccum += axeAlbedo * u_AmbientStrength * stepWeight\n";
+        fs << "                  * axeExternalLight(pos);\n";
+        // Emissao NAO e multiplicada por stepWeight vezes albedo: o meio emite
+        // por si, independentemente do que ele espalha. Vezes stepWeight ainda
+        // sim, senao a emissao nao respeitaria a densidade nem a oclusao do que
+        // ja foi acumulado a frente.
+        fs << "        fogAccum += axeEmissive * stepWeight;\n\n";
+        // ── VOLUME_SUN_V2 — inscattering do SOL ──────────────────────────────
+        //
+        // Mesmo texto do embutido, com a mesma regra do termo das point lights:
+        // o albedo do material so entra quando Base Color esta LIGADO, para
+        // grafo vazio continuar reproduzindo o fog embutido letra por letra.
+        fs << "        if (u_SunIntensity > 0.0)\n";
+        fs << "        {\n";
+        fs << "            float cosSun = dot(rayDirN, -u_SunDirection);\n";
+        fs << "            fogAccum += u_SunColor * u_SunIntensity * u_ScatterStrength\n";
+        fs << "                      * axeSunPhase(cosSun) * stepWeight * axeSunLight(pos)"
+            << scatterAlbedo << ";\n";
+        fs << "        }\n\n";
+        fs << "        for (int li = 0; li < 8; ++li)\n";
+        fs << "        {\n";
+        fs << "            if (li >= u_NumLights) break;\n";
+        fs << "            vec3  toLight = u_LightPos[li] - pos;\n";
+        fs << "            float dist    = length(toLight);\n";
+        fs << "            float dn      = dist / max(u_LightRadius[li], 0.001);\n";
+        fs << "            float atten   = max(0.0, 1.0 - dn * dn);\n";
+        fs << "            if (atten <= 0.001) continue;\n";
+        fs << "            if (u_LightIsSpot[li] == 1)\n";
+        fs << "            {\n";
+        fs << "                vec3  toLightN = toLight / max(dist, 1e-6);\n";
+        fs << "                float cosAngle = dot(-toLightN, u_LightDir[li]);\n";
+        fs << "                float spotAtt  = smoothstep(u_LightOuterCut[li] - 0.05,\n";
+        fs << "                                            u_LightOuterCut[li], cosAngle);\n";
+        fs << "                if (spotAtt <= 0.001) continue;\n";
+        fs << "                atten *= spotAtt;\n";
+        fs << "            }\n";
+        fs << "            float cosTheta = dot(rayDirN, toLight / max(dist, 1e-6));\n";
+        fs << "            float mie = (1.0 - 0.85 * 0.85) /\n";
+        fs << "                        pow(1.0 + 0.85 * 0.85 - 2.0 * 0.85 * cosTheta, 1.5);\n";
+        fs << "            mie = max(0.0, mie);\n";
+        fs << "            fogAccum += u_LightColor[li] * u_LightIntensity[li] * atten\n";
+        fs << "                      * u_ScatterStrength * mie * stepWeight"
+            << scatterAlbedo << ";\n";
+        fs << "        }\n\n";
+        fs << "        transmittance *= stepTrans;\n";
+        fs << "        if (transmittance < 0.01) break;\n";
+        fs << "    }\n\n";
+        fs << "    vec3 finalColor = sceneColor * transmittance + fogAccum;\n";
+        fs << "    FragColor = vec4(finalColor, 1.0);\n";
+        fs << "}\n";
+
+        result.FragmentShader = fs.str();
+        result.SamplerTextures = samplerTextures;
+        CollectSamplerUUIDs(compiler, graph, samplerTextures, result);
+        result.Success = true;
+        return result;
+    }
+
+    // VOLUME_DOMAIN_V1 — irmao do CompilePostProcessFromFile.
+    bool MaterialCompiler::CompileVolumeFromFile(const std::filesystem::path& materialFilePath,
+        std::shared_ptr<Shader>& outShader,
+        std::map<std::string, std::shared_ptr<Texture2D>>& outSamplers)
+    {
+        std::filesystem::path graphPath = materialFilePath;
+        graphPath.replace_extension(".axegraph");
+
+        if (!std::filesystem::exists(graphPath))
+        {
+            AXE_CORE_WARN("CompileVolumeFromFile: grafo nao encontrado em '{}'", graphPath.string());
+            return false;
+        }
+
+        try
+        {
+            std::ifstream file(graphPath);
+            if (!file.is_open())
+            {
+                AXE_CORE_WARN("CompileVolumeFromFile: falha ao abrir '{}'", graphPath.string());
+                return false;
+            }
+
+            nlohmann::json j;
+            file >> j;
+            file.close();
+
+            MaterialGraph graph;
+            graph.Deserialize(j);
+
+            // Recusa material de outro dominio em vez de compila-lo como se
+            // fosse deste: o shader sairia sem o ray march e o passe de fog
+            // desenharia um quad de tela cheia com o resultado.
+            if (graph.Domain != MaterialDomain::Volume)
+            {
+                AXE_CORE_WARN("CompileVolumeFromFile: '{}' nao tem Domain = Volume "
+                    "— ignorado.", materialFilePath.string());
+                return false;
+            }
+
+            auto result = CompileVolume(&graph);
+            if (!result.Success)
+            {
+                AXE_CORE_WARN("CompileVolumeFromFile: {}", result.ErrorMessage);
+                return false;
+            }
+
+            auto shader = Shader::Create(result.VertexShader, result.FragmentShader);
+            if (!shader) return false;
+
+            // Cozinha junto, como o CompilePostProcessFromFile faz: abrir a
+            // cena no editor deixa o `.axeshader` em dia mesmo que o autor
+            // nunca clique em Compile neste material. Sem isto, o jogo
+            // empacotado carregaria o fog embutido em vez do material.
+            BakeShaderToDisk(result, materialFilePath, CookedMaterialDomain::Volume);
+
+            outShader = shader;
+            outSamplers = result.SamplerTextures;
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            AXE_CORE_ERROR("CompileVolumeFromFile: erro ao compilar: {}", e.what());
+            return false;
+        }
     }
 
     CompiledMaterial MaterialCompiler::CompileEmissiveAverage(MaterialGraph* graph)
@@ -2046,6 +2878,286 @@ void main()
         if (src)VisitNode(src);
     }
 
+    // ── WPO_V1 ───────────────────────────────────────────────────────────────
+    //
+    // Ver a nota na declaracao. Em resumo: o pin 8 alimenta o VERTICE, e
+    // emiti-lo aqui poria uma segunda copia do subgrafo da onda dentro do
+    // fragment shader — codigo morto, mas visivel no Shader Log e pago em toda
+    // compilacao.
+    void MaterialCompiler::VisitMaterialOutput(Node* outputNode)
+    {
+        if (!outputNode) return;
+
+        // O proprio Material Output nao gera codigo (GenerateNodeCode devolve
+        // string vazia para ele), mas precisa entrar em m_VisitedNodes: sem
+        // isso, um caminho que chegue de volta nele o processaria de novo — e
+        // dessa vez pelo VisitNode, que NAO pula o pin 8.
+        m_VisitedNodes.insert(outputNode->ID.Get());
+
+        for (int i = 0; i < (int)outputNode->Inputs.size(); ++i)
+        {
+            if (i == kMaterialOutputWPOPin) continue;
+            VisitPin(&outputNode->Inputs[i]);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  WPO_V1 — GenerateVertexShader
+    //
+    //  Ver a nota longa na declaracao (material_compiler.hpp).
+    // ═════════════════════════════════════════════════════════════════════════
+    namespace
+    {
+        // O vertex shader de sempre. Extraido para funcao porque agora ha DOIS
+        // caminhos que precisam dele: o material sem WPO, que o devolve tal e
+        // qual, e o codigo abaixo, que reusa o mesmo cabecalho.
+        const char* kVertexAttribsGLSL =
+            "#version 460 core\n"
+            "layout(location = 0) in vec3 a_Position;\n"
+            "layout(location = 1) in vec3 a_Normal;\n"
+            "layout(location = 2) in vec2 a_TexCoord;\n"
+            "layout(location = 3) in vec3 a_Tangent;\n"
+            "layout(location = 4) in vec3 a_Bitangent;\n\n"
+            "uniform mat4 u_Model;\n"
+            "uniform mat4 u_ViewProjection;\n"
+            "uniform mat3 u_NormalMatrix;\n\n"
+            "out vec3 v_Normal;\n"
+            "out vec3 v_FragPos;\n"
+            "out vec2 v_TexCoord;\n"
+            "out vec3 v_Tangent;\n"
+            "out vec3 v_Bitangent;\n\n";
+
+        std::string DefaultVertexShaderGLSL()
+        {
+            return std::string(kVertexAttribsGLSL) +
+                "void main()\n"
+                "{\n"
+                "    vec4 worldPos  = u_Model * vec4(a_Position, 1.0);\n"
+                "    v_FragPos      = worldPos.xyz;\n"
+                "    v_Normal       = normalize(u_NormalMatrix * a_Normal);\n"
+                "    v_Tangent      = normalize(u_NormalMatrix * a_Tangent);\n"
+                "    v_Bitangent    = normalize(u_NormalMatrix * a_Bitangent);\n"
+                "    v_TexCoord     = a_TexCoord;\n"
+                "    gl_Position    = u_ViewProjection * worldPos;\n"
+                "}\n";
+        }
+
+        std::string GLSLFloat(float v)
+        {
+            std::stringstream s;
+            s << std::fixed << std::setprecision(6) << v;
+            return s.str();
+        }
+    }
+
+    std::string MaterialCompiler::GenerateVertexShader(MaterialGraph* graph,
+        Node* outputNode,
+        const std::unordered_map<int, std::string>& samplers,
+        bool& outUsesWPO,
+        bool& outUsesSceneHeight)
+    {
+        outUsesWPO = false;
+        outUsesSceneHeight = false;
+
+        if (!graph || !outputNode) return DefaultVertexShaderGLSL();
+        if ((int)outputNode->Inputs.size() <= kMaterialOutputWPOPin)
+            return DefaultVertexShaderGLSL();
+
+        // ── O compilador do estagio de vertice ───────────────────────────────
+        //
+        // Instancia PROPRIA, e nao a do fragmento: m_PinVariables mapeia pin ->
+        // nome de variavel, e as variaveis do fragmento nao existem dentro da
+        // funcao gerada aqui. Reaproveitar a instancia faria o WPO referenciar
+        // nomes de outro escopo — GLSL invalido, e num ponto sem relacao com o
+        // que o autor ligou.
+        //
+        // O construtor LIMPA s_LastFunctionErrors, que ja carrega os erros de
+        // Material Function do fragmento. Guardar e reconcatenar preserva os
+        // dois: uma funcao quebrada usada so na onda tambem tem de aparecer.
+        const std::string priorFunctionErrors = s_LastFunctionErrors;
+
+        MaterialCompiler vsc(graph);
+        vsc.m_NodeSamplers = samplers;   // MESMO nome de uniform nos dois estagios
+
+        Pin* wpoPin = &outputNode->Inputs[kMaterialOutputWPOPin];
+        Pin* srcPin = vsc.GetSourcePin(wpoPin);
+
+        if (!srcPin)
+        {
+            // Pin solto: devolve o vertex shader que a engine sempre gerou,
+            // byte a byte. E o que garante que esta rodada nao muda nenhum
+            // material existente.
+            s_LastFunctionErrors = priorFunctionErrors;
+            return DefaultVertexShaderGLSL();
+        }
+
+        vsc.VisitPin(wpoPin);
+
+        std::string offsetExpr = vsc.AdaptToType(
+            vsc.GetPinVariable(srcPin->ID),
+            vsc.GetPinType(srcPin->ID),
+            PinType::Vec3);
+
+        s_LastFunctionErrors = priorFunctionErrors + s_LastFunctionErrors;
+
+        const std::string& body = vsc.m_FragmentCode;
+        outUsesWPO = true;
+        outUsesSceneHeight =
+            body.find("axeSceneHeight(") != std::string::npos ||
+            body.find("axeSceneDistance(") != std::string::npos ||
+            body.find("axeSceneNearestBase(") != std::string::npos ||
+            body.find("axeSceneNearestTop(") != std::string::npos;
+
+        std::stringstream vs;
+        vs << kVertexAttribsGLSL;
+
+        // Uniforms que os nodes referenciam. u_Model/u_ViewProjection/
+        // u_NormalMatrix ja vieram do cabecalho.
+        //
+        // Sao as MESMAS uniforms do fragment shader, com os mesmos nomes: em
+        // GL, uniform de mesmo nome em estagios diferentes do mesmo programa e
+        // UMA uniform so. Por isso o encanamento existente (geometry pass e
+        // mesh renderer ja enviam u_Time, u_CameraPosition e o mapa de altura)
+        // alimenta o vertice sem uma linha nova no runtime.
+        vs << "uniform vec3  u_CameraPosition;\n";
+        vs << "uniform float u_Time;\n\n";
+
+        // Samplers: so os que o codigo gerado REALMENTE cita. Declarar todos
+        // faria o vertex shader consumir unidades de textura (o limite do
+        // estagio de vertice e menor que o do fragmento) por nada.
+        bool declaredAlbedo = false;
+        for (auto& node : graph->GetNodes())
+        {
+            auto it = samplers.find(node->ID.Get());
+            if (it == samplers.end()) continue;
+            if (body.find(it->second) == std::string::npos) continue;
+            vs << "uniform sampler2D " << it->second << ";\n";
+            if (it->second == "u_AlbedoMap") declaredAlbedo = true;
+        }
+
+        // Rede de seguranca para o FALLBACK do node Texture Sample: sem entrada
+        // em m_NodeSamplers ele emite `texture(u_AlbedoMap, ...)`. Isso
+        // acontece com textura amostrada DENTRO de uma Material Function — a
+        // varredura que nomeia samplers so enxerga nodes do grafo de fora.
+        //
+        // No fragmento a uniform costuma existir por outro caminho e o defeito
+        // passa; aqui daria "'u_AlbedoMap' : undeclared identifier", que e
+        // erro de compilacao do material inteiro por causa de um caso de borda.
+        if (!declaredAlbedo && body.find("u_AlbedoMap") != std::string::npos)
+            vs << "uniform sampler2D u_AlbedoMap;\n";
+
+        vs << "\n";
+
+        // Fallbacks para nodes de particula, como nos outros dominios: valor
+        // definido em vez de erro de compilacao.
+        vs << "float v_Age01 = 0.0;\n";
+        vs << "vec4  v_Color  = vec4(1.0);\n\n";
+
+        vs << SceneHelpersGLSL(SceneHelperMode::Vertex);
+        vs << NoiseHelpersGLSL();
+        vs << vsc.m_CustomFunctions;
+
+        // ── A funcao ─────────────────────────────────────────────────────────
+        //
+        // Os parametros se chamam v_FragPos / v_TexCoord / v_Normal /
+        // v_Tangent / v_Bitangent porque e assim que os nodes ja escrevem. Sim,
+        // eles SOMBREIAM as varyings `out` de mesmo nome declaradas acima —
+        // sombreamento de global por parametro e valido em GLSL (validado no
+        // glslangValidator antes de entrar), e nenhum node escreve numa
+        // varying, so le.
+        vs << "vec3 axeWorldPositionOffset(vec3 v_FragPos, vec2 v_TexCoord,\n"
+            << "                           vec3 v_Normal, vec3 v_Tangent, vec3 v_Bitangent)\n"
+            << "{\n";
+        vs << body;
+        vs << "    return " << offsetExpr << ";\n";
+        vs << "}\n\n";
+
+        vs << "void main()\n{\n";
+        vs << "    vec4 axeWorld4 = u_Model * vec4(a_Position, 1.0);\n";
+        vs << "    vec3 axeP      = axeWorld4.xyz;\n";
+        vs << "    vec3 axeN      = normalize(u_NormalMatrix * a_Normal);\n";
+        vs << "    vec3 axeTraw   = u_NormalMatrix * a_Tangent;\n";
+        vs << "    vec3 axeBraw   = u_NormalMatrix * a_Bitangent;\n";
+        // WPO_V2 — a amostra unica do mapa de altura, ANTES de qualquer chamada
+        // ao WPO. Emitida sempre, e nao so quando o grafo usa o mapa: a funcao
+        // existe em todo vertex shader gerado, sai cedo quando nao ha mapa
+        // ligado, e uma chamada a mais custa menos que um caso em que ela falta.
+        vs << "    axeSceneHeightSample(axeP);\n\n";
+
+        if (!graph->RecomputeNormalFromWPO)
+        {
+            // Só desloca. Normal, tangente e bitangente saem exatamente como
+            // no vertex shader padrao — o material se MOVE e continua
+            // respondendo a luz como a malha original.
+            vs << "    vec3 axeDisp = axeP + axeWorldPositionOffset(axeP, a_TexCoord,\n"
+                << "                        axeN, normalize(axeTraw), normalize(axeBraw));\n\n";
+            vs << "    v_FragPos   = axeDisp;\n";
+            vs << "    v_Normal    = axeN;\n";
+            vs << "    v_Tangent   = normalize(axeTraw);\n";
+            vs << "    v_Bitangent = normalize(axeBraw);\n";
+        }
+        else
+        {
+            // ── Base ortonormal da superficie ────────────────────────────
+            //
+            // a_Tangent chega degenerado com frequencia (plano exportado sem
+            // UV util, malha sem tangentes calculadas), e normalize de vetor
+            // nulo e NaN em GLSL — a malha inteira sumiria da tela. O ramo
+            // constroi uma tangente qualquer perpendicular a normal: para
+            // MEDIR inclinacao serve qualquer par ortonormal, o que importa e
+            // a orientacao (cross(T, B) tem de dar N, e por isso a
+            // reortogonalizacao logo abaixo).
+            vs << "    vec3 axeT;\n";
+            vs << "    if (dot(axeTraw, axeTraw) > 1e-8) axeT = normalize(axeTraw);\n";
+            vs << "    else axeT = normalize(cross((abs(axeN.y) < 0.99)\n"
+                << "                   ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), axeN));\n";
+            vs << "    vec3 axeB = normalize(cross(axeN, axeT));\n";
+            vs << "    axeT      = normalize(cross(axeB, axeN));\n\n";
+
+            vs << "    vec3 axeDisp = axeP + axeWorldPositionOffset(axeP, a_TexCoord, axeN, axeT, axeB);\n\n";
+
+            // ── Normal por diferenca finita ──────────────────────────────
+            //
+            // O mesmo deslocamento avaliado em dois pontos vizinhos da a
+            // SUPERFICIE deslocada, e o produto vetorial das duas arestas da
+            // a normal dela. E o "Recompute Normals" do material de agua da
+            // Unreal, e custa duas avaliacoes extras do subgrafo por vertice.
+            //
+            // ATENCAO: os vizinhos deslocam a POSICAO DE MUNDO, nao a UV. Uma
+            // onda montada a partir de UV Coordinate da o mesmo valor nos tres
+            // pontos e a normal sai plana — sem erro nenhum, so o efeito
+            // faltando. O compilador avisa isso no log quando detecta que o
+            // codigo gerado nao le v_FragPos.
+            vs << "    const float axeEps = "
+                << GLSLFloat(graph->WPONormalDelta < 1e-4f ? 1e-4f : graph->WPONormalDelta)
+                << ";\n";
+            vs << "    vec3 axePu = axeP + axeT * axeEps;\n";
+            vs << "    vec3 axePv = axeP + axeB * axeEps;\n";
+            vs << "    vec3 axeDu = axePu + axeWorldPositionOffset(axePu, a_TexCoord, axeN, axeT, axeB);\n";
+            vs << "    vec3 axeDv = axePv + axeWorldPositionOffset(axePv, a_TexCoord, axeN, axeT, axeB);\n";
+            vs << "    vec3 axeCr = cross(axeDu - axeDisp, axeDv - axeDisp);\n";
+            // Cruzamento nulo acontece de verdade: crista perfeitamente plana,
+            // ou os dois vizinhos caindo no mesmo valor. Cair na normal
+            // original e o unico fallback que nao pisca.
+            vs << "    vec3 axeNewN = (dot(axeCr, axeCr) > 1e-12) ? normalize(axeCr) : axeN;\n\n";
+
+            // Tangente reortogonalizada contra a normal NOVA — senao o espaco
+            // tangente fica torto e um Normal Map ligado no material renderiza
+            // errado justamente nas cristas, onde ele mais aparece.
+            vs << "    vec3 axeTp = axeT - axeNewN * dot(axeNewN, axeT);\n";
+            vs << "    v_Tangent   = (dot(axeTp, axeTp) > 1e-8) ? normalize(axeTp) : axeT;\n";
+            vs << "    v_Bitangent = cross(axeNewN, v_Tangent);\n";
+            vs << "    v_Normal    = axeNewN;\n";
+            vs << "    v_FragPos   = axeDisp;\n";
+        }
+
+        vs << "    v_TexCoord  = a_TexCoord;\n";
+        vs << "    gl_Position = u_ViewProjection * vec4(v_FragPos, 1.0);\n";
+        vs << "}\n";
+
+        return vs.str();
+    }
+
     // =========================================================================
     // Geração de código GLSL por tipo de node
     // =========================================================================
@@ -2356,7 +3468,7 @@ void main()
             std::string intVar = MakeVar("sunint");
             RegisterPin(node->Outputs[3].ID, intVar, PinType::Float);
 
-            if (m_PostProcessTarget)
+            if (m_HasSunUniforms)
             {
                 code << "vec3 " << dirVar << " = normalize(u_SunDirection);";
                 code << "\n    vec3 " << toVar << " = -" << dirVar << ";";
@@ -2370,6 +3482,79 @@ void main()
                 code << "\n    vec3 " << colVar << " = vec3(1.0);";
                 code << "\n    float " << intVar << " = 1.0;";
             }
+        }
+
+        // -----------------------------------------------------------------
+        // VOLUME_SUN_V2b — Fog Settings
+        //
+        // Os valores que o autor ajusta no Inspector, disponiveis no grafo.
+        //
+        // Fora do dominio Volume as uniforms nao existem, e ai o node emite os
+        // MESMOS defaults do struct VolumetricFogSettings — nao zero. Zero na
+        // densidade seria "sem nevoa" e zero na cor seria preto: dois valores
+        // que MUDAM o resultado em vez de apenas nao agir. O default do struct
+        // e o unico valor que faz o grafo se comportar como o fog embutido.
+        // -----------------------------------------------------------------
+        else if (node->Name == "Fog Settings")
+        {
+            std::string densVar = MakeVar("fogdens");
+            std::string colVar = MakeVar("fogcol");
+            std::string baseVar = MakeVar("fogbase");
+            std::string fallVar = MakeVar("fogfall");
+
+            RegisterPin(node->Outputs[0].ID, densVar, PinType::Float);
+            RegisterPin(node->Outputs[1].ID, colVar, PinType::Vec3);
+            RegisterPin(node->Outputs[2].ID, baseVar, PinType::Float);
+            RegisterPin(node->Outputs[3].ID, fallVar, PinType::Float);
+
+            if (m_HasFogUniforms)
+            {
+                code << "float " << densVar << " = u_Density;";
+                code << "\n    vec3  " << colVar << " = u_FogColor;";
+                code << "\n    float " << baseVar << " = u_HeightBase;";
+                code << "\n    float " << fallVar << " = u_HeightFalloff;";
+            }
+            else
+            {
+                // Os defaults de VolumetricFogSettings, letra por letra.
+                code << "float " << densVar << " = 0.04;";
+                code << "\n    vec3  " << colVar << " = vec3(0.6, 0.7, 0.8);";
+                code << "\n    float " << baseVar << " = 0.0;";
+                code << "\n    float " << fallVar << " = 0.15;";
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // VOLUME_SUN_V2 — Sun Light
+        //
+        // Quanto do sol chega a este ponto: 0 na sombra, 1 no sol.
+        //
+        // Emite SEMPRE a mesma chamada — `axeSunLight(...)` — e quem muda por
+        // dominio e a DEFINICAO dela, colada pelo SceneHelpersGLSL. E o mesmo
+        // desenho do axeSceneDepth: o gerador de node nao pode saber em qual
+        // dos seis shaders o texto dele vai cair, entao ele nunca decide; quem
+        // decide e o shader.
+        //
+        // Fora do Volume a definicao devolve 1.0 (totalmente iluminado). O node
+        // compila e nao faz nada, em vez de sumir do menu — um node que
+        // desaparece esconde do autor que ele existe; um node que devolve valor
+        // definido apenas nao age, e isso da para ver na tela.
+        //
+        // Pino solto = o ponto sendo avaliado. No Volume isso e a amostra do
+        // ray march, que e o caso de uso normal; ligado, permite perguntar por
+        // outro ponto (um metro acima, por exemplo).
+        // -----------------------------------------------------------------
+        else if (node->Name == "Sun Light")
+        {
+            std::string var = MakeVar("sunlit");
+
+            std::string pos = "v_FragPos";
+            if (Pin* srcPos = GetSourcePin(&node->Inputs[0]))
+                pos = AdaptToType(GetPinVariable(srcPos->ID),
+                    GetPinType(srcPos->ID), PinType::Vec3);
+
+            RegisterPin(node->Outputs[0].ID, var, PinType::Float);
+            code << "float " << var << " = axeSunLight(" << pos << ");";
         }
 
         // -----------------------------------------------------------------
@@ -2835,6 +4020,27 @@ void main()
             RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float); // Y
             RegisterPin(node->Outputs[3].ID, var + ".z", PinType::Float); // Z
             code << "vec3 " << var << " = v_FragPos;";
+        }
+        // ── WPO_V1 — Vertex Normal ───────────────────────────────────────────
+        //
+        // `v_Normal` e nao `N`: N e uma variavel LOCAL do main dos shaders de
+        // fragmento (ja virada pelo Two Sided, e possivelmente substituida pelo
+        // Normal Map mais abaixo) e nao existe no estagio de vertice, onde
+        // v_Normal e o parametro da funcao de WPO. Usar a varying da o MESMO
+        // valor nos dois estagios — que e o que permite mover um subgrafo do
+        // Base Color para o World Position Offset sem ele mudar de resultado.
+        //
+        // Normalizado na emissao porque a interpolacao entre vertices encurta o
+        // vetor, e quem liga isto num Dot Product ou num Multiply espera
+        // comprimento 1.
+        else if (node->Name == "Vertex Normal")
+        {
+            std::string var = MakeVar("vnormal");
+            RegisterPin(node->Outputs[0].ID, var, PinType::Vec3);
+            RegisterPin(node->Outputs[1].ID, var + ".x", PinType::Float);
+            RegisterPin(node->Outputs[2].ID, var + ".y", PinType::Float);
+            RegisterPin(node->Outputs[3].ID, var + ".z", PinType::Float);
+            code << "vec3 " << var << " = normalize(v_Normal);";
         }
 
         // Fresnel

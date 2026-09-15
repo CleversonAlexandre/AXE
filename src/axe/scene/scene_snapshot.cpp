@@ -104,8 +104,61 @@ namespace axe
 			// Recria as entidades com os identificadores ORIGINAIS (índice +
 			// versão). É o que mantém pais/filhos e a seleção do editor
 			// válidos depois do restore.
+			//
+			// ═══════════════════════════════════════════════════════════════
+			//  GHOST_ENTITY_V1 — O GUARDA `valid()` NAO E ZELO, E O CONSERTO
+			//
+			//  ── O SINTOMA ─────────────────────────────────────────────────
+			//
+			//  Linhas "Entity" vazias na Hierarchy, aparecendo DEPOIS de
+			//  apagar alguma coisa, sobrevivendo a apagar-e-salvar e voltando
+			//  a cada boot. No `.axescene` elas sao entradas com
+			//  `"components": null` e ids gigantes: 1048578, 1048590,
+			//  1048591, 1048593.
+			//
+			//  ── O QUE ESSES NUMEROS SAO ───────────────────────────────────
+			//
+			//  1048576 e 2^20, e o entt parte o handle de 32 bits em 20 bits
+			//  de INDICE e 12 de VERSAO. Entao 1048578 le-se "indice 2,
+			//  versao 1" — e versao 1 quer dizer: este slot ja foi destruido
+			//  uma vez. Sao os buracos deixados pelas delecoes dele.
+			//
+			//  ── A CAUSA ───────────────────────────────────────────────────
+			//
+			//  `src.storage<entt::entity>()` NAO itera apenas as entidades
+			//  vivas: ele percorre o array inteiro, buracos inclusive, e
+			//  devolve o handle ja com a versao incrementada. Medido:
+			//  destruir 2 de 6 entidades e iterar o storage entrega 6 itens,
+			//  dois deles com `valid() == false`.
+			//
+			//  Sem o guarda, o `dst.create(entity)` MATERIALIZA cada buraco
+			//  como entidade viva de verdade no destino — e nua, porque o
+			//  CopyAll logo abaixo so tem componentes para copiar das que
+			//  eram reais. Cada Capture/Restore (undo, redo, Play/Stop)
+			//  transformava os buracos da cena em entidades.
+			//
+			//  Dai em diante elas sao legitimas: o `if (!registry.valid())`
+			//  do SceneSerializer as aprova, elas vao para o arquivo como
+			//  `components: null`, e o loader (que cria toda entidade como
+			//  `CreateEntity("Entity")` e so depois aplica o que veio no
+			//  JSON) devolve exatamente a linha "Entity" vazia. O ciclo
+			//  fechava sozinho — por isso apagar e salvar nao resolvia.
+			//
+			//  ── POR QUE O GUARDA NAO QUEBRA O QUE O COMENTARIO ACIMA PROTEGE
+			//
+			//  A preocupacao com os identificadores ORIGINAIS continua de pe,
+			//  e continua atendida: pular um buraco nao muda o handle de
+			//  ninguem — `create(hint)` poe cada entidade viva no seu indice
+			//  e versao de origem, e os buracos voltam a ser buracos.
+			//  Verificado lado a lado: com o guarda, as vivas saem com os
+			//  MESMOS handles; sem ele, saem os mesmos MAIS os fantasmas.
+			// ═══════════════════════════════════════════════════════════════
 			for (auto entity : src.storage<entt::entity>())
+			{
+				if (!src.valid(entity)) continue;
+
 				dst.create(entity);
+			}
 
 			CopyAll(AllComponents{}, src, dst);
 		}

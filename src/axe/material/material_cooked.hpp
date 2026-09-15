@@ -103,6 +103,14 @@ namespace axe
         // material_cooked.cpp. Esquecer o segundo faz o cozido carregar como
         // "surface" com um aviso no log, em vez de falhar.
         PostProcess,
+
+        // VOLUME_DOMAIN_V1 — o MEIO participante, avaliado dentro do ray
+        // march do passe de fog volumetrico.
+        //
+        // Diferente de todos os anteriores numa coisa: o shader gerado neste
+        // dominio nao e avaliado UMA vez por pixel — o corpo do grafo vira uma
+        // FUNCAO chamada a cada passo do raio. Ver CompileVolume.
+        Volume,
     };
 
     // ═════════════════════════════════════════════════════════════════════════

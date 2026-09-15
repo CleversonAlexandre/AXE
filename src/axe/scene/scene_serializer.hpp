@@ -130,9 +130,29 @@ namespace axe
 			return s_PostProcessMaterialRecompileCallback;
 		}
 
+		// VOLUME_DOMAIN_V1 — quarto dominio, mesma assinatura.
+		//
+		// Existe pela MESMA razao que o slot de post process: sem ele o
+		// MaterialShaderCache cairia no `default` do switch e resolveria o
+		// material pelo COZIDO em disco. Isso funciona no jogo empacotado, mas
+		// no editor a fonte da verdade e o GRAFO — o fog continuaria mostrando
+		// a ultima compilacao bem-sucedida enquanto o autor edita.
+		using VolumeMaterialRecompileCallback = LightMaterialRecompileCallback;
+
+		static void SetVolumeMaterialRecompileCallback(VolumeMaterialRecompileCallback cb)
+		{
+			s_VolumeMaterialRecompileCallback = cb;
+		}
+
+		static VolumeMaterialRecompileCallback GetVolumeMaterialRecompileCallback()
+		{
+			return s_VolumeMaterialRecompileCallback;
+		}
+
 		static LightMaterialRecompileCallback    s_LightMaterialRecompileCallback;
 		static ParticleMaterialRecompileCallback s_ParticleMaterialRecompileCallback;
 		static PostProcessMaterialRecompileCallback s_PostProcessMaterialRecompileCallback;
+		static VolumeMaterialRecompileCallback      s_VolumeMaterialRecompileCallback;
 
 	};
 

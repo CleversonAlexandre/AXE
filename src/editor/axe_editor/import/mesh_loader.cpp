@@ -175,7 +175,31 @@ namespace axe
 		const aiScene* scene = importer.ReadFile(filepath,
 			aiProcess_Triangulate |
 			aiProcess_GenSmoothNormals | // só gera se o mesh não tiver normais
-			aiProcess_CalcTangentSpace
+			aiProcess_CalcTangentSpace |
+			// ── WELD_VERTICES_V1 ─────────────────────────────────────────────
+			//
+			//  Sem esta flag o Assimp NAO compartilha vertice entre faces
+			//  vizinhas: cada quad do arquivo vira uma ilha com os proprios 4
+			//  cantos. A malha sai soldada do Blender e chega aqui desmontada.
+			//
+			//  A conta do plano de agua do Clever, conferida no Asset Viewer:
+			//
+			//    4 subdivisoes de um quad ....... 256 quads
+			//    triangulados ................... 512 triangulos   (bate)
+			//    4 cantos proprios por quad ..... 1024 vertices    (bate)
+			//    soldado seria ................... 289 vertices
+			//
+			//  Nao muda um pixel — os vertices duplicados sao identicos em
+			//  posicao, normal, UV e tangente, entao o sombreamento ja era o
+			//  mesmo. O que muda e o CUSTO: o World Position Offset roda POR
+			//  VERTICE, e com o recalculo de normal sao tres avaliacoes cada.
+			//  3,5x de vertice a toa e justamente o orcamento que deveria estar
+			//  indo para mais subdivisao, que e o que deixa a onda lisa.
+			//
+			//  Funde apenas o que e identico em TODOS os atributos, entao
+			//  costura de UV e aresta dura continuam separadas de proposito —
+			//  nao ha risco de achatar sombreamento de malha com normal partida.
+			aiProcess_JoinIdenticalVertices
 		);
 
 		// Mesmo bug que o SkeletalMeshLoader tinha: o Assimp marca

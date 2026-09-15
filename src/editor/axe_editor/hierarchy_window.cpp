@@ -227,7 +227,18 @@ namespace axe
         {
             ImGui::Indent(20.0f);
             for (auto child : rel->Children)
+            {
+                // ENTITY_DETACH_V1 — cinto de seguranca.
+                //
+                // O conserto de verdade esta no Scene::DestroyEntity, que agora
+                // desliga do pai. Esta linha fica porque a arvore NAO pode
+                // depender de ninguem: qualquer caminho futuro que esqueca de
+                // desligar volta a desenhar uma entidade fantasma aqui, e uma
+                // linha sem nome no Hierarchy e o tipo de defeito que o usuario
+                // reporta semanas depois, sem conseguir dizer o que fez.
+                if (!registry.valid(child)) continue;
                 DrawNode(child);
+            }
             ImGui::Unindent(20.0f);
         }
     }
@@ -488,6 +499,21 @@ namespace axe
             };
         collectSnapshots(entity);
 
+        // ── ENTITY_DETACH_V1 — o undo PERDIA o pai ───────────────────────────
+        //
+        // Os snapshots cobrem a entidade e os DESCENDENTES dela; o pai fica de
+        // fora, e com razao (ele nao esta sendo deletado). So que o
+        // DeserializeEntities so religa `parent` quando o pai esta no idMap
+        // daquele lote — e nao esta. O vinculo era descartado em silencio e a
+        // entidade voltava como RAIZ.
+        //
+        // Isso nao e cosmetico: o transform gravado e LOCAL, entao a mesma
+        // entidade voltava numa posicao de mundo diferente da que tinha antes
+        // do delete. Desfazer um delete mudava a cena.
+        entt::entity oldParent = entt::null;
+        if (auto* rel = registry.try_get<RelationshipComponent>(entity))
+            oldParent = rel->Parent;
+
         m_Context->ClearSelection();
         m_Renaming = false;
 
@@ -514,11 +540,18 @@ namespace axe
             m_History->Push({
                 "Deletar " + entityName,
                 nullptr,
-                [ctx, scn, snaps]()
+                [ctx, scn, snaps, oldParent]()
                 {
                     entt::entity root = SceneSerializer::DeserializeEntities(snaps, *scn);
-                    if (root != entt::null)
-                        ctx->Select(root);
+                    if (root == entt::null) return;
+
+                    // Religa ao pai, se ele ainda existir. `false` porque o
+                    // transform do snapshot JA esta em espaco local — pedir
+                    // ajuste aqui moveria a entidade uma segunda vez.
+                    if (oldParent != entt::null && scn->GetRegistry().valid(oldParent))
+                        scn->SetParent(root, oldParent, false);
+
+                    ctx->Select(root);
                 }
                 });
         }

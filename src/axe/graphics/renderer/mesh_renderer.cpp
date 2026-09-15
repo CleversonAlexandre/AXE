@@ -555,6 +555,44 @@ namespace axe
             shader->SetInt("u_HasSceneDepth", 0);
         }
 
+        // ── FORWARD_SHADOW_V1 — as cascatas, no slot 13 ──────────────────────
+        //
+        // UNIDADE 13, e a escolha e deliberada. Os slots 0-4 sao os mapas do
+        // material, 5/6/7 o IBL, 8 a shadow map legada, 9 o G-Buffer e 10/11 o
+        // mapa de altura. Sobrariam 12 — mas o lighting pass amarra um SAMPLER
+        // OBJECT nas unidades 11 e 12, e sampler object fica presa a unidade
+        // ate ser trocada. Um sampler com GL_TEXTURE_COMPARE_MODE ligado sobre
+        // uma amostragem crua e comportamento indefinido.
+        //
+        // A unidade 13 nao e tocada por nenhum passe, entao a textura vale com
+        // os PARAMETROS DELA MESMA — NEAREST e sem comparacao, que e
+        // exatamente o que a amostragem crua daqui espera.
+        if (m_CascadeCount > 0 && m_CascadeArrayID != 0)
+        {
+            RenderCommand::BindTextureUnit(13, m_CascadeArrayID);
+            shader->SetInt("u_ForwardShadowArray", 13);
+            shader->SetInt("u_ForwardCascadeCount", m_CascadeCount);
+            shader->SetMat4("u_ForwardShadowView", glm::value_ptr(m_CascadeView));
+
+            for (int i = 0; i < m_CascadeCount; ++i)
+            {
+                const std::string idx = "[" + std::to_string(i) + "]";
+                shader->SetMat4(("u_ForwardCascadeMatrix" + idx).c_str(),
+                    glm::value_ptr(m_CascadeMatrices[i]));
+                shader->SetFloat(("u_ForwardCascadeSplit" + idx).c_str(),
+                    m_CascadeSplits[i]);
+                shader->SetFloat(("u_ForwardCascadeTexel" + idx).c_str(),
+                    m_CascadeTexelWorld[i]);
+            }
+        }
+        else
+        {
+            // Uniform declarada e nao enviada vale ZERO em silencio — e zero
+            // aqui significaria "cascata 0 valida", que amostraria a unidade 13
+            // com o que estivesse nela. Mandar o desligamento e obrigatorio.
+            shader->SetInt("u_ForwardCascadeCount", 0);
+        }
+
         RenderCommand::DrawIndexed(mesh.GetVertexArray());
     }
 
@@ -562,6 +600,34 @@ namespace axe
     {
         m_ShadowMapID = depthMapID;
         m_LightSpaceMatrix = lightSpaceMatrix;
+    }
+
+    // ── FORWARD_SHADOW_V1 ────────────────────────────────────────────────────
+    //
+    // Ver a nota longa na declaracao. Copia por valor, na hora; ponteiro nulo
+    // ou passe nao inicializado zera a contagem e o shader volta a nao ter
+    // sombra, que e o comportamento anterior a esta rodada.
+    void MeshRenderer::SetCascadedShadow(const CascadedShadowPass* csm, const glm::mat4& view)
+    {
+        if (!csm || !csm->IsInitialized() || csm->GetCascadeCount() <= 0)
+        {
+            m_CascadeCount = 0;
+            m_CascadeArrayID = 0;
+            return;
+        }
+
+        m_CascadeArrayID = csm->GetDepthArrayID();
+        m_CascadeView = view;
+        m_CascadeCount = csm->GetCascadeCount();
+        if (m_CascadeCount > AXE_SHADOW_CASCADES) m_CascadeCount = AXE_SHADOW_CASCADES;
+
+        const auto& cascades = csm->GetCascades();
+        for (int i = 0; i < m_CascadeCount; ++i)
+        {
+            m_CascadeMatrices[i] = cascades[i].LightSpaceMatrix;
+            m_CascadeSplits[i] = cascades[i].SplitDepth;
+            m_CascadeTexelWorld[i] = cascades[i].TexelWorldSize;
+        }
     }
 
     void MeshRenderer::SetSceneHeightSource(uint32_t heightMapID, uint32_t seedMapID,
